@@ -2,7 +2,7 @@
 #
 # Validates that:
 # 1. SGLang serves the Qwen3-30B-A3B MoE model correctly (tp=4)
-# 2. SlimeRecipe trains the model with GRPO on 1×8×H100
+# 2. SlimeRecipe trains the model with GRPO on 2×8×H100 (tp=8, colocate=False)
 #
 # Qwen3-30B-A3B is a Mixture-of-Experts model:
 #   - 30B total params, ~3B active per token
@@ -165,7 +165,7 @@ def main() -> None:
             custom_rm_function=haiku_rm,
             gpu_type="H100",
             colocate=False,
-            tensor_model_parallel_size=4,
+            tensor_model_parallel_size=8,
             sequence_parallel=True,
             rollout_num_gpus_per_engine=4,
             rollout_num_gpus=8,
@@ -218,7 +218,7 @@ def main() -> None:
     print("=" * 60)
     print("Model:          Qwen3-30B-A3B (MoE, 128 experts, top-8)")
     print("SGLang config:  tp=4, sglang_image=v0.5.12-cu130")
-    print("SlimeRecipe:    tp=4, colocate, 1x8xH100, GRPO")
+    print("SlimeRecipe:    tp=8, colocate=False, 2x8xH100, GRPO")
     print(f"Base score:     {base_eval.mean:.1f}")
     print(f"Trained score:  {trained_eval.mean:.1f}")
     print(f"Delta:          {trained_eval.mean - base_eval.mean:+.1f}")
