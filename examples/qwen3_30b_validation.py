@@ -168,6 +168,7 @@ def main() -> None:
             tensor_model_parallel_size=4,
             sequence_parallel=True,
             rollout_num_gpus_per_engine=4,
+            rollout_num_gpus=8,
             num_rollout=1,
             rollout_batch_size=4,
             rollout_max_response_len=4096,
