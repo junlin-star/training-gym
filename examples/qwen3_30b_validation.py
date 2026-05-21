@@ -165,19 +165,19 @@ def main() -> None:
             custom_rm_function=haiku_rm,
             gpu_type="H100",
             colocate=False,
-            tensor_model_parallel_size=8,
+            tensor_model_parallel_size=4,
             sequence_parallel=True,
             rollout_num_gpus_per_engine=4,
             rollout_num_gpus=8,
             num_rollout=1,
-            rollout_batch_size=4,
+            rollout_batch_size=2,
             rollout_max_response_len=4096,
             rollout_temperature=1.0,
             sglang_mem_fraction_static=0.75,
             save_interval=5,
-            n_samples_per_prompt=8,
+            n_samples_per_prompt=4,
             lr=5e-7,
-            max_tokens_per_gpu=4096,
+            max_tokens_per_gpu=2048,
             apply_chat_template_kwargs='{"enable_thinking": false}',
             image_overlay=lambda image: image.run_commands(
                 "uv pip install --system aiohttp nltk>=3.8.0",
@@ -218,7 +218,7 @@ def main() -> None:
     print("=" * 60)
     print("Model:          Qwen3-30B-A3B (MoE, 128 experts, top-8)")
     print("SGLang config:  tp=4, sglang_image=v0.5.12-cu130")
-    print("SlimeRecipe:    tp=8, colocate=False, 2x8xH100, GRPO")
+    print("SlimeRecipe:    tp=4, colocate=False, 2x8xH100, GRPO")
     print(f"Base score:     {base_eval.mean:.1f}")
     print(f"Trained score:  {trained_eval.mean:.1f}")
     print(f"Delta:          {trained_eval.mean - base_eval.mean:+.1f}")
