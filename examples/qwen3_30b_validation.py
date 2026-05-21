@@ -182,6 +182,8 @@ def main() -> None:
             image_overlay=lambda image: image.run_commands(
                 "uv pip install --system aiohttp nltk>=3.8.0",
                 "python -c \"import nltk; nltk.download('cmudict', quiet=True)\"",
+                # Patch Slime bug: expert_offset unbound when args.num_experts is None
+                "sed -i 's/    ep_size = mpu.get_expert_model_parallel_world_size()/    ep_size = mpu.get_expert_model_parallel_world_size()\\n    expert_offset = 0/' /root/slime/slime/backends/megatron_utils/update_weight/common.py",
             ),
         ),
     )
