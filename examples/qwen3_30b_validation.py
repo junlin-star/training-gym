@@ -174,7 +174,7 @@ def main() -> None:
             rollout_max_response_len=4096,
             rollout_temperature=1.0,
             sglang_mem_fraction_static=0.75,
-            save_interval=5,
+            save_interval=100,
             n_samples_per_prompt=8,
             lr=5e-7,
             max_tokens_per_gpu=2048,
