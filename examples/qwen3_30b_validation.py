@@ -177,7 +177,7 @@ def main() -> None:
             save_interval=100,
             n_samples_per_prompt=8,
             lr=5e-7,
-            max_tokens_per_gpu=2048,
+            max_tokens_per_gpu=1024,
             apply_chat_template_kwargs='{"enable_thinking": false}',
             image_overlay=lambda image: image.run_commands(
                 "uv pip install --system aiohttp nltk>=3.8.0",
