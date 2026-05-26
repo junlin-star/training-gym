@@ -52,6 +52,15 @@ class ModelArchitecture:
         Use separate output projection weights instead of tying to token
         embeddings. Default ``False``.
 
+    ## Mixture of Experts
+
+    num_experts : int
+        Total number of MoE experts. Default ``0`` (dense model).
+    moe_ffn_hidden_size : int
+        Per-expert FFN intermediate size. Default ``0``.
+    moe_shared_expert_intermediate_size : int
+        Shared expert FFN intermediate size. Default ``0``.
+
     ## Position Encoding
 
     use_rotary_position_embeddings : bool
@@ -74,6 +83,9 @@ class ModelArchitecture:
     disable_bias_linear: bool = True
     qk_layernorm: bool = True
     untie_embeddings_and_output_weights: bool = False
+    num_experts: int = 0
+    moe_ffn_hidden_size: int = 0
+    moe_shared_expert_intermediate_size: int = 0
     use_rotary_position_embeddings: bool = True
     rotary_base: int = 10000
 
@@ -109,6 +121,12 @@ class ModelArchitecture:
             args.append("--qk-layernorm")
         if self.untie_embeddings_and_output_weights:
             args.append("--untie-embeddings-and-output-weights")
+        if self.num_experts:
+            args += ["--num-experts", str(self.num_experts)]
+        if self.moe_ffn_hidden_size:
+            args += ["--moe-ffn-hidden-size", str(self.moe_ffn_hidden_size)]
+        if self.moe_shared_expert_intermediate_size:
+            args += ["--moe-shared-expert-intermediate-size", str(self.moe_shared_expert_intermediate_size)]
         if self.use_rotary_position_embeddings:
             args += ["--position-embedding-type", "rope"]
             if self.rotary_base != 10000:

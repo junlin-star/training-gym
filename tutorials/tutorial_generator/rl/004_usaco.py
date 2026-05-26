@@ -3,7 +3,7 @@
 
 TUTORIAL_METADATA = {
     "framework": "`slime`",
-    "cluster_shape": "4 × 8×H100",
+    "cluster_shape": "1 × 8×H100",
     "summary": "Hill-climb Qwen3.6-35B-A3B on USACO with sandbox-verified rewards",
     "difficulty": "Advanced",
     "order": 25,
@@ -112,9 +112,8 @@ def _dataset():
     dataset = HarborDataset(
         dataset_name="usaco/usaco",
         test_data_dir="tests",
-        train_size=100,
-        eval_size=20,
-        train_repeats=5,
+        train_size=1,
+        eval_size=1,
         always_prepare=True,
         shuffle_tasks=True,
         shuffle_seed=42,
@@ -293,9 +292,9 @@ def _train_intro():
     """
     ## Train with SLIME
 
-    Now we hill-climb. This MoE model needs serious hardware —
-    4 nodes × 8×H100 (32 GPUs) with TP4, PP2, CP4, and optimizer
-    CPU offload, matching the official Slime recipe for Qwen3.5-27B.
+    Now we hill-climb. This MoE model fits on a single node —
+    1 × 8×H100 (8 GPUs) with TP2, PP1, CP2, EP8, and optimizer
+    CPU offload, matching the official Slime recipe for Qwen3.6-35B-A3B.
     Key overrides:
     - **`custom_rm_function=usaco_rm`** — the sandbox reward defined above.
     - **`rollout_max_response_len=4096`** — competitive programming
@@ -315,12 +314,12 @@ def _train():
 
             gpu_type="H100",
             colocate=True,
-            actor_num_nodes=4,
+            actor_num_nodes=1,
             actor_num_gpus_per_node=8,
-            tensor_model_parallel_size=4,
+            tensor_model_parallel_size=2,
             sequence_parallel=True,
 
-            rollout_num_gpus_per_engine=2,
+            rollout_num_gpus_per_engine=4,
             num_rollout=1,
             rollout_batch_size=8,
             n_samples_per_prompt=8,
@@ -328,7 +327,7 @@ def _train():
             rollout_temperature=1.0,
             sglang_mem_fraction_static=0.75,
 
-            global_batch_size=64,
+            global_batch_size=32,
             lr=1e-6,
             max_tokens_per_gpu=8192,
             eval_max_response_len=4096,

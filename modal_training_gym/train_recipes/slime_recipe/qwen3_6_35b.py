@@ -6,24 +6,23 @@ from modal_training_gym.train_recipes.slime_recipe.recipe import SlimeRecipe
 
 @dataclass(config=ConfigDict(extra="forbid", arbitrary_types_allowed=True))
 class Qwen3_6_35b_Recipe(SlimeRecipe):
-    """Qwen3.6-35B-A3B (MoE) on 4×8×H100 with TP4/PP2/CP4, colocated GRPO."""
+    """Qwen3.6-35B-A3B (MoE) on 1×8×H100 with TP2/PP1/CP2/EP8, colocated GRPO."""
 
     gpu_type: str = "H100"
     colocate: bool = True
-    actor_num_nodes: int = 4
+    actor_num_nodes: int = 1
     actor_num_gpus_per_node: int = 8
 
     # ── Parallelism ───────────────────────────────────────────────────────
-    tensor_model_parallel_size: int = 4
+    tensor_model_parallel_size: int = 2
     sequence_parallel: bool = True
-    pipeline_model_parallel_size: int = 2
-    decoder_last_pipeline_num_layers: int = 30
-    context_parallel_size: int = 4
-    expert_model_parallel_size: int = 1
+    pipeline_model_parallel_size: int = 1
+    context_parallel_size: int = 2
+    expert_model_parallel_size: int = 8
     expert_tensor_parallel_size: int = 1
 
     # ── Rollout ───────────────────────────────────────────────────────────
-    rollout_num_gpus_per_engine: int = 2
+    rollout_num_gpus_per_engine: int = 4
     num_rollout: int = 1
     rollout_batch_size: int = 8
     rollout_max_response_len: int = 4096
@@ -32,7 +31,7 @@ class Qwen3_6_35b_Recipe(SlimeRecipe):
 
     # ── Training ──────────────────────────────────────────────────────────
     n_samples_per_prompt: int = 8
-    global_batch_size: int = 64
+    global_batch_size: int = 32
     lr: float = 1e-6
     max_tokens_per_gpu: int = 8192
     calculate_per_token_loss: bool = True

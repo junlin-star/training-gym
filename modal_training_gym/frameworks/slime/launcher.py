@@ -65,8 +65,8 @@ from modal_training_gym.common.checkpoint import (
 from modal_training_gym.common.framework import Framework
 
 SLIME_ROOT = "/root/slime"
-# Pin by digest to prevent mutable-tag drift.  Tag: nightly-dev-20260329a
-SLIME_IMAGE = "slimerl/slime@sha256:d8ccfba3cd21134b277da4e0f37f57d6290d7b68432e6de047c7d25406c35190"
+# Pin by digest to prevent mutable-tag drift.  Tag: nightly-dev-20260526a
+SLIME_IMAGE = "slimerl/slime@sha256:2568a8283b913eeea86b68397288f9ebdb59ebad4eab11c64ee3ce0c49819c3a"
 HARBOR_PKG_VERSION = "0.6.6"
 
 

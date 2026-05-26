@@ -26,7 +26,10 @@ class Qwen3_6_35B(HFModelConfiguration):
         swiglu=True,
         disable_bias_linear=True,
         qk_layernorm=True,
+        untie_embeddings_and_output_weights=True,
+        num_experts=256,
+        moe_ffn_hidden_size=512,
+        moe_shared_expert_intermediate_size=512,
         use_rotary_position_embeddings=True,
         rotary_base=10000000,
-        untie_embeddings_and_output_weights=True,
     )
