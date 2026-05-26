@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import re
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 import datetime
@@ -302,3 +304,167 @@ class EvalConfig:
         )
         result.save()
         return result
+
+
+_CODE_FENCE_RE = re.compile(r"```(?:python)?\s*(.*?)```", re.IGNORECASE | re.DOTALL)
+
+
+def extract_code(text: str) -> str:
+    """Extract Python code from an LLM response.
+
+    Strips chat-template artifacts (``<think>``, ``<|im_start|>``, …) and
+    returns the first ``python`` fenced block, or the full text when no
+    fence is found.
+    """
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n").strip()
+    if "<|im_start|>assistant" in normalized:
+        normalized = normalized.rsplit("<|im_start|>assistant", 1)[-1]
+    if "</think>" in normalized:
+        normalized = normalized.split("</think>", 1)[-1]
+    normalized = normalized.replace("<think>", "").replace("<|im_end|>", "").strip()
+    if match := _CODE_FENCE_RE.search(normalized):
+        return match.group(1).strip()
+    return normalized
+
+
+def score_in_sandbox(
+    code: str,
+    *,
+    test_cases: list[dict[str, str]],
+    timeout_sec: int = 60,
+    sandbox_cpu: float = 1.0,
+    sandbox_memory: int = 1024,
+    python_version: str = "3.11",
+) -> tuple[float, dict[str, Any]]:
+    """Run *code* against *test_cases* in a Modal sandbox.
+
+    Each test case is a dict with ``input`` (piped to stdin) and
+    ``expected_output`` (compared against stdout).  Returns
+    ``(fraction_passed, metadata_dict)``.
+    """
+    import modal
+
+    if not test_cases:
+        return 0.0, {"passed": 0, "total": 0}
+
+    script = (
+        "\n".join(
+            [
+                "import sys, io, json",
+                f"candidate = {json.dumps(code)}",
+                f"tests = {json.dumps(test_cases)}",
+                "results = []",
+                "for tc in tests:",
+                "    sys.stdin = io.StringIO(tc['input'])",
+                "    buf = io.StringIO()",
+                "    old = sys.stdout",
+                "    sys.stdout = buf",
+                "    try:",
+                "        exec(candidate, {}, {})",
+                "        sys.stdout = old",
+                "        results.append({'output': buf.getvalue(), 'ok': True})",
+                "    except Exception as e:",
+                "        sys.stdout = old",
+                "        results.append({'output': '', 'ok': False})",
+                "print(json.dumps(results))",
+            ]
+        )
+        + "\n"
+    )
+
+    try:
+        app = modal.App.lookup("training-gym-sandbox-rm", create_if_missing=True)
+        sandbox = modal.Sandbox.create(
+            "python",
+            "-c",
+            script,
+            app=app,
+            image=modal.Image.debian_slim(python_version=python_version),
+            timeout=timeout_sec,
+            cpu=sandbox_cpu,
+            memory=sandbox_memory,
+        )
+        stdout = sandbox.stdout.read()
+        sandbox.stderr.read()
+        sandbox.wait()
+    except Exception:
+        return 0.0, {"passed": 0, "total": len(test_cases)}
+
+    try:
+        results = json.loads(stdout)
+    except (json.JSONDecodeError, ValueError):
+        return 0.0, {"passed": 0, "total": len(test_cases)}
+
+    passed = sum(
+        1
+        for r, tc in zip(results, test_cases)
+        if r.get("ok") and r.get("output", "").strip() == tc["expected_output"].strip()
+    )
+    return passed / len(test_cases), {"passed": passed, "total": len(test_cases)}
+
+
+@dataclass
+class HarborEval(EvalConfig):
+    """Evaluate a deployed model on a Harbor dataset using sandbox execution.
+
+    Automates the common pattern of generating code from a Harbor task,
+    extracting it from the LLM response, running it in a Modal sandbox,
+    and comparing stdout against expected test-case outputs.
+
+    When neither ``eval_fn`` nor ``eval_response_fn`` is provided, a
+    default sandbox-backed scorer is used automatically.  Pass
+    ``extract_code_fn`` to override how code is pulled from the model
+    response, or supply your own ``eval_fn`` to take full control.
+    """
+
+    sandbox_timeout: int = 60
+    sandbox_cpu: float = 1.0
+    sandbox_memory: int = 1024
+    sandbox_python_version: str = "3.11"
+    extract_code_fn: Callable[[str], str] | None = None
+
+    def _resolve_test_cases(self, example: DatasetRow) -> list[dict[str, str]]:
+        label = example.get("label", {})
+        if isinstance(label, str):
+            try:
+                label = json.loads(label)
+            except (json.JSONDecodeError, ValueError):
+                label = {}
+        if isinstance(label, dict):
+            cases = label.get("test_cases")
+            if isinstance(cases, list):
+                return cases
+        return []
+
+    def _extract_code(self, text: str) -> str:
+        if self.extract_code_fn is not None:
+            return self.extract_code_fn(text)
+        return extract_code(text)
+
+    def _harbor_eval_fn(
+        self,
+        deployment: "ModelDeployment",
+        example: DatasetRow,
+    ) -> EvalRowResult:
+        prompt = self.build_prompt(example)
+        response = deployment.generate(
+            prompt, ensure_ready=False, **self.generate_kwargs
+        )
+        code = self._extract_code(response)
+        test_cases = self._resolve_test_cases(example)
+        score, metadata = score_in_sandbox(
+            code,
+            test_cases=test_cases,
+            timeout_sec=self.sandbox_timeout,
+            sandbox_cpu=self.sandbox_cpu,
+            sandbox_memory=self.sandbox_memory,
+            python_version=self.sandbox_python_version,
+        )
+        return EvalRowResult(
+            score=score, response=response, prompt=prompt, metadata=metadata
+        )
+
+    def __post_init__(self) -> None:
+        if self.eval_fn is None and self.eval_response_fn is None:
+            self.eval_fn = self._harbor_eval_fn
+        super().__post_init__()

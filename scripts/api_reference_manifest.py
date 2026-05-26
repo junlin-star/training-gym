@@ -79,6 +79,13 @@ API_REFERENCE_MANIFEST = [
         "sidebar_label": "EvalConfig",
     },
     {
+        "class_name": "HarborEval",
+        "module": "modal_training_gym.common.eval",
+        "group": "evaluation",
+        "class_type": "config_data",
+        "sidebar_label": "HarborEval",
+    },
+    {
         "class_name": "EvalResult",
         "module": "modal_training_gym.common.eval",
         "group": "evaluation",
