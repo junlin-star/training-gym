@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+import json
+import re
+from dataclasses import dataclass, field
 from typing import Any
 
 
@@ -114,12 +116,25 @@ class ModelArchitecture:
         return args
 
 
+@dataclass
+class ToolCall:
+    """A parsed tool invocation from model output."""
+
+    name: str
+    arguments: dict[str, Any] = field(default_factory=dict)
+
+
 class ModelConfig:
     """Base class for model identity and weight-download logic.
 
     Subclass and set ``model_name`` (and optionally ``model_path`` and
     ``architecture``) as class attributes, then override ``download()``
     to materialize weights into the shared model volume.
+
+    Output-parsing methods (``strip_thinking``, ``strip_chat_template``,
+    ``parse_tool_calls``, ``extract_content``) default to no-ops.
+    Model-family subclasses override them to handle their specific
+    response format.
     """
 
     model_name: str = ""
@@ -133,6 +148,27 @@ class ModelConfig:
     def download(self) -> None:
         """Download or materialize weights into the model volume."""
         raise NotImplementedError(f"{type(self).__name__} has no download()")
+
+    # ── Output parsing ─────────────────────────────────────────────────────
+
+    def strip_thinking(self, text: str) -> str:
+        """Remove thinking / reasoning blocks from model output."""
+        return text
+
+    def strip_chat_template(self, text: str) -> str:
+        """Remove chat-template delimiters from raw model output."""
+        return text
+
+    def parse_tool_calls(self, text: str) -> list[ToolCall]:
+        """Extract structured tool calls from model output."""
+        return []
+
+    def extract_content(self, text: str) -> str:
+        """Return clean response text with thinking, chat-template artifacts,
+        and tool-call blocks removed."""
+        result = self.strip_chat_template(text)
+        result = self.strip_thinking(result)
+        return result.strip()
 
 
 class HFModelConfiguration(ModelConfig):
@@ -149,3 +185,51 @@ class HFModelConfiguration(ModelConfig):
         if self.model_path:
             kwargs["local_dir"] = str(self.model_path)
         snapshot_download(**kwargs)
+
+
+# ── Qwen3 family ───────────────────────────────────────────────────────────
+
+_QWEN3_TOOL_CALL_RE = re.compile(r"<tool_call>\s*(.*?)\s*</tool_call>", re.DOTALL)
+
+
+class Qwen3ModelConfig(HFModelConfiguration):
+    """HFModelConfiguration with Qwen3-family output parsing.
+
+    Handles ``<think>``/``</think>`` reasoning blocks,
+    ``<|im_start|>``/``<|im_end|>`` chat-template delimiters,
+    and ``<tool_call>``/``</tool_call>`` tool invocations.
+    """
+
+    def strip_thinking(self, text: str) -> str:
+        if "</think>" in text:
+            text = text.split("</think>", 1)[-1]
+        text = text.replace("<think>", "")
+        return text.strip()
+
+    def strip_chat_template(self, text: str) -> str:
+        text = text.replace("\r\n", "\n").replace("\r", "\n")
+        if "<|im_start|>assistant" in text:
+            text = text.rsplit("<|im_start|>assistant", 1)[-1]
+        text = text.replace("<|im_end|>", "")
+        return text.strip()
+
+    def parse_tool_calls(self, text: str) -> list[ToolCall]:
+        calls: list[ToolCall] = []
+        for match in _QWEN3_TOOL_CALL_RE.finditer(text):
+            try:
+                data = json.loads(match.group(1))
+                calls.append(
+                    ToolCall(
+                        name=data.get("name", ""),
+                        arguments=data.get("arguments", {}),
+                    )
+                )
+            except (json.JSONDecodeError, KeyError, TypeError):
+                continue
+        return calls
+
+    def extract_content(self, text: str) -> str:
+        result = self.strip_chat_template(text)
+        result = self.strip_thinking(result)
+        result = _QWEN3_TOOL_CALL_RE.sub("", result)
+        return result.strip()

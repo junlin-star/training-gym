@@ -2,6 +2,8 @@ from .base import (
     HFModelConfiguration,
     ModelArchitecture,
     ModelConfig,
+    Qwen3ModelConfig,
+    ToolCall,
 )
 from .qwen3_0_6b import Qwen3_0_6B
 from .qwen3_1_7b import Qwen3_1_7B
@@ -15,6 +17,7 @@ __all__ = [
     "HFModelConfiguration",
     "ModelArchitecture",
     "ModelConfig",
+    "Qwen3ModelConfig",
     "Qwen3_0_6B",
     "Qwen3_1_7B",
     "Qwen3_4B",
@@ -22,4 +25,5 @@ __all__ = [
     "Qwen3_14B",
     "Qwen3_30B",
     "Qwen3_32B",
+    "ToolCall",
 ]

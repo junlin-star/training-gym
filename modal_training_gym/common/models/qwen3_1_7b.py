@@ -1,9 +1,9 @@
 """Qwen3-1.7B model spec as a concrete HFModelConfiguration subclass."""
 
-from .base import HFModelConfiguration, ModelArchitecture
+from .base import ModelArchitecture, Qwen3ModelConfig
 
 
-class Qwen3_1_7B(HFModelConfiguration):
+class Qwen3_1_7B(Qwen3ModelConfig):
     """Qwen3-1.7B (1.7 billion parameters) from Alibaba.
 
     Pre-configured with full ``ModelArchitecture`` for Megatron-based

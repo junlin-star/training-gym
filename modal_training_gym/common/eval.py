@@ -15,6 +15,7 @@ from modal_training_gym.utils.metadata import MetadataStore, vol_get, vol_list, 
 if TYPE_CHECKING:
     from modal_training_gym.common.dataset import DatasetConfig
     from modal_training_gym.common.deployment import ModelDeployment
+    from modal_training_gym.common.models.base import ModelConfig
 
 EVAL_SUMMARY_STORE = MetadataStore.EVALS
 EVAL_SUMMARY_KEY = "summary"
@@ -309,22 +310,32 @@ class EvalConfig:
 _CODE_FENCE_RE = re.compile(r"```(?:python)?\s*(.*?)```", re.IGNORECASE | re.DOTALL)
 
 
-def extract_code(text: str) -> str:
+def extract_code(text: str, model: "ModelConfig | None" = None) -> str:
     """Extract Python code from an LLM response.
 
-    Strips chat-template artifacts (``<think>``, ``<|im_start|>``, …) and
-    returns the first ``python`` fenced block, or the full text when no
-    fence is found.
+    When *model* is provided, uses model-aware parsing to strip thinking
+    tags and chat-template artifacts, and checks tool-call arguments for
+    a ``code`` key.  Falls back to regex heuristics when *model* is
+    ``None``.
     """
-    normalized = text.replace("\r\n", "\n").replace("\r", "\n").strip()
-    if "<|im_start|>assistant" in normalized:
-        normalized = normalized.rsplit("<|im_start|>assistant", 1)[-1]
-    if "</think>" in normalized:
-        normalized = normalized.split("</think>", 1)[-1]
-    normalized = normalized.replace("<think>", "").replace("<|im_end|>", "").strip()
-    if match := _CODE_FENCE_RE.search(normalized):
+    if model is not None:
+        content = model.extract_content(text)
+        for tool_call in model.parse_tool_calls(text):
+            code = tool_call.arguments.get("code", "")
+            if code:
+                return code
+    else:
+        normalized = text.replace("\r\n", "\n").replace("\r", "\n").strip()
+        if "<|im_start|>assistant" in normalized:
+            normalized = normalized.rsplit("<|im_start|>assistant", 1)[-1]
+        if "</think>" in normalized:
+            normalized = normalized.split("</think>", 1)[-1]
+        normalized = normalized.replace("<think>", "").replace("<|im_end|>", "").strip()
+        content = normalized
+
+    if match := _CODE_FENCE_RE.search(content):
         return match.group(1).strip()
-    return normalized
+    return content
 
 
 def score_in_sandbox(
@@ -417,6 +428,7 @@ class HarborEval(EvalConfig):
     response, or supply your own ``eval_fn`` to take full control.
     """
 
+    model: "ModelConfig | None" = None
     sandbox_timeout: int = 60
     sandbox_cpu: float = 1.0
     sandbox_memory: int = 1024
@@ -439,7 +451,7 @@ class HarborEval(EvalConfig):
     def _extract_code(self, text: str) -> str:
         if self.extract_code_fn is not None:
             return self.extract_code_fn(text)
-        return extract_code(text)
+        return extract_code(text, model=self.model)
 
     def _harbor_eval_fn(
         self,
