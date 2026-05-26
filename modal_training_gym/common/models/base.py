@@ -129,7 +129,7 @@ class ParsedResponse:
     """Structured result of parsing raw model output."""
 
     content: str = ""
-    tool_calls: list[ToolCall] | None = None
+    tool_calls: list[ToolCall] = field(default_factory=list)
     thinking: str | None = None
 
 
@@ -229,6 +229,6 @@ def parse_qwen3_response(text: str) -> ParsedResponse:
 
     return ParsedResponse(
         content=content,
-        tool_calls=tool_calls or None,
+        tool_calls=tool_calls,
         thinking=thinking,
     )
