@@ -15,7 +15,7 @@ class Qwen3_6_35B(HFModelConfiguration):
     architecture = ModelArchitecture(
         num_layers=40,
         hidden_size=2048,
-        ffn_hidden_size=512,
+        ffn_hidden_size=5632,
         num_attention_heads=16,
         group_query_attention=True,
         num_query_groups=2,
@@ -28,4 +28,5 @@ class Qwen3_6_35B(HFModelConfiguration):
         qk_layernorm=True,
         use_rotary_position_embeddings=True,
         rotary_base=10000000,
+        untie_embeddings_and_output_weights=True,
     )

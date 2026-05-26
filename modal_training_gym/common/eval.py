@@ -286,7 +286,7 @@ class EvalConfig:
         with ThreadPoolExecutor(max_workers=max_concurrency) as executor:
             indexed_results = executor.map(
                 _evaluate_indexed,
-                enumerate(self.dataset.load(), start=1),
+                enumerate(self.dataset.load(split="eval"), start=1),
             )
             for idx, result in indexed_results:
                 if debug:

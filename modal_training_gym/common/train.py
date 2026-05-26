@@ -17,11 +17,13 @@ from pydantic.dataclasses import dataclass
 def _merge_recipe(base: SlimeRecipe, overrides: SlimeRecipe) -> SlimeRecipe:
     base_fields = {f.name: getattr(base, f.name) for f in _dc.fields(base)}
     for f in _dc.fields(overrides):
+        if f.name not in base_fields:
+            continue
         user_val = getattr(overrides, f.name)
         default_val = getattr(base, f.name)
         if user_val != default_val:
             base_fields[f.name] = user_val
-    return SlimeRecipe(**base_fields)
+    return type(base)(**base_fields)
 
 
 @dataclass(config=ConfigDict(extra="forbid", arbitrary_types_allowed=True))
