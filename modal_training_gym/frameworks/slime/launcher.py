@@ -592,11 +592,19 @@ def build_slime_app(
             os.makedirs(save_root, exist_ok=True)
 
             original_save = slime.save
+            original_load = slime.load
             object.__setattr__(slime, "save", save_root)
+            if _has_torch_dist_checkpoint(save_root):
+                print(
+                    f"Detected existing checkpoint in {save_root}; "
+                    "will resume training from last saved iteration."
+                )
+                object.__setattr__(slime, "load", save_root)
             try:
                 cmd = build_train_cmd(slime, SLIME_ROOT, model=model, dataset=dataset)
             finally:
                 object.__setattr__(slime, "save", original_save)
+                object.__setattr__(slime, "load", original_load)
             runtime_env = {
                 "env_vars": {
                     "no_proxy": f"127.0.0.1,{cluster.head_addr}",
