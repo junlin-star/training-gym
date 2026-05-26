@@ -128,7 +128,7 @@ class ToolCall:
 class ParsedResponse:
     """Structured result of parsing raw model output."""
 
-    content: str
+    content: str = ""
     tool_calls: list[ToolCall] = field(default_factory=list)
     thinking: str = ""
 
