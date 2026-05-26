@@ -129,8 +129,8 @@ class ParsedResponse:
     """Structured result of parsing raw model output."""
 
     content: str = ""
-    tool_calls: list[ToolCall] = field(default_factory=list)
-    thinking: str = ""
+    tool_calls: list[ToolCall] | None = None
+    thinking: str | None = None
 
 
 ResponseParser = Callable[[str], ParsedResponse]
@@ -206,10 +206,10 @@ def parse_qwen3_response(text: str) -> ParsedResponse:
         text = text.rsplit("<|im_start|>assistant", 1)[-1]
     text = text.replace("<|im_end|>", "")
 
-    thinking = ""
+    thinking: str | None = None
     if "</think>" in text:
         parts = text.split("</think>", 1)
-        thinking = parts[0].replace("<think>", "").strip()
+        thinking = parts[0].replace("<think>", "").strip() or None
         text = parts[1]
     text = text.replace("<think>", "")
 
@@ -227,4 +227,8 @@ def parse_qwen3_response(text: str) -> ParsedResponse:
             continue
     content = _QWEN3_TOOL_CALL_RE.sub("", text).strip()
 
-    return ParsedResponse(content=content, tool_calls=tool_calls, thinking=thinking)
+    return ParsedResponse(
+        content=content,
+        tool_calls=tool_calls or None,
+        thinking=thinking,
+    )
