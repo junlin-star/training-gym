@@ -151,6 +151,15 @@ class SlimeRecipe(BaseTrainRecipe):
     rollout_function: Callable | str | None = None
     custom_megatron_before_train_step_hook: Callable | str | None = None
 
+    # ── SGLang rollout engine ──────────────────────────────────────────────
+    sglang_enable_dp_attention: bool = False
+    sglang_dp_size: int | None = None
+    sglang_ep_size: int | None = None
+    sglang_enable_dp_lm_head: bool = False
+    sglang_disable_custom_all_reduce: bool = False
+    sglang_cuda_graph_bs: list[int] | None = None
+    sglang_max_running_requests: int | None = None
+
     # ── SGLang / config overrides ───────────────────────────────────────────
     extra_config: dict | None = None
     sglang_config: dict | None = None

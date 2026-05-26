@@ -61,6 +61,14 @@ class ModelArchitecture:
     moe_shared_expert_intermediate_size : int
         Shared expert FFN intermediate size. Default ``0``.
 
+    ## Checkpoint Conversion
+
+    megatron_model_type : str
+        Slime/Megatron model type string for pre-conversion (e.g.
+        ``"qwen3.5-35B-A3B"``). When set, the launcher pre-converts
+        the HF checkpoint to torch_dist format before training instead
+        of relying on bridge-mode auto-detection. Default ``""``.
+
     ## Position Encoding
 
     use_rotary_position_embeddings : bool
@@ -86,8 +94,13 @@ class ModelArchitecture:
     num_experts: int = 0
     moe_ffn_hidden_size: int = 0
     moe_shared_expert_intermediate_size: int = 0
+    megatron_model_type: str = ""
     use_rotary_position_embeddings: bool = True
     rotary_base: int = 10000
+
+    @property
+    def needs_pre_conversion(self) -> bool:
+        return bool(self.megatron_model_type)
 
     def to_megatron_args(self) -> list[str]:
         """Generate Megatron-LM CLI flags from this architecture spec."""

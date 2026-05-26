@@ -331,7 +331,7 @@ def build_slime_app(
             dataset.validate_prepared(ep)
         data_volume.commit()
 
-    convert_nnodes = get_checkpoint_conversion_policy(slime)[0]
+    convert_nnodes = get_checkpoint_conversion_policy(slime, model=model)[0]
 
     @app.function(
         image=image,
@@ -363,7 +363,7 @@ def build_slime_app(
                 f"Found existing torch_dist checkpoint at {save_path}; skipping conversion."
             )
             return
-        num_nodes, nproc_per_node, extra_args = get_checkpoint_conversion_policy(slime)
+        num_nodes, nproc_per_node, extra_args = get_checkpoint_conversion_policy(slime, model=model)
         node_rank, master_addr, _, nnodes = get_modal_cluster_context(num_nodes)
 
         torchrun_args = [f"--nproc-per-node={nproc_per_node}"]
@@ -623,21 +623,18 @@ def build_slime_app(
             _converted: set[str] = set()
             _hf_path: str | None = None
 
-            def _resolve_hf_path() -> str:
-                nonlocal _hf_path
-                if _hf_path is None:
-                    from huggingface_hub import snapshot_download as _snap
+            if model and (slime.megatron_to_hf_mode == "bridge" or slime.ref_load):
+                from huggingface_hub import snapshot_download as _snap
 
-                    _hf_path = (
-                        str(model.model_path)
-                        if model.model_path
-                        else _snap(model.model_name, local_files_only=True)
-                    )
-                return _hf_path
+                _hf_path = (
+                    str(model.model_path)
+                    if model.model_path
+                    else _snap(model.model_name, local_files_only=True)
+                )
 
             def _start_conversions() -> None:
                 """Scan for new complete checkpoints and start converting them."""
-                if not (model and slime.megatron_to_hf_mode == "bridge"):
+                if not (model and (slime.megatron_to_hf_mode == "bridge" or slime.ref_load)):
                     return
                 prefix = _get_slime_checkpoint_prefix()
                 if not prefix:
@@ -662,7 +659,7 @@ def build_slime_app(
                         if os.path.exists(hf_dir):
                             _converted.add(entry.name)
                             continue
-                        hf_path = _resolve_hf_path()
+                        hf_path = _hf_path
                         convert_cmd = (
                             f"python {SLIME_ROOT}/tools/convert_torch_dist_to_hf.py "
                             f"--input-dir {shlex.quote(entry.path)} "

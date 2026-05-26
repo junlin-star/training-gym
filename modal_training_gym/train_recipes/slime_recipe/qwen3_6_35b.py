@@ -17,7 +17,7 @@ class Qwen3_6_35b_Recipe(SlimeRecipe):
     tensor_model_parallel_size: int = 2
     sequence_parallel: bool = True
     pipeline_model_parallel_size: int = 1
-    context_parallel_size: int = 2
+    context_parallel_size: int = 1
     expert_model_parallel_size: int = 8
     expert_tensor_parallel_size: int = 1
 
@@ -28,6 +28,12 @@ class Qwen3_6_35b_Recipe(SlimeRecipe):
     rollout_max_response_len: int = 4096
     rollout_temperature: float = 1.0
     sglang_mem_fraction_static: float = 0.75
+    sglang_enable_dp_attention: bool = True
+    sglang_dp_size: int | None = 4
+    sglang_ep_size: int | None = 4
+    sglang_enable_dp_lm_head: bool = True
+    sglang_cuda_graph_bs: list[int] | None = None
+    sglang_max_running_requests: int | None = 512
 
     # ── Training ──────────────────────────────────────────────────────────
     n_samples_per_prompt: int = 8
@@ -46,6 +52,8 @@ class Qwen3_6_35b_Recipe(SlimeRecipe):
     attention_backend: str = "flash"
 
     # ── Checkpointing / eval ──────────────────────────────────────────────
+    megatron_to_hf_mode: str = ""
+    ref_load: str = "/checkpoints/torch_dist/Qwen--Qwen3.6-35B-A3B"
     save_interval: int = 20
     eval_interval: int | None = 20
     eval_max_response_len: int = 4096

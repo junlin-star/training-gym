@@ -77,6 +77,12 @@ class TrainConfig:
         with modal.enable_output():
             with app.run():
                 modal_app_id = app.app_id or ""
+                if (
+                    self.model
+                    and getattr(self.model, "architecture", None)
+                    and getattr(self.model.architecture, "needs_pre_conversion", False)
+                ):
+                    app.convert_checkpoint.remote()
                 result_dict = app.train.remote(
                     modal_app_id=modal_app_id,
                     modal_app_url=modal_app_dashboard_url(modal_app_id),

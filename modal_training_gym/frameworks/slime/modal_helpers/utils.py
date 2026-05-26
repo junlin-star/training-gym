@@ -12,7 +12,7 @@ _CONVERSION_EXTRA_ARGS = [
 ]
 
 
-def get_checkpoint_conversion_policy(slime_cfg) -> tuple[int, int, list[str]]:
+def get_checkpoint_conversion_policy(slime_cfg, model=None) -> tuple[int, int, list[str]]:
     """Return (num_nodes, nproc_per_node, extra_args) for checkpoint conversion."""
     gpus_per_node = slime_cfg.actor_num_gpus_per_node
     actor_nodes = slime_cfg.actor_num_nodes
@@ -43,6 +43,11 @@ def get_checkpoint_conversion_policy(slime_cfg) -> tuple[int, int, list[str]]:
         for attr, flag in _CONVERSION_EXTRA_ARGS:
             if x := getattr(slime_cfg, attr, None):
                 extra_args.append(f"--{flag} {x}")
+
+        if model and getattr(model, "architecture", None):
+            mmt = getattr(model.architecture, "megatron_model_type", "")
+            if mmt:
+                extra_args.append(f"--megatron-model-type {mmt}")
 
         return num_nodes, nproc_per_node, extra_args
 

@@ -247,6 +247,11 @@ def _main_impl() -> None:
             rollout_max_response_len=4096,
             rollout_temperature=1.0,
             sglang_mem_fraction_static=0.75,
+            sglang_enable_dp_attention=True,
+            sglang_dp_size=4,
+            sglang_ep_size=4,
+            sglang_enable_dp_lm_head=True,
+            sglang_max_running_requests=512,
 
             global_batch_size=32,
             lr=1e-6,
