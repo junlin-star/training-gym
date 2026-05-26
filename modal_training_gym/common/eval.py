@@ -483,8 +483,25 @@ class HarborEval(EvalConfig):
             sandbox_memory=self.sandbox_memory,
             python_version=self.sandbox_python_version,
         )
+
+        parsed_dict: dict[str, Any] | None = None
+        if self.model is not None:
+            parsed = self.model.parse_response(response)
+            parsed_dict = {
+                "content": parsed.content,
+                "thinking": parsed.thinking,
+                "tool_calls": [
+                    {"name": tc.name, "arguments": tc.arguments}
+                    for tc in parsed.tool_calls
+                ],
+            }
+
         return EvalRowResult(
-            score=score, response=response, prompt=prompt, metadata=metadata
+            score=score,
+            response=response,
+            prompt=prompt,
+            parsed_response=parsed_dict,
+            metadata=metadata,
         )
 
     def __post_init__(self) -> None:
