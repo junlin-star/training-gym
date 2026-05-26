@@ -50,7 +50,7 @@ def _run_instructions():
     """
     Run with:
     ```
-    uv run python tutorials/rl/001_sandboxes/001_sandboxes.py
+    uv run modal run -d tutorials/rl/001_sandboxes/001_sandboxes.py
     ```
     """
 

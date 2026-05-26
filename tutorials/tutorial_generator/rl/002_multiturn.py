@@ -49,7 +49,7 @@ def _run_instructions():
     """
     Run with:
     ```
-    uv run python tutorials/rl/002_multiturn_number_guessing/002_multiturn_number_guessing.py
+    uv run modal run -d tutorials/rl/002_multiturn_number_guessing/002_multiturn_number_guessing.py
     ```
     """
 

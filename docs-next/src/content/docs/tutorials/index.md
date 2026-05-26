@@ -28,7 +28,7 @@ source and emits `tutorials/<bucket>/<name>/<name>.py` + `tutorials/<bucket>/<na
 Regenerate manually after editing a source file:
 
 ```bash
-uv run python tutorials/generate_tutorial.py
+uv run modal run -d tutorials/generate_tutorial.py
 ```
 
 ### Cell decorators

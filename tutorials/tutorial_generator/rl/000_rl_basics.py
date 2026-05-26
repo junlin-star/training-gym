@@ -50,7 +50,7 @@ def run_instructions():
     """
     To run the tutorial, run the following command:
     ```
-    uv run python tutorials/rl/000_rl_basics/000_rl_basics.py
+    uv run modal run -d tutorials/rl/000_rl_basics/000_rl_basics.py
     ```
     """
 

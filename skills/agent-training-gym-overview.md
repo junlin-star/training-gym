@@ -367,5 +367,5 @@ test. Run with `uv run python tests/test_model_configuration.py`.
 - Cross-framework scripts → `modal_training_gym/tools/`.
 - Cross-framework helpers → `modal_training_gym/common/framework.py`.
 - Tutorial sources → `tutorials/tutorial_generator/<name>.py`.
-- Tutorial regeneration → `uv run python tutorials/generate_tutorial.py`.
+- Tutorial regeneration → `uv run modal run -d tutorials/generate_tutorial.py`.
 - Tests → `tests/test_*.py`, run via `uv run python tests/<file>.py`.

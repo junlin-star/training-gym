@@ -44,7 +44,7 @@
 # number matches.
 # Run with:
 # ```
-# uv run python tutorials/rl/003_on_policy_distillation/003_on_policy_distillation.py
+# uv run modal run -d tutorials/rl/003_on_policy_distillation/003_on_policy_distillation.py
 # ```
 # ## Prerequisites
 #

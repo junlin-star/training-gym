@@ -25,7 +25,7 @@
 # and the sandbox — so you control cost, latency, and data privacy.
 # Run with:
 # ```
-# uv run python tutorials/misc/000_agent_sandbox/000_agent_sandbox.py
+# uv run modal run -d tutorials/misc/000_agent_sandbox/000_agent_sandbox.py
 # ```
 # ## Prerequisites
 #

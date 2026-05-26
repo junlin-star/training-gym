@@ -3,6 +3,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 import datetime
+import enum
 from typing import TYPE_CHECKING, Any, Callable
 
 from pydantic import BaseModel, Field
@@ -62,12 +63,20 @@ class EvalRowResult(BaseModel):
     )  # metadata that user can inject about the evaluation result
 
 
+class EvalStatus(str, enum.Enum):
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
 class EvalSummary(BaseModel):
     eval_id: str
     eval_config_id: str
     created_at: datetime.datetime
     total: int
+    expected_total: int | None = None
     mean: float
+    status: EvalStatus = EvalStatus.COMPLETED
 
     @classmethod
     def list_summaries(cls) -> list["EvalSummary"]:
@@ -103,6 +112,8 @@ class EvalResult(BaseModel):
     eval_id: str
     eval_config_id: str
     deployment_id: str
+    expected_total: int | None = None
+    status: EvalStatus = EvalStatus.COMPLETED
     created_at: datetime.datetime = Field(
         default_factory=lambda: datetime.datetime.now(datetime.UTC)
     )
@@ -122,7 +133,9 @@ class EvalResult(BaseModel):
             eval_config_id=self.eval_config_id,
             created_at=self.created_at,
             total=self.total,
+            expected_total=self.expected_total,
             mean=self.mean,
+            status=self.status,
         )
 
     def save(self) -> None:
@@ -273,32 +286,47 @@ class EvalConfig:
         self.save()
         deployment.wait_until_ready()
 
+        examples = self.dataset.load()
+        from collections.abc import Sized
+
+        expected_total = len(examples) if isinstance(examples, Sized) else None
+
         def _evaluate_indexed(
             item: tuple[int, DatasetRow],
         ) -> tuple[int, EvalRowResult]:
             idx, example = item
             return idx, self.eval_fn(deployment, example)
 
-        results: list[EvalRowResult] = []
-        with ThreadPoolExecutor(max_workers=max_concurrency) as executor:
-            indexed_results = executor.map(
-                _evaluate_indexed,
-                enumerate(self.dataset.load(), start=1),
-            )
-            for idx, result in indexed_results:
-                if debug:
-                    print(
-                        f"Finished example {idx}: "
-                        f"response={result.response!r} score={result.score}",
-                        flush=True,
-                    )
-                results.append(result)
-
-        result = EvalResult(
+        eval_result = EvalResult(
             eval_id=f"eval-{uuid4().hex[:12]}",
             deployment_id=deployment.deployment_id,
             eval_config_id=self.eval_config_id,
-            rows=results,
+            expected_total=expected_total,
+            status=EvalStatus.RUNNING,
+            rows=[],
         )
-        result.save()
-        return result
+        eval_result.save()
+
+        try:
+            with ThreadPoolExecutor(max_workers=max_concurrency) as executor:
+                indexed_results = executor.map(
+                    _evaluate_indexed,
+                    enumerate(examples, start=1),
+                )
+                for idx, result in indexed_results:
+                    if debug:
+                        print(
+                            f"Finished example {idx}: "
+                            f"response={result.response!r} score={result.score}",
+                            flush=True,
+                        )
+                    eval_result.rows.append(result)
+                    eval_result.save()
+        except BaseException:
+            eval_result.status = EvalStatus.FAILED
+            eval_result.save()
+            raise
+
+        eval_result.status = EvalStatus.COMPLETED
+        eval_result.save()
+        return eval_result

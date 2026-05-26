@@ -21,7 +21,7 @@ def _merge_recipe(base: SlimeRecipe, overrides: SlimeRecipe) -> SlimeRecipe:
         default_val = getattr(base, f.name)
         if user_val != default_val:
             base_fields[f.name] = user_val
-    return SlimeRecipe(**base_fields)
+    return type(base)(**base_fields)
 
 
 @dataclass(config=ConfigDict(extra="forbid", arbitrary_types_allowed=True))
