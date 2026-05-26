@@ -355,7 +355,7 @@
       <div class="table-wrap">
         <MinimalTableSkeleton
           class="deployments-table"
-          columns={["Name", "Training run name", "Status", "Base model", ""]}
+          columns={["Name", "Training run name", "Status", "Base model", "Created", ""]}
           rows={6}
         />
       </div>
@@ -372,6 +372,7 @@
               <th>Training run name</th>
               <th>Status</th>
               <th>Base model</th>
+              <th>Created</th>
               <th></th>
             </tr>
           </thead>
@@ -413,6 +414,9 @@
                 </td>
                 <td class="model-cell" title={row.baseModel}>
                   {row.baseModel}
+                </td>
+                <td class="created-cell">
+                  <TimeAgo timestamp={row.deployment.created_at || row.run?.created_at} showJustNow falsyRepresentation="—" />
                 </td>
                 <td class="open-link-cell">
                   {#if row.deployment.modal_app_url || row.run?.modal_app_url}

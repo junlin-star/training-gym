@@ -320,11 +320,11 @@
         deployment,
         run: findRunForDeployment(deployment),
       }))
-      .sort((a, b) =>
-        deploymentLabel(a.deployment).localeCompare(
-          deploymentLabel(b.deployment),
-        ),
-      ),
+      .sort((a, b) => {
+        const tsA = a.deployment.created_at || a.run?.created_at || 0;
+        const tsB = b.deployment.created_at || b.run?.created_at || 0;
+        return (tsB || 0) - (tsA || 0);
+      }),
   );
 
   function evalAccuracy(ev) {

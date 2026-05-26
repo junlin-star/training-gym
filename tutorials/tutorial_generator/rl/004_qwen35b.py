@@ -1,0 +1,206 @@
+# pyright: reportUndefinedVariable=false
+"""Tutorial source for `004_qwen35b` — parsed by generate_tutorial.py."""
+
+TUTORIAL_METADATA = {
+    "framework": "`slime`",
+    "cluster_shape": "1 × 8×H100",
+    "summary": "Hill-climb Qwen3.6-35B-A3B on GSM8K math with GRPO",
+    "difficulty": "Advanced",
+    "order": 25,
+    "api_classes": [
+        "HuggingFaceDataset",
+        "DeploymentConfig",
+        "EvalConfig",
+        "EvalRowResult",
+        "ModelDeployment",
+        "Qwen3_6_35B",
+        "SlimeRecipe",
+        "TrainConfig",
+    ],
+}
+
+
+from tutorial_generator import code, markdown, notebook_only, py_only, shell
+
+
+@markdown
+def _intro():
+    """
+    # Hill-climbing GSM8K with Qwen3.6-35B-A3B
+
+    This tutorial trains **Qwen3.6-35B-A3B** (a 35B-parameter MoE model
+    with ~3B active) on grade-school math problems from
+    [DAPO-math-17k](https://huggingface.co/datasets/zhuzilin/dapo-math-17k).
+
+    The loop:
+    1. Load math problems from HuggingFace via `HuggingFaceDataset`.
+    2. Score model outputs using slime's built-in `deepscaler` reward
+       model, which extracts the final numerical answer and compares
+       it to the ground truth.
+    3. Feed that score back as a GRPO reward through SLIME.
+    4. Compare base vs. trained accuracy.
+
+    Qwen3.6-35B-A3B uses a newer HuggingFace architecture class
+    (`Qwen3_5MoeForConditionalGeneration`) that requires checkpoint
+    pre-conversion. The training gym handles this automatically when
+    `megatron_model_type` is set on the model's architecture spec.
+    """
+
+
+@py_only
+@markdown
+def _run_instructions():
+    """
+    Run with:
+    ```
+    uv run modal run -d tutorials/rl/004_qwen35b/004_qwen35b.py
+    ```
+    """
+
+
+@notebook_only
+@shell("%uv pip install -q git+https://github.com/modal-projects/training-gym.git@main")
+def _install():
+    pass
+
+
+@code
+def _imports():
+    from modal_training_gym import (
+        DeploymentConfig,
+        EvalConfig,
+        EvalRowResult,
+        HuggingFaceDataset,
+        ModelDeployment,
+        Qwen3_6_35B,
+        SlimeRecipe,
+        TrainConfig,
+        list_checkpoints,
+    )
+    from modal_training_gym.deploy_recipes.sglang_recipe import Qwen3_6_35b_SglangRecipe
+
+
+@markdown
+def _dataset_intro():
+    """
+    ## Load DAPO-math from HuggingFace
+
+    [DAPO-math-17k](https://huggingface.co/datasets/zhuzilin/dapo-math-17k)
+    contains ~17k math problems with ground-truth answers. We use a
+    small subset for this tutorial — 100 training samples and 20 for eval.
+    """
+
+
+@code
+def _dataset():
+    class MathDataset(HuggingFaceDataset):
+        hf_repo = "zhuzilin/dapo-math-17k"
+        input_column = "prompt"
+        output_column = "label"
+        output_format = "jsonl"
+        apply_chat_template = False
+
+    dataset = MathDataset(n_rows=120)
+
+
+@notebook_only
+@markdown
+def _dataset_preview():
+    """
+    Let's take a quick look at the dataset.
+    """
+
+
+@notebook_only
+@code
+def _dataset_preview_code():
+    rows = dataset.load()
+    for row in rows[:2]:
+        prompt = row["prompt"]
+        if isinstance(prompt, list):
+            prompt = prompt[0]["content"] if prompt else ""
+        print(prompt[:200])
+        print(f"  label: {row['label']}")
+        print()
+
+
+@markdown
+def _train_intro():
+    """
+    ## Train with SLIME
+
+    This MoE model fits on a single node — 1 × 8×H100 (8 GPUs) with
+    TP2, PP1, EP8, and optimizer CPU offload, matching the official
+    Slime recipe for Qwen3.6-35B-A3B.
+
+    Key points:
+    - **`rm_type="deepscaler"`** — slime's built-in math reward that
+      extracts and compares numerical answers. No custom reward function
+      or sandbox needed.
+    - The model's `megatron_model_type` triggers automatic checkpoint
+      pre-conversion from HF to Megatron format before training starts.
+    """
+
+
+@code
+def _train():
+    training_run = TrainConfig(
+        model=Qwen3_6_35B(),
+        dataset=dataset,
+        recipe=SlimeRecipe(
+            rm_type="deepscaler",
+
+            gpu_type="H100",
+            colocate=True,
+            actor_num_nodes=1,
+            actor_num_gpus_per_node=8,
+            tensor_model_parallel_size=2,
+            sequence_parallel=True,
+
+            rollout_num_gpus_per_engine=4,
+            num_rollout=1,
+            rollout_batch_size=8,
+            n_samples_per_prompt=4,
+            rollout_max_response_len=4096,
+            rollout_temperature=1.0,
+            sglang_mem_fraction_static=0.75,
+            sglang_enable_dp_attention=True,
+            sglang_dp_size=4,
+            sglang_ep_size=4,
+            sglang_enable_dp_lm_head=True,
+            sglang_max_running_requests=512,
+
+            global_batch_size=32,
+            lr=1e-6,
+            max_tokens_per_gpu=8192,
+            eval_max_response_len=4096,
+            n_samples_per_eval_prompt=4,
+            save_interval=20,
+            eval_interval=20,
+        ),
+    )
+    print("Starting training...")
+    train_result = training_run.train()
+    print(f"Training run id: {train_result.training_run_id}")
+
+
+@markdown
+def _serve_eval_intro():
+    """
+    ## Serve and evaluate
+
+    Serve the trained checkpoint and run a quick math eval.
+    """
+
+
+@code
+def _serve_trained():
+    checkpoint = list_checkpoints(train_result.training_run_id)[-1]
+    trained_deployment = DeploymentConfig(
+        model=Qwen3_6_35B(),
+        recipe=Qwen3_6_35b_SglangRecipe(),
+        checkpoint=checkpoint,
+        app_name="qwen3-6-35b-math-serve",
+        served_model_name="qwen3-6-35b-math",
+    ).serve()
+    print(f"Trained model URL: {trained_deployment.url}")

@@ -12,14 +12,24 @@ _CONVERSION_EXTRA_ARGS = [
 ]
 
 
-def get_checkpoint_conversion_policy(slime_cfg, model=None) -> tuple[int, int, list[str]]:
+def get_checkpoint_conversion_policy(
+    slime_cfg, model=None
+) -> tuple[int, int, list[str]]:
     """Return (num_nodes, nproc_per_node, extra_args) for checkpoint conversion."""
     gpus_per_node = slime_cfg.actor_num_gpus_per_node
     actor_nodes = slime_cfg.actor_num_nodes
     tp = slime_cfg.tensor_model_parallel_size
     pp = getattr(slime_cfg, "pipeline_model_parallel_size", 1)
 
-    world_size = tp * pp if (tp > 1 or pp > 1) else gpus_per_node
+    needs_preconv = (
+        model
+        and getattr(model, "architecture", None)
+        and getattr(model.architecture, "needs_pre_conversion", False)
+    )
+    if needs_preconv:
+        world_size = actor_nodes * gpus_per_node
+    else:
+        world_size = tp * pp if (tp > 1 or pp > 1) else gpus_per_node
     max_world_size = actor_nodes * gpus_per_node
     if world_size > max_world_size:
         raise ValueError(
@@ -35,9 +45,12 @@ def get_checkpoint_conversion_policy(slime_cfg, model=None) -> tuple[int, int, l
             continue
 
         extra_args: list[str] = []
-        if tp > 1 or pp > 1:
+        conv_tp = tp
+        if needs_preconv:
+            conv_tp = 1
+        if conv_tp > 1 or pp > 1:
             extra_args += [
-                f"--tensor-model-parallel-size {tp}",
+                f"--tensor-model-parallel-size {conv_tp}",
                 f"--pipeline-model-parallel-size {pp}",
             ]
         for attr, flag in _CONVERSION_EXTRA_ARGS:
@@ -45,9 +58,36 @@ def get_checkpoint_conversion_policy(slime_cfg, model=None) -> tuple[int, int, l
                 extra_args.append(f"--{flag} {x}")
 
         if model and getattr(model, "architecture", None):
-            mmt = getattr(model.architecture, "megatron_model_type", "")
-            if mmt:
-                extra_args.append(f"--megatron-model-type {mmt}")
+            arch = model.architecture
+            _arch_fields = [
+                ("num_layers", "num-layers"),
+                ("hidden_size", "hidden-size"),
+                ("ffn_hidden_size", "ffn-hidden-size"),
+                ("num_attention_heads", "num-attention-heads"),
+                ("num_query_groups", "num-query-groups"),
+                ("kv_channels", "kv-channels"),
+                ("vocab_size", "vocab-size"),
+                ("norm_epsilon", "norm-epsilon"),
+                ("rotary_base", "rotary-base"),
+            ]
+            for attr, flag in _arch_fields:
+                val = getattr(arch, attr, 0)
+                if val:
+                    extra_args.append(f"--{flag} {val}")
+            if arch.group_query_attention:
+                extra_args.append("--group-query-attention")
+            if arch.swiglu:
+                extra_args.append("--swiglu")
+            if arch.disable_bias_linear:
+                extra_args.append("--disable-bias-linear")
+            if arch.qk_layernorm:
+                extra_args.append("--qk-layernorm")
+            if arch.untie_embeddings_and_output_weights:
+                extra_args.append("--untie-embeddings-and-output-weights")
+            if arch.normalization and arch.normalization != "LayerNorm":
+                extra_args.append(f"--normalization {arch.normalization}")
+            if arch.use_rotary_position_embeddings:
+                extra_args.append("--position-embedding-type rope")
 
         return num_nodes, nproc_per_node, extra_args
 

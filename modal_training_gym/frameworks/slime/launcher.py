@@ -120,6 +120,16 @@ def build_slime_app(
     SlimeRecipe._validate_custom_model_architecture(model)
     SlimeRecipe._validate_dataset(dataset)
 
+    if (
+        model
+        and getattr(model, "architecture", None)
+        and getattr(model.architecture, "needs_pre_conversion", False)
+    ):
+        slug = model.model_name.replace("/", "--")
+        object.__setattr__(slime, "megatron_to_hf_mode", "")
+        if not slime.ref_load:
+            object.__setattr__(slime, "ref_load", f"/checkpoints/torch_dist/{slug}")
+
     caller_module = resolve_caller_module()
     if caller_module is not None and caller_module.__name__ != "__main__":
         cloudpickle.register_pickle_by_value(caller_module)
@@ -363,7 +373,9 @@ def build_slime_app(
                 f"Found existing torch_dist checkpoint at {save_path}; skipping conversion."
             )
             return
-        num_nodes, nproc_per_node, extra_args = get_checkpoint_conversion_policy(slime, model=model)
+        num_nodes, nproc_per_node, extra_args = get_checkpoint_conversion_policy(
+            slime, model=model
+        )
         node_rank, master_addr, _, nnodes = get_modal_cluster_context(num_nodes)
 
         torchrun_args = [f"--nproc-per-node={nproc_per_node}"]
@@ -389,11 +401,23 @@ def build_slime_app(
         else:
             convert_script = f"{SLIME_ROOT}/tools/convert_hf_to_torch_dist.py"
 
-        cmd = (
-            f"torchrun {' '.join(torchrun_args)} {convert_script} "
-            f"{' '.join(extra_args)} "
-            f"--hf-checkpoint {shlex.quote(hf_path)} --save {shlex.quote(save_path)}"
-        )
+        mmt = ""
+        if model and getattr(model, "architecture", None):
+            mmt = getattr(model.architecture, "megatron_model_type", "")
+        if mmt:
+            model_script = f"{SLIME_ROOT}/scripts/models/{mmt}.sh"
+            cmd = (
+                f"source {model_script} && "
+                f"torchrun {' '.join(torchrun_args)} {convert_script} "
+                f"${{MODEL_ARGS[@]}} "
+                f"--hf-checkpoint {shlex.quote(hf_path)} --save {shlex.quote(save_path)}"
+            )
+        else:
+            cmd = (
+                f"torchrun {' '.join(torchrun_args)} {convert_script} "
+                f"{' '.join(extra_args)} "
+                f"--hf-checkpoint {shlex.quote(hf_path)} --save {shlex.quote(save_path)}"
+            )
 
         env = {**os.environ, **slime.environment}
         if num_nodes > 1:
