@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 
 @dataclass
@@ -133,6 +133,9 @@ class ParsedResponse:
     thinking: str = ""
 
 
+ResponseParser = Callable[[str], ParsedResponse]
+
+
 class ModelConfig:
     """Base class for model identity and weight-download logic.
 
@@ -140,13 +143,15 @@ class ModelConfig:
     ``architecture``) as class attributes, then override ``download()``
     to materialize weights into the shared model volume.
 
-    Override ``parse_response`` to handle model-specific output formats
-    (thinking tags, chat-template delimiters, tool-call blocks).
+    Set ``response_parser`` to a function that converts raw model output
+    into a :class:`ParsedResponse`.  For example, Qwen3 models set
+    ``response_parser = parse_qwen3_response``.
     """
 
     model_name: str = ""
     model_path: str | None = None
     architecture: ModelArchitecture | None = None
+    response_parser: ResponseParser | None = None
 
     def __init__(self, **kwargs: Any) -> None:
         for k, v in kwargs.items():
@@ -159,10 +164,11 @@ class ModelConfig:
     def parse_response(self, text: str) -> ParsedResponse:
         """Parse raw model output into structured content.
 
-        The base implementation returns the text as-is.  Model-family
-        subclasses override this to strip thinking tags, chat-template
-        delimiters, and extract tool calls.
+        Delegates to ``self.response_parser`` when set, otherwise
+        returns the text as-is.
         """
+        if self.response_parser is not None:
+            return self.response_parser(text)
         return ParsedResponse(content=text)
 
 
@@ -187,43 +193,38 @@ class HFModelConfiguration(ModelConfig):
 _QWEN3_TOOL_CALL_RE = re.compile(r"<tool_call>\s*(.*?)\s*</tool_call>", re.DOTALL)
 
 
-class Qwen3ModelConfig(HFModelConfiguration):
-    """HFModelConfiguration with Qwen3-family output parsing.
+def parse_qwen3_response(text: str) -> ParsedResponse:
+    """Parse Qwen3-family model output into structured content.
 
     Handles ``<think>``/``</think>`` reasoning blocks,
     ``<|im_start|>``/``<|im_end|>`` chat-template delimiters,
     and ``<tool_call>``/``</tool_call>`` tool invocations.
     """
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
 
-    def parse_response(self, text: str) -> ParsedResponse:
-        text = text.replace("\r\n", "\n").replace("\r", "\n")
+    if "<|im_start|>assistant" in text:
+        text = text.rsplit("<|im_start|>assistant", 1)[-1]
+    text = text.replace("<|im_end|>", "")
 
-        # Strip chat-template delimiters
-        if "<|im_start|>assistant" in text:
-            text = text.rsplit("<|im_start|>assistant", 1)[-1]
-        text = text.replace("<|im_end|>", "")
+    thinking = ""
+    if "</think>" in text:
+        parts = text.split("</think>", 1)
+        thinking = parts[0].replace("<think>", "").strip()
+        text = parts[1]
+    text = text.replace("<think>", "")
 
-        # Extract thinking
-        thinking = ""
-        if "</think>" in text:
-            parts = text.split("</think>", 1)
-            thinking = parts[0].replace("<think>", "").strip()
-            text = parts[1]
-        text = text.replace("<think>", "")
-
-        # Parse tool calls
-        tool_calls: list[ToolCall] = []
-        for match in _QWEN3_TOOL_CALL_RE.finditer(text):
-            try:
-                data = json.loads(match.group(1))
-                tool_calls.append(
-                    ToolCall(
-                        name=data.get("name", ""),
-                        arguments=data.get("arguments", {}),
-                    )
+    tool_calls: list[ToolCall] = []
+    for match in _QWEN3_TOOL_CALL_RE.finditer(text):
+        try:
+            data = json.loads(match.group(1))
+            tool_calls.append(
+                ToolCall(
+                    name=data.get("name", ""),
+                    arguments=data.get("arguments", {}),
                 )
-            except (json.JSONDecodeError, KeyError, TypeError):
-                continue
-        content = _QWEN3_TOOL_CALL_RE.sub("", text).strip()
+            )
+        except (json.JSONDecodeError, KeyError, TypeError):
+            continue
+    content = _QWEN3_TOOL_CALL_RE.sub("", text).strip()
 
-        return ParsedResponse(content=content, tool_calls=tool_calls, thinking=thinking)
+    return ParsedResponse(content=content, tool_calls=tool_calls, thinking=thinking)

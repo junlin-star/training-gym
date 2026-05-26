@@ -108,11 +108,11 @@ API_REFERENCE_MANIFEST = [
         "sidebar_label": "ParsedResponse",
     },
     {
-        "class_name": "Qwen3ModelConfig",
+        "class_name": "parse_qwen3_response",
         "module": "modal_training_gym.common.models.base",
         "group": "models",
         "class_type": "behavior",
-        "sidebar_label": "Qwen3ModelConfig",
+        "sidebar_label": "parse_qwen3_response",
     },
     {
         "class_name": "Qwen3_0_6B",

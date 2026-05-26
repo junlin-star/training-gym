@@ -1,14 +1,16 @@
 """Qwen3-0.6B model spec as a concrete HFModelConfiguration subclass."""
 
-from .base import ModelArchitecture, Qwen3ModelConfig
+from .base import HFModelConfiguration, ModelArchitecture, parse_qwen3_response
 
 
-class Qwen3_0_6B(Qwen3ModelConfig):
+class Qwen3_0_6B(HFModelConfiguration):
     """Qwen3-0.6B (0.6 billion parameters) from Alibaba.
 
     Pre-configured with full ``ModelArchitecture`` for Megatron-based
     frameworks (slime). Downloads from ``Qwen/Qwen3-0.6B`` on HuggingFace.
     """
+
+    response_parser = parse_qwen3_response
 
     model_name = "Qwen/Qwen3-0.6B"
     architecture = ModelArchitecture(

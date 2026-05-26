@@ -3,8 +3,8 @@ from .base import (
     ModelArchitecture,
     ModelConfig,
     ParsedResponse,
-    Qwen3ModelConfig,
     ToolCall,
+    parse_qwen3_response,
 )
 from .qwen3_0_6b import Qwen3_0_6B
 from .qwen3_1_7b import Qwen3_1_7B
@@ -19,7 +19,6 @@ __all__ = [
     "ModelArchitecture",
     "ModelConfig",
     "ParsedResponse",
-    "Qwen3ModelConfig",
     "Qwen3_0_6B",
     "Qwen3_1_7B",
     "Qwen3_4B",
@@ -28,4 +27,5 @@ __all__ = [
     "Qwen3_30B",
     "Qwen3_32B",
     "ToolCall",
+    "parse_qwen3_response",
 ]

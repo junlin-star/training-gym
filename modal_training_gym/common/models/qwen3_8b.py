@@ -1,14 +1,16 @@
 """Qwen3-8B model spec as a concrete HFModelConfiguration subclass."""
 
-from .base import ModelArchitecture, Qwen3ModelConfig
+from .base import HFModelConfiguration, ModelArchitecture, parse_qwen3_response
 
 
-class Qwen3_8B(Qwen3ModelConfig):
+class Qwen3_8B(HFModelConfiguration):
     """Qwen3-8B (8 billion parameters) from Alibaba.
 
     Pre-configured with full ``ModelArchitecture`` for Megatron-based
     frameworks (slime). Downloads from ``Qwen/Qwen3-8B`` on HuggingFace.
     """
+
+    response_parser = parse_qwen3_response
 
     model_name = "Qwen/Qwen3-8B"
     architecture = ModelArchitecture(
