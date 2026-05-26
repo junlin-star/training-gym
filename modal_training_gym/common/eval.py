@@ -10,6 +10,8 @@ from pydantic import BaseModel, Field
 from modal_training_gym.common.dataset import DatasetRow
 from modal_training_gym.utils.metadata import MetadataStore, vol_get, vol_list, vol_put
 
+from modal_training_gym.common.models.base import ParsedResponse
+
 if TYPE_CHECKING:
     from modal_training_gym.common.dataset import DatasetConfig
     from modal_training_gym.common.deployment import ModelDeployment
@@ -57,6 +59,7 @@ class EvalRowResult(BaseModel):
     score: float
     response: str = ""  # TODO, this doesn't have to be a string
     prompt: str = ""
+    parsed_response: ParsedResponse | None = None
     metadata: dict[str, Any] = Field(
         default_factory=dict
     )  # metadata that user can inject about the evaluation result

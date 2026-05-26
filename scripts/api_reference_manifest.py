@@ -94,6 +94,27 @@ API_REFERENCE_MANIFEST = [
     },
     # --- Models ---
     {
+        "class_name": "ToolCall",
+        "module": "modal_training_gym.common.models.base",
+        "group": "models",
+        "class_type": "config_data",
+        "sidebar_label": "ToolCall",
+    },
+    {
+        "class_name": "ParsedResponse",
+        "module": "modal_training_gym.common.models.base",
+        "group": "models",
+        "class_type": "config_data",
+        "sidebar_label": "ParsedResponse",
+    },
+    {
+        "class_name": "parse_qwen3_response",
+        "module": "modal_training_gym.common.models.base",
+        "group": "models",
+        "class_type": "behavior",
+        "sidebar_label": "parse_qwen3_response",
+    },
+    {
         "class_name": "Qwen3_0_6B",
         "module": "modal_training_gym.common.models.qwen3_0_6b",
         "group": "models",
