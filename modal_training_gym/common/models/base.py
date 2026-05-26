@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+import json
+import re
+from dataclasses import dataclass, field
 from typing import Any
 
 
@@ -114,12 +116,32 @@ class ModelArchitecture:
         return args
 
 
+@dataclass
+class ToolCall:
+    """A parsed tool invocation from model output."""
+
+    name: str
+    arguments: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class ParsedResponse:
+    """Structured result of parsing raw model output."""
+
+    content: str
+    tool_calls: list[ToolCall] = field(default_factory=list)
+    thinking: str = ""
+
+
 class ModelConfig:
     """Base class for model identity and weight-download logic.
 
     Subclass and set ``model_name`` (and optionally ``model_path`` and
     ``architecture``) as class attributes, then override ``download()``
     to materialize weights into the shared model volume.
+
+    Override ``parse_response`` to handle model-specific output formats
+    (thinking tags, chat-template delimiters, tool-call blocks).
     """
 
     model_name: str = ""
@@ -133,6 +155,15 @@ class ModelConfig:
     def download(self) -> None:
         """Download or materialize weights into the model volume."""
         raise NotImplementedError(f"{type(self).__name__} has no download()")
+
+    def parse_response(self, text: str) -> ParsedResponse:
+        """Parse raw model output into structured content.
+
+        The base implementation returns the text as-is.  Model-family
+        subclasses override this to strip thinking tags, chat-template
+        delimiters, and extract tool calls.
+        """
+        return ParsedResponse(content=text)
 
 
 class HFModelConfiguration(ModelConfig):
@@ -149,3 +180,50 @@ class HFModelConfiguration(ModelConfig):
         if self.model_path:
             kwargs["local_dir"] = str(self.model_path)
         snapshot_download(**kwargs)
+
+
+# ── Qwen3 family ───────────────────────────────────────────────────────
+
+_QWEN3_TOOL_CALL_RE = re.compile(r"<tool_call>\s*(.*?)\s*</tool_call>", re.DOTALL)
+
+
+class Qwen3ModelConfig(HFModelConfiguration):
+    """HFModelConfiguration with Qwen3-family output parsing.
+
+    Handles ``<think>``/``</think>`` reasoning blocks,
+    ``<|im_start|>``/``<|im_end|>`` chat-template delimiters,
+    and ``<tool_call>``/``</tool_call>`` tool invocations.
+    """
+
+    def parse_response(self, text: str) -> ParsedResponse:
+        text = text.replace("\r\n", "\n").replace("\r", "\n")
+
+        # Strip chat-template delimiters
+        if "<|im_start|>assistant" in text:
+            text = text.rsplit("<|im_start|>assistant", 1)[-1]
+        text = text.replace("<|im_end|>", "")
+
+        # Extract thinking
+        thinking = ""
+        if "</think>" in text:
+            parts = text.split("</think>", 1)
+            thinking = parts[0].replace("<think>", "").strip()
+            text = parts[1]
+        text = text.replace("<think>", "")
+
+        # Parse tool calls
+        tool_calls: list[ToolCall] = []
+        for match in _QWEN3_TOOL_CALL_RE.finditer(text):
+            try:
+                data = json.loads(match.group(1))
+                tool_calls.append(
+                    ToolCall(
+                        name=data.get("name", ""),
+                        arguments=data.get("arguments", {}),
+                    )
+                )
+            except (json.JSONDecodeError, KeyError, TypeError):
+                continue
+        content = _QWEN3_TOOL_CALL_RE.sub("", text).strip()
+
+        return ParsedResponse(content=content, tool_calls=tool_calls, thinking=thinking)

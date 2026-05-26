@@ -1,9 +1,9 @@
 """Qwen3-30B-A3B model spec as a concrete HFModelConfiguration subclass."""
 
-from .base import HFModelConfiguration, ModelArchitecture
+from .base import ModelArchitecture, Qwen3ModelConfig
 
 
-class Qwen3_30B(HFModelConfiguration):
+class Qwen3_30B(Qwen3ModelConfig):
     """Qwen3-30B-A3B (30B total, ~3B active) MoE model from Alibaba.
 
     Mixture-of-Experts with 128 experts, 8 active per token.
