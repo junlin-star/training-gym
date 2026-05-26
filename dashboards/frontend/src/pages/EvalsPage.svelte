@@ -809,7 +809,24 @@
                         <pre class="example-section-text">{promptText}</pre>
                       </div>
                     {/if}
-                    {#if row.response}
+                    {#if row.parsed_response}
+                      {#if row.parsed_response.thinking}
+                        <div class="example-section">
+                          <span class="example-section-label">Thinking</span>
+                          <pre class="example-section-text parsed-thinking">{row.parsed_response.thinking}</pre>
+                        </div>
+                      {/if}
+                      <div class="example-section">
+                        <span class="example-section-label">Content</span>
+                        <pre class="example-section-text">{row.parsed_response.content}</pre>
+                      </div>
+                      {#if row.parsed_response.tool_calls?.length}
+                        <div class="example-section">
+                          <span class="example-section-label">Tool calls</span>
+                          <pre class="example-section-text">{JSON.stringify(row.parsed_response.tool_calls, null, 2)}</pre>
+                        </div>
+                      {/if}
+                    {:else if row.response}
                       <div class="example-section">
                         <span class="example-section-label">Response</span>
                         <pre class="example-section-text">{row.response}</pre>
@@ -1539,6 +1556,12 @@
     padding: 8px;
     max-height: 200px;
     overflow-y: auto;
+  }
+
+  .parsed-thinking {
+    opacity: 0.6;
+    border-left: 2px solid var(--color-c-orange-80, #f0a040);
+    padding-left: 10px;
   }
 
   .example-section-score {

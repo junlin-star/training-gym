@@ -57,6 +57,7 @@ class EvalRowResult(BaseModel):
     score: float
     response: str = ""  # TODO, this doesn't have to be a string
     prompt: str = ""
+    parsed_response: dict[str, Any] | None = None
     metadata: dict[str, Any] = Field(
         default_factory=dict
     )  # metadata that user can inject about the evaluation result
