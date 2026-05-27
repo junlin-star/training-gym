@@ -26,13 +26,15 @@ def get_checkpoint_conversion_policy(
         and getattr(model, "architecture", None)
         and getattr(model.architecture, "needs_pre_conversion", False)
     )
+    ep = getattr(slime_cfg, "expert_model_parallel_size", 1) or 1
+    etp = getattr(slime_cfg, "expert_tensor_parallel_size", 1) or 1
+
     if needs_preconv:
-        # Match training TP exactly so Megatron doesn't need to re-shard
-        # (re-sharding triggers BytesIO errors in dist_checkpointing).
-        # PP is forced to 1 and EP is left at 1 — expert re-sharding
-        # (EP 1→N) works fine because it only redistributes whole expert
-        # tensors rather than splitting/merging tensor data.
-        world_size = tp
+        # Match ALL training parallelism dims exactly so Megatron
+        # doesn't attempt any re-sharding at load time (re-sharding
+        # triggers BytesIO errors in dist_checkpointing).
+        pp = 1
+        world_size = actor_nodes * gpus_per_node
     else:
         world_size = tp * pp if (tp > 1 or pp > 1) else gpus_per_node
     max_world_size = actor_nodes * gpus_per_node
@@ -60,8 +62,8 @@ def get_checkpoint_conversion_policy(
             ]
         if needs_preconv:
             extra_args += [
-                "--expert-model-parallel-size 1",
-                "--expert-tensor-parallel-size 1",
+                f"--expert-model-parallel-size {ep}",
+                f"--expert-tensor-parallel-size {etp}",
             ]
         for attr, flag in _CONVERSION_EXTRA_ARGS:
             if x := getattr(slime_cfg, attr, None):
