@@ -128,7 +128,7 @@ def build_slime_app(
         slug = model.model_name.replace("/", "--")
         object.__setattr__(slime, "megatron_to_hf_mode", "")
         if not slime.ref_load:
-            object.__setattr__(slime, "ref_load", f"/checkpoints/torch_dist/{slug}-v4")
+            object.__setattr__(slime, "ref_load", f"/checkpoints/torch_dist/{slug}-v5")
 
     caller_module = resolve_caller_module()
     if caller_module is not None and caller_module.__name__ != "__main__":
@@ -408,19 +408,23 @@ def build_slime_app(
         if mmt:
             model_script = f"{SLIME_ROOT}/scripts/models/{mmt}.sh"
             pp_override = getattr(slime, "pipeline_model_parallel_size", 1)
-            filter_pp = (
+            tp_override = getattr(slime, "tensor_model_parallel_size", 1)
+            filter_parallel = (
                 "FILTERED_ARGS=(); skip=false; "
                 'for a in "${MODEL_ARGS[@]}"; do '
-                'if [[ "$a" == --pipeline-model-parallel-size ]]; then skip=true; continue; fi; '
+                'if [[ "$a" == --pipeline-model-parallel-size ]] || '
+                '[[ "$a" == --tensor-model-parallel-size ]]; then '
+                "skip=true; continue; fi; "
                 "if $skip; then skip=false; continue; fi; "
                 'FILTERED_ARGS+=("$a"); '
                 "done"
             )
             cmd = (
-                f"source {model_script} && {filter_pp} && "
+                f"source {model_script} && {filter_parallel} && "
                 f"torchrun {' '.join(torchrun_args)} {convert_script} "
                 f'"${{FILTERED_ARGS[@]}}" '
                 f"--pipeline-model-parallel-size {pp_override} "
+                f"--tensor-model-parallel-size {tp_override} "
                 f"--hf-checkpoint {shlex.quote(hf_path)} --save {shlex.quote(save_path)}"
             )
         else:
