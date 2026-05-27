@@ -69,6 +69,12 @@ class ModelArchitecture:
         the HF checkpoint to torch_dist format before training instead
         of relying on bridge-mode auto-detection. Default ``""``.
 
+    ## Attention Extras
+
+    attention_output_gate : bool
+        Enable output gating on attention layers (required by some
+        hybrid architectures such as Qwen 3.6). Default ``False``.
+
     ## Position Encoding
 
     use_rotary_position_embeddings : bool
@@ -99,6 +105,7 @@ class ModelArchitecture:
     moe_router_topk: int = 0
     megatron_spec: list[str] | None = None
     megatron_model_type: str = ""
+    attention_output_gate: bool = False
     use_rotary_position_embeddings: bool = True
     rotary_base: int = 10000
 
@@ -155,6 +162,8 @@ class ModelArchitecture:
             args += ["--moe-router-topk", str(self.moe_router_topk)]
         if self.megatron_spec:
             args += ["--spec"] + list(self.megatron_spec)
+        if self.attention_output_gate:
+            args.append("--attention-output-gate")
         if self.use_rotary_position_embeddings:
             args += ["--position-embedding-type", "rope"]
             if self.rotary_base != 10000:

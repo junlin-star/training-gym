@@ -299,6 +299,7 @@ class SlimeRecipe(BaseTrainRecipe):
                 else {}
             ),
             **({"spec": arch.megatron_spec} if arch.megatron_spec else {}),
+            **({"attention_output_gate": True} if arch.attention_output_gate else {}),
             "use_rotary_position_embeddings": arch.use_rotary_position_embeddings,
             "rotary_base": arch.rotary_base,
         }

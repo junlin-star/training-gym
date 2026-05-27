@@ -114,6 +114,8 @@ def get_checkpoint_conversion_policy(
                 extra_args.append(f"--moe-router-topk {arch.moe_router_topk}")
             if arch.megatron_spec:
                 extra_args.append(f"--spec {' '.join(arch.megatron_spec)}")
+            if arch.attention_output_gate:
+                extra_args.append("--attention-output-gate")
             if arch.use_rotary_position_embeddings:
                 extra_args.append("--use-rotary-position-embeddings")
                 extra_args.append("--position-embedding-type rope")
