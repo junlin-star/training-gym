@@ -69,29 +69,30 @@ SLIME_ROOT = "/root/slime"
 SLIME_IMAGE = "slimerl/slime@sha256:2568a8283b913eeea86b68397288f9ebdb59ebad4eab11c64ee3ce0c49819c3a"
 HARBOR_PKG_VERSION = "0.6.6"
 
-# Inline Python script that patches /root/Megatron-LM validation.py
+# Base64-encoded Python script that patches /root/Megatron-LM validation.py
 # so validate_sharding_integrity logs a warning instead of raising.
 # Executed at image-build time to avoid import-time side effects.
-_PATCH_VALIDATION_SCRIPT = r"""
-import re, pathlib
-p = pathlib.Path("/root/Megatron-LM/megatron/core/dist_checkpointing/validation.py")
-src = p.read_text()
-old = "def validate_sharding_integrity("
-if old in src and "_orig_impl" not in src:
-    src = src.replace(
-        old,
-        "def validate_sharding_integrity(*_a, **_k):\n"
-        "    import warnings as _w\n"
-        "    try:\n"
-        "        return _validate_sharding_integrity_orig_impl(*_a, **_k)\n"
-        "    except Exception as _e:\n"
-        '        _w.warn(f"Skipped sharding integrity validation: {_e}")\n'
-        "\n\n"
-        "def _validate_sharding_integrity_orig_impl(",
-        1,
-    )
-    p.write_text(src)
-"""
+# Base64 avoids Dockerfile quoting issues with multiline strings.
+_PATCH_VALIDATION_B64: str
+_patch_src = (
+    "import pathlib\n"
+    "p = pathlib.Path('/root/Megatron-LM/megatron/core/dist_checkpointing/validation.py')\n"
+    "src = p.read_text()\n"
+    "old = 'def validate_sharding_integrity('\n"
+    "if old in src and '_orig_impl' not in src:\n"
+    "    new = (\n"
+    "        'def validate_sharding_integrity(*_a, **_k):\\n'\n"
+    "        '    import warnings as _w\\n'\n"
+    "        '    try:\\n'\n"
+    "        '        return _validate_sharding_integrity_orig_impl(*_a, **_k)\\n'\n"
+    "        '    except Exception as _e:\\n'\n"
+    "        '        _w.warn(f\"Skipped sharding integrity validation: {_e}\")\\n'\n"
+    "        '\\n\\n'\n"
+    "        'def _validate_sharding_integrity_orig_impl('\n"
+    "    )\n"
+    "    p.write_text(src.replace(old, new, 1))\n"
+)
+_PATCH_VALIDATION_B64 = base64.b64encode(_patch_src.encode()).decode()
 
 
 def _build_slime_base_image() -> "Image":
@@ -179,7 +180,7 @@ def build_slime_app(
     )
     if _has_hybrid_spec:
         image = image.run_commands(
-            "python3 -c " + shlex.quote(_PATCH_VALIDATION_SCRIPT)
+            f"echo {_PATCH_VALIDATION_B64} | base64 -d | python3"
         )
 
     if slime.image_overlay is not None:
