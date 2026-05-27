@@ -410,14 +410,17 @@ def build_slime_app(
             pp_override = getattr(slime, "pipeline_model_parallel_size", 1)
             tp_override = getattr(slime, "tensor_model_parallel_size", 1)
             filter_parallel = (
+                'echo "DEBUG: MODEL_ARGS=${MODEL_ARGS[*]}"; '
                 "FILTERED_ARGS=(); skip=false; "
                 'for a in "${MODEL_ARGS[@]}"; do '
-                'if [[ "$a" == --pipeline?model?parallel?size ]] || '
-                '[[ "$a" == --tensor?model?parallel?size ]]; then '
-                "skip=true; continue; fi; "
-                "if $skip; then skip=false; continue; fi; "
+                'if echo "$a" | grep -qE "^--(pipeline|tensor).model.parallel.size$"; then '
+                'echo "DEBUG_FILTER: skipping flag: $a"; skip=true; continue; fi; '
+                "if $skip; then "
+                'echo "DEBUG_FILTER: skipping value: $a"; '
+                "skip=false; continue; fi; "
                 'FILTERED_ARGS+=("$a"); '
-                "done"
+                "done; "
+                'echo "DEBUG: FILTERED count=${#FILTERED_ARGS[@]}"'
             )
             cmd = (
                 f"source {model_script} && {filter_parallel} && "
