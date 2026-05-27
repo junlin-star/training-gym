@@ -128,7 +128,7 @@ def build_slime_app(
         slug = model.model_name.replace("/", "--")
         object.__setattr__(slime, "megatron_to_hf_mode", "")
         if not slime.ref_load:
-            object.__setattr__(slime, "ref_load", f"/checkpoints/torch_dist/{slug}")
+            object.__setattr__(slime, "ref_load", f"/checkpoints/torch_dist/{slug}-v2")
 
     caller_module = resolve_caller_module()
     if caller_module is not None and caller_module.__name__ != "__main__":
@@ -368,6 +368,7 @@ def build_slime_app(
         else:
             hf_path = snapshot_download(model.model_name, local_files_only=True)
         save_path = str(slime.ref_load)
+
         if _has_torch_dist_checkpoint(save_path):
             print(
                 f"Found existing torch_dist checkpoint at {save_path}; skipping conversion."
@@ -404,12 +405,11 @@ def build_slime_app(
         mmt = ""
         if model and getattr(model, "architecture", None):
             mmt = getattr(model.architecture, "megatron_model_type", "")
-        if mmt:
-            model_script = f"{SLIME_ROOT}/scripts/models/{mmt}.sh"
+        if mmt and model and getattr(model, "architecture", None):
+            arch_args = " ".join(model.architecture.to_megatron_args())
             cmd = (
-                f"source {model_script} && "
                 f"torchrun {' '.join(torchrun_args)} {convert_script} "
-                f"${{MODEL_ARGS[@]}} "
+                f"{arch_args} "
                 f"--hf-checkpoint {shlex.quote(hf_path)} --save {shlex.quote(save_path)}"
             )
         else:
