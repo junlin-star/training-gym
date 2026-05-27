@@ -299,11 +299,6 @@ class SlimeRecipe(BaseTrainRecipe):
                 else {}
             ),
             **({"spec": arch.megatron_spec} if arch.megatron_spec else {}),
-            **(
-                {"no_ckpt_load_validate_sharding_integrity": True}
-                if arch.megatron_spec
-                else {}
-            ),
             "use_rotary_position_embeddings": arch.use_rotary_position_embeddings,
             "rotary_base": arch.rotary_base,
         }
