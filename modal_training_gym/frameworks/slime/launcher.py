@@ -128,7 +128,7 @@ def build_slime_app(
         slug = model.model_name.replace("/", "--")
         object.__setattr__(slime, "megatron_to_hf_mode", "")
         if not slime.ref_load:
-            object.__setattr__(slime, "ref_load", f"/checkpoints/torch_dist/{slug}-v6")
+            object.__setattr__(slime, "ref_load", f"/checkpoints/torch_dist/{slug}-v7")
 
     caller_module = resolve_caller_module()
     if caller_module is not None and caller_module.__name__ != "__main__":
@@ -409,21 +409,18 @@ def build_slime_app(
             model_script = f"{SLIME_ROOT}/scripts/models/{mmt}.sh"
             pp_override = getattr(slime, "pipeline_model_parallel_size", 1)
             tp_override = getattr(slime, "tensor_model_parallel_size", 1)
-            filter_parallel = (
-                'echo "DEBUG: MODEL_ARGS=${MODEL_ARGS[*]}"; '
-                "FILTERED_ARGS=(); skip=false; "
+            filter_spec = (
+                "FILTERED_ARGS=(); skip_count=0; "
                 'for a in "${MODEL_ARGS[@]}"; do '
-                'if echo "$a" | grep -qE "^--(pipeline|tensor).model.parallel.size$"; then '
-                'echo "DEBUG_FILTER: skipping flag: $a"; skip=true; continue; fi; '
-                "if $skip; then "
-                'echo "DEBUG_FILTER: skipping value: $a"; '
-                "skip=false; continue; fi; "
+                "if [ $skip_count -gt 0 ]; then "
+                "skip_count=$((skip_count-1)); continue; fi; "
+                'if [[ "$a" == --spec ]]; then '
+                "skip_count=2; continue; fi; "
                 'FILTERED_ARGS+=("$a"); '
-                "done; "
-                'echo "DEBUG: FILTERED count=${#FILTERED_ARGS[@]}"'
+                "done"
             )
             cmd = (
-                f"source {model_script} && {filter_parallel} && "
+                f"source {model_script} && {filter_spec} && "
                 f"torchrun {' '.join(torchrun_args)} {convert_script} "
                 f'"${{FILTERED_ARGS[@]}}" '
                 f"--pipeline-model-parallel-size {pp_override} "
