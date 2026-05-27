@@ -128,7 +128,7 @@ def build_slime_app(
         slug = model.model_name.replace("/", "--")
         object.__setattr__(slime, "megatron_to_hf_mode", "")
         if not slime.ref_load:
-            object.__setattr__(slime, "ref_load", f"/checkpoints/torch_dist/{slug}-v9")
+            object.__setattr__(slime, "ref_load", f"/checkpoints/torch_dist/{slug}-v10")
 
     caller_module = resolve_caller_module()
     if caller_module is not None and caller_module.__name__ != "__main__":
@@ -409,13 +409,38 @@ def build_slime_app(
             convert_script = f"{SLIME_ROOT}/tools/convert_hf_to_torch_dist.py"
         if mmt:
             model_script = f"{SLIME_ROOT}/scripts/models/{mmt}.sh"
-            cmd = (
-                f"source {model_script} && "
-                f"torchrun {' '.join(torchrun_args)} {convert_script} "
-                '"${MODEL_ARGS[@]}" '
-                f"{' '.join(extra_args)} "
-                f"--hf-checkpoint {shlex.quote(hf_path)} --save {shlex.quote(save_path)}"
-            )
+            if needs_preconv:
+                # Strip parallelism flags from MODEL_ARGS so the only
+                # source of TP/PP/EP is our extra_args (last-value-wins
+                # is standard argparse behaviour, but some Megatron forks
+                # deviate — filtering is the safest approach).
+                filter_cmd = (
+                    "CONV_ARGS=(); SKIP=0; "
+                    'for a in "${MODEL_ARGS[@]}"; do '
+                    '  if [ "$SKIP" = 1 ]; then SKIP=0; continue; fi; '
+                    '  case "$a" in '
+                    "    --tensor-model-parallel-size|--pipeline-model-parallel-size|"
+                    "--expert-model-parallel-size|--expert-tensor-parallel-size|"
+                    "--context-parallel-size) SKIP=1; continue ;; "
+                    "  esac; "
+                    '  CONV_ARGS+=("$a"); '
+                    "done"
+                )
+                cmd = (
+                    f"source {model_script} && {filter_cmd} && "
+                    f"torchrun {' '.join(torchrun_args)} {convert_script} "
+                    '"${CONV_ARGS[@]}" '
+                    f"{' '.join(extra_args)} "
+                    f"--hf-checkpoint {shlex.quote(hf_path)} --save {shlex.quote(save_path)}"
+                )
+            else:
+                cmd = (
+                    f"source {model_script} && "
+                    f"torchrun {' '.join(torchrun_args)} {convert_script} "
+                    '"${MODEL_ARGS[@]}" '
+                    f"{' '.join(extra_args)} "
+                    f"--hf-checkpoint {shlex.quote(hf_path)} --save {shlex.quote(save_path)}"
+                )
         else:
             cmd = (
                 f"torchrun {' '.join(torchrun_args)} {convert_script} "

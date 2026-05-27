@@ -27,10 +27,11 @@ def get_checkpoint_conversion_policy(
         and getattr(model.architecture, "needs_pre_conversion", False)
     )
     if needs_preconv:
-        # Match training parallelism exactly so Megatron doesn't need to
-        # re-shard the checkpoint (re-sharding triggers BytesIO errors in
-        # dist_checkpointing).  We disable the upstream script's automatic
-        # PP auto-inflation via SKIP_PP_AUTOINFLATE so PP stays at 1.
+        # Match training TP exactly so Megatron doesn't need to re-shard
+        # (re-sharding triggers BytesIO errors in dist_checkpointing).
+        # PP is forced to 1 and EP is left at 1 — expert re-sharding
+        # (EP 1→N) works fine because it only redistributes whole expert
+        # tensors rather than splitting/merging tensor data.
         world_size = tp
     else:
         world_size = tp * pp if (tp > 1 or pp > 1) else gpus_per_node
@@ -56,6 +57,11 @@ def get_checkpoint_conversion_policy(
             extra_args += [
                 f"--tensor-model-parallel-size {conv_tp}",
                 f"--pipeline-model-parallel-size {pp}",
+            ]
+        if needs_preconv:
+            extra_args += [
+                "--expert-model-parallel-size 1",
+                "--expert-tensor-parallel-size 1",
             ]
         for attr, flag in _CONVERSION_EXTRA_ARGS:
             if x := getattr(slime_cfg, attr, None):
@@ -90,6 +96,14 @@ def get_checkpoint_conversion_policy(
                 extra_args.append("--untie-embeddings-and-output-weights")
             if arch.normalization and arch.normalization != "LayerNorm":
                 extra_args.append(f"--normalization {arch.normalization}")
+            if arch.num_experts:
+                extra_args.append(f"--num-experts {arch.num_experts}")
+            if arch.moe_ffn_hidden_size:
+                extra_args.append(f"--moe-ffn-hidden-size {arch.moe_ffn_hidden_size}")
+            if arch.moe_shared_expert_intermediate_size:
+                extra_args.append(
+                    f"--moe-shared-expert-intermediate-size {arch.moe_shared_expert_intermediate_size}"
+                )
             if arch.use_rotary_position_embeddings:
                 extra_args.append("--position-embedding-type rope")
 
