@@ -291,6 +291,8 @@ class SlimeRecipe(BaseTrainRecipe):
                 if arch.moe_shared_expert_intermediate_size
                 else {}
             ),
+            **({"moe_grouped_gemm": True} if arch.moe_grouped_gemm else {}),
+            **({"moe_shared_expert_gate": True} if arch.moe_shared_expert_gate else {}),
             "use_rotary_position_embeddings": arch.use_rotary_position_embeddings,
             "rotary_base": arch.rotary_base,
         }

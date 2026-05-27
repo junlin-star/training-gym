@@ -30,6 +30,8 @@ class Qwen3_6_35B(HFModelConfiguration):
         num_experts=256,
         moe_ffn_hidden_size=512,
         moe_shared_expert_intermediate_size=512,
+        moe_grouped_gemm=True,
+        moe_shared_expert_gate=True,
         megatron_model_type="qwen3.5-35B-A3B",
         use_rotary_position_embeddings=True,
         rotary_base=10000000,
