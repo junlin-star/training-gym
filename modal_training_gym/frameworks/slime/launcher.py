@@ -409,16 +409,18 @@ def build_slime_app(
             model_script = f"{SLIME_ROOT}/scripts/models/{mmt}.sh"  # noqa: F841
             pp_override = getattr(slime, "pipeline_model_parallel_size", 1)  # noqa: F841
             tp_override = getattr(slime, "tensor_model_parallel_size", 1)  # noqa: F841
-            inspect_script = (
-                "import importlib, inspect; "
-                "m = importlib.import_module('slime_plugins.models.qwen3_5'); "
-                "spec = m.get_qwen3_5_spec(); "
-                "print('SPEC_TYPE:', type(spec)); "
-                "print('SPEC_VALUE:', spec); "
-                "print('SPEC_SOURCE:'); "
-                "print(inspect.getsource(m.get_qwen3_5_spec))"
-            )
-            cmd = f'python3 -c "{inspect_script}"'
+            debug_script = "/tmp/_debug_spec.py"
+            with open(debug_script, "w") as f:
+                f.write(
+                    "import importlib, inspect\n"
+                    "m = importlib.import_module('slime_plugins.models.qwen3_5')\n"
+                    "spec = m.get_qwen3_5_spec()\n"
+                    "print('SPEC_TYPE:', type(spec))\n"
+                    "print('SPEC_VALUE:', spec)\n"
+                    "print('SPEC_SOURCE:')\n"
+                    "print(inspect.getsource(m.get_qwen3_5_spec))\n"
+                )
+            cmd = f"python3 {debug_script}"
         else:
             cmd = (
                 f"torchrun {' '.join(torchrun_args)} {convert_script} "
