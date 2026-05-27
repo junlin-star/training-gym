@@ -406,44 +406,13 @@ def build_slime_app(
         if model and getattr(model, "architecture", None):
             mmt = getattr(model.architecture, "megatron_model_type", "")
         if mmt:
-            model_script = f"{SLIME_ROOT}/scripts/models/{mmt}.sh"
-            pp_override = getattr(slime, "pipeline_model_parallel_size", 1)
-            tp_override = getattr(slime, "tensor_model_parallel_size", 1)
-            # Filter --spec from MODEL_ARGS, replace with wrapper that
-            # preserves PP/TP after the original spec modifies them.
-            filter_and_rewrap = (
-                "FILTERED_ARGS=(); SPEC_MOD=''; SPEC_FN=''; skip=0; "
-                'for a in "${MODEL_ARGS[@]}"; do '
-                "if [ $skip -eq 2 ]; then SPEC_MOD=$a; skip=1; continue; fi; "
-                "if [ $skip -eq 1 ]; then SPEC_FN=$a; skip=0; continue; fi; "
-                'if [ "$a" = --spec ]; then skip=2; continue; fi; '
-                'FILTERED_ARGS+=("$a"); done; '
-                'if [ -n "$SPEC_MOD" ]; then '
-                "cat > /tmp/_spec_wrapper.py << 'PYEOF'\n"
-                "import importlib\n"
-                "import os\n"
-                "_mod = importlib.import_module(os.environ['_SPEC_MOD'])\n"
-                "_orig = getattr(_mod, os.environ['_SPEC_FN'])\n"
-                "def patched(args, config, vp_stage):\n"
-                "    pp = args.pipeline_model_parallel_size\n"
-                "    tp = args.tensor_model_parallel_size\n"
-                "    result = _orig(args, config, vp_stage)\n"
-                "    args.pipeline_model_parallel_size = pp\n"
-                "    args.tensor_model_parallel_size = tp\n"
-                "    return result\n"
-                "PYEOF\n"
-                "export _SPEC_MOD=$SPEC_MOD _SPEC_FN=$SPEC_FN; "
-                "fi"
-            )
+            model_script = f"{SLIME_ROOT}/scripts/models/{mmt}.sh"  # noqa: F841
+            pp_override = getattr(slime, "pipeline_model_parallel_size", 1)  # noqa: F841
+            tp_override = getattr(slime, "tensor_model_parallel_size", 1)  # noqa: F841
             cmd = (
-                f"source {model_script} && {filter_and_rewrap} && "
-                f"PYTHONPATH=/tmp:$PYTHONPATH "
-                f"torchrun {' '.join(torchrun_args)} {convert_script} "
-                f'"${{FILTERED_ARGS[@]}}" '
-                f"--spec _spec_wrapper patched "
-                f"--pipeline-model-parallel-size {pp_override} "
-                f"--tensor-model-parallel-size {tp_override} "
-                f"--hf-checkpoint {shlex.quote(hf_path)} --save {shlex.quote(save_path)}"
+                f"head -200 {SLIME_ROOT}/tools/convert_hf_to_torch_dist.py; "
+                f"echo '=== GREP SPEC ==='; "
+                f"grep -n 'spec\\|parallel.*size\\|total_model' {SLIME_ROOT}/tools/convert_hf_to_torch_dist.py"
             )
         else:
             cmd = (
