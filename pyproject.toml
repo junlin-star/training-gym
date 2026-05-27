@@ -2,7 +2,14 @@
 name = "modal-training-gym"
 version = "0.1.0"
 description = "Reusable building blocks for Modal multi-node training examples"
+readme = "README.md"
+license = {file = "LICENSE"}
+authors = [{name = "Modal Labs"}]
 requires-python = ">=3.12"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+]
 dependencies = [
     "modal",
     "cloudpickle",
@@ -22,6 +29,10 @@ packages = ["modal_training_gym"]
 
 [project.scripts]
 training-gym = "modal_training_gym.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/modal-projects/training-gym"
+Documentation = "https://gym.modal.dev"
 
 [dependency-groups]
 dev = [
