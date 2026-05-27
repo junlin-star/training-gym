@@ -94,6 +94,29 @@ _patch_src = (
 )
 _PATCH_VALIDATION_B64 = base64.b64encode(_patch_src.encode()).decode()
 
+# Patch _replace_sharded_keys_with_state_dict_keys in torch.py to skip
+# non-list entries (BytesIO from _extra_state).  Without this, loading
+# hybrid-model checkpoints crashes with "object of type '_io.BytesIO'
+# has no len()".
+_PATCH_TORCH_LOAD_B64: str
+_patch_torch_src = (
+    "import pathlib, re\n"
+    "p = pathlib.Path('/root/Megatron-LM/megatron/core/dist_checkpointing/strategies/torch.py')\n"
+    "src = p.read_text()\n"
+    "# Insert a guard before the assert that checks len(tensors)\n"
+    "old = '        assert len(tensors) == len(rename_mapping[k])'\n"
+    "if old in src and 'isinstance(tensors, list)' not in src:\n"
+    "    new = (\n"
+    "        '        if not isinstance(tensors, list):\\n'\n"
+    "        '            continue  # skip BytesIO / _extra_state entries\\n'\n"
+    "        '        assert len(tensors) == len(rename_mapping[k])'\n"
+    "    )\n"
+    "    src = src.replace(old, new, 1)\n"
+    "    p.write_text(src)\n"
+    "    print('Patched _replace_sharded_keys_with_state_dict_keys in torch.py')\n"
+)
+_PATCH_TORCH_LOAD_B64 = base64.b64encode(_patch_torch_src.encode()).decode()
+
 
 def _build_slime_base_image() -> "Image":
     return (
@@ -153,7 +176,7 @@ def build_slime_app(
         slug = model.model_name.replace("/", "--")
         object.__setattr__(slime, "megatron_to_hf_mode", "")
         if not slime.ref_load:
-            object.__setattr__(slime, "ref_load", f"/checkpoints/torch_dist/{slug}-v27")
+            object.__setattr__(slime, "ref_load", f"/checkpoints/torch_dist/{slug}-v28")
 
     caller_module = resolve_caller_module()
     if caller_module is not None and caller_module.__name__ != "__main__":
@@ -213,7 +236,8 @@ def build_slime_app(
     train_image = image
     if _has_hybrid_spec:
         train_image = image.run_commands(
-            f"echo {_PATCH_VALIDATION_B64} | base64 -d | python3"
+            f"echo {_PATCH_VALIDATION_B64} | base64 -d | python3",
+            f"echo {_PATCH_TORCH_LOAD_B64} | base64 -d | python3",
         )
 
     def _get_custom_generate_path() -> str:
