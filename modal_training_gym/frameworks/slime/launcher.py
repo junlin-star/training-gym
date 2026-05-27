@@ -405,11 +405,13 @@ def build_slime_app(
         mmt = ""
         if model and getattr(model, "architecture", None):
             mmt = getattr(model.architecture, "megatron_model_type", "")
-        if mmt and model and getattr(model, "architecture", None):
-            arch_args = " ".join(model.architecture.to_megatron_args())
+        if mmt:
+            model_script = f"{SLIME_ROOT}/scripts/models/{mmt}.sh"
             cmd = (
+                f"source {model_script} && "
                 f"torchrun {' '.join(torchrun_args)} {convert_script} "
-                f"{arch_args} "
+                f"${{MODEL_ARGS[@]}} "
+                f"--pipeline-model-parallel-size 1 "
                 f"--hf-checkpoint {shlex.quote(hf_path)} --save {shlex.quote(save_path)}"
             )
         else:
