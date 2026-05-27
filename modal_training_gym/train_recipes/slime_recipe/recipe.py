@@ -293,6 +293,7 @@ class SlimeRecipe(BaseTrainRecipe):
             ),
             **({"moe_grouped_gemm": True} if arch.moe_grouped_gemm else {}),
             **({"moe_shared_expert_gate": True} if arch.moe_shared_expert_gate else {}),
+            **({"spec": arch.megatron_spec} if arch.megatron_spec else {}),
             "use_rotary_position_embeddings": arch.use_rotary_position_embeddings,
             "rotary_base": arch.rotary_base,
         }

@@ -96,6 +96,7 @@ class ModelArchitecture:
     moe_shared_expert_intermediate_size: int = 0
     moe_grouped_gemm: bool = False
     moe_shared_expert_gate: bool = False
+    megatron_spec: list[str] | None = None
     megatron_model_type: str = ""
     use_rotary_position_embeddings: bool = True
     rotary_base: int = 10000
@@ -149,6 +150,8 @@ class ModelArchitecture:
             args.append("--moe-grouped-gemm")
         if self.moe_shared_expert_gate:
             args.append("--moe-shared-expert-gate")
+        if self.megatron_spec:
+            args += ["--spec"] + list(self.megatron_spec)
         if self.use_rotary_position_embeddings:
             args += ["--position-embedding-type", "rope"]
             if self.rotary_base != 10000:
