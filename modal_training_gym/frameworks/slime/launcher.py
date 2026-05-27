@@ -406,16 +406,19 @@ def build_slime_app(
         if model and getattr(model, "architecture", None):
             mmt = getattr(model.architecture, "megatron_model_type", "")
         if mmt:
-            model_script = f"{SLIME_ROOT}/scripts/models/{mmt}.sh"
+            model_script = f"{SLIME_ROOT}/scripts/models/{mmt}.sh"  # noqa: F841
             pp_override = getattr(slime, "pipeline_model_parallel_size", 1)  # noqa: F841
             tp_override = getattr(slime, "tensor_model_parallel_size", 1)  # noqa: F841
-            debug_vars = (
-                'echo "DEBUG_VARS:"; '
-                "declare -p | grep -i 'parallel\\|model.*size\\|ARGS' || true; "
-                "env | grep -i 'parallel\\|model.*size' || true; "
-                'echo "DEBUG_ALL_VARS_END"'
+            inspect_script = (
+                "import importlib, inspect\\n"
+                "m = importlib.import_module('slime_plugins.models.qwen3_5')\\n"
+                "spec = m.get_qwen3_5_spec()\\n"
+                "print('SPEC_TYPE:', type(spec))\\n"
+                "print('SPEC_VALUE:', spec)\\n"
+                "print('SPEC_SOURCE:')\\n"
+                "print(inspect.getsource(m.get_qwen3_5_spec))"
             )
-            cmd = f"source {model_script} && {debug_vars} && exit 1"
+            cmd = f'python3 -c "{inspect_script}"'
         else:
             cmd = (
                 f"torchrun {' '.join(torchrun_args)} {convert_script} "
