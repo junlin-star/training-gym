@@ -153,7 +153,7 @@ def build_slime_app(
         slug = model.model_name.replace("/", "--")
         object.__setattr__(slime, "megatron_to_hf_mode", "")
         if not slime.ref_load:
-            object.__setattr__(slime, "ref_load", f"/checkpoints/torch_dist/{slug}-v24")
+            object.__setattr__(slime, "ref_load", f"/checkpoints/torch_dist/{slug}-v25")
 
     caller_module = resolve_caller_module()
     if caller_module is not None and caller_module.__name__ != "__main__":
@@ -518,22 +518,21 @@ def build_slime_app(
             debug_script = (
                 "import os, torch\n"
                 f"ckpt_dir = '{save_path}/release'\n"
-                "if os.path.isdir(ckpt_dir):\n"
-                "    subdirs = sorted(os.listdir(ckpt_dir))\n"
-                "    print(f'release/ subdirs: {subdirs}')\n"
-                "    for sd in subdirs[:2]:\n"
-                "        sd_path = os.path.join(ckpt_dir, sd)\n"
-                "        if os.path.isdir(sd_path):\n"
-                "            files = sorted(os.listdir(sd_path))[:20]\n"
-                "            print(f'  {sd}/: {files}')\n"
-                "            meta_f = os.path.join(sd_path, '.metadata')\n"
-                "            if os.path.exists(meta_f):\n"
-                "                md = torch.load(meta_f, weights_only=False)\n"
-                "                if hasattr(md, 'state_dict_metadata'):\n"
-                "                    keys = sorted(md.state_dict_metadata.keys())\n"
-                "                    print(f'  Checkpoint keys ({len(keys)}):')\n"
-                "                    for k in keys[:40]:\n"
-                "                        print(f'    {k}')\n"
+                "meta_f = os.path.join(ckpt_dir, '.metadata')\n"
+                "print(f'Loading metadata from: {meta_f}')\n"
+                "print(f'Exists: {os.path.exists(meta_f)}')\n"
+                "md = torch.load(meta_f, weights_only=False)\n"
+                "print(f'Type: {type(md)}')\n"
+                "attrs = [a for a in dir(md) if not a.startswith('_')]\n"
+                "print(f'Attrs: {attrs}')\n"
+                "if hasattr(md, 'state_dict_metadata'):\n"
+                "    keys = sorted(md.state_dict_metadata.keys())\n"
+                "    print(f'Checkpoint keys ({len(keys)}):')\n"
+                "    for k in keys[:50]:\n"
+                "        v = md.state_dict_metadata[k]\n"
+                "        print(f'  {k}: {type(v).__name__}')\n"
+                "elif hasattr(md, 'planner_data'):\n"
+                "    print(f'planner_data: {md.planner_data}')\n"
             )
             encoded = base64.b64encode(debug_script.encode()).decode()
             subprocess.run(
