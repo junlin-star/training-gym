@@ -197,6 +197,15 @@ def build_slime_app(
     image = image.add_local_python_source("modal_training_gym", copy=True)
     image = mount_tools_dir(image)
 
+    if caller_script is not None:
+        caller_module_name = os.path.splitext(os.path.basename(caller_script))[0]
+        caller_remote_path = f"/root/{caller_module_name}.py"
+        image = image.add_local_file(
+            caller_script,
+            remote_path=caller_remote_path,
+            copy=True,
+        )
+
     # Build a separate training image with the validation patch.
     # Conversion must use the UNPATCHED image so sharding metadata is
     # saved correctly; training uses the patched image so checkpoint
@@ -205,15 +214,6 @@ def build_slime_app(
     if _has_hybrid_spec:
         train_image = image.run_commands(
             f"echo {_PATCH_VALIDATION_B64} | base64 -d | python3"
-        )
-
-    if caller_script is not None:
-        caller_module_name = os.path.splitext(os.path.basename(caller_script))[0]
-        caller_remote_path = f"/root/{caller_module_name}.py"
-        image = image.add_local_file(
-            caller_script,
-            remote_path=caller_remote_path,
-            copy=True,
         )
 
     def _get_custom_generate_path() -> str:
