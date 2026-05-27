@@ -153,7 +153,7 @@ def build_slime_app(
         slug = model.model_name.replace("/", "--")
         object.__setattr__(slime, "megatron_to_hf_mode", "")
         if not slime.ref_load:
-            object.__setattr__(slime, "ref_load", f"/checkpoints/torch_dist/{slug}-v26")
+            object.__setattr__(slime, "ref_load", f"/checkpoints/torch_dist/{slug}-v27")
 
     caller_module = resolve_caller_module()
     if caller_module is not None and caller_module.__name__ != "__main__":
@@ -516,18 +516,27 @@ def build_slime_app(
             import base64
 
             debug_script = (
-                "import os\n"
+                "import os, re\n"
                 "from torch.distributed.checkpoint import FileSystemReader\n"
                 f"ckpt_dir = '{save_path}/release'\n"
                 "reader = FileSystemReader(ckpt_dir)\n"
                 "md = reader.read_metadata()\n"
-                "print(f'Type: {type(md)}')\n"
-                "if hasattr(md, 'state_dict_metadata'):\n"
-                "    keys = sorted(md.state_dict_metadata.keys())\n"
-                "    print(f'Checkpoint keys ({len(keys)}):')\n"
-                "    for k in keys[:60]:\n"
-                "        v = md.state_dict_metadata[k]\n"
-                "        print(f'  {k}: {type(v).__name__}')\n"
+                "keys = sorted(md.state_dict_metadata.keys())\n"
+                "tensor_keys = [k for k in keys if 'Tensor' in type(md.state_dict_metadata[k]).__name__]\n"
+                "bytes_keys = [k for k in keys if 'Bytes' in type(md.state_dict_metadata[k]).__name__]\n"
+                "print(f'Total: {len(keys)}, Tensor: {len(tensor_keys)}, Bytes: {len(bytes_keys)}')\n"
+                "# Show pattern of tensor keys (deduplicate layer/expert indices)\n"
+                "patterns = set()\n"
+                "for k in tensor_keys:\n"
+                "    p = re.sub(r'\\d+', 'N', k)\n"
+                "    patterns.add(p)\n"
+                "print(f'Tensor key patterns ({len(patterns)}):')\n"
+                "for p in sorted(patterns):\n"
+                "    print(f'  {p}')\n"
+                "print(f'First 20 tensor keys:')\n"
+                "for k in tensor_keys[:20]:\n"
+                "    v = md.state_dict_metadata[k]\n"
+                "    print(f'  {k}: size={v.size}')\n"
             )
             encoded = base64.b64encode(debug_script.encode()).decode()
             subprocess.run(
