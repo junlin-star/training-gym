@@ -153,7 +153,7 @@ def build_slime_app(
         slug = model.model_name.replace("/", "--")
         object.__setattr__(slime, "megatron_to_hf_mode", "")
         if not slime.ref_load:
-            object.__setattr__(slime, "ref_load", f"/checkpoints/torch_dist/{slug}-v22")
+            object.__setattr__(slime, "ref_load", f"/checkpoints/torch_dist/{slug}-v23")
 
     caller_module = resolve_caller_module()
     if caller_module is not None and caller_module.__name__ != "__main__":
@@ -512,6 +512,24 @@ def build_slime_app(
 
         if node_rank == 0:
             print(f"Saved torch_dist checkpoint to {save_path}")
+            # Debug: inspect checkpoint key structure
+            debug_ckpt = (
+                "import os, torch; "
+                f"ckpt_dir = '{save_path}/release'; "
+                "if os.path.isdir(ckpt_dir): "
+                "  subdirs = sorted(os.listdir(ckpt_dir)); print(f'release/ subdirs: {subdirs}'); "
+                "  for sd in subdirs[:2]: "
+                "    sd_path = os.path.join(ckpt_dir, sd); "
+                "    if os.path.isdir(sd_path): "
+                "      files = sorted(os.listdir(sd_path))[:20]; print(f'  {sd}/: {files}'); "
+                "      meta_f = os.path.join(sd_path, '.metadata'); "
+                "      if os.path.exists(meta_f): "
+                "        md = torch.load(meta_f, weights_only=False); "
+                "        if hasattr(md, 'state_dict_metadata'): "
+                "          keys = sorted(md.state_dict_metadata.keys()); "
+                "          print(f'  Checkpoint keys ({len(keys)}): {keys[:30]}...'); "
+            )
+            subprocess.run(["python3", "-c", debug_ckpt], env=env)
 
     @app.function(
         image=image,
