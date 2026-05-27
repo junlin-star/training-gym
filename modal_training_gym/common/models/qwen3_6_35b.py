@@ -32,6 +32,7 @@ class Qwen3_6_35B(HFModelConfiguration):
         moe_shared_expert_intermediate_size=512,
         moe_grouped_gemm=True,
         moe_shared_expert_gate=True,
+        moe_router_topk=8,
         megatron_spec=["slime_plugins.models.qwen3_5", "get_qwen3_5_spec"],
         megatron_model_type="qwen3.5-35B-A3B",
         use_rotary_position_embeddings=True,
