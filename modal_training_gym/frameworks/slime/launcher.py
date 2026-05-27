@@ -128,7 +128,7 @@ def build_slime_app(
         slug = model.model_name.replace("/", "--")
         object.__setattr__(slime, "megatron_to_hf_mode", "")
         if not slime.ref_load:
-            object.__setattr__(slime, "ref_load", f"/checkpoints/torch_dist/{slug}-v5")
+            object.__setattr__(slime, "ref_load", f"/checkpoints/torch_dist/{slug}-v6")
 
     caller_module = resolve_caller_module()
     if caller_module is not None and caller_module.__name__ != "__main__":
@@ -412,8 +412,8 @@ def build_slime_app(
             filter_parallel = (
                 "FILTERED_ARGS=(); skip=false; "
                 'for a in "${MODEL_ARGS[@]}"; do '
-                'if [[ "$a" == --pipeline-model-parallel-size ]] || '
-                '[[ "$a" == --tensor-model-parallel-size ]]; then '
+                'if [[ "$a" == --pipeline?model?parallel?size ]] || '
+                '[[ "$a" == --tensor?model?parallel?size ]]; then '
                 "skip=true; continue; fi; "
                 "if $skip; then skip=false; continue; fi; "
                 'FILTERED_ARGS+=("$a"); '
