@@ -115,6 +115,7 @@ def get_checkpoint_conversion_policy(
             if arch.megatron_spec:
                 extra_args.append(f"--spec {' '.join(arch.megatron_spec)}")
             if arch.use_rotary_position_embeddings:
+                extra_args.append("--use-rotary-position-embeddings")
                 extra_args.append("--position-embedding-type rope")
 
         return num_nodes, nproc_per_node, extra_args
