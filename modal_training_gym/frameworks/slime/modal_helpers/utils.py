@@ -173,26 +173,4 @@ def build_train_cmd(slime_cfg, slime_root: str, model=None, dataset=None) -> str
     train_script = (
         f"{slime_root}/{'train_async.py' if slime_cfg.async_mode else 'train.py'}"
     )
-    args_str = shlex.join(slime_cfg.cli_args(dataset=dataset, model=model))
-
-    # Hybrid models (e.g., GDN + standard attention via --spec) trigger a
-    # validation error in Megatron's dist_checkpointing because not all
-    # layers have the same parameters.  Newer Megatron has
-    # --no-ckpt-load-validate-sharding-integrity but the Slime image may
-    # ship an older version.  Use a patched wrapper to swallow the error.
-    needs_patch = (
-        model
-        and getattr(model, "architecture", None)
-        and getattr(model.architecture, "megatron_spec", None)
-    )
-    if needs_patch:
-        import importlib.util
-
-        spec = importlib.util.find_spec(
-            "modal_training_gym.frameworks.slime.modal_helpers.patched_train_runner"
-        )
-        wrapper = spec.origin if spec else None
-        if wrapper:
-            return f"python3 {wrapper} {train_script} {args_str}"
-
-    return f"python3 {train_script} {args_str}"
+    return f"python3 {train_script} {shlex.join(slime_cfg.cli_args(dataset=dataset, model=model))}"
