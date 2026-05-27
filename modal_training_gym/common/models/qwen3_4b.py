@@ -10,7 +10,7 @@ class Qwen3_4B(HFModelConfiguration):
     frameworks (slime). Downloads from ``Qwen/Qwen3-4B`` on HuggingFace.
     """
 
-    response_parser = parse_qwen3_response
+    response_parser = staticmethod(parse_qwen3_response)
 
     model_name = "Qwen/Qwen3-4B"
     architecture = ModelArchitecture(

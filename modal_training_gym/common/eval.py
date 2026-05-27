@@ -440,6 +440,7 @@ class HarborEval(EvalConfig):
     """
 
     model: "ModelConfig | None" = None
+    test_cases: list[dict[str, str]] | None = None
     sandbox_timeout: int = 60
     sandbox_cpu: float = 1.0
     sandbox_memory: int = 1024
@@ -455,8 +456,10 @@ class HarborEval(EvalConfig):
                 label = {}
         if isinstance(label, dict):
             cases = label.get("test_cases")
-            if isinstance(cases, list):
+            if isinstance(cases, list) and cases:
                 return cases
+        if self.test_cases is not None:
+            return self.test_cases
         return []
 
     def _extract_code(self, text: str) -> str:
@@ -464,14 +467,29 @@ class HarborEval(EvalConfig):
             return self.extract_code_fn(text)
         return extract_code(text, model=self.model)
 
+    def _build_messages(self, example: DatasetRow, prompt: str) -> list[dict[str, str]]:
+        messages = example.get("messages")
+        if isinstance(messages, list) and messages:
+            return messages
+        msgs: list[dict[str, str]] = []
+        sys_prompt = getattr(self.dataset, "system_prompt", "")
+        if sys_prompt:
+            msgs.append({"role": "system", "content": sys_prompt})
+        msgs.append({"role": "user", "content": prompt})
+        return msgs
+
     def _harbor_eval_fn(
         self,
         deployment: "ModelDeployment",
         example: DatasetRow,
     ) -> EvalRowResult:
         prompt = self.build_prompt(example)
+        messages = self._build_messages(example, prompt)
         response = deployment.generate(
-            prompt, ensure_ready=False, **self.generate_kwargs
+            prompt,
+            ensure_ready=False,
+            messages=messages,
+            **self.generate_kwargs,
         )
         code = self._extract_code(response)
         test_cases = self._resolve_test_cases(example)
