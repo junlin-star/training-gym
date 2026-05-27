@@ -153,7 +153,7 @@ def build_slime_app(
         slug = model.model_name.replace("/", "--")
         object.__setattr__(slime, "megatron_to_hf_mode", "")
         if not slime.ref_load:
-            object.__setattr__(slime, "ref_load", f"/checkpoints/torch_dist/{slug}-v25")
+            object.__setattr__(slime, "ref_load", f"/checkpoints/torch_dist/{slug}-v26")
 
     caller_module = resolve_caller_module()
     if caller_module is not None and caller_module.__name__ != "__main__":
@@ -516,23 +516,18 @@ def build_slime_app(
             import base64
 
             debug_script = (
-                "import os, torch\n"
+                "import os\n"
+                "from torch.distributed.checkpoint import FileSystemReader\n"
                 f"ckpt_dir = '{save_path}/release'\n"
-                "meta_f = os.path.join(ckpt_dir, '.metadata')\n"
-                "print(f'Loading metadata from: {meta_f}')\n"
-                "print(f'Exists: {os.path.exists(meta_f)}')\n"
-                "md = torch.load(meta_f, weights_only=False)\n"
+                "reader = FileSystemReader(ckpt_dir)\n"
+                "md = reader.read_metadata()\n"
                 "print(f'Type: {type(md)}')\n"
-                "attrs = [a for a in dir(md) if not a.startswith('_')]\n"
-                "print(f'Attrs: {attrs}')\n"
                 "if hasattr(md, 'state_dict_metadata'):\n"
                 "    keys = sorted(md.state_dict_metadata.keys())\n"
                 "    print(f'Checkpoint keys ({len(keys)}):')\n"
-                "    for k in keys[:50]:\n"
+                "    for k in keys[:60]:\n"
                 "        v = md.state_dict_metadata[k]\n"
                 "        print(f'  {k}: {type(v).__name__}')\n"
-                "elif hasattr(md, 'planner_data'):\n"
-                "    print(f'planner_data: {md.planner_data}')\n"
             )
             encoded = base64.b64encode(debug_script.encode()).decode()
             subprocess.run(
