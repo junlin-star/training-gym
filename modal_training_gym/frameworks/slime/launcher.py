@@ -153,7 +153,7 @@ def build_slime_app(
         slug = model.model_name.replace("/", "--")
         object.__setattr__(slime, "megatron_to_hf_mode", "")
         if not slime.ref_load:
-            object.__setattr__(slime, "ref_load", f"/checkpoints/torch_dist/{slug}-v20")
+            object.__setattr__(slime, "ref_load", f"/checkpoints/torch_dist/{slug}-v21")
 
     caller_module = resolve_caller_module()
     if caller_module is not None and caller_module.__name__ != "__main__":
@@ -456,14 +456,28 @@ def build_slime_app(
         if mmt:
             model_script = f"{SLIME_ROOT}/scripts/models/{mmt}.sh"
             if needs_preconv:
-                # For pre-conversion, skip MODEL_ARGS entirely and rely
-                # only on extra_args (built from ModelArchitecture).  This
-                # avoids structural mismatches caused by bash-script flags
-                # (e.g. --attention-output-gate) that the training recipe
-                # does not set.  We still source the script for env vars.
+                # Strip parallelism flags from MODEL_ARGS so the only
+                # source of TP/PP/EP is our extra_args.  The bridge
+                # (AutoBridge) needs MODEL_ARGS to correctly map HF
+                # weights, so we keep all non-parallelism flags.
+                # Extra_args append --use-rotary-position-embeddings etc.
+                # so the conversion model matches training's structure.
+                filter_cmd = (
+                    "CONV_ARGS=(); SKIP=0; "
+                    'for a in "${MODEL_ARGS[@]}"; do '
+                    '  if [ "$SKIP" = 1 ]; then SKIP=0; continue; fi; '
+                    '  case "$a" in '
+                    "    --tensor-model-parallel-size|--pipeline-model-parallel-size"
+                    "|--expert-model-parallel-size|--expert-tensor-parallel-size"
+                    "|--context-parallel-size) SKIP=1; continue ;; "
+                    "  esac; "
+                    '  CONV_ARGS+=("$a"); '
+                    "done"
+                )
                 cmd = (
-                    f"source {model_script} && "
+                    f"source {model_script} && {filter_cmd} && "
                     f"torchrun {' '.join(torchrun_args)} {convert_script} "
+                    '"${CONV_ARGS[@]}" '
                     f"{' '.join(extra_args)} "
                     f"--hf-checkpoint {shlex.quote(hf_path)} --save {shlex.quote(save_path)}"
                 )
