@@ -27,7 +27,7 @@ def get_checkpoint_conversion_policy(
         and getattr(model.architecture, "needs_pre_conversion", False)
     )
     if needs_preconv:
-        world_size = 1
+        world_size = actor_nodes * gpus_per_node
     else:
         world_size = tp * pp if (tp > 1 or pp > 1) else gpus_per_node
     max_world_size = actor_nodes * gpus_per_node

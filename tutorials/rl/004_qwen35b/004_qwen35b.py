@@ -16,9 +16,9 @@
 # 4. Compare base vs. trained accuracy.
 #
 # Qwen3.6-35B-A3B uses a newer HuggingFace architecture class
-# (`Qwen3_5MoeForConditionalGeneration`). The training gym loads
-# the HuggingFace checkpoint directly via bridge mode — no manual
-# checkpoint conversion is needed.
+# (`Qwen3_5MoeForConditionalGeneration`) that requires checkpoint
+# pre-conversion. The training gym handles this automatically when
+# `megatron_model_type` is set on the model's architecture spec.
 # Run with:
 # ```
 # uv run modal run -d tutorials/rl/004_qwen35b/004_qwen35b.py
@@ -82,8 +82,8 @@ def _main_impl() -> None:
     # - **`rm_type="deepscaler"`** — slime's built-in math reward that
     #   extracts and compares numerical answers. No custom reward function
     #   or sandbox needed.
-    # - The model is loaded from HuggingFace via bridge mode, which
-    #   converts the HF checkpoint to Megatron format on the fly.
+    # - The model's `megatron_model_type` triggers automatic checkpoint
+    #   pre-conversion from HF to Megatron format before training starts.
 
     training_run = TrainConfig(
         model=Qwen3_6_35B(),

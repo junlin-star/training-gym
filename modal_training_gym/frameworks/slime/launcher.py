@@ -128,7 +128,7 @@ def build_slime_app(
         slug = model.model_name.replace("/", "--")
         object.__setattr__(slime, "megatron_to_hf_mode", "")
         if not slime.ref_load:
-            object.__setattr__(slime, "ref_load", f"/checkpoints/torch_dist/{slug}-v2")
+            object.__setattr__(slime, "ref_load", f"/checkpoints/torch_dist/{slug}-v3")
 
     caller_module = resolve_caller_module()
     if caller_module is not None and caller_module.__name__ != "__main__":
@@ -407,11 +407,14 @@ def build_slime_app(
             mmt = getattr(model.architecture, "megatron_model_type", "")
         if mmt:
             model_script = f"{SLIME_ROOT}/scripts/models/{mmt}.sh"
+            pp_override = getattr(slime, "pipeline_model_parallel_size", 1)
+            tp_override = getattr(slime, "tensor_model_parallel_size", 1)
             cmd = (
                 f"source {model_script} && "
                 f"torchrun {' '.join(torchrun_args)} {convert_script} "
                 f"${{MODEL_ARGS[@]}} "
-                f"--pipeline-model-parallel-size 1 "
+                f"--pipeline-model-parallel-size {pp_override} "
+                f"--tensor-model-parallel-size {tp_override} "
                 f"--hf-checkpoint {shlex.quote(hf_path)} --save {shlex.quote(save_path)}"
             )
         else:
