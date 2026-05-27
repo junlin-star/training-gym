@@ -128,7 +128,7 @@ def build_slime_app(
         slug = model.model_name.replace("/", "--")
         object.__setattr__(slime, "megatron_to_hf_mode", "")
         if not slime.ref_load:
-            object.__setattr__(slime, "ref_load", f"/checkpoints/torch_dist/{slug}-v12")
+            object.__setattr__(slime, "ref_load", f"/checkpoints/torch_dist/{slug}-v13")
 
     caller_module = resolve_caller_module()
     if caller_module is not None and caller_module.__name__ != "__main__":
@@ -410,17 +410,30 @@ def build_slime_app(
         if mmt:
             model_script = f"{SLIME_ROOT}/scripts/models/{mmt}.sh"
             if needs_preconv:
-                # For pre-conversion we deliberately skip MODEL_ARGS from
-                # the model bash script.  MODEL_ARGS includes settings
-                # (--spec, --moe-grouped-gemm, --moe-router-topk, etc.)
-                # that the conversion script would use to construct the
-                # Megatron model, but training does NOT pass these flags —
-                # so the checkpoint ends up with different state-dict keys
-                # than the training model expects.  Using only extra_args
-                # (derived from the Python config) ensures the conversion
-                # model matches training exactly.
+                # Keep MODEL_ARGS for --spec (needed for HF→Megatron
+                # weight mapping) but strip flags that change the model
+                # structure.  Training does NOT pass these, so the
+                # checkpoint would have different state-dict keys.
+                #   Parallelism: overridden via extra_args
+                #   --moe-grouped-gemm: changes expert weight layout
+                #   --moe-shared-expert-gate: adds extra gate weight
+                filter_cmd = (
+                    "CONV_ARGS=(); SKIP=0; "
+                    'for a in "${MODEL_ARGS[@]}"; do '
+                    '  if [ "$SKIP" = 1 ]; then SKIP=0; continue; fi; '
+                    '  case "$a" in '
+                    "    --tensor-model-parallel-size|--pipeline-model-parallel-size"
+                    "|--expert-model-parallel-size|--expert-tensor-parallel-size"
+                    "|--context-parallel-size) SKIP=1; continue ;; "
+                    "    --moe-grouped-gemm|--moe-shared-expert-gate) continue ;; "
+                    "  esac; "
+                    '  CONV_ARGS+=("$a"); '
+                    "done"
+                )
                 cmd = (
+                    f"source {model_script} && {filter_cmd} && "
                     f"torchrun {' '.join(torchrun_args)} {convert_script} "
+                    '"${CONV_ARGS[@]}" '
                     f"{' '.join(extra_args)} "
                     f"--hf-checkpoint {shlex.quote(hf_path)} --save {shlex.quote(save_path)}"
                 )
