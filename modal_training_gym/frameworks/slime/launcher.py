@@ -407,26 +407,15 @@ def build_slime_app(
             mmt = getattr(model.architecture, "megatron_model_type", "")
         if mmt:
             model_script = f"{SLIME_ROOT}/scripts/models/{mmt}.sh"
-            pp_override = getattr(slime, "pipeline_model_parallel_size", 1)
-            tp_override = getattr(slime, "tensor_model_parallel_size", 1)
-            filter_spec = (
-                "FILTERED_ARGS=(); skip_count=0; "
-                'for a in "${MODEL_ARGS[@]}"; do '
-                "if [ $skip_count -gt 0 ]; then "
-                "skip_count=$((skip_count-1)); continue; fi; "
-                'if [[ "$a" == --spec ]]; then '
-                "skip_count=2; continue; fi; "
-                'FILTERED_ARGS+=("$a"); '
-                "done"
+            pp_override = getattr(slime, "pipeline_model_parallel_size", 1)  # noqa: F841
+            tp_override = getattr(slime, "tensor_model_parallel_size", 1)  # noqa: F841
+            debug_vars = (
+                'echo "DEBUG_VARS:"; '
+                "declare -p | grep -i 'parallel\\|model.*size\\|ARGS' || true; "
+                "env | grep -i 'parallel\\|model.*size' || true; "
+                'echo "DEBUG_ALL_VARS_END"'
             )
-            cmd = (
-                f"source {model_script} && {filter_spec} && "
-                f"torchrun {' '.join(torchrun_args)} {convert_script} "
-                f'"${{FILTERED_ARGS[@]}}" '
-                f"--pipeline-model-parallel-size {pp_override} "
-                f"--tensor-model-parallel-size {tp_override} "
-                f"--hf-checkpoint {shlex.quote(hf_path)} --save {shlex.quote(save_path)}"
-            )
+            cmd = f"source {model_script} && {debug_vars} && exit 1"
         else:
             cmd = (
                 f"torchrun {' '.join(torchrun_args)} {convert_script} "
