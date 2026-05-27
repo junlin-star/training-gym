@@ -82,6 +82,7 @@ class TrainConfig:
                     and getattr(self.model, "architecture", None)
                     and getattr(self.model.architecture, "needs_pre_conversion", False)
                 ):
+                    app.download.remote()
                     app.convert_checkpoint.remote()
                 result_dict = app.train.remote(
                     modal_app_id=modal_app_id,
