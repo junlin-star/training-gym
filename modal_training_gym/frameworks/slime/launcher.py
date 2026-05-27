@@ -658,7 +658,9 @@ def build_slime_app(
 
             def _start_conversions() -> None:
                 """Scan for new complete checkpoints and start converting them."""
-                if not (model and (slime.megatron_to_hf_mode == "bridge" or slime.ref_load)):
+                if not (
+                    model and (slime.megatron_to_hf_mode == "bridge" or slime.ref_load)
+                ):
                     return
                 prefix = _get_slime_checkpoint_prefix()
                 if not prefix:

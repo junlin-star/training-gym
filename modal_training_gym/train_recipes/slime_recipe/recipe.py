@@ -279,8 +279,18 @@ class SlimeRecipe(BaseTrainRecipe):
             "qk_layernorm": arch.qk_layernorm,
             "untie_embeddings_and_output_weights": arch.untie_embeddings_and_output_weights,
             **({"num_experts": arch.num_experts} if arch.num_experts else {}),
-            **({"moe_ffn_hidden_size": arch.moe_ffn_hidden_size} if arch.moe_ffn_hidden_size else {}),
-            **({"moe_shared_expert_intermediate_size": arch.moe_shared_expert_intermediate_size} if arch.moe_shared_expert_intermediate_size else {}),
+            **(
+                {"moe_ffn_hidden_size": arch.moe_ffn_hidden_size}
+                if arch.moe_ffn_hidden_size
+                else {}
+            ),
+            **(
+                {
+                    "moe_shared_expert_intermediate_size": arch.moe_shared_expert_intermediate_size
+                }
+                if arch.moe_shared_expert_intermediate_size
+                else {}
+            ),
             "use_rotary_position_embeddings": arch.use_rotary_position_embeddings,
             "rotary_base": arch.rotary_base,
         }

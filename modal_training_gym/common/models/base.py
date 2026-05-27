@@ -139,7 +139,10 @@ class ModelArchitecture:
         if self.moe_ffn_hidden_size:
             args += ["--moe-ffn-hidden-size", str(self.moe_ffn_hidden_size)]
         if self.moe_shared_expert_intermediate_size:
-            args += ["--moe-shared-expert-intermediate-size", str(self.moe_shared_expert_intermediate_size)]
+            args += [
+                "--moe-shared-expert-intermediate-size",
+                str(self.moe_shared_expert_intermediate_size),
+            ]
         if self.use_rotary_position_embeddings:
             args += ["--position-embedding-type", "rope"]
             if self.rotary_base != 10000:
