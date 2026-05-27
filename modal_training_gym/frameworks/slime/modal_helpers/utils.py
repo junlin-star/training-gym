@@ -27,12 +27,11 @@ def get_checkpoint_conversion_policy(
         and getattr(model.architecture, "needs_pre_conversion", False)
     )
     if needs_preconv:
-        # Single-GPU conversion: the upstream script auto-inflates PP to
-        # world_size when PP==1 and world_size>1, which produces a
-        # checkpoint layout that doesn't match training parallelism.
-        # Converting on 1 GPU (PP=1, TP=1) and letting Megatron's
-        # dist_checkpointing re-shard at load time avoids this.
-        world_size = 1
+        # Match training parallelism exactly so Megatron doesn't need to
+        # re-shard the checkpoint (re-sharding triggers BytesIO errors in
+        # dist_checkpointing).  We disable the upstream script's automatic
+        # PP auto-inflation via SKIP_PP_AUTOINFLATE so PP stays at 1.
+        world_size = tp
     else:
         world_size = tp * pp if (tp > 1 or pp > 1) else gpus_per_node
     max_world_size = actor_nodes * gpus_per_node
@@ -52,7 +51,6 @@ def get_checkpoint_conversion_policy(
         extra_args: list[str] = []
         conv_tp = tp
         if needs_preconv:
-            conv_tp = 1
             pp = 1
         if conv_tp > 1 or pp > 1:
             extra_args += [

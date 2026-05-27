@@ -128,7 +128,7 @@ def build_slime_app(
         slug = model.model_name.replace("/", "--")
         object.__setattr__(slime, "megatron_to_hf_mode", "")
         if not slime.ref_load:
-            object.__setattr__(slime, "ref_load", f"/checkpoints/torch_dist/{slug}-v8")
+            object.__setattr__(slime, "ref_load", f"/checkpoints/torch_dist/{slug}-v9")
 
     caller_module = resolve_caller_module()
     if caller_module is not None and caller_module.__name__ != "__main__":
@@ -390,7 +390,13 @@ def build_slime_app(
 
         import importlib.util
 
-        if num_nodes > 1:
+        mmt = ""
+        needs_preconv = False
+        if model and getattr(model, "architecture", None):
+            mmt = getattr(model.architecture, "megatron_model_type", "")
+            needs_preconv = bool(mmt)
+
+        if num_nodes > 1 or needs_preconv:
             spec = importlib.util.find_spec(
                 "modal_training_gym.frameworks.slime.modal_helpers.convert_hf_to_torch_dist"
             )
@@ -401,10 +407,6 @@ def build_slime_app(
                 )
         else:
             convert_script = f"{SLIME_ROOT}/tools/convert_hf_to_torch_dist.py"
-
-        mmt = ""
-        if model and getattr(model, "architecture", None):
-            mmt = getattr(model.architecture, "megatron_model_type", "")
         if mmt:
             model_script = f"{SLIME_ROOT}/scripts/models/{mmt}.sh"
             cmd = (
@@ -424,6 +426,8 @@ def build_slime_app(
         env = {**os.environ, **slime.environment}
         if num_nodes > 1:
             env["SKIP_RELEASE_RENAME"] = "1"
+        if needs_preconv:
+            env["SKIP_PP_AUTOINFLATE"] = "1"
 
         print(
             f"Conversion layout: nodes={num_nodes}, "
