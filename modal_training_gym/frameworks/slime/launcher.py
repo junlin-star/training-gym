@@ -69,22 +69,28 @@ SLIME_ROOT = "/root/slime"
 SLIME_IMAGE = "slimerl/slime@sha256:2568a8283b913eeea86b68397288f9ebdb59ebad4eab11c64ee3ce0c49819c3a"
 HARBOR_PKG_VERSION = "0.6.6"
 
-# usercustomize.py injected into site-packages so ALL processes
-# (including Ray actors) get the patch at interpreter startup.
-_HYBRID_VALIDATION_PATCH = """\
-# Patch Megatron sharding validation for hybrid models (e.g. GDN layers).
-try:
-    import megatron.core.dist_checkpointing.validation as _v
-    _orig_validate = _v.validate_sharding_integrity
-    def _patched_validate(*a, **k):
-        try:
-            return _orig_validate(*a, **k)
-        except Exception as e:
-            import warnings
-            warnings.warn(f"Skipped sharding integrity validation: {e}")
-    _v.validate_sharding_integrity = _patched_validate
-except Exception:
-    pass
+# Inline Python script that patches /root/Megatron-LM validation.py
+# so validate_sharding_integrity logs a warning instead of raising.
+# Executed at image-build time to avoid import-time side effects.
+_PATCH_VALIDATION_SCRIPT = r"""
+import re, pathlib
+p = pathlib.Path("/root/Megatron-LM/megatron/core/dist_checkpointing/validation.py")
+src = p.read_text()
+old = "def validate_sharding_integrity("
+if old in src and "_orig_impl" not in src:
+    src = src.replace(
+        old,
+        "def validate_sharding_integrity(*_a, **_k):\n"
+        "    import warnings as _w\n"
+        "    try:\n"
+        "        return _validate_sharding_integrity_orig_impl(*_a, **_k)\n"
+        "    except Exception as _e:\n"
+        '        _w.warn(f"Skipped sharding integrity validation: {_e}")\n'
+        "\n\n"
+        "def _validate_sharding_integrity_orig_impl(",
+        1,
+    )
+    p.write_text(src)
 """
 
 
@@ -164,20 +170,17 @@ def build_slime_app(
     # Hybrid models have layers with different parameter sets (e.g. GDN
     # layers carry linear_attn.dt_bias that standard attention layers lack).
     # Megatron's validate_sharding_integrity rejects this because not every
-    # position in the global tensor is covered.  Inject a usercustomize.py
-    # so the patch is active in ALL processes, including Ray actors.
+    # position in the global tensor is covered.  Patch the file directly at
+    # image-build time to avoid import side effects from usercustomize.py.
     _has_hybrid_spec = (
         model
         and getattr(model, "architecture", None)
         and getattr(model.architecture, "megatron_spec", None)
     )
     if _has_hybrid_spec:
-        _cmd = "python3 -c " + shlex.quote(
-            "import site, os; "
-            "p = os.path.join(site.getsitepackages()[0], 'usercustomize.py'); "
-            f"open(p, 'a').write({_HYBRID_VALIDATION_PATCH!r})"
+        image = image.run_commands(
+            "python3 -c " + shlex.quote(_PATCH_VALIDATION_SCRIPT)
         )
-        image = image.run_commands(_cmd)
 
     if slime.image_overlay is not None:
         image = slime.image_overlay(image)
