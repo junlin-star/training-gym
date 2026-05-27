@@ -153,7 +153,7 @@ def build_slime_app(
         slug = model.model_name.replace("/", "--")
         object.__setattr__(slime, "megatron_to_hf_mode", "")
         if not slime.ref_load:
-            object.__setattr__(slime, "ref_load", f"/checkpoints/torch_dist/{slug}-v16")
+            object.__setattr__(slime, "ref_load", f"/checkpoints/torch_dist/{slug}-v17")
 
     caller_module = resolve_caller_module()
     if caller_module is not None and caller_module.__name__ != "__main__":
@@ -171,18 +171,14 @@ def build_slime_app(
     # Hybrid models have layers with different parameter sets (e.g. GDN
     # layers carry linear_attn.dt_bias that standard attention layers lack).
     # Megatron's validate_sharding_integrity rejects this because not every
-    # position in the global tensor is covered.  Patch the file directly at
-    # image-build time to avoid import side effects from usercustomize.py.
+    # position in the global tensor is covered.  Patch the validation file
+    # only for training (not conversion — patching during save can corrupt
+    # the checkpoint's sharding metadata).
     _has_hybrid_spec = (
         model
         and getattr(model, "architecture", None)
         and getattr(model.architecture, "megatron_spec", None)
     )
-    if _has_hybrid_spec:
-        image = image.run_commands(
-            f"echo {_PATCH_VALIDATION_B64} | base64 -d | python3"
-        )
-
     if slime.image_overlay is not None:
         image = slime.image_overlay(image)
         object.__setattr__(slime, "image_overlay", None)
@@ -200,6 +196,16 @@ def build_slime_app(
 
     image = image.add_local_python_source("modal_training_gym", copy=True)
     image = mount_tools_dir(image)
+
+    # Build a separate training image with the validation patch.
+    # Conversion must use the UNPATCHED image so sharding metadata is
+    # saved correctly; training uses the patched image so checkpoint
+    # loading doesn't crash on hybrid layer validation.
+    train_image = image
+    if _has_hybrid_spec:
+        train_image = image.run_commands(
+            f"echo {_PATCH_VALIDATION_B64} | base64 -d | python3"
+        )
 
     if caller_script is not None:
         caller_module_name = os.path.splitext(os.path.basename(caller_script))[0]
@@ -555,7 +561,7 @@ def build_slime_app(
     _multi_node = slime.total_nodes > 1
 
     @app.function(
-        image=image,
+        image=train_image,
         gpu=gpu_spec,
         volumes=all_volumes,
         secrets=[
