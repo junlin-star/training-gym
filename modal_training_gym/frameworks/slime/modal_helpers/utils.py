@@ -106,6 +106,14 @@ def get_checkpoint_conversion_policy(
                 extra_args.append(
                     f"--moe-shared-expert-intermediate-size {arch.moe_shared_expert_intermediate_size}"
                 )
+            if arch.moe_grouped_gemm:
+                extra_args.append("--moe-grouped-gemm")
+            if arch.moe_shared_expert_gate:
+                extra_args.append("--moe-shared-expert-gate")
+            if arch.moe_router_topk:
+                extra_args.append(f"--moe-router-topk {arch.moe_router_topk}")
+            if arch.megatron_spec:
+                extra_args.append(f"--spec {' '.join(arch.megatron_spec)}")
             if arch.use_rotary_position_embeddings:
                 extra_args.append("--position-embedding-type rope")
 
