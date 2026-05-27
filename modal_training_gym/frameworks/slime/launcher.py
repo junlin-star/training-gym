@@ -128,7 +128,7 @@ def build_slime_app(
         slug = model.model_name.replace("/", "--")
         object.__setattr__(slime, "megatron_to_hf_mode", "")
         if not slime.ref_load:
-            object.__setattr__(slime, "ref_load", f"/checkpoints/torch_dist/{slug}-v7")
+            object.__setattr__(slime, "ref_load", f"/checkpoints/torch_dist/{slug}-v8")
 
     caller_module = resolve_caller_module()
     if caller_module is not None and caller_module.__name__ != "__main__":
@@ -406,13 +406,13 @@ def build_slime_app(
         if model and getattr(model, "architecture", None):
             mmt = getattr(model.architecture, "megatron_model_type", "")
         if mmt:
-            model_script = f"{SLIME_ROOT}/scripts/models/{mmt}.sh"  # noqa: F841
-            pp_override = getattr(slime, "pipeline_model_parallel_size", 1)  # noqa: F841
-            tp_override = getattr(slime, "tensor_model_parallel_size", 1)  # noqa: F841
+            model_script = f"{SLIME_ROOT}/scripts/models/{mmt}.sh"
             cmd = (
-                f"head -200 {SLIME_ROOT}/tools/convert_hf_to_torch_dist.py; "
-                f"echo '=== GREP SPEC ==='; "
-                f"grep -n 'spec\\|parallel.*size\\|total_model' {SLIME_ROOT}/tools/convert_hf_to_torch_dist.py"
+                f"source {model_script} && "
+                f"torchrun {' '.join(torchrun_args)} {convert_script} "
+                '"${MODEL_ARGS[@]}" '
+                f"{' '.join(extra_args)} "
+                f"--hf-checkpoint {shlex.quote(hf_path)} --save {shlex.quote(save_path)}"
             )
         else:
             cmd = (
