@@ -18,6 +18,7 @@ Executed at image-build time via ``python3 <this file>``.
 """
 
 import pathlib
+import re
 
 # ── 1. Patch torch.py: seek(0) in _mcore_to_torch_sharded_object ────────────
 
@@ -29,46 +30,43 @@ patched = False
 
 # The function creates a BytesIO via torch.save() and returns it with
 # the cursor at end-of-stream.  Add a seek(0) before the return.
-old_shobj = "return serialized_data"
+# Use regex to detect the actual indentation of the return statement.
 marker = "PATCHED_SEEK_SHOBJ"
-if old_shobj in src and marker not in src:
-    new_shobj = f"serialized_data.seek(0)  # {marker}\n    return serialized_data"
-    src = src.replace(old_shobj, new_shobj, 1)
+m = re.search(r"^( +)(return serialized_data)\b", src, re.MULTILINE)
+if m and marker not in src:
+    indent = m.group(1)
+    old_line = m.group(0)
+    new_line = (
+        f"{indent}serialized_data.seek(0)  # {marker}\n{indent}return serialized_data"
+    )
+    src = src.replace(old_line, new_line, 1)
     patched = True
 
 # ── 2. Patch MCoreSavePlanner.transform_object to seek(0) BytesIO ───────────
-# Handle both NVIDIA Megatron (has docstring) and THUDM slime fork (bare return)
+# The slime fork's transform_object is a simple one-liner:
+#     def transform_object(self, write_item: WriteItem, object: Any):
+#         return object
 
 marker2 = "PATCHED_TRANSFORM_SEEK"
 if marker2 not in src:
-    # NVIDIA Megatron version with docstring
-    old_transform_nvidia = (
-        '"""Make no transformations - bytes objects are already serialized."""\n'
-        "        return object"
+    # Match the transform_object method and detect its indentation
+    m2 = re.search(
+        r"^( +)def transform_object\(self, write_item: WriteItem, object: Any\):\n"
+        r"\1    return object",
+        src,
+        re.MULTILINE,
     )
-    # THUDM slime fork version — no docstring, inline
-    old_transform_slime = (
-        "def transform_object(self, write_item: WriteItem, object: Any): return object"
-    )
-    seek_body = (
-        "def transform_object(self, write_item: WriteItem, object: Any):\n"
-        "        import io as _io  # " + marker2 + "\n"
-        "        if isinstance(object, _io.BytesIO):\n"
-        "            object.seek(0)\n"
-        "        return object"
-    )
-    if old_transform_nvidia in src:
-        new_transform = (
-            '"""Make no transformations - bytes objects are already serialized."""\n'
-            "        import io as _io  # " + marker2 + "\n"
-            "        if isinstance(object, _io.BytesIO):\n"
-            "            object.seek(0)\n"
-            "        return object"
+    if m2:
+        indent = m2.group(1)
+        old_block = m2.group(0)
+        new_block = (
+            f"{indent}def transform_object(self, write_item: WriteItem, object: Any):\n"
+            f"{indent}    import io as _io  # {marker2}\n"
+            f"{indent}    if isinstance(object, _io.BytesIO):\n"
+            f"{indent}        object.seek(0)\n"
+            f"{indent}    return object"
         )
-        src = src.replace(old_transform_nvidia, new_transform, 1)
-        patched = True
-    elif old_transform_slime in src:
-        src = src.replace(old_transform_slime, seek_body, 1)
+        src = src.replace(old_block, new_block, 1)
         patched = True
 
 if patched:
@@ -76,30 +74,3 @@ if patched:
     print("Patched torch.py for checkpoint save BytesIO handling")
 else:
     print("WARNING: Could not patch torch.py — target strings not found")
-
-# ── 3. Patch filesystem_async.py: seek(0) BytesIO before writing ────────────
-
-fs_async = pathlib.Path(
-    "/root/Megatron-LM/megatron/core/dist_checkpointing/strategies/filesystem_async.py"
-)
-if fs_async.exists():
-    fs_src = fs_async.read_text()
-    # In prepare_write_data, BytesIO objects are resolved via
-    # planner.resolve_data().  Ensure they are seeked to 0.
-    old_bytes_resolve = (
-        "planner.resolve_data(item)) "
-        "for item in bucket if item.type == WriteItemType.BYTE_IO"
-    )
-    marker3 = "PATCHED_BYTES_SEEK"
-    if old_bytes_resolve in fs_src and marker3 not in fs_src:
-        # Wrap the resolve call to seek(0) the result
-        new_bytes_resolve = (
-            "(lambda _b: (_b.seek(0), _b)[1])(planner.resolve_data(item))) "
-            "for item in bucket if item.type == WriteItemType.BYTE_IO"
-            "  # " + marker3
-        )
-        fs_src = fs_src.replace(old_bytes_resolve, new_bytes_resolve, 1)
-        fs_async.write_text(fs_src)
-        print("Patched filesystem_async.py for BytesIO seek(0)")
-    else:
-        print("INFO: filesystem_async.py — target string not found or already patched")
