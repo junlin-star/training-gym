@@ -179,7 +179,7 @@ def build_slime_app(
 
     if caller_script is not None:
         caller_module_name = os.path.splitext(os.path.basename(caller_script))[0]
-        caller_remote_path = f"/root/{caller_module_name}.py"
+        caller_remote_path = f"{SLIME_ROOT}/{caller_module_name}.py"
         image = image.add_local_file(
             caller_script,
             remote_path=caller_remote_path,
@@ -234,7 +234,7 @@ def build_slime_app(
             fn_module_name = os.path.splitext(os.path.basename(fn_file))[0]
             image = image.add_local_file(
                 fn_file,
-                remote_path=f"/root/{fn_module_name}.py",
+                remote_path=f"{SLIME_ROOT}/{fn_module_name}.py",
                 copy=True,
             )
             return
@@ -264,7 +264,7 @@ def build_slime_app(
         mod_name = os.path.splitext(os.path.basename(tmp_path))[0]
         image = image.add_local_file(
             tmp_path,
-            remote_path=f"/root/{mod_name}.py",
+            remote_path=f"{SLIME_ROOT}/{mod_name}.py",
             copy=True,
         )
         set_path(f"{mod_name}.{fn_name}")
@@ -294,16 +294,6 @@ def build_slime_app(
         object.__setattr__(slime, "custom_rm_function", None)
     if slime.custom_generate_function is not None and _get_custom_generate_path():
         object.__setattr__(slime, "custom_generate_function", None)
-
-    # Ensure /root is importable so shipped callable modules (custom_rm,
-    # custom_generate) placed at /root/<name>.py can be found by all
-    # processes, including Ray actors spawned by Slime.
-    image = image.run_commands(
-        'python3 -c "'
-        "import site, pathlib; "
-        "pathlib.Path(site.getsitepackages()[0], 'training_gym_root.pth')"
-        ".write_text('/root\\n')\""
-    )
 
     # ── Volumes ──────────────────────────────────────────────────────────────
     hf_cache_volume = Volume.from_name("huggingface-cache", create_if_missing=True)
