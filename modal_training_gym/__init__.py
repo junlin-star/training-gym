@@ -10,6 +10,8 @@ _EXPORTS = {
     "EvalConfigDurable": ("modal_training_gym.common.eval", "EvalConfigDurable"),
     "EvalResult": ("modal_training_gym.common.eval", "EvalResult"),
     "EvalRowResult": ("modal_training_gym.common.eval", "EvalRowResult"),
+    "extract_code": ("modal_training_gym.common.eval", "extract_code"),
+    "HarborEval": ("modal_training_gym.common.eval", "HarborEval"),
     "HFModelConfiguration": (
         "modal_training_gym.common.models",
         "HFModelConfiguration",
@@ -38,6 +40,7 @@ _EXPORTS = {
     "Qwen3_30B": ("modal_training_gym.common.models", "Qwen3_30B"),
     "Qwen3_32B": ("modal_training_gym.common.models", "Qwen3_32B"),
     "Qwen3_6_35B": ("modal_training_gym.common.models", "Qwen3_6_35B"),
+    "score_in_sandbox": ("modal_training_gym.common.eval", "score_in_sandbox"),
     "SlimeRecipe": ("modal_training_gym.train_recipes.slime_recipe", "SlimeRecipe"),
     "SlimeRecipeBlock": (
         "modal_training_gym.train_recipes.slime_recipe",
@@ -58,6 +61,8 @@ __all__ = [
     "EvalConfigDurable",
     "EvalResult",
     "EvalRowResult",
+    "extract_code",
+    "HarborEval",
     "HFModelConfiguration",
     "HuggingFaceDataset",
     "list_checkpoints",
@@ -77,6 +82,7 @@ __all__ = [
     "Qwen3_30B",
     "Qwen3_32B",
     "Qwen3_6_35B",
+    "score_in_sandbox",
     "SlimeRecipe",
     "setup",
     "SlimeRecipeBlock",
