@@ -26,11 +26,15 @@ Complete reference for the training-gym Python library.
 | [`EvalConfig`](/reference/evaluation/evalconfig/) | Evaluate a deployed model on a dataset config. |
 | [`EvalResult`](/reference/evaluation/evalresult/) | Saved results for one evaluation run across a dataset. |
 | [`EvalRowResult`](/reference/evaluation/evalrowresult/) | One evaluated row: score, response text, and optional metadata. |
+| [`HarborEval`](/reference/evaluation/harboreval/) | Evaluate a deployed model on a Harbor dataset using sandbox execution. |
 
 ## Models
 
 | Class | Description |
 |-------|-------------|
+| [`ToolCall`](/reference/models/toolcall/) | A parsed tool invocation from model output. |
+| [`ParsedResponse`](/reference/models/parsedresponse/) | Structured result of parsing raw model output. |
+| [`parse_qwen3_response`](/reference/models/parse_qwen3_response/) | Parse Qwen3-family model output into structured content. |
 | [`Qwen3-0.6B`](/reference/models/qwen3_0_6b/) | Qwen3-0.6B (0.6 billion parameters) from Alibaba. |
 | [`Qwen3-1.7B`](/reference/models/qwen3_1_7b/) | Qwen3-1.7B (1.7 billion parameters) from Alibaba. |
 | [`Qwen3-4B`](/reference/models/qwen3_4b/) | Qwen3-4B (4 billion parameters) from Alibaba. |
@@ -38,6 +42,7 @@ Complete reference for the training-gym Python library.
 | [`Qwen3-14B`](/reference/models/qwen3_14b/) | Qwen3-14B (14 billion parameters) from Alibaba. |
 | [`Qwen3-30B-A3B`](/reference/models/qwen3_30b/) | Qwen3-30B-A3B (30B total, ~3B active) MoE model from Alibaba. |
 | [`Qwen3-32B`](/reference/models/qwen3_32b/) | Qwen3-32B (32 billion parameters) from Alibaba. |
+| [`Qwen3.6-35B-A3B`](/reference/models/qwen3_6_35b/) | Qwen3.6-35B-A3B (35B total, ~3B active) MoE model from Alibaba. |
 
 ## Training
 
@@ -46,6 +51,7 @@ Complete reference for the training-gym Python library.
 | [`TrainConfig`](/reference/training/trainconfig/) | Compose dataset, model, and recipe into one training entrypoint. |
 | [`MultiTurn`](/reference/training/multiturn/) | MultiTurn(generate_function: 'Callable', reward_function: 'Callable | None' = None, max_turns: 'int | None' = None, log_multi_turn: 'bool | None' = None, config_overrides: 'Mapping[str, Any]' = <factory>) |
 | [`SlimeRecipe`](/reference/training/slimerecipe/) | Recipe dataclass for configuring slime GRPO training on Modal. |
+| [`Qwen3_6_35b_Recipe`](/reference/training/qwen3_6_35b_recipe/) | Qwen3.6-35B-A3B (MoE) on 1×8×H100 with TP2/PP1/CP2/EP8, colocated GRPO. |
 
 ## Deployment
 

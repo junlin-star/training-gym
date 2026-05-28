@@ -21,9 +21,9 @@ Dataset configuration shared across training frameworks.
 
 ## Methods
 
-### `load(self) -> 'Any'`
+### `load(self, split: "Literal['all', 'train', 'eval']" = 'all') -> 'Any'`
 
-Load raw examples for local inspection or evaluation.
+Load raw examples, optionally filtered by split.
 
 ### `prepare(self, path: 'str', eval_paths: 'dict[str, str] | None' = None) -> 'None'`
 

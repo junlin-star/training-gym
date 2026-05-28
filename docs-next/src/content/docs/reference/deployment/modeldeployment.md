@@ -41,7 +41,7 @@ ModelDeployment(**data)
 
 ## Related Tutorials
 
-- [Code RL with Harbor hello-world and sandboxed verification](/tutorials/rl/001_sandboxes/)
 - [Multi-turn number-guessing RL with custom generate and reward functions](/tutorials/rl/002_multiturn/)
+- [Hill-climb Qwen3.6-35B-A3B on GSM8K math with GRPO](/tutorials/rl/004_qwen35b/)
 
 **Source:** [`modal_training_gym/common/deployment.py`](https://github.com/modal-projects/training-gym/blob/main/modal_training_gym/common/deployment.py)

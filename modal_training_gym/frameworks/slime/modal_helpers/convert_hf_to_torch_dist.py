@@ -8,7 +8,11 @@ Setting SKIP_RELEASE_RENAME=1 suppresses the rename so all nodes commit
 to iter_0000001/ additively. Megatron loads from iter_0000001/ via the
 tracker file just fine.
 
-When SKIP_RELEASE_RENAME is unset this wrapper is a transparent pass-through.
+Setting SKIP_PP_AUTOINFLATE=1 disables the conversion script's automatic
+inflation of pipeline_model_parallel_size to world_size.  This lets callers
+control PP/TP explicitly so the checkpoint layout matches training.
+
+When neither env var is set this wrapper is a transparent pass-through.
 """
 
 from __future__ import annotations
@@ -33,6 +37,11 @@ def main() -> None:
         src = src.replace(
             'f.write("release")',
             'f.write("1")  # SKIP_RELEASE_RENAME: keep iter_0000001',
+        )
+    if os.environ.get("SKIP_PP_AUTOINFLATE"):
+        src = src.replace(
+            "if args.pipeline_model_parallel_size == 1 and world_size > 1:",
+            "if False:  # SKIP_PP_AUTOINFLATE",
         )
     exec(
         compile(src, _UPSTREAM, "exec"), {"__name__": "__main__", "__file__": _UPSTREAM}

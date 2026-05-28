@@ -11,7 +11,7 @@ volume.
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
 import json
 import random
 import shutil
@@ -70,8 +70,8 @@ class DatasetConfig:
         """Materialize training data to ``path`` (and eval splits to ``eval_paths``)."""
         raise NotImplementedError(f"{type(self).__name__} has no prepare()")
 
-    def load(self) -> Any:
-        """Load raw examples for local inspection or evaluation."""
+    def load(self, split: Literal["all", "train", "eval"] = "all") -> Any:
+        """Load raw examples, optionally filtered by split."""
         raise NotImplementedError(f"{type(self).__name__} has no load()")
 
     def _expected_columns(self) -> set[str]:
@@ -167,7 +167,7 @@ class HuggingFaceDataset(DatasetConfig):
     def name(self) -> str:
         return self.hf_repo
 
-    def load(self) -> Any:
+    def load(self, split: Literal["all", "train", "eval"] = "all") -> Any:
         from datasets import load_dataset
 
         ds = load_dataset(
@@ -478,7 +478,7 @@ class HarborDataset(DatasetConfig):
         repeats = max(1, repeats)
         return [row for row in rows for _ in range(repeats)]
 
-    def load(self) -> Any:
+    def load(self, split: Literal["all", "train", "eval"] = "all") -> Any:
         task_root = self._resolve_task_root()
         out = []
         for task_dir in self._iter_task_dirs():
@@ -496,6 +496,11 @@ class HarborDataset(DatasetConfig):
                     "label": label,
                 }
             )
+        if self.train_size is not None:
+            if split == "train":
+                return out[: self.train_size]
+            if split == "eval":
+                return out[self.train_size : self.train_size + (self.eval_size or 0)]
         return out
 
     def to_pandas(self, *, formatted: bool = False):

@@ -30,5 +30,6 @@ Build the app, run training, and return the TrainResult.
 - [Code RL with Harbor hello-world and sandboxed verification](/tutorials/rl/001_sandboxes/)
 - [Multi-turn number-guessing RL with custom generate and reward functions](/tutorials/rl/002_multiturn/)
 - [On-policy distillation on math — Qwen3-8B teacher, Qwen3-4B student](/tutorials/rl/003_on_policy_distillation/)
+- [Hill-climb Qwen3.6-35B-A3B on GSM8K math with GRPO](/tutorials/rl/004_qwen35b/)
 
 **Source:** [`modal_training_gym/common/train.py`](https://github.com/modal-projects/training-gym/blob/main/modal_training_gym/common/train.py)

@@ -582,6 +582,7 @@
                     <col class="col-status" />
                     <col class="col-score" />
                     <col class="col-examples" />
+                    <col class="col-created" />
                   </colgroup>
                   <thead>
                     <tr>
@@ -592,6 +593,7 @@
                       <th>Status</th>
                       <th>Average score</th>
                       <th>Examples</th>
+                      <th>Created</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -637,6 +639,9 @@
                           {run.status === "Failed" ? "—" : run.avgScore.toFixed(4)}
                         </td>
                         <td>{run.totalRows ? run.totalRows : "—"}</td>
+                        <td class="created-cell">
+                          <TimeAgo timestamp={run.createdAt} showJustNow falsyRepresentation="—" />
+                        </td>
                       </tr>
                     {/each}
                   </tbody>

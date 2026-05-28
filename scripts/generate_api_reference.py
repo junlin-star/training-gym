@@ -616,6 +616,26 @@ def main() -> None:
 
         if entry["class_type"] == "config_data":
             content = generate_config_data_page(cls, entry, backlinks=backlinks)
+        elif not isinstance(cls, type):
+            doc = inspect.getdoc(cls) or ""
+            sig_str = ""
+            try:
+                sig_str = f"`{entry['class_name']}{inspect.signature(cls)}`"
+            except (ValueError, TypeError):
+                pass
+            lines = [
+                "---",
+                f'title: "{entry.get("sidebar_label", entry["class_name"])}"',
+                "---",
+                "",
+                f"# `{entry['class_name']}`",
+                "",
+            ]
+            if sig_str:
+                lines += [sig_str, ""]
+            if doc:
+                lines += [doc, ""]
+            content = "\n".join(lines) + "\n"
         else:
             content = generate_behavior_page(cls, entry, backlinks=backlinks)
 

@@ -72,6 +72,7 @@ Recipe dataclass for configuring slime GRPO training on Modal.
 | `eval_top_p` | `float` | `1.0` |  |
 | `eval_config` | `dict \| None` | `None` |  |
 | `save` | `str` | `"/checkpoints"` |  |
+| `load` | `str` | `""` |  |
 | `megatron_to_hf_mode` | `str` | `"bridge"` |  |
 | `use_fault_tolerance` | `bool` | `True` |  |
 | `rm_type` | `str \| None` | `None` |  |
@@ -79,6 +80,13 @@ Recipe dataclass for configuring slime GRPO training on Modal.
 | `custom_generate_function` | `collections.abc.Callable \| None` | `None` |  |
 | `rollout_function` | `collections.abc.Callable \| str \| None` | `None` |  |
 | `custom_megatron_before_train_step_hook` | `collections.abc.Callable \| str \| None` | `None` |  |
+| `sglang_enable_dp_attention` | `bool` | `False` |  |
+| `sglang_dp_size` | `int \| None` | `None` |  |
+| `sglang_ep_size` | `int \| None` | `None` |  |
+| `sglang_enable_dp_lm_head` | `bool` | `False` |  |
+| `sglang_disable_custom_all_reduce` | `bool` | `False` |  |
+| `sglang_cuda_graph_bs` | `list[int] \| None` | `None` |  |
+| `sglang_max_running_requests` | `int \| None` | `None` |  |
 | `extra_config` | `dict \| None` | `None` |  |
 | `sglang_config` | `dict \| None` | `None` |  |
 | `apply_chat_template_kwargs` | `str` | `""` |  |
@@ -95,5 +103,6 @@ Recipe dataclass for configuring slime GRPO training on Modal.
 - [Code RL with Harbor hello-world and sandboxed verification](/tutorials/rl/001_sandboxes/)
 - [Multi-turn number-guessing RL with custom generate and reward functions](/tutorials/rl/002_multiturn/)
 - [On-policy distillation on math — Qwen3-8B teacher, Qwen3-4B student](/tutorials/rl/003_on_policy_distillation/)
+- [Hill-climb Qwen3.6-35B-A3B on GSM8K math with GRPO](/tutorials/rl/004_qwen35b/)
 
 **Source:** [`modal_training_gym/train_recipes/slime_recipe/recipe.py`](https://github.com/modal-projects/training-gym/blob/main/modal_training_gym/train_recipes/slime_recipe/recipe.py)

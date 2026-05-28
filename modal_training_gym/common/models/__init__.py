@@ -13,6 +13,7 @@ from .qwen3_8b import Qwen3_8B
 from .qwen3_14b import Qwen3_14B
 from .qwen3_30b import Qwen3_30B
 from .qwen3_32b import Qwen3_32B
+from .qwen3_6_35b import Qwen3_6_35B
 
 __all__ = [
     "HFModelConfiguration",
@@ -28,4 +29,5 @@ __all__ = [
     "Qwen3_32B",
     "ToolCall",
     "parse_qwen3_response",
+    "Qwen3_6_35B",
 ]
