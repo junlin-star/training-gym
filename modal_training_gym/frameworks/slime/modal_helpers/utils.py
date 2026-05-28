@@ -112,13 +112,33 @@ def get_checkpoint_conversion_policy(
                 extra_args.append("--moe-shared-expert-gate")
             if arch.moe_router_topk:
                 extra_args.append(f"--moe-router-topk {arch.moe_router_topk}")
+            if arch.moe_router_score_function:
+                extra_args.append(
+                    f"--moe-router-score-function {arch.moe_router_score_function}"
+                )
+            if arch.moe_token_drop_policy:
+                extra_args.append(
+                    f"--moe-token-drop-policy {arch.moe_token_drop_policy}"
+                )
+            if arch.moe_router_dtype:
+                extra_args.append(f"--moe-router-dtype {arch.moe_router_dtype}")
+            if arch.moe_permute_fusion:
+                extra_args.append("--moe-permute-fusion")
+            if arch.moe_aux_loss_coeff is not None:
+                extra_args.append(f"--moe-aux-loss-coeff {arch.moe_aux_loss_coeff}")
             if arch.megatron_spec:
                 extra_args.append(f"--spec {' '.join(arch.megatron_spec)}")
+            if arch.apply_layernorm_1p:
+                extra_args.append("--apply-layernorm-1p")
+            if arch.use_gated_attention:
+                extra_args.append("--use-gated-attention")
             if arch.attention_output_gate:
                 extra_args.append("--attention-output-gate")
             if arch.use_rotary_position_embeddings:
                 extra_args.append("--use-rotary-position-embeddings")
                 extra_args.append("--position-embedding-type rope")
+                if arch.rotary_percent != 1.0:
+                    extra_args.append(f"--rotary-percent {arch.rotary_percent}")
 
         return num_nodes, nproc_per_node, extra_args
 
