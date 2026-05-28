@@ -179,7 +179,7 @@ def build_slime_app(
 
     if caller_script is not None:
         caller_module_name = os.path.splitext(os.path.basename(caller_script))[0]
-        caller_remote_path = f"{SLIME_ROOT}/{caller_module_name}.py"
+        caller_remote_path = f"/root/{caller_module_name}.py"
         image = image.add_local_file(
             caller_script,
             remote_path=caller_remote_path,
@@ -193,13 +193,6 @@ def build_slime_app(
     if _has_hybrid_spec:
         image = image.run_commands(
             f"echo {_PATCH_VALIDATION_B64} | base64 -d | python3",
-        )
-    train_image = image
-    if _has_hybrid_spec:
-        train_image = image.run_commands(
-            f"echo {_PATCH_TORCH_LOAD_B64} | base64 -d | python3",
-            f"echo {_PATCH_GLOBAL_PLAN_B64} | base64 -d | python3",
-            f"echo {_PATCH_CHECKPOINT_SAVE_B64} | base64 -d | python3",
         )
 
     def _get_custom_generate_path() -> str:
@@ -234,7 +227,7 @@ def build_slime_app(
             fn_module_name = os.path.splitext(os.path.basename(fn_file))[0]
             image = image.add_local_file(
                 fn_file,
-                remote_path=f"{SLIME_ROOT}/{fn_module_name}.py",
+                remote_path=f"/root/{fn_module_name}.py",
                 copy=True,
             )
             return
@@ -264,7 +257,7 @@ def build_slime_app(
         mod_name = os.path.splitext(os.path.basename(tmp_path))[0]
         image = image.add_local_file(
             tmp_path,
-            remote_path=f"{SLIME_ROOT}/{mod_name}.py",
+            remote_path=f"/root/{mod_name}.py",
             copy=True,
         )
         set_path(f"{mod_name}.{fn_name}")
@@ -294,6 +287,15 @@ def build_slime_app(
         object.__setattr__(slime, "custom_rm_function", None)
     if slime.custom_generate_function is not None and _get_custom_generate_path():
         object.__setattr__(slime, "custom_generate_function", None)
+
+    # Build train_image AFTER _ship_callable so shipped modules are included.
+    train_image = image
+    if _has_hybrid_spec:
+        train_image = image.run_commands(
+            f"echo {_PATCH_TORCH_LOAD_B64} | base64 -d | python3",
+            f"echo {_PATCH_GLOBAL_PLAN_B64} | base64 -d | python3",
+            f"echo {_PATCH_CHECKPOINT_SAVE_B64} | base64 -d | python3",
+        )
 
     # ── Volumes ──────────────────────────────────────────────────────────────
     hf_cache_volume = Volume.from_name("huggingface-cache", create_if_missing=True)
