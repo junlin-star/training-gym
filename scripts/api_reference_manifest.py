@@ -92,6 +92,13 @@ API_REFERENCE_MANIFEST = [
         "class_type": "behavior",
         "sidebar_label": "EvalRowResult",
     },
+    {
+        "class_name": "HarborEval",
+        "module": "modal_training_gym.common.eval",
+        "group": "evaluation",
+        "class_type": "config_data",
+        "sidebar_label": "HarborEval",
+    },
     # --- Models ---
     {
         "class_name": "ToolCall",

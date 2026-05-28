@@ -9,9 +9,9 @@
 #
 # Workflow:
 # 1. Pull the hello-world task from Harbor Hub via `HarborDataset`.
-# 2. Score model outputs by executing code in Modal sandboxes,
-#    piping test inputs via stdin and comparing stdout.
-# 3. Use that scorer for both offline eval and as SLIME `custom_rm_function`.
+# 2. Score model outputs with `HarborEval` — it extracts code,
+#    runs it in a Modal sandbox, and compares stdout automatically.
+# 3. Reuse the same `score_in_sandbox` helper as a SLIME `custom_rm_function`.
 # 4. Train and compare base vs. trained behavior.
 #
 # The key pattern: **correctness drives reward**.
@@ -28,19 +28,16 @@
 
 import modal
 
-import json
-import re
-
 from modal_training_gym import (
     DeploymentConfig,
-    EvalConfig,
-    EvalRowResult,
     HarborDataset,
-    ModelDeployment,
+    HarborEval,
     Qwen3_4B,
     SlimeRecipe,
     TrainConfig,
+    extract_code,
     list_checkpoints,
+    score_in_sandbox,
 )
 
 # ## Load hello-world from Harbor Hub
@@ -53,7 +50,7 @@ from modal_training_gym import (
 #
 # The hello-world task uses pytest-based verification rather than
 # `*.in`/`*.out` file pairs, so we define stdin/stdout test cases
-# inline and pass them directly to the sandbox scorer.
+# inline and pass them to `HarborEval` via the `test_cases` field.
 #
 # A single dataset instance handles both training and eval —
 # `prepare()` writes train and eval splits to the volume,
@@ -61,119 +58,40 @@ from modal_training_gym import (
 
 HELLO_WORLD_TESTS = [{"input": "", "expected_output": "Hello, world!\n"}]
 
-dataset = HarborDataset(
-    dataset_name="harbor/hello-world",
-    label_metadata_path="task.toml",
-    train_repeats=20,
-    always_prepare=True, # For the purpose of this tutorial, we want to prepare the dataset every time we run it, in case there is stale data from a previous run.
-    system_prompt=(
-        "You are an expert Python programmer. "
-        "Solve the given problem by writing a complete Python program. "
-        "Your program must print the answer to stdout using print(). "
-        "Do not create or write any files. "
-        "Put your solution in a ```python code fence."
-    ),
-)
-
-# ## Sandbox-backed scorer
+# ## Evaluate with HarborEval
 #
-# We execute candidate code in a Modal sandbox with test inputs piped via
-# `sys.stdin`, then compare stdout against expected output. All test cases
-# run in a single sandbox per sample for efficiency.
+# `HarborEval` automates the sandbox scoring loop. It:
+# 1. Sends each task's prompt to the deployed model.
+# 2. Extracts Python code from the response (stripping thinking tags,
+#    chat-template artifacts, and code fences via `extract_code`).
+# 3. Runs the extracted code in a Modal sandbox against the test cases.
+# 4. Returns a score = fraction of test cases passed.
+#
+# Since hello-world doesn't ship `*.in`/`*.out` file pairs, we pass
+# `test_cases` directly — `HarborEval` uses them as a fallback when
+# the dataset label doesn't contain test cases.
+#
+# Passing `model=Qwen3_4B()` enables model-aware response parsing,
+# which populates `parsed_response` on each result row for richer
+# dashboard display.
 
-_CODE_FENCE_RE = re.compile(r"```(?:python)?\s*(.*?)```", re.IGNORECASE | re.DOTALL)
+base_model = Qwen3_4B()
 
-def extract_python_code(text: str) -> str:
-    normalized = text.replace("\r\n", "\n").replace("\r", "\n").strip()
-    if "<|im_start|>assistant" in normalized:
-        normalized = normalized.rsplit("<|im_start|>assistant", 1)[-1]
-    if "</think>" in normalized:
-        normalized = normalized.split("</think>", 1)[-1]
-    normalized = normalized.replace("<think>", "").replace("<|im_end|>", "").strip()
-    if match := _CODE_FENCE_RE.search(normalized):
-        return match.group(1).strip()
-    return normalized
-
-def score_usaco_with_sandbox(
-    response: str,
-    *,
-    test_cases: list[dict],
-    timeout_sec: int = 60,
-) -> tuple[float, dict]:
-    import modal as _modal
-
-    code = extract_python_code(response)
-    if not test_cases:
-        return 0.0, {"passed": 0, "total": 0}
-
-    script = "\n".join([
-        "import sys, io, json",
-        f"candidate = {json.dumps(code)}",
-        f"tests = {json.dumps(test_cases)}",
-        "results = []",
-        "for tc in tests:",
-        "    sys.stdin = io.StringIO(tc['input'])",
-        "    buf = io.StringIO()",
-        "    old = sys.stdout",
-        "    sys.stdout = buf",
-        "    try:",
-        "        exec(candidate, {}, {})",
-        "        sys.stdout = old",
-        "        results.append({'output': buf.getvalue(), 'ok': True})",
-        "    except Exception as e:",
-        "        sys.stdout = old",
-        "        results.append({'output': '', 'ok': False})",
-        "print(json.dumps(results))",
-    ]) + "\n"
-
-    try:
-        app = _modal.App.lookup("training-gym-sandbox-rm", create_if_missing=True)
-        sandbox = _modal.Sandbox.create(
-            "python", "-c", script,
-            app=app,
-            image=_modal.Image.debian_slim(python_version="3.11"),
-            timeout=timeout_sec,
-            cpu=1.0,
-            memory=1024,
-        )
-        stdout = sandbox.stdout.read()
-        sandbox.stderr.read()
-        sandbox.wait()
-    except Exception:
-        return 0.0, {"passed": 0, "total": len(test_cases)}
-
-    try:
-        results = json.loads(stdout)
-    except (json.JSONDecodeError, ValueError):
-        return 0.0, {"passed": 0, "total": len(test_cases)}
-
-    passed = sum(
-        1 for r, tc in zip(results, test_cases)
-        if r.get("ok") and r.get("output", "").strip() == tc["expected_output"].strip()
-    )
-    return passed / len(test_cases), {"passed": passed, "total": len(test_cases)}
+# ## Train with SLIME and sandbox reward
+#
+# For training, we reuse the same `score_in_sandbox` and `extract_code`
+# helpers that `HarborEval` uses internally — wrapped in an async
+# reward function for SLIME's `custom_rm_function`.
 
 async def usaco_rm(args, sample, **kwargs) -> float:
     import asyncio
 
+    code = extract_code(sample.response, model=base_model)
     reward, meta = await asyncio.to_thread(
-        score_usaco_with_sandbox, sample.response, test_cases=HELLO_WORLD_TESTS,
+        score_in_sandbox, code, test_cases=HELLO_WORLD_TESTS,
     )
     sample.metadata = {**(getattr(sample, "metadata", None) or {}), "usaco": meta}
     return float(reward)
-
-def eval_fn(deployment: ModelDeployment, example: dict) -> EvalRowResult:
-    prompt = example.get("instruction", "")
-    response = deployment.generate(
-        prompt,
-        ensure_ready=False,
-        messages=[
-            {"role": "system", "content": dataset.system_prompt},
-            {"role": "user", "content": prompt},
-        ],
-    )
-    score, metadata = score_usaco_with_sandbox(response, test_cases=HELLO_WORLD_TESTS)
-    return EvalRowResult(score=score, response=response, metadata=metadata)
 
 import modal
 
@@ -188,21 +106,31 @@ def _main_impl() -> None:
             "https://modal.com/secrets with an HF_TOKEN entry, then re-run."
         ) from e
 
-    # ## Serve and evaluate the base model
+    dataset = HarborDataset(
+        dataset_name="harbor/hello-world",
+        label_metadata_path="task.toml",
+        train_repeats=20,
+        always_prepare=True, # For the purpose of this tutorial, we want to prepare the dataset every time we run it, in case there is stale data from a previous run.
+        system_prompt=(
+            "You are an expert Python programmer. "
+            "Solve the given problem by writing a complete Python program. "
+            "Your program must print the answer to stdout using print(). "
+            "Do not create or write any files. "
+            "Put your solution in a ```python code fence."
+        ),
+    )
 
-    base_model = Qwen3_4B()
-    base_deployment: ModelDeployment = DeploymentConfig(model=base_model).serve()
+    base_deployment = DeploymentConfig(model=base_model).serve()
     print(f"Base model URL: {base_deployment.url}")
 
-    eval_config = EvalConfig(
+    eval_config = HarborEval(
         dataset=dataset,
-        eval_fn=eval_fn,
+        model=base_model,
+        test_cases=HELLO_WORLD_TESTS,
     )
     print("Running base eval...")
     base_eval = eval_config.evaluate(base_deployment, debug=True)
     print(f"Base mean reward: {base_eval.mean:.4f}")
-
-    # ## Train with SLIME and sandbox reward
 
     training_run = TrainConfig(
         model=Qwen3_4B(),

@@ -151,6 +151,15 @@ class SlimeRecipe(BaseTrainRecipe):
     rollout_function: Callable | str | None = None
     custom_megatron_before_train_step_hook: Callable | str | None = None
 
+    # ── SGLang rollout engine ──────────────────────────────────────────────
+    sglang_enable_dp_attention: bool = False
+    sglang_dp_size: int | None = None
+    sglang_ep_size: int | None = None
+    sglang_enable_dp_lm_head: bool = False
+    sglang_disable_custom_all_reduce: bool = False
+    sglang_cuda_graph_bs: list[int] | None = None
+    sglang_max_running_requests: int | None = None
+
     # ── SGLang / config overrides ───────────────────────────────────────────
     extra_config: dict | None = None
     sglang_config: dict | None = None
@@ -269,6 +278,28 @@ class SlimeRecipe(BaseTrainRecipe):
             "disable_bias_linear": arch.disable_bias_linear,
             "qk_layernorm": arch.qk_layernorm,
             "untie_embeddings_and_output_weights": arch.untie_embeddings_and_output_weights,
+            **({"num_experts": arch.num_experts} if arch.num_experts else {}),
+            **(
+                {"moe_ffn_hidden_size": arch.moe_ffn_hidden_size}
+                if arch.moe_ffn_hidden_size
+                else {}
+            ),
+            **(
+                {
+                    "moe_shared_expert_intermediate_size": arch.moe_shared_expert_intermediate_size
+                }
+                if arch.moe_shared_expert_intermediate_size
+                else {}
+            ),
+            **({"moe_grouped_gemm": True} if arch.moe_grouped_gemm else {}),
+            **({"moe_shared_expert_gate": True} if arch.moe_shared_expert_gate else {}),
+            **(
+                {"moe_router_topk": arch.moe_router_topk}
+                if arch.moe_router_topk
+                else {}
+            ),
+            **({"spec": arch.megatron_spec} if arch.megatron_spec else {}),
+            **({"attention_output_gate": True} if arch.attention_output_gate else {}),
             "use_rotary_position_embeddings": arch.use_rotary_position_embeddings,
             "rotary_base": arch.rotary_base,
         }
@@ -378,6 +409,9 @@ class SlimeRecipe(BaseTrainRecipe):
         from modal_training_gym.train_recipes.slime_recipe.qwen3_4b import (
             Qwen3_4b_Recipe,
         )
+        from modal_training_gym.train_recipes.slime_recipe.qwen3_6_35b import (
+            Qwen3_6_35b_Recipe,
+        )
 
         if model_config.model_name == "Qwen/Qwen3-1.7B":
             return Qwen3_1_7b_Recipe()
@@ -389,4 +423,6 @@ class SlimeRecipe(BaseTrainRecipe):
             return Qwen3_14b_Recipe()
         if model_config.model_name == "Qwen/Qwen3-32B":
             return Qwen3_32b_Recipe()
+        if model_config.model_name == "Qwen/Qwen3.6-35B-A3B":
+            return Qwen3_6_35b_Recipe()
         return None

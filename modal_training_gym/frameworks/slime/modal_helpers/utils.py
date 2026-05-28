@@ -12,14 +12,31 @@ _CONVERSION_EXTRA_ARGS = [
 ]
 
 
-def get_checkpoint_conversion_policy(slime_cfg) -> tuple[int, int, list[str]]:
+def get_checkpoint_conversion_policy(
+    slime_cfg, model=None
+) -> tuple[int, int, list[str]]:
     """Return (num_nodes, nproc_per_node, extra_args) for checkpoint conversion."""
     gpus_per_node = slime_cfg.actor_num_gpus_per_node
     actor_nodes = slime_cfg.actor_num_nodes
     tp = slime_cfg.tensor_model_parallel_size
     pp = getattr(slime_cfg, "pipeline_model_parallel_size", 1)
 
-    world_size = tp * pp if (tp > 1 or pp > 1) else gpus_per_node
+    needs_preconv = (
+        model
+        and getattr(model, "architecture", None)
+        and getattr(model.architecture, "needs_pre_conversion", False)
+    )
+    ep = getattr(slime_cfg, "expert_model_parallel_size", 1) or 1
+    etp = getattr(slime_cfg, "expert_tensor_parallel_size", 1) or 1
+
+    if needs_preconv:
+        # Match ALL training parallelism dims exactly so Megatron
+        # doesn't attempt any re-sharding at load time (re-sharding
+        # triggers BytesIO errors in dist_checkpointing).
+        pp = 1
+        world_size = actor_nodes * gpus_per_node
+    else:
+        world_size = tp * pp if (tp > 1 or pp > 1) else gpus_per_node
     max_world_size = actor_nodes * gpus_per_node
     if world_size > max_world_size:
         raise ValueError(
@@ -35,14 +52,73 @@ def get_checkpoint_conversion_policy(slime_cfg) -> tuple[int, int, list[str]]:
             continue
 
         extra_args: list[str] = []
-        if tp > 1 or pp > 1:
+        conv_tp = tp
+        if needs_preconv:
+            pp = 1
+        if conv_tp > 1 or pp > 1:
             extra_args += [
-                f"--tensor-model-parallel-size {tp}",
+                f"--tensor-model-parallel-size {conv_tp}",
                 f"--pipeline-model-parallel-size {pp}",
+            ]
+        if needs_preconv:
+            extra_args += [
+                f"--expert-model-parallel-size {ep}",
+                f"--expert-tensor-parallel-size {etp}",
             ]
         for attr, flag in _CONVERSION_EXTRA_ARGS:
             if x := getattr(slime_cfg, attr, None):
                 extra_args.append(f"--{flag} {x}")
+
+        if model and getattr(model, "architecture", None):
+            arch = model.architecture
+            _arch_fields = [
+                ("num_layers", "num-layers"),
+                ("hidden_size", "hidden-size"),
+                ("ffn_hidden_size", "ffn-hidden-size"),
+                ("num_attention_heads", "num-attention-heads"),
+                ("num_query_groups", "num-query-groups"),
+                ("kv_channels", "kv-channels"),
+                ("vocab_size", "vocab-size"),
+                ("norm_epsilon", "norm-epsilon"),
+                ("rotary_base", "rotary-base"),
+            ]
+            for attr, flag in _arch_fields:
+                val = getattr(arch, attr, 0)
+                if val:
+                    extra_args.append(f"--{flag} {val}")
+            if arch.group_query_attention:
+                extra_args.append("--group-query-attention")
+            if arch.swiglu:
+                extra_args.append("--swiglu")
+            if arch.disable_bias_linear:
+                extra_args.append("--disable-bias-linear")
+            if arch.qk_layernorm:
+                extra_args.append("--qk-layernorm")
+            if arch.untie_embeddings_and_output_weights:
+                extra_args.append("--untie-embeddings-and-output-weights")
+            if arch.normalization and arch.normalization != "LayerNorm":
+                extra_args.append(f"--normalization {arch.normalization}")
+            if arch.num_experts:
+                extra_args.append(f"--num-experts {arch.num_experts}")
+            if arch.moe_ffn_hidden_size:
+                extra_args.append(f"--moe-ffn-hidden-size {arch.moe_ffn_hidden_size}")
+            if arch.moe_shared_expert_intermediate_size:
+                extra_args.append(
+                    f"--moe-shared-expert-intermediate-size {arch.moe_shared_expert_intermediate_size}"
+                )
+            if arch.moe_grouped_gemm:
+                extra_args.append("--moe-grouped-gemm")
+            if arch.moe_shared_expert_gate:
+                extra_args.append("--moe-shared-expert-gate")
+            if arch.moe_router_topk:
+                extra_args.append(f"--moe-router-topk {arch.moe_router_topk}")
+            if arch.megatron_spec:
+                extra_args.append(f"--spec {' '.join(arch.megatron_spec)}")
+            if arch.attention_output_gate:
+                extra_args.append("--attention-output-gate")
+            if arch.use_rotary_position_embeddings:
+                extra_args.append("--use-rotary-position-embeddings")
+                extra_args.append("--position-embedding-type rope")
 
         return num_nodes, nproc_per_node, extra_args
 
