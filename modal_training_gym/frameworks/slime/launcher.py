@@ -103,12 +103,13 @@ _patch_torch_src = (
     "import pathlib, re\n"
     "p = pathlib.Path('/root/Megatron-LM/megatron/core/dist_checkpointing/strategies/torch.py')\n"
     "src = p.read_text()\n"
-    "# Insert a guard before the assert that checks len(tensors)\n"
+    "# Wrap non-list values (BytesIO from _extra_state) in a list so\n"
+    "# len() works and _restore_dict_types finds them afterwards.\n"
     "old = '        assert len(tensors) == len(rename_mapping[k])'\n"
     "if old in src and 'isinstance(tensors, list)' not in src:\n"
     "    new = (\n"
     "        '        if not isinstance(tensors, list):\\n'\n"
-    "        '            continue  # skip BytesIO / _extra_state entries\\n'\n"
+    "        '            tensors = [tensors]\\n'\n"
     "        '        assert len(tensors) == len(rename_mapping[k])'\n"
     "    )\n"
     "    src = src.replace(old, new, 1)\n"
@@ -176,7 +177,7 @@ def build_slime_app(
         slug = model.model_name.replace("/", "--")
         object.__setattr__(slime, "megatron_to_hf_mode", "")
         if not slime.ref_load:
-            object.__setattr__(slime, "ref_load", f"/checkpoints/torch_dist/{slug}-v28")
+            object.__setattr__(slime, "ref_load", f"/checkpoints/torch_dist/{slug}-v29")
 
     caller_module = resolve_caller_module()
     if caller_module is not None and caller_module.__name__ != "__main__":
@@ -480,28 +481,13 @@ def build_slime_app(
         if mmt:
             model_script = f"{SLIME_ROOT}/scripts/models/{mmt}.sh"
             if needs_preconv:
-                # Strip parallelism flags from MODEL_ARGS so the only
-                # source of TP/PP/EP is our extra_args.  The bridge
-                # (AutoBridge) needs MODEL_ARGS to correctly map HF
-                # weights, so we keep all non-parallelism flags.
-                # Extra_args append --use-rotary-position-embeddings etc.
-                # so the conversion model matches training's structure.
-                filter_cmd = (
-                    "CONV_ARGS=(); SKIP=0; "
-                    'for a in "${MODEL_ARGS[@]}"; do '
-                    '  if [ "$SKIP" = 1 ]; then SKIP=0; continue; fi; '
-                    '  case "$a" in '
-                    "    --tensor-model-parallel-size|--pipeline-model-parallel-size"
-                    "|--expert-model-parallel-size|--expert-tensor-parallel-size"
-                    "|--context-parallel-size) SKIP=1; continue ;; "
-                    "  esac; "
-                    '  CONV_ARGS+=("$a"); '
-                    "done"
-                )
+                # Use ONLY extra_args (from ModelArchitecture) for conversion
+                # to guarantee the same model structure as training.
+                # MODEL_ARGS may carry flags (e.g. GDN/linear-attention
+                # settings) that the training recipe doesn't include,
+                # causing checkpoint key mismatches at load time.
                 cmd = (
-                    f"source {model_script} && {filter_cmd} && "
                     f"torchrun {' '.join(torchrun_args)} {convert_script} "
-                    '"${CONV_ARGS[@]}" '
                     f"{' '.join(extra_args)} "
                     f"--hf-checkpoint {shlex.quote(hf_path)} --save {shlex.quote(save_path)}"
                 )
@@ -536,37 +522,6 @@ def build_slime_app(
 
         if node_rank == 0:
             print(f"Saved torch_dist checkpoint to {save_path}")
-            # Debug: inspect checkpoint key structure
-            import base64
-
-            debug_script = (
-                "import os, re\n"
-                "from torch.distributed.checkpoint import FileSystemReader\n"
-                f"ckpt_dir = '{save_path}/release'\n"
-                "reader = FileSystemReader(ckpt_dir)\n"
-                "md = reader.read_metadata()\n"
-                "keys = sorted(md.state_dict_metadata.keys())\n"
-                "tensor_keys = [k for k in keys if 'Tensor' in type(md.state_dict_metadata[k]).__name__]\n"
-                "bytes_keys = [k for k in keys if 'Bytes' in type(md.state_dict_metadata[k]).__name__]\n"
-                "print(f'Total: {len(keys)}, Tensor: {len(tensor_keys)}, Bytes: {len(bytes_keys)}')\n"
-                "# Show pattern of tensor keys (deduplicate layer/expert indices)\n"
-                "patterns = set()\n"
-                "for k in tensor_keys:\n"
-                "    p = re.sub(r'\\d+', 'N', k)\n"
-                "    patterns.add(p)\n"
-                "print(f'Tensor key patterns ({len(patterns)}):')\n"
-                "for p in sorted(patterns):\n"
-                "    print(f'  {p}')\n"
-                "print(f'First 20 tensor keys:')\n"
-                "for k in tensor_keys[:20]:\n"
-                "    v = md.state_dict_metadata[k]\n"
-                "    print(f'  {k}: size={v.size}')\n"
-            )
-            encoded = base64.b64encode(debug_script.encode()).decode()
-            subprocess.run(
-                ["bash", "-c", f"echo {encoded} | base64 -d | python3"],
-                env=env,
-            )
 
     @app.function(
         image=image,
