@@ -100,21 +100,36 @@ _PATCH_VALIDATION_B64 = base64.b64encode(_patch_src.encode()).decode()
 # has no len()".
 _PATCH_TORCH_LOAD_B64: str
 _patch_torch_src = (
-    "import pathlib, re\n"
+    "import pathlib\n"
     "p = pathlib.Path('/root/Megatron-LM/megatron/core/dist_checkpointing/strategies/torch.py')\n"
     "src = p.read_text()\n"
-    "# Wrap non-list values (BytesIO from _extra_state) in a list so\n"
-    "# len() works and _restore_dict_types finds them afterwards.\n"
-    "old = '        assert len(tensors) == len(rename_mapping[k])'\n"
-    "if old in src and 'isinstance(tensors, list)' not in src:\n"
-    "    new = (\n"
+    "patched = False\n"
+    "# 1) Skip non-list values (BytesIO from _extra_state) in the rename loop.\n"
+    "old1 = '        assert len(tensors) == len(rename_mapping[k])'\n"
+    "if old1 in src and 'isinstance(tensors, list)' not in src:\n"
+    "    new1 = (\n"
     "        '        if not isinstance(tensors, list):\\n'\n"
-    "        '            tensors = [tensors]\\n'\n"
+    "        '            continue  # skip BytesIO _extra_state entries\\n'\n"
     "        '        assert len(tensors) == len(rename_mapping[k])'\n"
     "    )\n"
-    "    src = src.replace(old, new, 1)\n"
+    "    src = src.replace(old1, new1, 1)\n"
+    "    patched = True\n"
+    "# 2) Make _restore_dict_types tolerant of missing keys (skipped BytesIO).\n"
+    "old2 = '        _restore_dict_types(x[k], v)'\n"
+    "if old2 in src and 'k not in x' not in src:\n"
+    "    new2 = (\n"
+    "        '        if k not in x:\\n'\n"
+    "        '            if str(k) in x:\\n'\n"
+    "        '                k = str(k)\\n'\n"
+    "        '            else:\\n'\n"
+    "        '                continue\\n'\n"
+    "        '        _restore_dict_types(x[k], v)'\n"
+    "    )\n"
+    "    src = src.replace(old2, new2, 1)\n"
+    "    patched = True\n"
+    "if patched:\n"
     "    p.write_text(src)\n"
-    "    print('Patched _replace_sharded_keys_with_state_dict_keys in torch.py')\n"
+    "    print('Patched torch.py for hybrid-model checkpoint loading')\n"
 )
 _PATCH_TORCH_LOAD_B64 = base64.b64encode(_patch_torch_src.encode()).decode()
 
@@ -195,9 +210,8 @@ def build_slime_app(
     # Hybrid models have layers with different parameter sets (e.g. GDN
     # layers carry linear_attn.dt_bias that standard attention layers lack).
     # Megatron's validate_sharding_integrity rejects this because not every
-    # position in the global tensor is covered.  Patch the validation file
-    # only for training (not conversion — patching during save can corrupt
-    # the checkpoint's sharding metadata).
+    # position in the global tensor is covered.  Patch both the conversion
+    # and training images so saving and loading both succeed.
     _has_hybrid_spec = (
         model
         and getattr(model, "architecture", None)
@@ -230,14 +244,17 @@ def build_slime_app(
             copy=True,
         )
 
-    # Build a separate training image with the validation patch.
-    # Conversion must use the UNPATCHED image so sharding metadata is
-    # saved correctly; training uses the patched image so checkpoint
-    # loading doesn't crash on hybrid layer validation.
+    # Patch both conversion and training images for hybrid models.
+    # The validation patch lets save/load succeed despite non-uniform
+    # layer parameters.  The torch.py patch handles BytesIO entries
+    # from _extra_state during checkpoint loading.
+    if _has_hybrid_spec:
+        image = image.run_commands(
+            f"echo {_PATCH_VALIDATION_B64} | base64 -d | python3",
+        )
     train_image = image
     if _has_hybrid_spec:
         train_image = image.run_commands(
-            f"echo {_PATCH_VALIDATION_B64} | base64 -d | python3",
             f"echo {_PATCH_TORCH_LOAD_B64} | base64 -d | python3",
         )
 
@@ -481,13 +498,28 @@ def build_slime_app(
         if mmt:
             model_script = f"{SLIME_ROOT}/scripts/models/{mmt}.sh"
             if needs_preconv:
-                # Use ONLY extra_args (from ModelArchitecture) for conversion
-                # to guarantee the same model structure as training.
-                # MODEL_ARGS may carry flags (e.g. GDN/linear-attention
-                # settings) that the training recipe doesn't include,
-                # causing checkpoint key mismatches at load time.
+                # Strip parallelism flags from MODEL_ARGS so the only
+                # source of TP/PP/EP is our extra_args.  The bridge
+                # (AutoBridge) needs MODEL_ARGS to correctly map HF
+                # weights.  Extra_args (from ModelArchitecture) are
+                # appended LAST so they override any duplicates.
+                filter_cmd = (
+                    "CONV_ARGS=(); SKIP=0; "
+                    'for a in "${MODEL_ARGS[@]}"; do '
+                    '  if [ "$SKIP" = 1 ]; then SKIP=0; continue; fi; '
+                    '  case "$a" in '
+                    "    --tensor-model-parallel-size|--pipeline-model-parallel-size"
+                    "|--expert-model-parallel-size|--expert-tensor-parallel-size"
+                    "|--context-parallel-size) SKIP=1; continue ;; "
+                    "  esac; "
+                    '  CONV_ARGS+=("$a"); '
+                    "done"
+                )
                 cmd = (
+                    f"source {model_script} && {filter_cmd} && "
+                    f'echo "CONV_ARGS=${{CONV_ARGS[*]}}" && '
                     f"torchrun {' '.join(torchrun_args)} {convert_script} "
+                    '"${CONV_ARGS[@]}" '
                     f"{' '.join(extra_args)} "
                     f"--hf-checkpoint {shlex.quote(hf_path)} --save {shlex.quote(save_path)}"
                 )
