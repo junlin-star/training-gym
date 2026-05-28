@@ -73,6 +73,7 @@ HARBOR_PKG_VERSION = "0.6.6"
 _PATCH_VALIDATION_B64 = encode_patch("patch_validation")
 _PATCH_TORCH_LOAD_B64 = encode_patch("patch_torch_load")
 _PATCH_GLOBAL_PLAN_B64 = encode_patch("patch_global_plan")
+_PATCH_CHECKPOINT_SAVE_B64 = encode_patch("patch_checkpoint_save")
 
 
 def _build_slime_base_image() -> "Image":
@@ -198,6 +199,7 @@ def build_slime_app(
         train_image = image.run_commands(
             f"echo {_PATCH_TORCH_LOAD_B64} | base64 -d | python3",
             f"echo {_PATCH_GLOBAL_PLAN_B64} | base64 -d | python3",
+            f"echo {_PATCH_CHECKPOINT_SAVE_B64} | base64 -d | python3",
         )
 
     def _get_custom_generate_path() -> str:
