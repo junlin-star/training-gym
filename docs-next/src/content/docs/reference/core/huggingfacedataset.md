@@ -32,9 +32,9 @@ Dataset backed by a HuggingFace `datasets` repo.
 
 ## Methods
 
-### `load(self) -> 'Any'`
+### `load(self, split: "Literal['all', 'train', 'eval']" = 'all') -> 'Any'`
 
-Load raw examples for local inspection or evaluation.
+Load raw examples, optionally filtered by split.
 
 ### `prepare(self, path: 'str', eval_paths: 'dict[str, str] | None' = None) -> 'None'`
 
@@ -45,5 +45,9 @@ Materialize training data to `path` (and eval splits to `eval_paths`).
 ### `validate_prepared(self, path: 'str') -> 'None'`
 
 Sniff what `prepare()` wrote and confirm the columns the framework will index.
+
+## Related Tutorials
+
+- [Hill-climb Qwen3.6-35B-A3B on GSM8K math with GRPO](/tutorials/rl/004_qwen35b/)
 
 **Source:** [`modal_training_gym/common/dataset.py`](https://github.com/modal-projects/training-gym/blob/main/modal_training_gym/common/dataset.py)

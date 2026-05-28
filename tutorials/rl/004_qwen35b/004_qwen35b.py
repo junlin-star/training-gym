@@ -55,7 +55,7 @@ class MathDataset(HuggingFaceDataset):
     input_column = "prompt"
     output_column = "label"
     output_format = "jsonl"
-    apply_chat_template = False
+    apply_chat_template = True
 
 import modal
 

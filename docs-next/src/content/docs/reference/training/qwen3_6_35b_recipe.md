@@ -1,30 +1,30 @@
 ---
-title: SlimeRecipe
-description: API reference for SlimeRecipe
+title: Qwen3_6_35b_Recipe
+description: API reference for Qwen3_6_35b_Recipe
 ---
 
 ```python
-from modal_training_gym.train_recipes.slime_recipe.recipe import SlimeRecipe
+from modal_training_gym.train_recipes.slime_recipe.qwen3_6_35b import Qwen3_6_35b_Recipe
 ```
 
-Recipe dataclass for configuring slime GRPO training on Modal.
+Qwen3.6-35B-A3B (MoE) on 1×8×H100 with TP2/PP1/CP2/EP8, colocated GRPO.
 
-**Inherits from:** `BaseTrainRecipe`
+**Inherits from:** `SlimeRecipe`, `BaseTrainRecipe`
 
 ## Fields
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `gpu_type` | `str` |  |  |
-| `colocate` | `bool` |  |  |
-| `tensor_model_parallel_size` | `int` |  |  |
-| `sequence_parallel` | `bool` |  |  |
-| `rollout_num_gpus_per_engine` | `int` |  |  |
-| `num_rollout` | `int` |  |  |
-| `rollout_batch_size` | `int` |  |  |
-| `rollout_max_response_len` | `int` |  |  |
-| `rollout_temperature` | `float` |  |  |
-| `save_interval` | `int` |  |  |
+| `gpu_type` | `str` | `"H100"` |  |
+| `colocate` | `bool` | `True` |  |
+| `tensor_model_parallel_size` | `int` | `2` |  |
+| `sequence_parallel` | `bool` | `True` |  |
+| `rollout_num_gpus_per_engine` | `int` | `4` |  |
+| `num_rollout` | `int` | `1` |  |
+| `rollout_batch_size` | `int` | `8` |  |
+| `rollout_max_response_len` | `int` | `4096` |  |
+| `rollout_temperature` | `float` | `1.0` |  |
+| `save_interval` | `int` | `20` |  |
 | `recipe_type` | `RecipeType` | `slime` |  |
 | `name` | `str` | `""` |  |
 | `app_tags` | `dict` | `{}` |  |
@@ -40,7 +40,7 @@ Recipe dataclass for configuring slime GRPO training on Modal.
 | `critic_num_nodes` | `int \| None` | `None` |  |
 | `critic_num_gpus_per_node` | `int \| None` | `None` |  |
 | `advantage_estimator` | `str` | `"grpo"` |  |
-| `n_samples_per_prompt` | `int` | `2` |  |
+| `n_samples_per_prompt` | `int` | `8` |  |
 | `eps_clip` | `float` | `0.2` |  |
 | `eps_clip_high` | `float` | `0.28` |  |
 | `use_kl_loss` | `bool` | `False` |  |
@@ -50,7 +50,7 @@ Recipe dataclass for configuring slime GRPO training on Modal.
 | `ref_load` | `str` | `""` |  |
 | `rollout_shuffle` | `bool` | `True` |  |
 | `sglang_mem_fraction_static` | `float` | `0.75` |  |
-| `global_batch_size` | `int` | `16` |  |
+| `global_batch_size` | `int` | `32` |  |
 | `lr` | `float` | `1e-06` |  |
 | `lr_decay_style` | `str` | `"constant"` |  |
 | `weight_decay` | `float` | `0.1` |  |
@@ -65,10 +65,10 @@ Recipe dataclass for configuring slime GRPO training on Modal.
 | `recompute_method` | `str` | `"uniform"` |  |
 | `recompute_num_layers` | `int` | `1` |  |
 | `use_dynamic_batch_size` | `bool` | `True` |  |
-| `max_tokens_per_gpu` | `int` | `9216` |  |
-| `eval_interval` | `int \| None` | `None` |  |
+| `max_tokens_per_gpu` | `int` | `8192` |  |
+| `eval_interval` | `int \| None` | `20` |  |
 | `n_samples_per_eval_prompt` | `int` | `4` |  |
-| `eval_max_response_len` | `int` | `16384` |  |
+| `eval_max_response_len` | `int` | `4096` |  |
 | `eval_top_p` | `float` | `1.0` |  |
 | `eval_config` | `dict \| None` | `None` |  |
 | `save` | `str` | `"/checkpoints"` |  |
@@ -80,16 +80,26 @@ Recipe dataclass for configuring slime GRPO training on Modal.
 | `custom_generate_function` | `collections.abc.Callable \| None` | `None` |  |
 | `rollout_function` | `collections.abc.Callable \| str \| None` | `None` |  |
 | `custom_megatron_before_train_step_hook` | `collections.abc.Callable \| str \| None` | `None` |  |
-| `sglang_enable_dp_attention` | `bool` | `False` |  |
-| `sglang_dp_size` | `int \| None` | `None` |  |
-| `sglang_ep_size` | `int \| None` | `None` |  |
-| `sglang_enable_dp_lm_head` | `bool` | `False` |  |
+| `sglang_enable_dp_attention` | `bool` | `True` |  |
+| `sglang_dp_size` | `int \| None` | `4` |  |
+| `sglang_ep_size` | `int \| None` | `4` |  |
+| `sglang_enable_dp_lm_head` | `bool` | `True` |  |
 | `sglang_disable_custom_all_reduce` | `bool` | `False` |  |
 | `sglang_cuda_graph_bs` | `list[int] \| None` | `None` |  |
-| `sglang_max_running_requests` | `int \| None` | `None` |  |
+| `sglang_max_running_requests` | `int \| None` | `512` |  |
 | `extra_config` | `dict \| None` | `None` |  |
 | `sglang_config` | `dict \| None` | `None` |  |
 | `apply_chat_template_kwargs` | `str` | `""` |  |
+| `pipeline_model_parallel_size` | `int` | `1` |  |
+| `context_parallel_size` | `int` | `1` |  |
+| `expert_model_parallel_size` | `int` | `8` |  |
+| `expert_tensor_parallel_size` | `int` | `1` |  |
+| `calculate_per_token_loss` | `bool` | `True` |  |
+| `balance_data` | `bool` | `True` |  |
+| `optimizer_cpu_offload` | `bool` | `True` |  |
+| `overlap_cpu_optimizer_d2h_h2d` | `bool` | `True` |  |
+| `use_precision_aware_optimizer` | `bool` | `True` |  |
+| `attention_backend` | `str` | `"flash"` |  |
 
 ## Methods
 
@@ -97,12 +107,4 @@ Recipe dataclass for configuring slime GRPO training on Modal.
 
 ### `get_base_recipe(model_config: modal_training_gym.common.models.base.ModelConfig) -> 'SlimeRecipe | None'`
 
-## Related Tutorials
-
-- [Qwen3-4B haiku evaluation with verifiable rewards — serve, evaluate, train, compare](/tutorials/rl/000_rl_basics/)
-- [Code RL with Harbor hello-world and sandboxed verification](/tutorials/rl/001_sandboxes/)
-- [Multi-turn number-guessing RL with custom generate and reward functions](/tutorials/rl/002_multiturn/)
-- [On-policy distillation on math — Qwen3-8B teacher, Qwen3-4B student](/tutorials/rl/003_on_policy_distillation/)
-- [Hill-climb Qwen3.6-35B-A3B on GSM8K math with GRPO](/tutorials/rl/004_qwen35b/)
-
-**Source:** [`modal_training_gym/train_recipes/slime_recipe/recipe.py`](https://github.com/modal-projects/training-gym/blob/main/modal_training_gym/train_recipes/slime_recipe/recipe.py)
+**Source:** [`modal_training_gym/train_recipes/slime_recipe/qwen3_6_35b.py`](https://github.com/modal-projects/training-gym/blob/main/modal_training_gym/train_recipes/slime_recipe/qwen3_6_35b.py)

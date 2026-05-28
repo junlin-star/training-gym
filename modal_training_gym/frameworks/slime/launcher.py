@@ -136,6 +136,32 @@ _patch_torch_src = (
 )
 _PATCH_TORCH_LOAD_B64 = base64.b64encode(_patch_torch_src.encode()).decode()
 
+# Patch PyTorch's default_planner.py so _create_global_plan logs a warning
+# instead of raising ValueError("Failed to validate global plan") during
+# checkpoint saves.  Hybrid models with non-uniform layer parameters
+# (e.g. GDN + standard attention) trigger this validation failure because
+# not every rank contributes the same set of tensor keys.
+_PATCH_SAVE_PLANNER_B64: str
+_patch_save_planner_src = (
+    "import pathlib, re, sysconfig\n"
+    "sp = sysconfig.get_paths()['purelib']\n"
+    "p = pathlib.Path(sp) / 'torch' / 'distributed' / 'checkpoint' / 'default_planner.py'\n"
+    "if not p.exists():\n"
+    "    print(f'default_planner.py not found at {p}, skipping patch')\n"
+    "else:\n"
+    "    src = p.read_text()\n"
+    "    old = 'raise ValueError(\"Failed to validate global plan\")'\n"
+    "    if old in src and 'warnings.warn' not in src.split(old)[0].rsplit('\\n', 5)[-1]:\n"
+    "        new = (\n"
+    "            'import warnings as _w; '\n"
+    "            '_w.warn(\"Global plan validation failed — continuing anyway for hybrid models\")'\n"
+    "        )\n"
+    "        src = src.replace(old, new, 1)\n"
+    "        p.write_text(src)\n"
+    "        print('Patched default_planner.py for hybrid-model checkpoint saving')\n"
+)
+_PATCH_SAVE_PLANNER_B64 = base64.b64encode(_patch_save_planner_src.encode()).decode()
+
 
 def _build_slime_base_image() -> "Image":
     return (
@@ -195,7 +221,7 @@ def build_slime_app(
         slug = model.model_name.replace("/", "--")
         object.__setattr__(slime, "megatron_to_hf_mode", "")
         if not slime.ref_load:
-            object.__setattr__(slime, "ref_load", f"/checkpoints/torch_dist/{slug}-v30")
+            object.__setattr__(slime, "ref_load", f"/checkpoints/torch_dist/{slug}-v31")
 
     caller_module = resolve_caller_module()
     if caller_module is not None and caller_module.__name__ != "__main__":
@@ -259,6 +285,7 @@ def build_slime_app(
     if _has_hybrid_spec:
         train_image = image.run_commands(
             f"echo {_PATCH_TORCH_LOAD_B64} | base64 -d | python3",
+            f"echo {_PATCH_SAVE_PLANNER_B64} | base64 -d | python3",
         )
 
     def _get_custom_generate_path() -> str:

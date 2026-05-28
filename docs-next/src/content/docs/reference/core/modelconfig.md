@@ -25,11 +25,16 @@ ModelConfig(**kwargs)
 | `model_name` | `str` | `""` |  |
 | `model_path` | `str \| None` | `None` |  |
 | `architecture` | `ModelArchitecture \| None` | `None` |  |
+| `response_parser` | `Optional[Callable[[str], ParsedResponse]]` | `None` |  |
 
 ## Methods
 
 ### `download(self) -> 'None'`
 
 Download or materialize weights into the model volume.
+
+### `parse_response(self, text: 'str') -> 'ParsedResponse'`
+
+Parse raw model output into structured content.
 
 **Source:** [`modal_training_gym/common/models/base.py`](https://github.com/modal-projects/training-gym/blob/main/modal_training_gym/common/models/base.py)

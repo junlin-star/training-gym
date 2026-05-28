@@ -1,7 +1,7 @@
 ---
 title: Training Gym SDK
 description: Reusable building blocks and runnable examples for RL post-training on Modal.
-editUrl: https://github.com/modal-projects/training-gym/edit/main/README.md
+editUrl: https://github.com/modal-projects/training-gym/edit/joy/add-qwen-3.6-35b-a3b/README.md
 ---
 
 **[📖 Documentation](https://gym.modal.dev)** · **[Tutorials](https://gym.modal.dev/tutorials/)** · **[API Reference](https://gym.modal.dev/reference/)**
@@ -54,12 +54,12 @@ training-gym setup
 
 Modal prints a URL where you can watch jobs in progress.
 
-![Gym Observability Dashboard](https://raw.githubusercontent.com/modal-projects/training-gym/main/assets/observability_dashboard.png)
+![Gym Observability Dashboard](https://raw.githubusercontent.com/modal-projects/training-gym/joy/add-qwen-3.6-35b-a3b/assets/observability_dashboard.png)
 
 
 ## Tutorials
 
-The fastest path through the API is the [tutorials](https://github.com/modal-projects/training-gym/blob/main/tutorials). Each one
+The fastest path through the API is the [tutorials](https://github.com/modal-projects/training-gym/blob/joy/add-qwen-3.6-35b-a3b/tutorials). Each one
 ships as a runnable `.py` **and** a paired `.ipynb` narrated cell-by-cell —
 the notebook is the canonical walkthrough. Each tutorial below has a one-click
 **Launch** button that opens the `.ipynb` in a fresh Modal Notebook; the first
@@ -82,17 +82,17 @@ rest of the cells run as-is.
 
 | Tutorial | Summary | Difficulty | Framework | Launch |
 |---|---|---|---|---|
-| [`000_rl_basics`](https://github.com/modal-projects/training-gym/blob/main/tutorials/rl/000_rl_basics/000_rl_basics.ipynb) | Qwen3-4B haiku evaluation with verifiable rewards — serve, evaluate, train, compare | Beginner | `slime` | <a href="https://modal.com/notebooks/new/https://github.com/modal-projects/training-gym/blob/main/tutorials/rl/000_rl_basics/000_rl_basics.ipynb" target="_blank" rel="nofollow noopener noreferrer"><img src="https://modal-cdn.com/open-in-modal.svg" alt="Open in Modal"></a> |
-| [`001_sandboxes`](https://github.com/modal-projects/training-gym/blob/main/tutorials/rl/001_sandboxes/001_sandboxes.ipynb) | Code RL with Harbor hello-world and sandboxed verification | Intermediate | `slime` | <a href="https://modal.com/notebooks/new/https://github.com/modal-projects/training-gym/blob/main/tutorials/rl/001_sandboxes/001_sandboxes.ipynb" target="_blank" rel="nofollow noopener noreferrer"><img src="https://modal-cdn.com/open-in-modal.svg" alt="Open in Modal"></a> |
-| [`002_multiturn`](https://github.com/modal-projects/training-gym/blob/main/tutorials/rl/002_multiturn/002_multiturn.ipynb) | Multi-turn number-guessing RL with custom generate and reward functions | Intermediate | `slime` | <a href="https://modal.com/notebooks/new/https://github.com/modal-projects/training-gym/blob/main/tutorials/rl/002_multiturn/002_multiturn.ipynb" target="_blank" rel="nofollow noopener noreferrer"><img src="https://modal-cdn.com/open-in-modal.svg" alt="Open in Modal"></a> |
-| [`003_on_policy_distillation`](https://github.com/modal-projects/training-gym/blob/main/tutorials/rl/003_on_policy_distillation/003_on_policy_distillation.ipynb) | On-policy distillation on math — Qwen3-8B teacher, Qwen3-4B student | Intermediate | `slime` | <a href="https://modal.com/notebooks/new/https://github.com/modal-projects/training-gym/blob/main/tutorials/rl/003_on_policy_distillation/003_on_policy_distillation.ipynb" target="_blank" rel="nofollow noopener noreferrer"><img src="https://modal-cdn.com/open-in-modal.svg" alt="Open in Modal"></a> |
+| [`000_rl_basics`](https://github.com/modal-projects/training-gym/blob/joy/add-qwen-3.6-35b-a3b/tutorials/rl/000_rl_basics/000_rl_basics.ipynb) | Qwen3-4B haiku evaluation with verifiable rewards — serve, evaluate, train, compare | Beginner | `slime` | <a href="https://modal.com/notebooks/new/https://github.com/modal-projects/training-gym/blob/joy/add-qwen-3.6-35b-a3b/tutorials/rl/000_rl_basics/000_rl_basics.ipynb" target="_blank" rel="nofollow noopener noreferrer"><img src="https://modal-cdn.com/open-in-modal.svg" alt="Open in Modal"></a> |
+| [`001_sandboxes`](https://github.com/modal-projects/training-gym/blob/joy/add-qwen-3.6-35b-a3b/tutorials/rl/001_sandboxes/001_sandboxes.ipynb) | Code RL with Harbor hello-world and sandboxed verification | Intermediate | `slime` | <a href="https://modal.com/notebooks/new/https://github.com/modal-projects/training-gym/blob/joy/add-qwen-3.6-35b-a3b/tutorials/rl/001_sandboxes/001_sandboxes.ipynb" target="_blank" rel="nofollow noopener noreferrer"><img src="https://modal-cdn.com/open-in-modal.svg" alt="Open in Modal"></a> |
+| [`004_qwen35b`](https://github.com/modal-projects/training-gym/blob/joy/add-qwen-3.6-35b-a3b/tutorials/rl/004_qwen35b/004_qwen35b.ipynb) | Hill-climb Qwen3.6-35B-A3B on GSM8K math with GRPO | Advanced | `slime` | <a href="https://modal.com/notebooks/new/https://github.com/modal-projects/training-gym/blob/joy/add-qwen-3.6-35b-a3b/tutorials/rl/004_qwen35b/004_qwen35b.ipynb" target="_blank" rel="nofollow noopener noreferrer"><img src="https://modal-cdn.com/open-in-modal.svg" alt="Open in Modal"></a> |
+| [`002_multiturn`](https://github.com/modal-projects/training-gym/blob/joy/add-qwen-3.6-35b-a3b/tutorials/rl/002_multiturn/002_multiturn.ipynb) | Multi-turn number-guessing RL with custom generate and reward functions | Intermediate | `slime` | <a href="https://modal.com/notebooks/new/https://github.com/modal-projects/training-gym/blob/joy/add-qwen-3.6-35b-a3b/tutorials/rl/002_multiturn/002_multiturn.ipynb" target="_blank" rel="nofollow noopener noreferrer"><img src="https://modal-cdn.com/open-in-modal.svg" alt="Open in Modal"></a> |
+| [`003_on_policy_distillation`](https://github.com/modal-projects/training-gym/blob/joy/add-qwen-3.6-35b-a3b/tutorials/rl/003_on_policy_distillation/003_on_policy_distillation.ipynb) | On-policy distillation on math — Qwen3-8B teacher, Qwen3-4B student | Intermediate | `slime` | <a href="https://modal.com/notebooks/new/https://github.com/modal-projects/training-gym/blob/joy/add-qwen-3.6-35b-a3b/tutorials/rl/003_on_policy_distillation/003_on_policy_distillation.ipynb" target="_blank" rel="nofollow noopener noreferrer"><img src="https://modal-cdn.com/open-in-modal.svg" alt="Open in Modal"></a> |
 
 ### Agents
 
 | Tutorial | Summary | Difficulty | Framework | Launch |
 |---|---|---|---|---|
-| [`000_agent_sandbox`](https://github.com/modal-projects/training-gym/blob/main/tutorials/agent/000_agent_sandbox/000_agent_sandbox.ipynb) | Build an LLM agent harness with a self-hosted model and Modal Sandbox tool execution | Beginner | Modal Sandbox | <a href="https://modal.com/notebooks/new/https://github.com/modal-projects/training-gym/blob/main/tutorials/agent/000_agent_sandbox/000_agent_sandbox.ipynb" target="_blank" rel="nofollow noopener noreferrer"><img src="https://modal-cdn.com/open-in-modal.svg" alt="Open in Modal"></a> |
-| [`001_pi_dev`](https://github.com/modal-projects/training-gym/blob/main/tutorials/agent/001_pi_dev/001_pi_dev.ipynb) | Wikipedia Speedrun — pi.dev agent with custom tools and self-hosted model evaluation | Intermediate | pi.dev + Modal Sandbox | <a href="https://modal.com/notebooks/new/https://github.com/modal-projects/training-gym/blob/main/tutorials/agent/001_pi_dev/001_pi_dev.ipynb" target="_blank" rel="nofollow noopener noreferrer"><img src="https://modal-cdn.com/open-in-modal.svg" alt="Open in Modal"></a> |
+| [`000_agent_sandbox`](https://github.com/modal-projects/training-gym/blob/joy/add-qwen-3.6-35b-a3b/tutorials/agent/000_agent_sandbox/000_agent_sandbox.ipynb) | Build an LLM agent harness with a self-hosted model and Modal Sandbox tool execution | Beginner | Modal Sandbox | <a href="https://modal.com/notebooks/new/https://github.com/modal-projects/training-gym/blob/joy/add-qwen-3.6-35b-a3b/tutorials/agent/000_agent_sandbox/000_agent_sandbox.ipynb" target="_blank" rel="nofollow noopener noreferrer"><img src="https://modal-cdn.com/open-in-modal.svg" alt="Open in Modal"></a> |
 <!-- END TUTORIAL TABLE -->
 
 See [`tutorials/README.md`](/tutorials/) for how to run the `.py`
@@ -108,7 +108,7 @@ for larger models — are still in Beta.
 
 
 ## Architecture
-![Architecture diagram](https://raw.githubusercontent.com/modal-projects/training-gym/main/assets/training_gym_architecture_restyled.svg)
+![Architecture diagram](https://raw.githubusercontent.com/modal-projects/training-gym/joy/add-qwen-3.6-35b-a3b/assets/training_gym_architecture_restyled.svg)
 
 ## Documentation
 
@@ -126,7 +126,7 @@ Modal platform references:
 
 ## License
 
-[MIT](https://github.com/modal-projects/training-gym/blob/main/LICENSE).
+[MIT](https://github.com/modal-projects/training-gym/blob/joy/add-qwen-3.6-35b-a3b/LICENSE).
 
 ---
 

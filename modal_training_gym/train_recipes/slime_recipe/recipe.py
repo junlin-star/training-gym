@@ -298,10 +298,38 @@ class SlimeRecipe(BaseTrainRecipe):
                 if arch.moe_router_topk
                 else {}
             ),
+            **(
+                {"moe_router_score_function": arch.moe_router_score_function}
+                if arch.moe_router_score_function
+                else {}
+            ),
+            **(
+                {"moe_token_drop_policy": arch.moe_token_drop_policy}
+                if arch.moe_token_drop_policy
+                else {}
+            ),
+            **(
+                {"moe_router_dtype": arch.moe_router_dtype}
+                if arch.moe_router_dtype
+                else {}
+            ),
+            **({"moe_permute_fusion": True} if arch.moe_permute_fusion else {}),
+            **(
+                {"moe_aux_loss_coeff": arch.moe_aux_loss_coeff}
+                if arch.moe_aux_loss_coeff is not None
+                else {}
+            ),
             **({"spec": arch.megatron_spec} if arch.megatron_spec else {}),
+            **({"apply_layernorm_1p": True} if arch.apply_layernorm_1p else {}),
+            **({"use_gated_attention": True} if arch.use_gated_attention else {}),
             **({"attention_output_gate": True} if arch.attention_output_gate else {}),
             "use_rotary_position_embeddings": arch.use_rotary_position_embeddings,
             "rotary_base": arch.rotary_base,
+            **(
+                {"rotary_percent": arch.rotary_percent}
+                if arch.rotary_percent != 1.0
+                else {}
+            ),
         }
 
     @staticmethod

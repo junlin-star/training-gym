@@ -1,13 +1,15 @@
 ---
-title: EvalConfig
-description: API reference for EvalConfig
+title: HarborEval
+description: API reference for HarborEval
 ---
 
 ```python
-from modal_training_gym.common.eval import EvalConfig
+from modal_training_gym.common.eval import HarborEval
 ```
 
-Evaluate a deployed model on a dataset config.
+Evaluate a deployed model on a Harbor dataset using sandbox execution.
+
+**Inherits from:** `EvalConfig`
 
 ## Fields
 
@@ -19,6 +21,13 @@ Evaluate a deployed model on a dataset config.
 | `prompt_column` | `str \| None` | `None` |  |
 | `eval_config_id` | `str \| None` | `None` |  |
 | `generate_kwargs` | `dict[str, Any]` | `{}` |  |
+| `model` | `'ModelConfig \| None'` | `None` |  |
+| `test_cases` | `list[dict[str, str]] \| None` | `None` |  |
+| `sandbox_timeout` | `int` | `60` |  |
+| `sandbox_cpu` | `float` | `1.0` |  |
+| `sandbox_memory` | `int` | `1024` |  |
+| `sandbox_python_version` | `str` | `"3.11"` |  |
+| `extract_code_fn` | `Callable[[str], str] \| None` | `None` |  |
 
 ## Methods
 
@@ -32,9 +41,6 @@ Evaluate a deployed model on a dataset config.
 
 ## Related Tutorials
 
-- [Qwen3-4B haiku evaluation with verifiable rewards — serve, evaluate, train, compare](/tutorials/rl/000_rl_basics/)
-- [Multi-turn number-guessing RL with custom generate and reward functions](/tutorials/rl/002_multiturn/)
-- [On-policy distillation on math — Qwen3-8B teacher, Qwen3-4B student](/tutorials/rl/003_on_policy_distillation/)
-- [Hill-climb Qwen3.6-35B-A3B on GSM8K math with GRPO](/tutorials/rl/004_qwen35b/)
+- [Code RL with Harbor hello-world and sandboxed verification](/tutorials/rl/001_sandboxes/)
 
 **Source:** [`modal_training_gym/common/eval.py`](https://github.com/modal-projects/training-gym/blob/main/modal_training_gym/common/eval.py)

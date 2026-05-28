@@ -61,6 +61,19 @@ class ModelArchitecture:
     moe_shared_expert_intermediate_size : int
         Shared expert FFN intermediate size. Default ``0``.
 
+    ## MoE Routing
+
+    moe_router_score_function : str
+        Router scoring function (e.g. ``"softmax"``). Default ``""``.
+    moe_token_drop_policy : str
+        Token drop policy for MoE routing. Default ``""``.
+    moe_router_dtype : str
+        Data type for router computation (e.g. ``"fp32"``). Default ``""``.
+    moe_permute_fusion : bool
+        Enable permute fusion optimization for MoE. Default ``False``.
+    moe_aux_loss_coeff : float | None
+        Auxiliary load-balancing loss coefficient. Default ``None``.
+
     ## Checkpoint Conversion
 
     megatron_model_type : str
@@ -69,8 +82,15 @@ class ModelArchitecture:
         the HF checkpoint to torch_dist format before training instead
         of relying on bridge-mode auto-detection. Default ``""``.
 
+    ## Normalization Extras
+
+    apply_layernorm_1p : bool
+        Use zero-centered LayerNorm (add 1 to gamma). Default ``False``.
+
     ## Attention Extras
 
+    use_gated_attention : bool
+        Enable gated attention mechanism. Default ``False``.
     attention_output_gate : bool
         Enable output gating on attention layers (required by some
         hybrid architectures such as Qwen 3.6). Default ``False``.
@@ -81,6 +101,8 @@ class ModelArchitecture:
         Use RoPE positional encoding. Default ``True``.
     rotary_base : int
         Base frequency for RoPE. Default ``10000``.
+    rotary_percent : float
+        Fraction of hidden dims to apply RoPE to. Default ``1.0``.
     """
 
     num_layers: int = 0
@@ -103,11 +125,19 @@ class ModelArchitecture:
     moe_grouped_gemm: bool = False
     moe_shared_expert_gate: bool = False
     moe_router_topk: int = 0
+    moe_router_score_function: str = ""
+    moe_token_drop_policy: str = ""
+    moe_router_dtype: str = ""
+    moe_permute_fusion: bool = False
+    moe_aux_loss_coeff: float | None = None
     megatron_spec: list[str] | None = None
     megatron_model_type: str = ""
+    apply_layernorm_1p: bool = False
+    use_gated_attention: bool = False
     attention_output_gate: bool = False
     use_rotary_position_embeddings: bool = True
     rotary_base: int = 10000
+    rotary_percent: float = 1.0
 
     @property
     def needs_pre_conversion(self) -> bool:
@@ -160,14 +190,30 @@ class ModelArchitecture:
             args.append("--moe-shared-expert-gate")
         if self.moe_router_topk:
             args += ["--moe-router-topk", str(self.moe_router_topk)]
+        if self.moe_router_score_function:
+            args += ["--moe-router-score-function", self.moe_router_score_function]
+        if self.moe_token_drop_policy:
+            args += ["--moe-token-drop-policy", self.moe_token_drop_policy]
+        if self.moe_router_dtype:
+            args += ["--moe-router-dtype", self.moe_router_dtype]
+        if self.moe_permute_fusion:
+            args.append("--moe-permute-fusion")
+        if self.moe_aux_loss_coeff is not None:
+            args += ["--moe-aux-loss-coeff", str(self.moe_aux_loss_coeff)]
         if self.megatron_spec:
             args += ["--spec"] + list(self.megatron_spec)
+        if self.apply_layernorm_1p:
+            args.append("--apply-layernorm-1p")
+        if self.use_gated_attention:
+            args.append("--use-gated-attention")
         if self.attention_output_gate:
             args.append("--attention-output-gate")
         if self.use_rotary_position_embeddings:
             args += ["--position-embedding-type", "rope"]
             if self.rotary_base != 10000:
                 args += ["--rotary-base", str(self.rotary_base)]
+            if self.rotary_percent != 1.0:
+                args += ["--rotary-percent", str(self.rotary_percent)]
         return args
 
 
