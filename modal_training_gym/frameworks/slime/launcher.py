@@ -701,6 +701,13 @@ def build_slime_app(
                     **slime.environment,
                 }
             }
+            # Ensure /root is in PYTHONPATH so shipped callable modules
+            # (custom_rm, custom_generate) placed at /root/<name>.py are importable.
+            _pp = runtime_env["env_vars"].get("PYTHONPATH", "")
+            if "/root" not in _pp.split(":"):
+                runtime_env["env_vars"]["PYTHONPATH"] = (
+                    f"/root:{_pp}" if _pp else "/root"
+                )
 
             mode = "async" if slime.async_mode else "sync"
             print(
