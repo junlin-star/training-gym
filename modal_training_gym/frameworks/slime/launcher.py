@@ -295,6 +295,16 @@ def build_slime_app(
     if slime.custom_generate_function is not None and _get_custom_generate_path():
         object.__setattr__(slime, "custom_generate_function", None)
 
+    # Ensure /root is importable so shipped callable modules (custom_rm,
+    # custom_generate) placed at /root/<name>.py can be found by all
+    # processes, including Ray actors spawned by Slime.
+    image = image.run_commands(
+        'python3 -c "'
+        "import site, pathlib; "
+        "pathlib.Path(site.getsitepackages()[0], 'training_gym_root.pth')"
+        ".write_text('/root\\n')\""
+    )
+
     # ── Volumes ──────────────────────────────────────────────────────────────
     hf_cache_volume = Volume.from_name("huggingface-cache", create_if_missing=True)
     data_volume = Volume.from_name(f"{app_name}-data", create_if_missing=True)
@@ -701,13 +711,6 @@ def build_slime_app(
                     **slime.environment,
                 }
             }
-            # Ensure /root is in PYTHONPATH so shipped callable modules
-            # (custom_rm, custom_generate) placed at /root/<name>.py are importable.
-            _pp = runtime_env["env_vars"].get("PYTHONPATH", "")
-            if "/root" not in _pp.split(":"):
-                runtime_env["env_vars"]["PYTHONPATH"] = (
-                    f"/root:{_pp}" if _pp else "/root"
-                )
 
             mode = "async" if slime.async_mode else "sync"
             print(
