@@ -58,6 +58,7 @@ from .modal_helpers.utils import (
     get_modal_cluster_context,
     prepare_slime_config,
 )
+from .modal_helpers.patches import encode_patch
 from modal_training_gym.common.checkpoint import (
     Checkpoint,
     _get_slime_checkpoint_prefix,
@@ -69,72 +70,9 @@ SLIME_ROOT = "/root/slime"
 SLIME_IMAGE = "slimerl/slime@sha256:2568a8283b913eeea86b68397288f9ebdb59ebad4eab11c64ee3ce0c49819c3a"
 HARBOR_PKG_VERSION = "0.6.6"
 
-# Base64-encoded Python script that patches /root/Megatron-LM validation.py
-# so validate_sharding_integrity logs a warning instead of raising.
-# Executed at image-build time to avoid import-time side effects.
-# Base64 avoids Dockerfile quoting issues with multiline strings.
-_PATCH_VALIDATION_B64: str
-_patch_src = (
-    "import pathlib\n"
-    "p = pathlib.Path('/root/Megatron-LM/megatron/core/dist_checkpointing/validation.py')\n"
-    "src = p.read_text()\n"
-    "old = 'def validate_sharding_integrity('\n"
-    "if old in src and '_orig_impl' not in src:\n"
-    "    new = (\n"
-    "        'def validate_sharding_integrity(*_a, **_k):\\n'\n"
-    "        '    import warnings as _w\\n'\n"
-    "        '    try:\\n'\n"
-    "        '        return _validate_sharding_integrity_orig_impl(*_a, **_k)\\n'\n"
-    "        '    except Exception as _e:\\n'\n"
-    "        '        _w.warn(f\"Skipped sharding integrity validation: {_e}\")\\n'\n"
-    "        '\\n\\n'\n"
-    "        'def _validate_sharding_integrity_orig_impl('\n"
-    "    )\n"
-    "    p.write_text(src.replace(old, new, 1))\n"
-)
-_PATCH_VALIDATION_B64 = base64.b64encode(_patch_src.encode()).decode()
-
-# Patch _replace_sharded_keys_with_state_dict_keys in torch.py to skip
-# non-list entries (BytesIO from _extra_state).  Without this, loading
-# hybrid-model checkpoints crashes with "object of type '_io.BytesIO'
-# has no len()".
-_PATCH_TORCH_LOAD_B64: str
-_patch_torch_src = (
-    "import pathlib, re\n"
-    "p = pathlib.Path('/root/Megatron-LM/megatron/core/dist_checkpointing/strategies/torch.py')\n"
-    "src = p.read_text()\n"
-    "patched = False\n"
-    "# 1) Skip non-list values (BytesIO from _extra_state) in the rename loop.\n"
-    "old1 = '        assert len(tensors) == len(rename_mapping[k])'\n"
-    "if old1 in src and 'isinstance(tensors, list)' not in src:\n"
-    "    new1 = (\n"
-    "        '        if not isinstance(tensors, list):\\n'\n"
-    "        '            continue  # skip BytesIO _extra_state entries\\n'\n"
-    "        '        assert len(tensors) == len(rename_mapping[k])'\n"
-    "    )\n"
-    "    src = src.replace(old1, new1, 1)\n"
-    "    patched = True\n"
-    "# 2) Make _restore_dict_types tolerant of missing keys.\n"
-    "#    Detect the indentation dynamically.\n"
-    "m = re.search(r'^( +)_restore_dict_types\\(x\\[k\\], v\\)', src, re.MULTILINE)\n"
-    "if m and 'k not in x' not in src:\n"
-    "    indent = m.group(1)\n"
-    "    old2 = indent + '_restore_dict_types(x[k], v)'\n"
-    "    new2 = (\n"
-    "        indent + 'if k not in x:\\n'\n"
-    "        + indent + '    if str(k) in x:\\n'\n"
-    "        + indent + '        k = str(k)\\n'\n"
-    "        + indent + '    else:\\n'\n"
-    "        + indent + '        continue\\n'\n"
-    "        + indent + '_restore_dict_types(x[k], v)'\n"
-    "    )\n"
-    "    src = src.replace(old2, new2, 1)\n"
-    "    patched = True\n"
-    "if patched:\n"
-    "    p.write_text(src)\n"
-    "    print('Patched torch.py for hybrid-model checkpoint loading')\n"
-)
-_PATCH_TORCH_LOAD_B64 = base64.b64encode(_patch_torch_src.encode()).decode()
+_PATCH_VALIDATION_B64 = encode_patch("patch_validation")
+_PATCH_TORCH_LOAD_B64 = encode_patch("patch_torch_load")
+_PATCH_GLOBAL_PLAN_B64 = encode_patch("patch_global_plan")
 
 # Patch PyTorch's default_planner.py so _create_global_plan logs a warning
 # instead of raising ValueError("Failed to validate global plan") during
@@ -286,6 +224,7 @@ def build_slime_app(
         train_image = image.run_commands(
             f"echo {_PATCH_TORCH_LOAD_B64} | base64 -d | python3",
             f"echo {_PATCH_SAVE_PLANNER_B64} | base64 -d | python3",
+            f"echo {_PATCH_GLOBAL_PLAN_B64} | base64 -d | python3",
         )
 
     def _get_custom_generate_path() -> str:
