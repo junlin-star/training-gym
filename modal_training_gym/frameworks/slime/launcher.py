@@ -194,13 +194,6 @@ def build_slime_app(
         image = image.run_commands(
             f"echo {_PATCH_VALIDATION_B64} | base64 -d | python3",
         )
-    train_image = image
-    if _has_hybrid_spec:
-        train_image = image.run_commands(
-            f"echo {_PATCH_TORCH_LOAD_B64} | base64 -d | python3",
-            f"echo {_PATCH_GLOBAL_PLAN_B64} | base64 -d | python3",
-            f"echo {_PATCH_CHECKPOINT_SAVE_B64} | base64 -d | python3",
-        )
 
     def _get_custom_generate_path() -> str:
         cfg = slime.extra_config
@@ -294,6 +287,15 @@ def build_slime_app(
         object.__setattr__(slime, "custom_rm_function", None)
     if slime.custom_generate_function is not None and _get_custom_generate_path():
         object.__setattr__(slime, "custom_generate_function", None)
+
+    # Build train_image AFTER _ship_callable so shipped modules are included.
+    train_image = image
+    if _has_hybrid_spec:
+        train_image = image.run_commands(
+            f"echo {_PATCH_TORCH_LOAD_B64} | base64 -d | python3",
+            f"echo {_PATCH_GLOBAL_PLAN_B64} | base64 -d | python3",
+            f"echo {_PATCH_CHECKPOINT_SAVE_B64} | base64 -d | python3",
+        )
 
     # ── Volumes ──────────────────────────────────────────────────────────────
     hf_cache_volume = Volume.from_name("huggingface-cache", create_if_missing=True)
@@ -701,13 +703,6 @@ def build_slime_app(
                     **slime.environment,
                 }
             }
-            # Ensure /root is in PYTHONPATH so shipped callable modules
-            # (custom_rm, custom_generate) placed at /root/<name>.py are importable.
-            _pp = runtime_env["env_vars"].get("PYTHONPATH", "")
-            if "/root" not in _pp.split(":"):
-                runtime_env["env_vars"]["PYTHONPATH"] = (
-                    f"/root:{_pp}" if _pp else "/root"
-                )
 
             mode = "async" if slime.async_mode else "sync"
             print(
