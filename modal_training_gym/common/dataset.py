@@ -225,6 +225,12 @@ class HuggingFaceDataset(DatasetConfig):
 
 
 class HarborDataset(DatasetConfig):
+    """Dataset backed by a Harbor task directory structure.
+
+    Each task folder contains an instruction file and optional label metadata.
+    Tasks are discovered by globbing the task_root directory.
+    """
+
     _type: DatasetType = DatasetType.HARBOR
     dataset_name: str = ""
     path: str | None = None
