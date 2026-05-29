@@ -18,7 +18,7 @@
 # (deterministic, cheap) and whether the poem is actually good. That split between
 # *verifiable* and *subjective* rewards is exactly the landscape
 # RL post-training operates in. This tutorial covers the
-# verifiable half. In later tutorials, we will cover the subjective half.
+# verifiable half. In a later tutorial, we will cover the subjective half.
 # To run the tutorial, run the following command:
 # ```
 # uv run python tutorials/rl/000_rl_basics/000_rl_basics.py
@@ -44,11 +44,19 @@ from modal_training_gym import (
     list_checkpoints,
 )
 
-# Okay, how do we evaluate if that was a good haiku or not?
-# A haiku must follow the 5-7-5 syllable format.
-# We can count syllables using NLTK's CMU Pronouncing Dictionary
+# Let's now cover the evaluation part of the tutorial.
+#
+# A good eval takes a particular outcome and assigns a score to it. It can be binary (pass/fail) or continuous (0-100),
+# deterministic or subjective, and cheap or expensive to compute.
+#
+# In our case, we want our model to be good at writing haiku poems, so how do we evaluate if an llm response was a good haiku or not?
+#
+# Well, a haiku must follow the 5-7-5 syllable format, so we can count syllables using NLTK's CMU Pronouncing Dictionary
 # (with a regex fallback for words not in the dictionary)
-# and score how close each line is to its target.
+# and score how close each line is to its target syllable count.
+#
+# We can give it score 0 if it doesn't follow the 5-7-5 syllable format, and 1 if it does. But that's not very informative.
+# Instead, we can score it based on how close it is to the target syllable count for each line.
 
 _cmudict_cache = {}
 
@@ -88,6 +96,9 @@ def score_haiku(response: str) -> float:
 # Here, we use the statworx/haiku dataset from HuggingFace.
 # Each row has a `keywords` topic and a reference `text` haiku.
 # We can use this dataset to train our model.
+#
+# Datasets for training models can take many form factors, and huggingface dataset is just one of them.
+# If you're curious about other options, check out the [DatasetConfig](https://gym.modal.dev/reference/core/datasetconfig/) documentation.
 
 class HaikuDataset(HuggingFaceDataset):
     hf_repo = "statworx/haiku"
@@ -108,6 +119,11 @@ class HaikuDataset(HuggingFaceDataset):
 # First, to explain, an Eval Configuration is a class that owns the model-calling loop.
 # The task-specific part is a scoring function passed to `.evaluate(...)`, which must
 # return `EvalRowResult`.
+#
+# The very simple form of an eval is given a dataset, and the corresponding model response, return its score. That can be configured using
+# `EvalConfig.eval_response_fn`.
+#
+# For more complex evals (e.g. multi-turn), you can also define a custom `EvalConfig.eval_fn` that takes a `ModelDeployment` and a dataset row and returns a score.
 
 def eval_response_fn(_example: dict, response: str) -> EvalRowResult:
     return EvalRowResult(score=score_haiku(response), response=response)
@@ -116,6 +132,9 @@ def eval_response_fn(_example: dict, response: str) -> EvalRowResult:
 #
 # Now, let's actually train the model to write good haikus.
 # Here, we use the slime framework (https://github.com/THUDM/slime) on Modal.
+#
+# All flags that are native to slime can be passed to the `TrainConfig` object.
+# You can also add patches to slime using the `image_overlay` argument.
 
 async def haiku_rm(args, sample, **kwargs) -> float:
     return score_haiku(sample.response)
@@ -138,8 +157,13 @@ def _main_impl() -> None:
     # So, how does Qwen3-4B currently fare at writing haikus? We can
     # serve the base model and find out.
     #
-    # `DeploymentConfig.serve()` builds and deploys a vLLM app, then
-    # returns a `ModelDeployment` with the concrete endpoint URL.
+    # The training gym has several config classes so you can define deploymnet, training, and evaluation configurations,
+    # and reuse them across different runs for parameter sweeps.
+    #
+    # Let's start by initializng a `DeploymentConfig`.
+    #
+    # Calling `DeploymentConfig.serve()` builds and deploys a vLLM app, then
+    # returns a `ModelDeployment` that contains a the concrete endpoint URL.
 
     base_model = Qwen3_4B()
     base_model_deployment = DeploymentConfig(
