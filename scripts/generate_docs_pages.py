@@ -210,6 +210,8 @@ def starlight_frontmatter(destination: str) -> str:
         title: Tutorials
         description: Runnable Modal training examples across intro, RL, SFT, and infrastructure-focused walkthroughs.
         editUrl: {EDIT_BASE}/tutorials/README.md
+        prev: false
+        next: false
         ---
         """
     )
