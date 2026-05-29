@@ -28,9 +28,11 @@ def _intro():
     """
     # Code RL with Harbor hello-world + Modal sandboxes
 
+    That if you have a task that you want to train a model on that you want to score with an environment?
+
     This tutorial trains a model on the
     [hello-world](https://hub.harborframework.com/tasks/habor/hello-world/latest)
-    task from Harbor Hub, scoring solutions by executing them in Modal sandboxes.
+    task from Harbor Hub, scoring solutions by spawning and executing them in Modal sandboxes.
 
     Workflow:
     1. Pull the hello-world task from Harbor Hub via `HarborDataset`.
@@ -38,9 +40,6 @@ def _intro():
        runs it in a Modal sandbox, and compares stdout automatically.
     3. Reuse the same `score_in_sandbox` helper as a SLIME `custom_rm_function`.
     4. Train and compare base vs. trained behavior.
-
-    The key pattern: **correctness drives reward**.
-    Reward = fraction of test cases whose output matches expected.
     """
 
 
