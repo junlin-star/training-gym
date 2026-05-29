@@ -199,6 +199,7 @@ def starlight_frontmatter(destination: str) -> str:
             title: Training Gym SDK
             description: Reusable building blocks and runnable examples for RL post-training on Modal.
             editUrl: {EDIT_BASE}/README.md
+            next: false
             ---
             """
         )
@@ -209,6 +210,8 @@ def starlight_frontmatter(destination: str) -> str:
         title: Tutorials
         description: Runnable Modal training examples across intro, RL, SFT, and infrastructure-focused walkthroughs.
         editUrl: {EDIT_BASE}/tutorials/README.md
+        prev: false
+        next: false
         ---
         """
     )

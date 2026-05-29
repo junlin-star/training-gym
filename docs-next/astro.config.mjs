@@ -77,7 +77,7 @@ export default defineConfig({
         {
           label: 'Tutorials',
           items: [
-            { label: 'Overview', link: '/tutorials/' },
+            { label: 'All Tutorials', link: '/tutorials/' },
             {
               label: 'Reinforcement Learning',
               autogenerate: { directory: 'tutorials/rl' },
@@ -101,6 +101,7 @@ export default defineConfig({
                 { label: 'ModelArchitecture', link: '/reference/core/modelarchitecture/' },
                 { label: 'DatasetConfig', link: '/reference/core/datasetconfig/' },
                 { label: 'HuggingFaceDataset', link: '/reference/core/huggingfacedataset/' },
+                { label: 'HarborDataset', link: '/reference/core/harbordataset/' },
                 { label: 'WandbConfig', link: '/reference/core/wandbconfig/' },
                 { label: 'ModalRayCluster', link: '/reference/core/modalraycluster/' },
                 { label: 'TrainResult', link: '/reference/core/trainresult/' },
@@ -112,21 +113,32 @@ export default defineConfig({
                 { label: 'EvalConfig', link: '/reference/evaluation/evalconfig/' },
                 { label: 'EvalResult', link: '/reference/evaluation/evalresult/' },
                 { label: 'EvalRowResult', link: '/reference/evaluation/evalrowresult/' },
+                { label: 'HarborEval', link: '/reference/evaluation/harboreval/' },
               ],
             },
             {
               label: 'Models',
               items: [
+                { label: 'ToolCall', link: '/reference/models/toolcall/' },
+                { label: 'ParsedResponse', link: '/reference/models/parsedresponse/' },
+                { label: 'parse_qwen3_response', link: '/reference/models/parse_qwen3_response/' },
                 { label: 'Qwen3-0.6B', link: '/reference/models/qwen3_0_6b/' },
+                { label: 'Qwen3-1.7B', link: '/reference/models/qwen3_1_7b/' },
                 { label: 'Qwen3-4B', link: '/reference/models/qwen3_4b/' },
+                { label: 'Qwen3-8B', link: '/reference/models/qwen3_8b/' },
+                { label: 'Qwen3-14B', link: '/reference/models/qwen3_14b/' },
                 { label: 'Qwen3-30B-A3B', link: '/reference/models/qwen3_30b/' },
+                { label: 'Qwen3-32B', link: '/reference/models/qwen3_32b/' },
+                { label: 'Qwen3.6-35B-A3B', link: '/reference/models/qwen3_6_35b/' },
               ],
             },
             {
               label: 'Training',
               items: [
                 { label: 'TrainConfig', link: '/reference/training/trainconfig/' },
+                { label: 'MultiTurn', link: '/reference/training/multiturn/' },
                 { label: 'SlimeRecipe', link: '/reference/training/slimerecipe/' },
+                { label: 'Qwen3_6_35b_Recipe', link: '/reference/training/qwen3_6_35b_recipe/' },
               ],
             },
             {
