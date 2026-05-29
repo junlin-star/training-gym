@@ -74,13 +74,17 @@ _PATCH_VALIDATION_B64 = encode_patch("patch_validation")
 _PATCH_TORCH_LOAD_B64 = encode_patch("patch_torch_load")
 _PATCH_GLOBAL_PLAN_B64 = encode_patch("patch_global_plan")
 _PATCH_CHECKPOINT_SAVE_B64 = encode_patch("patch_checkpoint_save")
+_PATCH_ADVANTAGES_B64 = encode_patch("patch_advantages")
 
 
 def _build_slime_base_image() -> "Image":
     return (
         Image.from_registry(SLIME_IMAGE)
         .entrypoint([])
-        .run_commands("rm -rf /root/.cache/huggingface")
+        .run_commands(
+            "rm -rf /root/.cache/huggingface",
+            f"echo {_PATCH_ADVANTAGES_B64} | base64 -d | python3",
+        )
     )
 
 
