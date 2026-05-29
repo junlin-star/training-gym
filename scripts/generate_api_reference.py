@@ -539,7 +539,7 @@ def _build_tutorial_backlinks() -> dict[str, list[tuple[str, str]]]:
 
     tutorial_src = ROOT / "tutorials" / "tutorial_generator"
     backlinks: dict[str, list[tuple[str, str]]] = {}
-    buckets = ["intro", "rl", "sft", "misc"]
+    buckets = ["intro", "rl", "sft", "agent", "misc"]
 
     for bucket in buckets:
         bucket_dir = tutorial_src / bucket

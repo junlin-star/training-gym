@@ -208,7 +208,7 @@ def starlight_frontmatter(destination: str) -> str:
         f"""\
         ---
         title: Tutorials
-        description: Runnable Modal training examples across intro, RL, SFT, and infrastructure-focused walkthroughs.
+        description: Runnable Modal training examples across RL and agent walkthroughs.
         editUrl: {EDIT_BASE}/tutorials/README.md
         prev: false
         next: false

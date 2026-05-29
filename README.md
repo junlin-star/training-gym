@@ -31,12 +31,6 @@ Then import the building blocks from your own script:
 from modal_training_gym import TrainConfig
 ```
 
-## Agent set-up
-
-This repository includes an `AGENTS.md` and a `skills/` directory (symlinked to `.claude/skills/`) that teach Claude Code how to navigate the framework — W&B configuration, custom rollouts and generate functions, custom eval functions, and more.
-
-Clone the repo and run `claude` from its root; the skills load automatically based on what you ask for.
-
 ## Observability dashboard
 
 Training Gym ships a dashboard that aggregates training runs, deployments,

@@ -83,14 +83,14 @@ base_model = Qwen3_4B()
 # helpers that `HarborEval` uses internally — wrapped in an async
 # reward function for SLIME's `custom_rm_function`.
 
-async def usaco_rm(args, sample, **kwargs) -> float:
+async def harbor_rm(args, sample, **kwargs) -> float:
     import asyncio
 
     code = extract_code(sample.response, model=base_model)
     reward, meta = await asyncio.to_thread(
         score_in_sandbox, code, test_cases=HELLO_WORLD_TESTS,
     )
-    sample.metadata = {**(getattr(sample, "metadata", None) or {}), "usaco": meta}
+    sample.metadata = {**(getattr(sample, "metadata", None) or {}), "harbor": meta}
     return float(reward)
 
 import modal
@@ -136,7 +136,7 @@ def _main_impl() -> None:
         model=Qwen3_4B(),
         dataset=dataset,
         recipe=SlimeRecipe(
-            custom_rm_function=usaco_rm,
+            custom_rm_function=harbor_rm,
 
             gpu_type="H100",
             colocate=True,
