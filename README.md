@@ -1,6 +1,6 @@
 # Training Gym
 
-**[📖 Documentation](https://gym.modal.dev)** · **[Tutorials](https://gym.modal.dev/tutorials/)** · **[API Reference](https://gym.modal.dev/reference/)**
+**[📖 Documentation](https://gym.modal.dev)** · **[API Reference](https://gym.modal.dev/reference/)**
 
 Modal Training Gym is a Python SDK for **RL post-training** on [Modal](https://modal.com) — so you don't have to hand-roll a launcher every time.
 Pick a base model, a dataset, and an RL framework (GRPO, PPO, custom reward / generate functions); the gym handles cluster topology, Ray/NCCL bring-up, volume mounts, checkpointing, and serving for eval and rollouts. SFT and plain distributed training are supported too — but RL is the happy path.
@@ -78,16 +78,15 @@ rest of the cells run as-is.
 |---|---|---|---|---|
 | [`000_rl_basics`](tutorials/rl/000_rl_basics/000_rl_basics.ipynb) | Qwen3-4B haiku evaluation with verifiable rewards — serve, evaluate, train, compare | Beginner | `slime` | <a href="https://modal.com/notebooks/new/https://github.com/modal-projects/training-gym/blob/main/tutorials/rl/000_rl_basics/000_rl_basics.ipynb" target="_blank" rel="nofollow noopener noreferrer"><img src="https://modal-cdn.com/open-in-modal.svg" alt="Open in Modal"></a> |
 | [`001_sandboxes`](tutorials/rl/001_sandboxes/001_sandboxes.ipynb) | Code RL with Harbor hello-world and sandboxed verification | Intermediate | `slime` | <a href="https://modal.com/notebooks/new/https://github.com/modal-projects/training-gym/blob/main/tutorials/rl/001_sandboxes/001_sandboxes.ipynb" target="_blank" rel="nofollow noopener noreferrer"><img src="https://modal-cdn.com/open-in-modal.svg" alt="Open in Modal"></a> |
-| [`004_qwen35b`](tutorials/rl/004_qwen35b/004_qwen35b.ipynb) | Hill-climb Qwen3.6-35B-A3B on GSM8K math with GRPO | Advanced | `slime` | <a href="https://modal.com/notebooks/new/https://github.com/modal-projects/training-gym/blob/main/tutorials/rl/004_qwen35b/004_qwen35b.ipynb" target="_blank" rel="nofollow noopener noreferrer"><img src="https://modal-cdn.com/open-in-modal.svg" alt="Open in Modal"></a> |
 | [`002_multiturn`](tutorials/rl/002_multiturn/002_multiturn.ipynb) | Multi-turn number-guessing RL with custom generate and reward functions | Intermediate | `slime` | <a href="https://modal.com/notebooks/new/https://github.com/modal-projects/training-gym/blob/main/tutorials/rl/002_multiturn/002_multiturn.ipynb" target="_blank" rel="nofollow noopener noreferrer"><img src="https://modal-cdn.com/open-in-modal.svg" alt="Open in Modal"></a> |
 | [`003_on_policy_distillation`](tutorials/rl/003_on_policy_distillation/003_on_policy_distillation.ipynb) | On-policy distillation on math — Qwen3-8B teacher, Qwen3-4B student | Intermediate | `slime` | <a href="https://modal.com/notebooks/new/https://github.com/modal-projects/training-gym/blob/main/tutorials/rl/003_on_policy_distillation/003_on_policy_distillation.ipynb" target="_blank" rel="nofollow noopener noreferrer"><img src="https://modal-cdn.com/open-in-modal.svg" alt="Open in Modal"></a> |
+| [`004_qwen35b`](tutorials/rl/004_qwen35b/004_qwen35b.ipynb) | Hill-climb Qwen3.6-35B-A3B on GSM8K math with GRPO | Advanced | `slime` | <a href="https://modal.com/notebooks/new/https://github.com/modal-projects/training-gym/blob/main/tutorials/rl/004_qwen35b/004_qwen35b.ipynb" target="_blank" rel="nofollow noopener noreferrer"><img src="https://modal-cdn.com/open-in-modal.svg" alt="Open in Modal"></a> |
 
 ### Agents
 
 | Tutorial | Summary | Difficulty | Framework | Launch |
 |---|---|---|---|---|
 | [`000_agent_sandbox`](tutorials/agent/000_agent_sandbox/000_agent_sandbox.ipynb) | Build an LLM agent harness with a self-hosted model and Modal Sandbox tool execution | Beginner | Modal Sandbox | <a href="https://modal.com/notebooks/new/https://github.com/modal-projects/training-gym/blob/main/tutorials/agent/000_agent_sandbox/000_agent_sandbox.ipynb" target="_blank" rel="nofollow noopener noreferrer"><img src="https://modal-cdn.com/open-in-modal.svg" alt="Open in Modal"></a> |
-<!-- END TUTORIAL TABLE -->
 
 See [`tutorials/README.md`](tutorials/README.md) for how to run the `.py`
 companions from the CLI and how to author a new tutorial.
@@ -106,7 +105,6 @@ companions from the CLI and how to author a new tutorial.
 
 Full docs are hosted at **[gym.modal.dev](https://gym.modal.dev)**:
 
-- [Tutorials](https://gym.modal.dev/tutorials/) — step-by-step runnable examples
 - [API Reference](https://gym.modal.dev/reference/) — every public class documented with types and defaults
 
 Modal platform references:
@@ -119,68 +117,3 @@ Modal platform references:
 ## License
 
 [MIT](LICENSE).
-
----
-
-# Contributing Guide
-
-## Layout
-
-```
-modal_training_gym/        ← installable package
-├── common/                ← shared classes (datasets, models, eval, deployment, Ray helpers)
-├── deploy_recipes/        ← serving presets for engines like SGLang and vLLM
-├── frameworks/            ← launcher implementations that build Modal apps
-└── train_recipes/         ← training presets such as SlimeRecipe
-
-tutorials/                 ← runnable examples — one folder per tutorial
-├── tutorial_generator/    ← source files; each produces a .py + .ipynb
-└── generate_tutorial.py   ← AST-walks the sources, regenerates .py + .ipynb
-
-dashboards/                ← observability dashboard (deploy with `modal deploy dashboards/app.py`)
-docs-next/                 ← Starlight docs site (deploy with `modal deploy docs-next/docs_next_app.py`)
-.claude/skills/            ← agent skills for navigating this repo
-```
-
-## Dev setup
-
-```bash
-# editable install + pinned dev deps (pre-commit, etc.)
-uv sync
-
-# optional: register this venv as a Jupyter kernel for notebook work
-uv run python -m ipykernel install --user --name=modal-training-gym
-
-# install the pre-commit hook locally
-uv run pre-commit install
-```
-
-Python is pinned to 3.12 (see `.python-version` and `pyproject.toml`). Modal's
-`@app.function(serialized=True)` requires the local and remote Python versions
-to match, and the framework images we ship (slime nightly, NeMo 25.11) are all
-py312.
-
-## Authoring a new tutorial
-
-See [`tutorials/README.md`](tutorials/README.md#authoring-a-new-tutorial)
-for the generator-source format and the per-tutorial `TUTORIAL_METADATA`
-schema.
-
-## Contributing a new recipe
-
-1. Add a train recipe under `modal_training_gym/train_recipes/`, or a deploy
-   recipe under `modal_training_gym/deploy_recipes/`.
-2. If the recipe needs new runtime behavior, wire it into the relevant launcher
-   or serving builder under `modal_training_gym/frameworks/` or
-   `modal_training_gym/deploy_recipes/*/serve_*.py`.
-3. Add or update a source tutorial under
-   `tutorials/tutorial_generator/<bucket>/` and run the generator.
-4. Keep shared container objects (`dataset`, `model`, `wandb`, `eval`)
-   framework-agnostic — recipe layers do the translation into engine-specific
-   flags.
-
-## Agent guide
-
-Working on this repo with an AI coding agent? The `.claude/skills/` directory
-contains auto-triggering skills for Modal training workflows, example
-validation, and repo navigation.
