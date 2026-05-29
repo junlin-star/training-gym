@@ -2,16 +2,11 @@
 
 **[📖 Documentation](https://gym.modal.dev)** · **[API Reference](https://gym.modal.dev/reference/)**
 
-Modal Training Gym is a Python SDK for **RL post-training** on [Modal](https://modal.com) — so you don't have to hand-roll a launcher every time.
-Pick a base model, a dataset, and an RL framework (GRPO, PPO, custom reward / generate functions); the gym handles cluster topology, Ray/NCCL bring-up, volume mounts, checkpointing, and serving for eval and rollouts. SFT and plain distributed training are supported too — but RL is the happy path.
+Modal Training Gym is a Python SDK for **RL post-training** on [Modal](https://modal.com)—so you don't have to hand-roll a launcher every time.
+
+Pick a base model, a dataset, and an RL framework; the gym handles cluster topology, Ray/NCCL bring-up, volume mounts, checkpointing, and serving for eval and rollouts.
 
 ## Quickstart
-
-> [!NOTE]
-> **Python 3.12 is required.** Modal's `serialized=True` functions use
-> cloudpickle, which requires the local Python version to exactly match the
-> remote container's. All framework images ship Python 3.12, so running from
-> 3.11 or 3.13 will fail at app build time.
 
 Install with pip:
 
@@ -30,6 +25,12 @@ Then import the building blocks from your own script:
 ```python
 from modal_training_gym import TrainConfig
 ```
+
+> [!NOTE]
+> **Python 3.12 is required.** Modal's `serialized=True` functions use
+> cloudpickle, which requires the local Python version to exactly match the
+> remote container's. All framework images ship Python 3.12, so running from
+> 3.11 or 3.13 will fail at app build time.
 
 ## Agent set-up
 
