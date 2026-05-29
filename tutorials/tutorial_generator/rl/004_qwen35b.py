@@ -4,7 +4,7 @@
 TUTORIAL_METADATA = {
     "framework": "`slime`",
     "cluster_shape": "1 × 8×H100",
-    "summary": "Hill-climb Qwen3.6-35B-A3B on GSM8K math with GRPO",
+    "summary": "Train Qwen3.6-35B-A3B on DAPO-math with GRPO",
     "difficulty": "Advanced",
     "order": 25,
     "api_classes": [
@@ -26,7 +26,7 @@ from tutorial_generator import code, markdown, notebook_only, py_only, shell
 @markdown
 def _intro():
     """
-    # Hill-climbing GSM8K with Qwen3.6-35B-A3B
+    # Training Qwen3.6-35B-A3B on DAPO-math
 
     This tutorial trains **Qwen3.6-35B-A3B** (a 35B-parameter MoE model
     with ~3B active) on grade-school math problems from
