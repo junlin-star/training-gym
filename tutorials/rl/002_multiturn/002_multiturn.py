@@ -18,7 +18,7 @@
 # - `loss_mask`: trains only on model-generated tokens, not environment feedback.
 # Run with:
 # ```
-# uv run python tutorials/rl/002_multiturn_number_guessing/002_multiturn_number_guessing.py
+# uv run python tutorials/rl/002_multiturn/002_multiturn.py
 # ```
 # ## Prerequisites
 #
@@ -54,10 +54,10 @@ _MAX_TURNS = 6
 _PROMPT = (
     "You are playing a number guessing game.\n"
     "The hidden integer is between 1 and 20.\n"
-    "Return only guesses in this exact format: <answer>N</answer>\n"
+    "Return only guesses in this exact format: <answer>N</answer> "
+    "where N is an integer between 1 and 20.\n"
     "After each guess, you will receive <feedback>higher</feedback> or "
-    "<feedback>lower</feedback>, and must update your next guess accordingly.\n"
-    "where N is an integer between 1 and 20."
+    "<feedback>lower</feedback>, and must update your next guess accordingly."
 )
 
 TRAIN_TARGETS = list(range(1, _MAX_VALUE + 1, 2))
@@ -238,7 +238,7 @@ async def number_guess_rm(args, sample, **kwargs) -> float:
 
 # ## Offline multi-turn trajectory evaluator
 #
-# `EvalConfig` now supports `eval_fn`, so we can plug in a full
+# `EvalConfig` supports `eval_fn`, so we can plug in a full
 # multi-turn evaluator per row while still using the standard eval runner.
 
 def run_guessing_trajectory(

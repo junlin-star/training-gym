@@ -1,5 +1,5 @@
 # pyright: reportUndefinedVariable=false
-"""Tutorial source for `001_code_golf_sandboxes` — parsed by generate_tutorial.py."""
+"""Tutorial source for `001_sandboxes` — parsed by generate_tutorial.py."""
 
 TUTORIAL_METADATA = {
     "framework": "`slime`",
@@ -28,10 +28,10 @@ def _intro():
     """
     # Code RL with Harbor hello-world + Modal sandboxes
 
-    That if you have a task that you want to train a model on that you want to score with an environment?
+    What if you have a task where you want to score model outputs by running them in an environment?
 
     This tutorial trains a model on the
-    [hello-world](https://hub.harborframework.com/tasks/habor/hello-world/latest)
+    [hello-world](https://hub.harborframework.com/tasks/harbor/hello-world/latest)
     task from Harbor Hub, scoring solutions by spawning and executing them in Modal sandboxes.
 
     Workflow:
@@ -183,21 +183,21 @@ def _train_intro():
 
 @code
 def _train():
-    async def usaco_rm(args, sample, **kwargs) -> float:
+    async def sandbox_rm(args, sample, **kwargs) -> float:
         import asyncio
 
         code = extract_code(sample.response, model=base_model)
         reward, meta = await asyncio.to_thread(
             score_in_sandbox, code, test_cases=HELLO_WORLD_TESTS,
         )
-        sample.metadata = {**(getattr(sample, "metadata", None) or {}), "usaco": meta}
+        sample.metadata = {**(getattr(sample, "metadata", None) or {}), "sandbox": meta}
         return float(reward)
 
     training_run = TrainConfig(
         model=Qwen3_4B(),
         dataset=dataset,
         recipe=SlimeRecipe(
-            custom_rm_function=usaco_rm,
+            custom_rm_function=sandbox_rm,
 
             gpu_type="H100",
             colocate=True,
