@@ -52,6 +52,7 @@ _SLIME_SKIP = {
     "image_run_commands",
     "image_env",
     "train_function_kwargs",
+    "ephemeral_disk",
 }
 
 YAML_CONFIG_FIELDS = ("eval_config", "extra_config", "sglang_config")
@@ -163,6 +164,9 @@ class SlimeRecipe(BaseTrainRecipe):
     load: str = ""
     megatron_to_hf_mode: str = "bridge"
     use_fault_tolerance: bool = True
+
+    # ── Container resources ──────────────────────────────────────────────────
+    ephemeral_disk: int | None = None  # MiB; passed to Modal @app.function
 
     # ── Reward model ─────────────────────────────────────────────────────────
     rm_type: str | None = None

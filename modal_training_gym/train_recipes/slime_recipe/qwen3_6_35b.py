@@ -55,3 +55,6 @@ class Qwen3_6_35b_Recipe(SlimeRecipe):
     save_interval: int = 20
     eval_interval: int | None = 20
     eval_max_response_len: int = 4096
+
+    # ── Container resources ──────────────────────────────────────────────
+    ephemeral_disk: int | None = 200 * 1024  # 200 GiB — 35B MoE checkpoints
