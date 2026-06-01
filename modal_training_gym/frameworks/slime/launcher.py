@@ -380,17 +380,18 @@ def build_slime_app(
         data_volume.commit()
 
     convert_nnodes = get_checkpoint_conversion_policy(slime, model=model)[0]
+    convert_multi_node = convert_nnodes > 1
 
     @app.function(
         image=image,
         gpu=gpu_spec,
         volumes=all_volumes,
         timeout=4 * 60 * 60,
-        experimental_options={"efa_enabled": True},
+        experimental_options={"efa_enabled": True} if convert_multi_node else {},
         serialized=True,
         name="convert_checkpoint",
     )
-    @clustered(convert_nnodes, rdma=True if convert_nnodes > 1 else False)  # pyright: ignore[reportCallIssue, reportOptionalCall]
+    @clustered(convert_nnodes, rdma=convert_multi_node)  # pyright: ignore[reportCallIssue, reportOptionalCall]
     def convert_checkpoint():
         from huggingface_hub import snapshot_download
 
