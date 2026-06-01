@@ -57,4 +57,6 @@ class Qwen3_6_35b_Recipe(SlimeRecipe):
     eval_max_response_len: int = 4096
 
     # ── Container resources ──────────────────────────────────────────────
-    ephemeral_disk: int | None = 200 * 1024  # 200 GiB — 35B MoE checkpoints
+    ephemeral_disk: int | None = (
+        400 * 1024
+    )  # 400 GiB — 35B MoE checkpoints + volume cache
