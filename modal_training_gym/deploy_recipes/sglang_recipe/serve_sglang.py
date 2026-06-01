@@ -47,6 +47,12 @@ def build_sglang_serve_app(
         )
         # pydantic_core in the nightly image needs typing_extensions>=4.13 (Sentinel)
         .uv_pip_install("typing_extensions>=4.13")
+        # Brand-new model architectures (e.g. deepseek_v4) aren't in released
+        # transformers yet; install from git source so AutoConfig recognizes them.
+        .run_commands(
+            "uv pip install --system --no-build-isolation "
+            "'transformers @ git+https://github.com/huggingface/transformers.git'"
+        )
         .env(
             {
                 "HF_HUB_CACHE": "/root/.cache/huggingface",
@@ -90,6 +96,7 @@ def build_sglang_serve_app(
         image=image,
         gpu=gpu_spec,
         scaledown_window=10 * 60,
+        min_containers=1,
         timeout=24 * 60 * 60,
         volumes=volumes,
         secrets=hf_secrets(),
