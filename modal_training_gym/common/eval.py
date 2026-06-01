@@ -158,6 +158,33 @@ EvalResponseFn = Callable[[DatasetRow, Response], EvalRowResult]  # TOOD: bad na
 EvalFn = Callable[["ModelDeployment", DatasetRow], EvalRowResult]
 
 
+@dataclass(frozen=True)
+class HarborEvalGenerationContext:
+    """Inputs available while generating a response for one Harbor eval row."""
+
+    deployment: "ModelDeployment"
+    example: DatasetRow
+    prompt: str
+    messages: list[dict[str, str]]
+    generate_kwargs: dict[str, Any]
+    config: "HarborEval"
+
+
+@dataclass(frozen=True)
+class HarborEvalScoringContext(HarborEvalGenerationContext):
+    """Inputs available while scoring a generated Harbor eval response."""
+
+    response: str
+
+
+HarborEvalResultLike = (
+    EvalRowResult | float | tuple[float, dict[str, Any]] | dict[str, Any]
+)
+HarborEvalRunFn = Callable[[HarborEvalGenerationContext], HarborEvalResultLike]
+HarborEvalGenerateFn = Callable[[HarborEvalGenerationContext], str]
+HarborEvalScoreFn = Callable[[HarborEvalScoringContext], HarborEvalResultLike]
+
+
 @dataclass
 class EvalConfig:
     """Evaluate a deployed model on a dataset config.
@@ -427,16 +454,18 @@ def score_in_sandbox(
 
 @dataclass
 class HarborEval(EvalConfig):
-    """Evaluate a deployed model on a Harbor dataset using sandbox execution.
+    """Generic evaluator for Harbor-style datasets.
 
-    Automates the common pattern of generating code from a Harbor task,
-    extracting it from the LLM response, running it in a Modal sandbox,
-    and comparing stdout against expected test-case outputs.
+    ``HarborEval`` keeps the original code-sandbox behavior as its default,
+    but exposes smaller hooks for other benchmark shapes:
 
-    When neither ``eval_fn`` nor ``eval_response_fn`` is provided, a
-    default sandbox-backed scorer is used automatically.  Pass
-    ``extract_code_fn`` to override how code is pulled from the model
-    response, or supply your own ``eval_fn`` to take full control.
+    - ``run_fn`` gets the full row context and may return an ``EvalRowResult``.
+    - ``generate_fn`` customizes how a model response is produced.
+    - ``score_fn`` scores a generated response without replacing generation.
+
+    If no hook is provided, HarborEval generates a response, extracts Python
+    code, runs the code in a Modal sandbox, and compares stdout against
+    ``test_cases`` from the row label or the config.
     """
 
     model: "ModelConfig | None" = None
@@ -446,6 +475,9 @@ class HarborEval(EvalConfig):
     sandbox_memory: int = 1024
     sandbox_python_version: str = "3.11"
     extract_code_fn: Callable[[str], str] | None = None
+    run_fn: HarborEvalRunFn | None = None
+    generate_fn: HarborEvalGenerateFn | None = None
+    score_fn: HarborEvalScoreFn | None = None
 
     def _resolve_test_cases(self, example: DatasetRow) -> list[dict[str, str]]:
         label = example.get("label", {})
@@ -478,21 +510,62 @@ class HarborEval(EvalConfig):
         msgs.append({"role": "user", "content": prompt})
         return msgs
 
-    def _harbor_eval_fn(
+    def _coerce_eval_result(
         self,
-        deployment: "ModelDeployment",
-        example: DatasetRow,
+        result: HarborEvalResultLike,
+        *,
+        prompt: str,
+        response: str = "",
     ) -> EvalRowResult:
-        prompt = self.build_prompt(example)
-        messages = self._build_messages(example, prompt)
-        response = deployment.generate(
-            prompt,
+        if isinstance(result, EvalRowResult):
+            if not result.prompt:
+                result.prompt = prompt
+            if response and not result.response:
+                result.response = response
+            return result
+
+        if isinstance(result, tuple):
+            score, metadata = result
+            return EvalRowResult(
+                score=float(score),
+                response=response,
+                prompt=prompt,
+                metadata=metadata,
+            )
+
+        if isinstance(result, dict):
+            metadata = result.get("metadata", {})
+            if not isinstance(metadata, dict):
+                metadata = {"metadata": metadata}
+            return EvalRowResult(
+                score=float(result.get("score", 0.0)),
+                response=str(result.get("response", response)),
+                prompt=str(result.get("prompt", prompt)),
+                parsed_response=result.get("parsed_response"),
+                metadata=metadata,
+            )
+
+        return EvalRowResult(score=float(result), response=response, prompt=prompt)
+
+    def _generate_response(self, context: HarborEvalGenerationContext) -> str:
+        if self.generate_fn is not None:
+            return self.generate_fn(context)
+        return context.deployment.generate(
+            context.prompt,
             ensure_ready=False,
-            messages=messages,
-            **self.generate_kwargs,
+            messages=context.messages,
+            **context.generate_kwargs,
         )
-        code = self._extract_code(response)
-        test_cases = self._resolve_test_cases(example)
+
+    def _score_response(
+        self,
+        context: HarborEvalScoringContext,
+    ) -> HarborEvalResultLike:
+        if self.score_fn is not None:
+            return self.score_fn(context)
+
+        code = self._extract_code(context.response)
+        test_cases = self._resolve_test_cases(context.example)
         score, metadata = score_in_sandbox(
             code,
             test_cases=test_cases,
@@ -501,18 +574,64 @@ class HarborEval(EvalConfig):
             sandbox_memory=self.sandbox_memory,
             python_version=self.sandbox_python_version,
         )
-
-        parsed = self.model.parse_response(response) if self.model is not None else None
-
+        parsed = (
+            self.model.parse_response(context.response)
+            if self.model is not None
+            else None
+        )
         return EvalRowResult(
             score=score,
-            response=response,
-            prompt=prompt,
+            response=context.response,
+            prompt=context.prompt,
             parsed_response=parsed,
             metadata=metadata,
         )
 
+    def _harbor_eval_fn(
+        self,
+        deployment: "ModelDeployment",
+        example: DatasetRow,
+    ) -> EvalRowResult:
+        prompt = self.build_prompt(example)
+        messages = self._build_messages(example, prompt)
+        generation_context = HarborEvalGenerationContext(
+            deployment=deployment,
+            example=example,
+            prompt=prompt,
+            messages=messages,
+            generate_kwargs=dict(self.generate_kwargs),
+            config=self,
+        )
+
+        if self.run_fn is not None:
+            return self._coerce_eval_result(
+                self.run_fn(generation_context),
+                prompt=prompt,
+            )
+
+        response = self._generate_response(generation_context)
+        scoring_context = HarborEvalScoringContext(
+            deployment=deployment,
+            example=example,
+            prompt=prompt,
+            messages=messages,
+            generate_kwargs=dict(self.generate_kwargs),
+            config=self,
+            response=response,
+        )
+        return self._coerce_eval_result(
+            self._score_response(scoring_context),
+            prompt=prompt,
+            response=response,
+        )
+
     def __post_init__(self) -> None:
+        custom_hooks = self.run_fn or self.generate_fn or self.score_fn
         if self.eval_fn is None and self.eval_response_fn is None:
             self.eval_fn = self._harbor_eval_fn
+        elif custom_hooks:
+            raise ValueError(
+                "HarborEval custom hooks cannot be combined with eval_fn or "
+                "eval_response_fn. Use one style of customization."
+            )
         super().__post_init__()

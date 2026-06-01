@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from enum import Enum
 from typing import Any, Literal
+import hashlib
 import json
 import random
 import shutil
@@ -235,6 +236,9 @@ class HarborDataset(DatasetConfig):
     dataset_name: str = ""
     path: str | None = None
     task_root: str = ""
+    repo_url: str | None = None
+    repo_ref: str = "main"
+    repo_subdir: str = ""
     task_glob: str = "*"
     task_names: list[str] | None = None
     instruction_path: str = "instruction.md"
@@ -264,6 +268,9 @@ class HarborDataset(DatasetConfig):
                 slug = self.path.replace("/", "_")
             elif self.task_root:
                 slug = self.task_root.replace("/", "_")
+            elif self.repo_url:
+                repo_id = f"{self.repo_url}@{self.repo_ref}"
+                slug = f"repo-{hashlib.sha256(repo_id.encode()).hexdigest()[:12]}"
             else:
                 slug = "harbor"
             self.dataset_id = f"{slug}-{uuid.uuid4()}"
@@ -336,6 +343,116 @@ class HarborDataset(DatasetConfig):
             raise FileNotFoundError(f"No Harbor tasks found under {cache_dir}")
         return task_root
 
+    def _normalized_repo_source(self) -> tuple[str, str, str]:
+        if self.repo_url is None:
+            raise ValueError("repo_url is required for repo-backed Harbor datasets")
+
+        repo_url = self.repo_url.rstrip("/")
+        repo_ref = self.repo_ref
+        repo_subdir = self.repo_subdir.strip("/")
+
+        from urllib.parse import urlparse
+
+        parsed = urlparse(repo_url)
+        parts = [part for part in parsed.path.strip("/").split("/") if part]
+        if parsed.netloc == "github.com" and len(parts) >= 4 and parts[2] == "tree":
+            owner, repo = parts[0], parts[1]
+            repo_ref = parts[3]
+            tree_subdir = "/".join(parts[4:])
+            repo_subdir = "/".join(part for part in [tree_subdir, repo_subdir] if part)
+            repo_url = f"{parsed.scheme}://{parsed.netloc}/{owner}/{repo}.git"
+
+        return repo_url, repo_ref, repo_subdir
+
+    def _repo_cache_dir(self) -> Path:
+        repo_url, repo_ref, _ = self._normalized_repo_source()
+        repo_id = f"{repo_url}@{repo_ref}"
+        digest = hashlib.sha256(repo_id.encode()).hexdigest()[:16]
+        return Path.home() / ".cache" / "harbor" / "repos" / digest
+
+    def _clone_repo_dataset(self, cache_dir: Path) -> None:
+        import subprocess
+
+        repo_url, repo_ref, _ = self._normalized_repo_source()
+        git_bin = shutil.which("git")
+        if git_bin is None:
+            raise FileNotFoundError(
+                "git is required to clone repo-backed Harbor datasets"
+            )
+
+        if (cache_dir / ".git").exists():
+            subprocess.run(
+                [
+                    git_bin,
+                    "-C",
+                    str(cache_dir),
+                    "fetch",
+                    "--depth",
+                    "1",
+                    "origin",
+                    repo_ref,
+                ],
+                check=True,
+            )
+            subprocess.run(
+                [git_bin, "-C", str(cache_dir), "checkout", "--detach", "FETCH_HEAD"],
+                check=True,
+            )
+            return
+
+        cache_dir.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            subprocess.run(
+                [
+                    git_bin,
+                    "clone",
+                    "--depth",
+                    "1",
+                    "--branch",
+                    repo_ref,
+                    repo_url,
+                    str(cache_dir),
+                ],
+                check=True,
+            )
+        except subprocess.CalledProcessError:
+            if cache_dir.exists():
+                shutil.rmtree(cache_dir)
+            subprocess.run(
+                [git_bin, "clone", "--no-checkout", repo_url, str(cache_dir)],
+                check=True,
+            )
+            subprocess.run(
+                [
+                    git_bin,
+                    "-C",
+                    str(cache_dir),
+                    "fetch",
+                    "--depth",
+                    "1",
+                    "origin",
+                    repo_ref,
+                ],
+                check=True,
+            )
+            subprocess.run(
+                [git_bin, "-C", str(cache_dir), "checkout", "--detach", "FETCH_HEAD"],
+                check=True,
+            )
+
+    def _pull_repo_dataset(self) -> Path:
+        cache_dir = self._repo_cache_dir()
+        self._clone_repo_dataset(cache_dir)
+        repo_url, repo_ref, repo_subdir = self._normalized_repo_source()
+        task_root = cache_dir / repo_subdir if repo_subdir else cache_dir
+        task_root = task_root.resolve()
+        if not task_root.exists():
+            raise FileNotFoundError(
+                f"repo_subdir does not exist in {repo_url!r}@{repo_ref}: {repo_subdir!r}"
+            )
+        discovered_root = self._discover_task_root(task_root)
+        return discovered_root if discovered_root != task_root else task_root
+
     def _discover_task_root(self, search_root: Path) -> Path:
         task_dirs = sorted(
             {
@@ -359,9 +476,11 @@ class HarborDataset(DatasetConfig):
             task_root = self._pull_harbor_dataset()
         elif self.task_root:
             task_root = Path(self.task_root).resolve()
+        elif self.repo_url:
+            task_root = self._pull_repo_dataset()
         else:
             raise ValueError(
-                f"{type(self).__name__} requires dataset_name, path, or task_root"
+                f"{type(self).__name__} requires dataset_name, path, task_root, or repo_url"
             )
         if not task_root.exists():
             raise FileNotFoundError(f"task root does not exist: {task_root}")
