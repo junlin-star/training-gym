@@ -390,7 +390,7 @@ def build_slime_app(
         serialized=True,
         name="convert_checkpoint",
     )
-    @clustered(convert_nnodes, rdma=True)  # pyright: ignore[reportCallIssue, reportOptionalCall]
+    @clustered(convert_nnodes, rdma=True if convert_nnodes > 1 else False)  # pyright: ignore[reportCallIssue, reportOptionalCall]
     def convert_checkpoint():
         from huggingface_hub import snapshot_download
 
