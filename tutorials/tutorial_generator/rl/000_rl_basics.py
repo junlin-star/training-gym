@@ -334,7 +334,7 @@ def _serve_and_eval_trained():
 @markdown
 def _trained_eval_section():
     """
-    ## Evaluate the trained checkpoint
+    ## Evaluate the first checkpoint
 
     Now let's run the same eval on the trained model and compare.
     """
@@ -394,7 +394,7 @@ def _continue_to_train_off_of_a_checkpoint_code():
 @markdown
 def _trained_eval_off_of_a_checkpoint():
     """
-    ## Evaluate the trained checkpoint
+    ## Evaluate the continued checkpoint
 
     Now let's run the same eval on the newly trained model and compare.
     """
@@ -415,7 +415,7 @@ def _trained_eval_off_of_a_checkpoint_code():
 @markdown
 def _trained_eval_off_of_a_checkpoint_results():
     """
-    ## Compare the results
+    ## Compare second-run results
 
     Now let's compare the results of the newly trained model and the base model.
     """
@@ -430,9 +430,9 @@ def _trained_eval_off_of_a_checkpoint_results_code():
 @markdown
 def _compare_results():
     """
-    ## Compare the results
+    ## Compare all runs
 
-    Now let's compare the results of the newly trained model and the base model.
+    Now let's compare the results across all three checkpoints.
     """
 
 @code

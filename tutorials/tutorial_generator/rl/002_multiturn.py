@@ -112,8 +112,9 @@ def _dataset():
         input_column = "prompt"
         always_prepare = True # For the purpose of this tutorial, we want to prepare the dataset every time we run it, in case there is stale data from a previous run.
 
-        def load(self):
-            return [{"prompt": _PROMPT, "target": target} for target in TEST_TARGETS]
+        def load(self, split="all"):
+            targets = TRAIN_TARGETS if split == "train" else TEST_TARGETS
+            return [{"prompt": _PROMPT, "target": target} for target in targets]
 
         def prepare(self, path: str, eval_paths: dict[str, str] | None = None):
             import os

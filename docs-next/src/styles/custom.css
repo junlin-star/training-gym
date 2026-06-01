@@ -120,6 +120,11 @@ body::before {
 .sidebar-pane {
   background: var(--sl-color-bg-sidebar);
   inset-block-start: calc(var(--sl-nav-height) - 1px);
+  scrollbar-width: none;
+}
+
+.sidebar-pane::-webkit-scrollbar {
+  display: none;
 }
 
 .sidebar:has(.tg-sidebar-empty) {
@@ -131,7 +136,7 @@ body::before {
 }
 
 .sidebar-content {
-  padding-top: 0;
+  padding-top: 1rem;
 }
 
 #starlight__sidebar .tg-tutorial-sidebar {

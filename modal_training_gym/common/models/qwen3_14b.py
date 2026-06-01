@@ -1,6 +1,6 @@
 """Qwen3-14B model spec as a concrete HFModelConfiguration subclass."""
 
-from .base import HFModelConfiguration, ModelArchitecture
+from .base import HFModelConfiguration, ModelArchitecture, parse_qwen3_response
 
 
 class Qwen3_14B(HFModelConfiguration):
@@ -9,6 +9,8 @@ class Qwen3_14B(HFModelConfiguration):
     Pre-configured with full ``ModelArchitecture`` for Megatron-based
     frameworks (slime). Downloads from ``Qwen/Qwen3-14B`` on HuggingFace.
     """
+
+    response_parser = staticmethod(parse_qwen3_response)
 
     model_name = "Qwen/Qwen3-14B"
     architecture = ModelArchitecture(

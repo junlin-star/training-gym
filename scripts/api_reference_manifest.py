@@ -92,7 +92,35 @@ API_REFERENCE_MANIFEST = [
         "class_type": "behavior",
         "sidebar_label": "EvalRowResult",
     },
+    {
+        "class_name": "HarborEval",
+        "module": "modal_training_gym.common.eval",
+        "group": "evaluation",
+        "class_type": "config_data",
+        "sidebar_label": "HarborEval",
+    },
     # --- Models ---
+    {
+        "class_name": "ToolCall",
+        "module": "modal_training_gym.common.models.base",
+        "group": "models",
+        "class_type": "config_data",
+        "sidebar_label": "ToolCall",
+    },
+    {
+        "class_name": "ParsedResponse",
+        "module": "modal_training_gym.common.models.base",
+        "group": "models",
+        "class_type": "config_data",
+        "sidebar_label": "ParsedResponse",
+    },
+    {
+        "class_name": "parse_qwen3_response",
+        "module": "modal_training_gym.common.models.base",
+        "group": "models",
+        "class_type": "behavior",
+        "sidebar_label": "parse_qwen3_response",
+    },
     {
         "class_name": "Qwen3_0_6B",
         "module": "modal_training_gym.common.models.qwen3_0_6b",
@@ -142,6 +170,13 @@ API_REFERENCE_MANIFEST = [
         "class_type": "config_data",
         "sidebar_label": "Qwen3-32B",
     },
+    {
+        "class_name": "Qwen3_6_35B",
+        "module": "modal_training_gym.common.models.qwen3_6_35b",
+        "group": "models",
+        "class_type": "config_data",
+        "sidebar_label": "Qwen3.6-35B-A3B",
+    },
     # --- Training ---
     {
         "class_name": "TrainConfig",
@@ -163,6 +198,13 @@ API_REFERENCE_MANIFEST = [
         "group": "training",
         "class_type": "config_data",
         "sidebar_label": "SlimeRecipe",
+    },
+    {
+        "class_name": "Qwen3_6_35b_Recipe",
+        "module": "modal_training_gym.train_recipes.slime_recipe.qwen3_6_35b",
+        "group": "training",
+        "class_type": "config_data",
+        "sidebar_label": "Qwen3_6_35b_Recipe",
     },
     # --- Deployment ---
     {

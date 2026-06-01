@@ -14,6 +14,13 @@ class SlimeRecipeBlock(Protocol):
 
 @dataclass
 class MultiTurn:
+    """Configure multi-turn rollout for conversational RL training.
+
+    Wraps a custom generate function and optional reward function so that
+    slime performs multiple interaction turns per rollout step instead of
+    single-shot generation.
+    """
+
     generate_function: Callable
     reward_function: Callable | None = None
     max_turns: int | None = None

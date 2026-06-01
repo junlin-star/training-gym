@@ -128,7 +128,7 @@
       <div class="table-wrap">
         <MinimalTableSkeleton
           class="runs-table"
-          columns={["Name", "Status", "Model", "Dataset", "Recipe", ""]}
+          columns={["Name", "Status", "Model", "Dataset", "Recipe", "Created", ""]}
           rows={8}
         />
       </div>
@@ -148,6 +148,7 @@
               <th>Model</th>
               <th>Dataset</th>
               <th>Recipe</th>
+              <th>Created</th>
               <th></th>
             </tr>
           </thead>
@@ -184,6 +185,9 @@
                   <button class="cell-open-button" onclick={() => selectRun(run.run_id)}>
                     {run.framework || "—"}
                   </button>
+                </td>
+                <td class="created-cell">
+                  <TimeAgo timestamp={run.started_at || run.created_at} showJustNow falsyRepresentation="—" />
                 </td>
                 <td class="modal-link-cell">
                   <div class="modal-link-wrap">
@@ -249,6 +253,10 @@
         <div class="drawer-kv">
           <span class="drawer-key">Model</span>
           <span class="drawer-value">{modelName(selectedRun)}</span>
+        </div>
+        <div class="drawer-kv">
+          <span class="drawer-key">Dataset</span>
+          <span class="drawer-value">{selectedRun.config_summary?.dataset_name || "—"}</span>
         </div>
         <div class="drawer-kv">
           <span class="drawer-key">Recipe</span>

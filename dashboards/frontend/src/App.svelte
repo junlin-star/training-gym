@@ -7,7 +7,7 @@
   import TrainingPage from "./pages/TrainingPage.svelte";
   import DeploymentsPage from "./pages/DeploymentsPage.svelte";
   import EvalsPage from "./pages/EvalsPage.svelte";
-  import { fetchRuns, fetchEvals, fetchDeployments } from "./lib/api.js";
+  import { fetchRuns, fetchEvals, fetchDeployments, fetchEvalDetail } from "./lib/api.js";
   import logoSvg from "./lib/logo.svg";
   import { fmtDuration, truncateId } from "./lib/format.js";
 
@@ -320,11 +320,11 @@
         deployment,
         run: findRunForDeployment(deployment),
       }))
-      .sort((a, b) =>
-        deploymentLabel(a.deployment).localeCompare(
-          deploymentLabel(b.deployment),
-        ),
-      ),
+      .sort((a, b) => {
+        const tsA = a.deployment.created_at || a.run?.created_at || 0;
+        const tsB = b.deployment.created_at || b.run?.created_at || 0;
+        return (tsB || 0) - (tsA || 0);
+      }),
   );
 
   function evalAccuracy(ev) {
@@ -688,6 +688,9 @@
         loading={loadingEvals}
         {error}
         {evalConfigGroups}
+        {fetchEvalDetail}
+        {getEvalStatus}
+        {evalConfigMeta}
         onOpenTrainingRun={openTrainingRun}
         onOpenDeployment={openDeployment}
       />

@@ -120,12 +120,6 @@
     return `${base}-${rowIndex}`;
   }
 
-  function statusTone(status) {
-    if (status === "Ready") return "ready";
-    if (status === "Inactive") return "inactive";
-    return "pending";
-  }
-
   function matchesSearch(row, query) {
     if (!query) return true;
     return [
@@ -226,7 +220,6 @@
         ...row,
         key: rowKey(row, index),
         status,
-        statusTone: statusTone(status),
         baseModel:
           row.deployment.served_model_name || row.deployment.model_name || "—",
       };
@@ -362,7 +355,7 @@
       <div class="table-wrap">
         <MinimalTableSkeleton
           class="deployments-table"
-          columns={["Name", "Training run name", "Status", "Base model", ""]}
+          columns={["Name", "Training run name", "Status", "Base model", "Created", ""]}
           rows={6}
         />
       </div>
@@ -379,6 +372,7 @@
               <th>Training run name</th>
               <th>Status</th>
               <th>Base model</th>
+              <th>Created</th>
               <th></th>
             </tr>
           </thead>
@@ -416,13 +410,13 @@
                   {/if}
                 </td>
                 <td>
-                  <span class={`deployment-status deployment-status-${row.statusTone}`}>
-                    <span class="status-dot"></span>
-                    <span>{row.status}</span>
-                  </span>
+                  <StatusPill status={row.status} />
                 </td>
                 <td class="model-cell" title={row.baseModel}>
                   {row.baseModel}
+                </td>
+                <td class="created-cell">
+                  <TimeAgo timestamp={row.deployment.created_at || row.run?.created_at} showJustNow falsyRepresentation="—" />
                 </td>
                 <td class="open-link-cell">
                   {#if row.deployment.modal_app_url || row.run?.modal_app_url}
@@ -481,10 +475,7 @@
       <section class="details-meta">
         <div class="meta-row">
           <span class="meta-key">Status</span>
-          <span class={`deployment-status deployment-status-${selectedDeployment.statusTone}`}>
-            <span class="status-dot"></span>
-            <span>{selectedDeployment.status}</span>
-          </span>
+          <StatusPill status={selectedDeployment.status} />
         </div>
         <div class="meta-row">
           <span class="meta-key">Model</span>
@@ -802,43 +793,6 @@
 
   .cross-link:hover {
     color: var(--text-bright);
-  }
-
-  .deployment-status {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 12px;
-    line-height: 12px;
-    font-weight: 500;
-    border-radius: 9999px;
-    padding: 3px 10px;
-    border: 1px solid transparent;
-  }
-
-  .status-dot {
-    width: 7px;
-    height: 7px;
-    border-radius: 999px;
-    background: currentColor;
-  }
-
-  .deployment-status-ready {
-    color: #6ac355;
-    background: #273823;
-    border-color: #2d4327;
-  }
-
-  .deployment-status-pending {
-    color: #d176bd;
-    background: #2f2436;
-    border-color: #3b2a37;
-  }
-
-  .deployment-status-inactive {
-    color: #f87171;
-    background: #3b2020;
-    border-color: #5b3333;
   }
 
   .open-link-cell {

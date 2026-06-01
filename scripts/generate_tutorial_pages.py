@@ -16,11 +16,12 @@ TUTORIAL_SRC_DIR = ROOT / "tutorials" / "tutorial_generator"
 DEFAULT_OUTPUT_DIR = ROOT / "docs-next" / "src" / "content" / "docs" / "tutorials"
 REPO_URL = "https://github.com/modal-projects/training-gym"
 
-BUCKETS = ["intro", "rl", "sft", "misc"]
+BUCKETS = ["intro", "rl", "sft", "agent", "misc"]
 BUCKET_LABELS = {
     "intro": "Getting Started",
     "rl": "Reinforcement Learning",
     "sft": "Supervised Fine-Tuning",
+    "agent": "Agents",
     "misc": "Infrastructure",
 }
 
@@ -99,6 +100,9 @@ def generate_tutorial_page(
     source_path: Path,
     bucket: str,
     metadata: dict,
+    *,
+    is_first_in_bucket: bool = False,
+    is_last: bool = False,
 ) -> str:
     """Generate a Starlight markdown page from a tutorial source."""
     name = source_path.stem
@@ -126,9 +130,12 @@ def generate_tutorial_page(
         "---",
         f'title: "{title}"',
         f'description: "{metadata.get("summary", "")}"',
-        "---",
-        "",
     ]
+    if is_first_in_bucket:
+        lines.append("prev: false")
+    if is_last:
+        lines.append("next: false")
+    lines.extend(["---", ""])
 
     first_markdown = True
     for cell_type, content in cells:
@@ -197,6 +204,7 @@ def main() -> None:
             shutil.rmtree(bucket_output_dir)
     generated = 0
 
+    tutorials = []
     for bucket in BUCKETS:
         bucket_dir = TUTORIAL_SRC_DIR / bucket
         if not bucket_dir.is_dir():
@@ -211,20 +219,33 @@ def main() -> None:
                 print(f"  SKIP {source_path.name}: no TUTORIAL_METADATA found")
                 continue
 
-            content = generate_tutorial_page(source_path, bucket, metadata)
-            out_dir = output_dir / bucket
-            out_dir.mkdir(parents=True, exist_ok=True)
-            out_path = out_dir / f"{source_path.stem}.md"
-            if out_path.exists():
-                print(
-                    f"  WARNING: overwriting existing tutorial page {out_path.relative_to(ROOT) if out_path.is_relative_to(ROOT) else out_path}",
-                    file=sys.stderr,
-                )
-            out_path.write_text(content)
+            tutorials.append((source_path, bucket, metadata))
+
+    seen_buckets: set[str] = set()
+    for i, (source_path, bucket, metadata) in enumerate(tutorials):
+        is_first_in_bucket = bucket not in seen_buckets
+        seen_buckets.add(bucket)
+        is_last = i == len(tutorials) - 1
+        content = generate_tutorial_page(
+            source_path,
+            bucket,
+            metadata,
+            is_first_in_bucket=is_first_in_bucket,
+            is_last=is_last,
+        )
+        out_dir = output_dir / bucket
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_path = out_dir / f"{source_path.stem}.md"
+        if out_path.exists():
             print(
-                f"  {out_path.relative_to(ROOT) if out_path.is_relative_to(ROOT) else out_path}"
+                f"  WARNING: overwriting existing tutorial page {out_path.relative_to(ROOT) if out_path.is_relative_to(ROOT) else out_path}",
+                file=sys.stderr,
             )
-            generated += 1
+        out_path.write_text(content)
+        print(
+            f"  {out_path.relative_to(ROOT) if out_path.is_relative_to(ROOT) else out_path}"
+        )
+        generated += 1
 
     print(f"\nGenerated {generated} tutorial pages")
 

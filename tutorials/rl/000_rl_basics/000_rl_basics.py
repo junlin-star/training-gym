@@ -214,7 +214,7 @@ def _main_impl() -> None:
     ).serve()
     print(f"Trained model deployed to {trained_model_deployment.url}")
 
-    # ## Evaluate the trained checkpoint
+    # ## Evaluate the first checkpoint
     #
     # Now let's run the same eval on the trained model and compare.
 
@@ -261,7 +261,7 @@ def _main_impl() -> None:
     new_train_result = new_training_run.train()
     print("——— New training complete ———")
 
-    # ## Evaluate the trained checkpoint
+    # ## Evaluate the continued checkpoint
     #
     # Now let's run the same eval on the newly trained model and compare.
 
@@ -276,7 +276,7 @@ def _main_impl() -> None:
     ).serve()
     print(f"Newly trained model deployed to {new_model_deployment.url}")
 
-    # ## Compare the results
+    # ## Compare second-run results
     #
     # Now let's compare the results of the newly trained model and the base model.
 
@@ -285,9 +285,9 @@ def _main_impl() -> None:
     print(f"Trained model (new) haiku score: {new_eval.mean:.1f}")
     print("——— Trained model (new) evaluation complete ———")
 
-    # ## Compare the results
+    # ## Compare all runs
     #
-    # Now let's compare the results of the newly trained model and the base model.
+    # Now let's compare the results across all three checkpoints.
 
     print(f"Base model haiku score: {base_eval.mean:.1f}")
     print(f"Trained model haiku score: {trained_eval.mean:.1f}")

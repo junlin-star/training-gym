@@ -58,6 +58,7 @@ from .modal_helpers.utils import (
     get_modal_cluster_context,
     prepare_slime_config,
 )
+from .modal_helpers.patches import encode_patch
 from modal_training_gym.common.checkpoint import (
     Checkpoint,
     _get_slime_checkpoint_prefix,
@@ -65,16 +66,25 @@ from modal_training_gym.common.checkpoint import (
 from modal_training_gym.common.framework import Framework
 
 SLIME_ROOT = "/root/slime"
-# Pin by digest to prevent mutable-tag drift.  Tag: nightly-dev-20260329a
-SLIME_IMAGE = "slimerl/slime@sha256:d8ccfba3cd21134b277da4e0f37f57d6290d7b68432e6de047c7d25406c35190"
+# Pin by digest to prevent mutable-tag drift.  Tag: nightly-dev-20260526a
+SLIME_IMAGE = "slimerl/slime@sha256:2568a8283b913eeea86b68397288f9ebdb59ebad4eab11c64ee3ce0c49819c3a"
 HARBOR_PKG_VERSION = "0.6.6"
+
+_PATCH_VALIDATION_B64 = encode_patch("patch_validation")
+_PATCH_TORCH_LOAD_B64 = encode_patch("patch_torch_load")
+_PATCH_GLOBAL_PLAN_B64 = encode_patch("patch_global_plan")
+_PATCH_CHECKPOINT_SAVE_B64 = encode_patch("patch_checkpoint_save")
+_PATCH_ADVANTAGES_B64 = encode_patch("patch_advantages")
 
 
 def _build_slime_base_image() -> "Image":
     return (
         Image.from_registry(SLIME_IMAGE)
         .entrypoint([])
-        .run_commands("rm -rf /root/.cache/huggingface")
+        .run_commands(
+            "rm -rf /root/.cache/huggingface",
+            f"echo {_PATCH_ADVANTAGES_B64} | base64 -d | python3",
+        )
     )
 
 
@@ -120,6 +130,16 @@ def build_slime_app(
     SlimeRecipe._validate_custom_model_architecture(model)
     SlimeRecipe._validate_dataset(dataset)
 
+    if (
+        model
+        and getattr(model, "architecture", None)
+        and getattr(model.architecture, "needs_pre_conversion", False)
+    ):
+        slug = model.model_name.replace("/", "--")
+        object.__setattr__(slime, "megatron_to_hf_mode", "")
+        if not slime.ref_load:
+            object.__setattr__(slime, "ref_load", f"/checkpoints/torch_dist/{slug}-v31")
+
     caller_module = resolve_caller_module()
     if caller_module is not None and caller_module.__name__ != "__main__":
         cloudpickle.register_pickle_by_value(caller_module)
@@ -133,6 +153,16 @@ def build_slime_app(
     # ── Image ────────────────────────────────────────────────────────────────
     image = _build_slime_base_image()
 
+    # Hybrid models have layers with different parameter sets (e.g. GDN
+    # layers carry linear_attn.dt_bias that standard attention layers lack).
+    # Megatron's validate_sharding_integrity rejects this because not every
+    # position in the global tensor is covered.  Patch both the conversion
+    # and training images so saving and loading both succeed.
+    _has_hybrid_spec = (
+        model
+        and getattr(model, "architecture", None)
+        and getattr(model.architecture, "megatron_spec", None)
+    )
     if slime.image_overlay is not None:
         image = slime.image_overlay(image)
         object.__setattr__(slime, "image_overlay", None)
@@ -158,6 +188,15 @@ def build_slime_app(
             caller_script,
             remote_path=caller_remote_path,
             copy=True,
+        )
+
+    # Patch both conversion and training images for hybrid models.
+    # The validation patch lets save/load succeed despite non-uniform
+    # layer parameters.  The torch.py patch handles BytesIO entries
+    # from _extra_state during checkpoint loading.
+    if _has_hybrid_spec:
+        image = image.run_commands(
+            f"echo {_PATCH_VALIDATION_B64} | base64 -d | python3",
         )
 
     def _get_custom_generate_path() -> str:
@@ -253,6 +292,15 @@ def build_slime_app(
     if slime.custom_generate_function is not None and _get_custom_generate_path():
         object.__setattr__(slime, "custom_generate_function", None)
 
+    # Build train_image AFTER _ship_callable so shipped modules are included.
+    train_image = image
+    if _has_hybrid_spec:
+        train_image = image.run_commands(
+            f"echo {_PATCH_TORCH_LOAD_B64} | base64 -d | python3",
+            f"echo {_PATCH_GLOBAL_PLAN_B64} | base64 -d | python3",
+            f"echo {_PATCH_CHECKPOINT_SAVE_B64} | base64 -d | python3",
+        )
+
     # ── Volumes ──────────────────────────────────────────────────────────────
     hf_cache_volume = Volume.from_name("huggingface-cache", create_if_missing=True)
     data_volume = Volume.from_name(f"{app_name}-data", create_if_missing=True)
@@ -331,7 +379,7 @@ def build_slime_app(
             dataset.validate_prepared(ep)
         data_volume.commit()
 
-    convert_nnodes = get_checkpoint_conversion_policy(slime)[0]
+    convert_nnodes = get_checkpoint_conversion_policy(slime, model=model)[0]
 
     @app.function(
         image=image,
@@ -358,12 +406,15 @@ def build_slime_app(
         else:
             hf_path = snapshot_download(model.model_name, local_files_only=True)
         save_path = str(slime.ref_load)
+
         if _has_torch_dist_checkpoint(save_path):
             print(
                 f"Found existing torch_dist checkpoint at {save_path}; skipping conversion."
             )
             return
-        num_nodes, nproc_per_node, extra_args = get_checkpoint_conversion_policy(slime)
+        num_nodes, nproc_per_node, extra_args = get_checkpoint_conversion_policy(
+            slime, model=model
+        )
         node_rank, master_addr, _, nnodes = get_modal_cluster_context(num_nodes)
 
         torchrun_args = [f"--nproc-per-node={nproc_per_node}"]
@@ -377,7 +428,13 @@ def build_slime_app(
 
         import importlib.util
 
-        if num_nodes > 1:
+        mmt = ""
+        needs_preconv = False
+        if model and getattr(model, "architecture", None):
+            mmt = getattr(model.architecture, "megatron_model_type", "")
+            needs_preconv = bool(mmt)
+
+        if num_nodes > 1 or needs_preconv:
             spec = importlib.util.find_spec(
                 "modal_training_gym.frameworks.slime.modal_helpers.convert_hf_to_torch_dist"
             )
@@ -388,16 +445,54 @@ def build_slime_app(
                 )
         else:
             convert_script = f"{SLIME_ROOT}/tools/convert_hf_to_torch_dist.py"
-
-        cmd = (
-            f"torchrun {' '.join(torchrun_args)} {convert_script} "
-            f"{' '.join(extra_args)} "
-            f"--hf-checkpoint {shlex.quote(hf_path)} --save {shlex.quote(save_path)}"
-        )
+        if mmt:
+            model_script = f"{SLIME_ROOT}/scripts/models/{mmt}.sh"
+            if needs_preconv:
+                # Strip parallelism flags from MODEL_ARGS so the only
+                # source of TP/PP/EP is our extra_args.  The bridge
+                # (AutoBridge) needs MODEL_ARGS to correctly map HF
+                # weights.  Extra_args (from ModelArchitecture) are
+                # appended LAST so they override any duplicates.
+                filter_cmd = (
+                    "CONV_ARGS=(); SKIP=0; "
+                    'for a in "${MODEL_ARGS[@]}"; do '
+                    '  if [ "$SKIP" = 1 ]; then SKIP=0; continue; fi; '
+                    '  case "$a" in '
+                    "    --tensor-model-parallel-size|--pipeline-model-parallel-size"
+                    "|--expert-model-parallel-size|--expert-tensor-parallel-size"
+                    "|--context-parallel-size) SKIP=1; continue ;; "
+                    "  esac; "
+                    '  CONV_ARGS+=("$a"); '
+                    "done"
+                )
+                cmd = (
+                    f"source {model_script} && {filter_cmd} && "
+                    f'echo "CONV_ARGS=${{CONV_ARGS[*]}}" && '
+                    f"torchrun {' '.join(torchrun_args)} {convert_script} "
+                    '"${CONV_ARGS[@]}" '
+                    f"{' '.join(extra_args)} "
+                    f"--hf-checkpoint {shlex.quote(hf_path)} --save {shlex.quote(save_path)}"
+                )
+            else:
+                cmd = (
+                    f"source {model_script} && "
+                    f"torchrun {' '.join(torchrun_args)} {convert_script} "
+                    '"${MODEL_ARGS[@]}" '
+                    f"{' '.join(extra_args)} "
+                    f"--hf-checkpoint {shlex.quote(hf_path)} --save {shlex.quote(save_path)}"
+                )
+        else:
+            cmd = (
+                f"torchrun {' '.join(torchrun_args)} {convert_script} "
+                f"{' '.join(extra_args)} "
+                f"--hf-checkpoint {shlex.quote(hf_path)} --save {shlex.quote(save_path)}"
+            )
 
         env = {**os.environ, **slime.environment}
         if num_nodes > 1:
             env["SKIP_RELEASE_RENAME"] = "1"
+        if needs_preconv:
+            env["SKIP_PP_AUTOINFLATE"] = "1"
 
         print(
             f"Conversion layout: nodes={num_nodes}, "
@@ -460,7 +555,7 @@ def build_slime_app(
     _multi_node = slime.total_nodes > 1
 
     @app.function(
-        image=image,
+        image=train_image,
         gpu=gpu_spec,
         volumes=all_volumes,
         secrets=[
@@ -482,6 +577,7 @@ def build_slime_app(
     ):
         modal_app_id = modal_app_id or os.environ.get("MODAL_APP_ID", "")
         modal_app_url = modal_app_url or modal_app_dashboard_url(modal_app_id)
+
         await asyncio.gather(
             hf_cache_volume.reload.aio(),
             data_volume.reload.aio(),
@@ -591,11 +687,19 @@ def build_slime_app(
             os.makedirs(save_root, exist_ok=True)
 
             original_save = slime.save
+            original_load = slime.load
             object.__setattr__(slime, "save", save_root)
+            if _has_torch_dist_checkpoint(save_root):
+                print(
+                    f"Detected existing checkpoint in {save_root}; "
+                    "will resume training from last saved iteration."
+                )
+                object.__setattr__(slime, "load", save_root)
             try:
                 cmd = build_train_cmd(slime, SLIME_ROOT, model=model, dataset=dataset)
             finally:
                 object.__setattr__(slime, "save", original_save)
+                object.__setattr__(slime, "load", original_load)
             runtime_env = {
                 "env_vars": {
                     "no_proxy": f"127.0.0.1,{cluster.head_addr}",
@@ -610,47 +714,84 @@ def build_slime_app(
             )
             print(f"Command: {cmd}, runtime_env: {runtime_env}")
 
-            async with cluster.forward_dashboard() as tunnel:
-                print(f"Ray dashboard: {tunnel.url}")
-                await cluster.submit_and_tail(cmd, runtime_env=runtime_env)
+            _convert_procs: list[tuple[str, subprocess.Popen]] = []
+            _converted: set[str] = set()
+            _hf_path: str | None = None
 
-            if model and slime.megatron_to_hf_mode == "bridge":
+            if model and (slime.megatron_to_hf_mode == "bridge" or slime.ref_load):
                 from huggingface_hub import snapshot_download as _snap
 
-                hf_path = (
+                _hf_path = (
                     str(model.model_path)
                     if model.model_path
                     else _snap(model.model_name, local_files_only=True)
                 )
-                prefix = _get_slime_checkpoint_prefix()
-                ckpt_dirs = (
-                    sorted(
-                        (
-                            d
-                            for d in os.scandir(save_root)
-                            if d.is_dir()
-                            and d.name.startswith(prefix)
-                            and not d.name.endswith("_hf")
-                        ),
-                        key=lambda d: d.name,
-                    )
-                    if prefix
-                    else []
-                )
 
-                for entry in ckpt_dirs:
-                    hf_dir = f"{entry.path}_hf"
-                    if not os.path.exists(hf_dir):
-                        cmd = (
+            def _start_conversions() -> None:
+                """Scan for new complete checkpoints and start converting them."""
+                if not (
+                    model and (slime.megatron_to_hf_mode == "bridge" or slime.ref_load)
+                ):
+                    return
+                prefix = _get_slime_checkpoint_prefix()
+                if not prefix:
+                    return
+                tracker = os.path.join(save_root, "latest_checkpointed_iteration.txt")
+                try:
+                    with open(tracker) as f:
+                        latest = int(f.read().strip())
+                except (OSError, ValueError):
+                    return
+                for entry in os.scandir(save_root):
+                    if (
+                        entry.is_dir()
+                        and entry.name.startswith(prefix)
+                        and not entry.name.endswith("_hf")
+                        and entry.name not in _converted
+                    ):
+                        iter_num = entry.name.replace(prefix, "").lstrip("_")
+                        if not iter_num.isdigit() or int(iter_num) > latest:
+                            continue
+                        hf_dir = f"{entry.path}_hf"
+                        if os.path.exists(hf_dir):
+                            _converted.add(entry.name)
+                            continue
+                        hf_path = _hf_path
+                        convert_cmd = (
                             f"python {SLIME_ROOT}/tools/convert_torch_dist_to_hf.py "
                             f"--input-dir {shlex.quote(entry.path)} "
                             f"--output-dir {shlex.quote(hf_dir)} "
                             f"--origin-hf-dir {shlex.quote(hf_path)} "
                             f"--force"
                         )
-                        print(f"Converting {entry.name} → HF: {cmd}")
-                        subprocess.run(["bash", "-c", cmd], check=True)
-                        print(f"Converted {entry.name} → {hf_dir}")
+                        print(f"[bg-convert] Starting: {entry.name} → HF")
+                        proc = subprocess.Popen(["bash", "-c", convert_cmd])
+                        _convert_procs.append((entry.name, proc))
+                        _converted.add(entry.name)
+
+            async def _background_converter():
+                while not _stop_converter.is_set():
+                    _start_conversions()
+                    await asyncio.sleep(15)
+
+            _stop_converter = asyncio.Event()
+            converter_task = asyncio.ensure_future(_background_converter())
+
+            async with cluster.forward_dashboard() as tunnel:
+                print(f"Ray dashboard: {tunnel.url}")
+                await cluster.submit_and_tail(cmd, runtime_env=runtime_env)
+
+            _stop_converter.set()
+            await converter_task
+            _start_conversions()
+
+            for name, proc in _convert_procs:
+                proc.wait()
+                if proc.returncode != 0:
+                    raise RuntimeError(
+                        f"Checkpoint conversion failed for {name} (exit {proc.returncode})"
+                    )
+                print(f"[bg-convert] Converted {name}")
 
             result_kwargs = {
                 "app_name": app_name,

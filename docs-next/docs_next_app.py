@@ -28,9 +28,12 @@ if not modal.is_local():
     pass
 elif not DIST_DIR.exists() or not any(DIST_DIR.iterdir()):
     import subprocess
+    import sys
 
-    subprocess.check_call(["npm", "ci"], cwd=str(DOCS_DIR))
-    subprocess.check_call(["npm", "run", "build"], cwd=str(DOCS_DIR))
+    REPO_ROOT = DOCS_DIR.parent
+    subprocess.check_call(
+        [sys.executable, "scripts/generate_all.py"], cwd=str(REPO_ROOT)
+    )
 
 
 image = (

@@ -1,6 +1,6 @@
 """Qwen3-30B-A3B model spec as a concrete HFModelConfiguration subclass."""
 
-from .base import HFModelConfiguration, ModelArchitecture
+from .base import HFModelConfiguration, ModelArchitecture, parse_qwen3_response
 
 
 class Qwen3_30B(HFModelConfiguration):
@@ -10,6 +10,8 @@ class Qwen3_30B(HFModelConfiguration):
     Pre-configured with base ``ModelArchitecture`` for Megatron-based
     frameworks (slime). Downloads from ``Qwen/Qwen3-30B-A3B`` on HuggingFace.
     """
+
+    response_parser = staticmethod(parse_qwen3_response)
 
     model_name = "Qwen/Qwen3-30B-A3B"
     architecture = ModelArchitecture(
@@ -26,6 +28,7 @@ class Qwen3_30B(HFModelConfiguration):
         swiglu=True,
         disable_bias_linear=True,
         qk_layernorm=True,
+        untie_embeddings_and_output_weights=True,
         use_rotary_position_embeddings=True,
         rotary_base=1000000,
     )

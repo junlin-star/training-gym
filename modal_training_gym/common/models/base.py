@@ -1,7 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any
+import json
+import re
+from dataclasses import dataclass, field
+from typing import Any, Callable
 
 
 @dataclass
@@ -50,12 +52,57 @@ class ModelArchitecture:
         Use separate output projection weights instead of tying to token
         embeddings. Default ``False``.
 
+    ## Mixture of Experts
+
+    num_experts : int
+        Total number of MoE experts. Default ``0`` (dense model).
+    moe_ffn_hidden_size : int
+        Per-expert FFN intermediate size. Default ``0``.
+    moe_shared_expert_intermediate_size : int
+        Shared expert FFN intermediate size. Default ``0``.
+
+    ## MoE Routing
+
+    moe_router_score_function : str
+        Router scoring function (e.g. ``"softmax"``). Default ``""``.
+    moe_token_drop_policy : str
+        Token drop policy for MoE routing. Default ``""``.
+    moe_router_dtype : str
+        Data type for router computation (e.g. ``"fp32"``). Default ``""``.
+    moe_permute_fusion : bool
+        Enable permute fusion optimization for MoE. Default ``False``.
+    moe_aux_loss_coeff : float | None
+        Auxiliary load-balancing loss coefficient. Default ``None``.
+
+    ## Checkpoint Conversion
+
+    megatron_model_type : str
+        Slime/Megatron model type string for pre-conversion (e.g.
+        ``"qwen3.5-35B-A3B"``). When set, the launcher pre-converts
+        the HF checkpoint to torch_dist format before training instead
+        of relying on bridge-mode auto-detection. Default ``""``.
+
+    ## Normalization Extras
+
+    apply_layernorm_1p : bool
+        Use zero-centered LayerNorm (add 1 to gamma). Default ``False``.
+
+    ## Attention Extras
+
+    use_gated_attention : bool
+        Enable gated attention mechanism. Default ``False``.
+    attention_output_gate : bool
+        Enable output gating on attention layers (required by some
+        hybrid architectures such as Qwen 3.6). Default ``False``.
+
     ## Position Encoding
 
     use_rotary_position_embeddings : bool
         Use RoPE positional encoding. Default ``True``.
     rotary_base : int
         Base frequency for RoPE. Default ``10000``.
+    rotary_percent : float
+        Fraction of hidden dims to apply RoPE to. Default ``1.0``.
     """
 
     num_layers: int = 0
@@ -72,8 +119,29 @@ class ModelArchitecture:
     disable_bias_linear: bool = True
     qk_layernorm: bool = True
     untie_embeddings_and_output_weights: bool = False
+    num_experts: int = 0
+    moe_ffn_hidden_size: int = 0
+    moe_shared_expert_intermediate_size: int = 0
+    moe_grouped_gemm: bool = False
+    moe_shared_expert_gate: bool = False
+    moe_router_topk: int = 0
+    moe_router_score_function: str = ""
+    moe_token_drop_policy: str = ""
+    moe_router_dtype: str = ""
+    moe_permute_fusion: bool = False
+    moe_aux_loss_coeff: float | None = None
+    megatron_spec: list[str] | None = None
+    megatron_model_type: str = ""
+    apply_layernorm_1p: bool = False
+    use_gated_attention: bool = False
+    attention_output_gate: bool = False
     use_rotary_position_embeddings: bool = True
     rotary_base: int = 10000
+    rotary_percent: float = 1.0
+
+    @property
+    def needs_pre_conversion(self) -> bool:
+        return bool(self.megatron_model_type)
 
     def to_megatron_args(self) -> list[str]:
         """Generate Megatron-LM CLI flags from this architecture spec."""
@@ -107,11 +175,66 @@ class ModelArchitecture:
             args.append("--qk-layernorm")
         if self.untie_embeddings_and_output_weights:
             args.append("--untie-embeddings-and-output-weights")
+        if self.num_experts:
+            args += ["--num-experts", str(self.num_experts)]
+        if self.moe_ffn_hidden_size:
+            args += ["--moe-ffn-hidden-size", str(self.moe_ffn_hidden_size)]
+        if self.moe_shared_expert_intermediate_size:
+            args += [
+                "--moe-shared-expert-intermediate-size",
+                str(self.moe_shared_expert_intermediate_size),
+            ]
+        if self.moe_grouped_gemm:
+            args.append("--moe-grouped-gemm")
+        if self.moe_shared_expert_gate:
+            args.append("--moe-shared-expert-gate")
+        if self.moe_router_topk:
+            args += ["--moe-router-topk", str(self.moe_router_topk)]
+        if self.moe_router_score_function:
+            args += ["--moe-router-score-function", self.moe_router_score_function]
+        if self.moe_token_drop_policy:
+            args += ["--moe-token-drop-policy", self.moe_token_drop_policy]
+        if self.moe_router_dtype:
+            args += ["--moe-router-dtype", self.moe_router_dtype]
+        if self.moe_permute_fusion:
+            args.append("--moe-permute-fusion")
+        if self.moe_aux_loss_coeff is not None:
+            args += ["--moe-aux-loss-coeff", str(self.moe_aux_loss_coeff)]
+        if self.megatron_spec:
+            args += ["--spec"] + list(self.megatron_spec)
+        if self.apply_layernorm_1p:
+            args.append("--apply-layernorm-1p")
+        if self.use_gated_attention:
+            args.append("--use-gated-attention")
+        if self.attention_output_gate:
+            args.append("--attention-output-gate")
         if self.use_rotary_position_embeddings:
             args += ["--position-embedding-type", "rope"]
             if self.rotary_base != 10000:
                 args += ["--rotary-base", str(self.rotary_base)]
+            if self.rotary_percent != 1.0:
+                args += ["--rotary-percent", str(self.rotary_percent)]
         return args
+
+
+@dataclass
+class ToolCall:
+    """A parsed tool invocation from model output."""
+
+    name: str
+    arguments: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class ParsedResponse:
+    """Structured result of parsing raw model output."""
+
+    content: str = ""
+    tool_calls: list[ToolCall] = field(default_factory=list)
+    thinking: str | None = None
+
+
+ResponseParser = Callable[[str], ParsedResponse]
 
 
 class ModelConfig:
@@ -120,11 +243,16 @@ class ModelConfig:
     Subclass and set ``model_name`` (and optionally ``model_path`` and
     ``architecture``) as class attributes, then override ``download()``
     to materialize weights into the shared model volume.
+
+    Set ``response_parser`` to a function that converts raw model output
+    into a :class:`ParsedResponse`.  For example, Qwen3 models set
+    ``response_parser = parse_qwen3_response``.
     """
 
     model_name: str = ""
     model_path: str | None = None
     architecture: ModelArchitecture | None = None
+    response_parser: ResponseParser | None = None
 
     def __init__(self, **kwargs: Any) -> None:
         for k, v in kwargs.items():
@@ -133,6 +261,16 @@ class ModelConfig:
     def download(self) -> None:
         """Download or materialize weights into the model volume."""
         raise NotImplementedError(f"{type(self).__name__} has no download()")
+
+    def parse_response(self, text: str) -> ParsedResponse:
+        """Parse raw model output into structured content.
+
+        Delegates to ``self.response_parser`` when set, otherwise
+        returns the text as-is.
+        """
+        if self.response_parser is not None:
+            return self.response_parser(text)
+        return ParsedResponse(content=text)
 
 
 class HFModelConfiguration(ModelConfig):
@@ -149,3 +287,49 @@ class HFModelConfiguration(ModelConfig):
         if self.model_path:
             kwargs["local_dir"] = str(self.model_path)
         snapshot_download(**kwargs)
+
+
+# ── Qwen3 family ───────────────────────────────────────────────────────
+
+_QWEN3_TOOL_CALL_RE = re.compile(r"<tool_call>\s*(.*?)\s*</tool_call>", re.DOTALL)
+
+
+def parse_qwen3_response(text: str) -> ParsedResponse:
+    """Parse Qwen3-family model output into structured content.
+
+    Handles ``<think>``/``</think>`` reasoning blocks,
+    ``<|im_start|>``/``<|im_end|>`` chat-template delimiters,
+    and ``<tool_call>``/``</tool_call>`` tool invocations.
+    """
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+
+    if "<|im_start|>assistant" in text:
+        text = text.rsplit("<|im_start|>assistant", 1)[-1]
+    text = text.replace("<|im_end|>", "")
+
+    thinking: str | None = None
+    if "</think>" in text:
+        parts = text.split("</think>", 1)
+        thinking = parts[0].replace("<think>", "").strip() or None
+        text = parts[1]
+    text = text.replace("<think>", "")
+
+    tool_calls: list[ToolCall] = []
+    for match in _QWEN3_TOOL_CALL_RE.finditer(text):
+        try:
+            data = json.loads(match.group(1))
+            tool_calls.append(
+                ToolCall(
+                    name=data.get("name", ""),
+                    arguments=data.get("arguments", {}),
+                )
+            )
+        except (json.JSONDecodeError, KeyError, TypeError):
+            continue
+    content = _QWEN3_TOOL_CALL_RE.sub("", text).strip()
+
+    return ParsedResponse(
+        content=content,
+        tool_calls=tool_calls,
+        thinking=thinking,
+    )
