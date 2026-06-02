@@ -3,7 +3,7 @@
 These are functionally identical to slime's built-in
 ``slime.rollout.on_policy_distillation.reward_func`` and
 ``post_process_rewards``, but route the HTTP call through
-:func:`modal_training_gym.frameworks.slime.sglang_client.generate` so
+:func:`modal_training_gym.common.sglang_client.generate` so
 that arbitrary SGLang ``/generate`` parameters (e.g. ``top_logprobs_num``)
 can be injected via ``args.sglang_request_params``.
 
@@ -17,7 +17,7 @@ from typing import Any
 
 import torch
 
-from modal_training_gym.frameworks.slime.sglang_client import (
+from modal_training_gym.common.sglang_client import (
     generate as sglang_generate,
 )
 
