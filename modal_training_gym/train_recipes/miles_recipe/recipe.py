@@ -325,6 +325,19 @@ class MilesConfig(BaseTrainRecipe):
             )
         return math.ceil(total_gpus / gpus_per_node)
 
+    @classmethod
+    def get_base_recipe(cls, model_config: ModelConfig) -> "MilesConfig | None":
+        from modal_training_gym.train_recipes.miles_recipe.kimi import (
+            Kimi_K2_5_Recipe,
+            Kimi_K2_6_Recipe,
+        )
+
+        if model_config.model_name == "moonshotai/Kimi-K2.5":
+            return Kimi_K2_5_Recipe()
+        if model_config.model_name == "moonshotai/Kimi-K2.6":
+            return Kimi_K2_6_Recipe()
+        return None
+
     def download_model(self) -> None:
         from modal_training_gym.frameworks.miles.modal_helpers.utils import (
             resolve_checkpoint_ref,
