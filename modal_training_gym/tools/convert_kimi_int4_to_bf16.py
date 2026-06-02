@@ -33,20 +33,31 @@ from collections import defaultdict
 from typing import Any
 
 
+def _find_config_value(obj: Any, key: str) -> Any:
+    if isinstance(obj, dict):
+        if key in obj:
+            return obj[key]
+        for value in obj.values():
+            found = _find_config_value(value, key)
+            if found is not None:
+                return found
+    elif isinstance(obj, list):
+        for value in obj:
+            found = _find_config_value(value, key)
+            if found is not None:
+                return found
+    return None
+
+
 def _load_config(model_dir: str, config_path: str | None) -> tuple[int, int, int]:
     """Read config.json and return hidden_size, inter_size, and group_size."""
     cfg_path = config_path or os.path.join(model_dir, "config.json")
     with open(cfg_path) as f:
         cfg = json.load(f)
-    hidden_size = int(cfg.get("hidden_size"))
-    inter_size = int(cfg.get("moe_intermediate_size"))
-    group_size = int(
-        cfg.get("quantization_config", {})
-        .get("config_groups", {})
-        .get("group_0", {})
-        .get("weights", {})
-        .get("group_size", 128)
-    )
+
+    hidden_size = int(_find_config_value(cfg, "hidden_size") or 0)
+    inter_size = int(_find_config_value(cfg, "moe_intermediate_size") or 0)
+    group_size = int(_find_config_value(cfg, "group_size") or 128)
     return hidden_size, inter_size, group_size
 
 
