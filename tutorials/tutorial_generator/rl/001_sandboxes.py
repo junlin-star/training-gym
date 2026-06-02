@@ -63,6 +63,8 @@ def _install():
 
 @code
 def _imports():
+    import os
+
     from modal_training_gym import (
         DeploymentConfig,
         HarborDataset,
@@ -222,9 +224,13 @@ def _train():
             ),
         ),
     )
-    print("Starting training...")
-    train_result = training_run.train()
-    print(f"Training run id: {train_result.training_run_id}")
+    if os.environ.get("SANDBOX_SKIP_TRAIN", "").lower() in {"1", "true", "yes"}:
+        print("Skipping training because SANDBOX_SKIP_TRAIN=1")
+        train_result = None
+    else:
+        print("Starting training...")
+        train_result = training_run.train()
+        print(f"Training run id: {train_result.training_run_id}")
 
 
 @markdown
@@ -236,15 +242,18 @@ def _serve_trained_intro():
 
 @code
 def _serve_trained():
-    checkpoint = list_checkpoints(train_result.training_run_id)[-1]
-    trained_deployment = DeploymentConfig(
-        model=Qwen3_4B(),
-        checkpoint=checkpoint,
-        app_name="qwen3-4b-hello-world-serve",
-        served_model_name="qwen3-4b-hello-world",
-    ).serve()
-    print(f"Trained model URL: {trained_deployment.url}")
+    if train_result is None:
+        print("Skipping trained checkpoint eval because training was skipped.")
+    else:
+        checkpoint = list_checkpoints(train_result.training_run_id)[-1]
+        trained_deployment = DeploymentConfig(
+            model=Qwen3_4B(),
+            checkpoint=checkpoint,
+            app_name="qwen3-4b-hello-world-serve",
+            served_model_name="qwen3-4b-hello-world",
+        ).serve()
+        print(f"Trained model URL: {trained_deployment.url}")
 
-    trained_eval = eval_config.evaluate(trained_deployment, debug=True)
-    print(f"Trained mean reward: {trained_eval.mean:.4f}")
-    print(f"Base mean reward:    {base_eval.mean:.4f}")
+        trained_eval = eval_config.evaluate(trained_deployment, debug=True)
+        print(f"Trained mean reward: {trained_eval.mean:.4f}")
+        print(f"Base mean reward:    {base_eval.mean:.4f}")
