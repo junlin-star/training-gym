@@ -714,36 +714,41 @@
     align-items: center;
     justify-content: space-between;
     gap: 1rem;
-    padding: 8px 24px 12px;
+    min-height: 53px;
+    padding: 0 1rem;
   }
 
   .top-brand {
     display: inline-flex;
     align-items: center;
-    gap: 0.62rem;
+    gap: 0.55rem;
+    flex: 0 0 auto;
     min-width: 0;
   }
 
   .top-brand-logo {
-    width: 1.7rem;
-    height: 1.7rem;
+    height: 17.5px;
+    width: auto;
     flex: 0 0 auto;
   }
 
   .top-brand-title {
     display: inline-flex;
     align-items: center;
-    gap: 0.38rem;
-    font-size: 1.85rem;
+    gap: 0.18rem;
+    font-family: var(--font-display);
+    font-feature-settings: "ss01" on;
+    font-size: 17.6px;
     line-height: 1;
     padding-block: 0.08rem;
-    font-weight: 700;
-    letter-spacing: -0.025em;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    transform: translateY(1px);
     white-space: nowrap;
   }
 
   .top-brand-modal {
-    color: var(--text-bright);
+    color: #ddffdc;
   }
 
   .top-brand-gym {
@@ -783,16 +788,8 @@
 
   @media (max-width: 900px) {
     .top-navbar {
-      padding: 14px 0.95rem;
-    }
-
-    .top-brand-logo {
-      width: 1.35rem;
-      height: 1.35rem;
-    }
-
-    .top-brand-title {
-      font-size: 1.35rem;
+      min-height: 53px;
+      padding: 0 1rem;
     }
 
     .shell {
@@ -801,6 +798,12 @@
 
     .workspace {
       padding: 24px;
+    }
+  }
+
+  @media (max-width: 520px) {
+    .docs-button {
+      display: none;
     }
   }
 </style>
