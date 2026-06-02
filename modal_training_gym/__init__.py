@@ -26,6 +26,8 @@ _EXPORTS = {
     "ModelArchitecture": ("modal_training_gym.common.models", "ModelArchitecture"),
     "ModelConfig": ("modal_training_gym.common.models", "ModelConfig"),
     "ModelDeployment": ("modal_training_gym.common.deployment", "ModelDeployment"),
+    "Kimi_K2_5": ("modal_training_gym.common.models", "Kimi_K2_5"),
+    "MilesConfig": ("modal_training_gym.train_recipes.miles_recipe", "MilesConfig"),
     "MultiTurn": ("modal_training_gym.train_recipes.slime_recipe", "MultiTurn"),
     "parse_qwen3_response": (
         "modal_training_gym.common.models",
@@ -71,6 +73,8 @@ __all__ = [
     "ModelArchitecture",
     "ModelConfig",
     "ModelDeployment",
+    "Kimi_K2_5",
+    "MilesConfig",
     "MultiTurn",
     "parse_qwen3_response",
     "ParsedResponse",

@@ -7,8 +7,10 @@ from modal_training_gym.common.models import ModelConfig
 from modal_training_gym.common.checkpoint import Checkpoint
 from modal_training_gym.common.train_result import TrainResult
 from modal_training_gym.common.modal_urls import modal_app_dashboard_url
+from modal_training_gym.frameworks.miles import build_miles_app
 from modal_training_gym.frameworks.slime import build_slime_app
 from modal_training_gym.train_recipes.base import BaseTrainRecipe, RecipeType
+from modal_training_gym.train_recipes.miles_recipe import MilesConfig
 from modal_training_gym.train_recipes.slime_recipe import SlimeRecipe
 from pydantic import ConfigDict
 from pydantic.dataclasses import dataclass
@@ -44,6 +46,18 @@ class TrainConfig:
 
     def _build_app(self):
         recipe_type = self.recipe.recipe_type
+        if recipe_type == RecipeType.MILES:
+            if not isinstance(self.recipe, MilesConfig):
+                raise TypeError(
+                    f"Recipe type {recipe_type} requires MilesConfig, got {type(self.recipe).__name__}"
+                )
+            return build_miles_app(
+                training_run_id=self.training_run_id,
+                miles=cast(MilesConfig, self.recipe),
+                model=self.model,
+                dataset=self.dataset,
+                checkpoint=self.checkpoint,
+            )
         if recipe_type == RecipeType.SLIME:
             if not isinstance(self.recipe, SlimeRecipe):
                 raise TypeError(
@@ -77,11 +91,18 @@ class TrainConfig:
         with modal.enable_output():
             with app.run():
                 modal_app_id = app.app_id or ""
-                if (
-                    self.model
+                needs_slime_preconv = (
+                    isinstance(self.recipe, SlimeRecipe)
+                    and self.model
                     and getattr(self.model, "architecture", None)
                     and getattr(self.model.architecture, "needs_pre_conversion", False)
-                ):
+                )
+                needs_miles_raw_conversion = (
+                    isinstance(self.recipe, MilesConfig)
+                    and getattr(self.recipe, "megatron_to_hf_mode", "bridge")
+                    != "bridge"
+                )
+                if needs_slime_preconv or needs_miles_raw_conversion:
                     app.download.remote()
                     app.convert_checkpoint.remote()
                 result_dict = app.train.remote(
