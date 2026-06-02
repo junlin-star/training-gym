@@ -19,6 +19,13 @@
   font-style: italic;
 }
 
+@font-face {
+  font-family: "Goga";
+  src: url("https://modal-cdn.com/fonts/Goga-VariableVF.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+}
+
 :root {
   --color-ground: #181818;
   --color-dark-gray: #212525;
@@ -213,6 +220,9 @@
   --font-sans:
     "Inter Variable", ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji",
     "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
+  --font-display:
+    "Goga", ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji",
+    "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
   --font-mono:
     "Fira Mono", ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas,
     monospace;
@@ -234,4 +244,14 @@ body {
   text-rendering: optimizeLegibility;
   color-scheme: dark;
   font-feature-settings: "cv11" on;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  font-family: var(--font-display);
+  font-feature-settings: "ss01" on;
 }

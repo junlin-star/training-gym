@@ -19,11 +19,11 @@ const isActive = (href: string) =>
 
 <div class="tg-header">
   <div class="tg-header__left">
-    <a href="/" class="title-wrapper sl-flex" style="text-decoration: none; align-items: center; gap: 0.6rem;">
-      <img src="/modal-logo.svg" alt="Modal" style="height: 1.25rem; width: auto;" />
-      <span class="site-title">Training Gym</span>
+    <a href="/" class="title-wrapper sl-flex" style="text-decoration: none; align-items: center; gap: 0.55rem;">
+      <img src="/modal-logo.svg" alt="Modal" style="height: 17.5px; width: auto;" />
+      <span class="site-title"><span class="site-title__modal">Modal</span><span class="site-title__gym">Training Gym</span></span>
     </a>
-    <nav class="tg-header__nav sl-hidden lg:sl-flex" aria-label="Primary">
+    <nav class="tg-header__nav" aria-label="Primary">
       {navItems.map((item) => (
         <a
           href={item.href}
@@ -36,12 +36,29 @@ const isActive = (href: string) =>
   </div>
   <div class="tg-header__right print:hidden">
     {shouldRenderSearch && (
-      <div class="tg-header__search sl-hidden md:sl-flex">
+      <div class="tg-header__search">
         <Search class="tg-header__search" />
       </div>
     )}
     <a class="tg-header__repo" href="https://github.com/modal-projects/training-gym">
       GitHub
     </a>
+    <details class="tg-header__menu">
+      <summary aria-label="Open navigation">
+        <span></span>
+        <span></span>
+        <span></span>
+      </summary>
+      <nav class="tg-header__menu-panel" aria-label="Primary">
+        {navItems.map((item) => (
+          <a
+            href={item.href}
+            class:list={['tg-header__menu-link', { 'is-active': isActive(item.href) }]}
+          >
+            {item.label}
+          </a>
+        ))}
+      </nav>
+    </details>
   </div>
 </div>
