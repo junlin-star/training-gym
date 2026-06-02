@@ -73,7 +73,6 @@ __all__ = [
     "ModelArchitecture",
     "ModelConfig",
     "ModelDeployment",
-    "Kimi_K2_5",
     "MilesConfig",
     "MultiTurn",
     "parse_qwen3_response",
