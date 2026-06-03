@@ -36,11 +36,48 @@ class Kimi_K2_5(HFModelConfiguration):
         if patched != source:
             modeling_file.write_text(patched)
 
+    @staticmethod
+    def _transformers_module_name(checkpoint_path: str) -> str:
+        name = Path(checkpoint_path).name
+        return (
+            name.replace("-", "_hyphen_").replace(".", "_dot_").replace("/", "_slash_")
+        )
+
+    @classmethod
+    def _seed_dynamic_module_cache(cls, checkpoint_path: str) -> None:
+        source = Path(checkpoint_path)
+        if not source.exists():
+            return
+        py_files = list(source.glob("*.py"))
+        if not py_files:
+            return
+        module_dir = (
+            Path.home()
+            / ".cache"
+            / "huggingface"
+            / "modules"
+            / "transformers_modules"
+            / cls._transformers_module_name(checkpoint_path)
+        )
+        module_dir.mkdir(parents=True, exist_ok=True)
+        init_file = module_dir / "__init__.py"
+        if not init_file.exists():
+            init_file.write_text("")
+        for src in py_files:
+            dst = module_dir / src.name
+            dst.write_bytes(src.read_bytes())
+        print(f"Seeded Kimi dynamic module cache: {module_dir}")
+
+    def prepare_runtime_cache(self) -> None:
+        self._seed_dynamic_module_cache(self.int4_model_path)
+        self._seed_dynamic_module_cache(self.model_path)
+
     def download(self) -> str:
         source_dir = snapshot_download(self.model_name)
         self._patch_source_model(source_dir)
 
         if Path(self.model_path).exists():
+            self.prepare_runtime_cache()
             return self.model_path
 
         int4_path = Path(self.int4_model_path)
@@ -71,4 +108,5 @@ class Kimi_K2_5(HFModelConfiguration):
             ],
             check=True,
         )
+        self.prepare_runtime_cache()
         return self.model_path

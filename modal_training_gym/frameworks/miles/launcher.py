@@ -440,6 +440,9 @@ def build_miles_app(
 
         cluster.start_ray()
 
+        if model and hasattr(model, "prepare_runtime_cache"):
+            model.prepare_runtime_cache()
+
         if not cluster.is_head:
             await cluster.wait_forever()
             return
