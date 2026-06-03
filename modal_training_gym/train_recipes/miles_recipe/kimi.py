@@ -23,11 +23,12 @@ class _KimiK2Recipe(MilesConfig):
         "OPEN_TRAINING_INT4_GROUP_SIZE": "32",
     }
 
-    actor_num_nodes: int = 8
+    actor_num_nodes: int = 32
     actor_num_gpus_per_node: int = 8
     colocate: bool = True
     use_miles_router: bool = True
     skip_eval_before_train: bool = True
+    update_weight_buffer_size: int = 4 * 512 * 1024 * 1024
 
     prompt_data: str = "/data/dapo-math-17k/dapo-math-17k.jsonl"
     input_key: str = "prompt"
@@ -37,12 +38,13 @@ class _KimiK2Recipe(MilesConfig):
     balance_data: bool = True
     rm_type: str = "deepscaler"
 
-    num_rollout: int = 2
-    rollout_batch_size: int = 2
-    n_samples_per_prompt: int = 2
-    rollout_max_response_len: int = 4096
+    num_rollout: int = 20
+    rollout_batch_size: int = 32
+    n_samples_per_prompt: int = 8
+    rollout_max_response_len: int = 16384
     rollout_temperature: float = 1.0
-    global_batch_size: int = 8
+    sglang_cuda_graph_bs: list[int] = [1, 2, 4, 8] + list(range(16, 129, 8))
+    global_batch_size: int = 256
 
     advantage_estimator: str = "grpo"
     kl_loss_coef: float = 0.0
@@ -56,6 +58,10 @@ class _KimiK2Recipe(MilesConfig):
     weight_decay: float = 0.1
     adam_beta1: float = 0.9
     adam_beta2: float = 0.98
+    optimizer_cpu_offload: bool = True
+    overlap_cpu_optimizer_d2h_h2d: bool = True
+    use_precision_aware_optimizer: bool = True
+    use_distributed_optimizer: bool = True
 
     train_backend: str = "megatron"
     tensor_model_parallel_size: int = 8
@@ -86,7 +92,7 @@ class _KimiK2Recipe(MilesConfig):
 
 
 class Kimi_K2_5_Recipe(_KimiK2Recipe):
-    """Kimi-K2.5 on 8x8xH200 with Miles INT4 rollout and BF16 reference load."""
+    """Kimi-K2.5 on 32x8xH200 with Miles INT4 rollout and BF16 reference load."""
 
     source_hf_checkpoint: str = "moonshotai/Kimi-K2.5"
     hf_checkpoint: str = "/checkpoints/Kimi-K2.5-int4"
@@ -94,7 +100,7 @@ class Kimi_K2_5_Recipe(_KimiK2Recipe):
 
 
 class Kimi_K2_6_Recipe(_KimiK2Recipe):
-    """Kimi-K2.6 on 8x8xH200 with Miles INT4 rollout and BF16 reference load."""
+    """Kimi-K2.6 on 32x8xH200 with Miles INT4 rollout and BF16 reference load."""
 
     source_hf_checkpoint: str = "moonshotai/Kimi-K2.6"
     hf_checkpoint: str = "/checkpoints/Kimi-K2.6-int4"
