@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import dataclass, field
+
 from modal_training_gym.common import ids
 from modal_training_gym.common.dataset import DatasetConfig
 from modal_training_gym.common.ids import GymObjectId
@@ -10,8 +12,18 @@ from modal_training_gym.utils.metadata import MetadataStore
 
 
 def test_config_fingerprint_is_stable_for_dict_order() -> None:
-    left = ids.config_fingerprint({"model": "qwen", "recipe": {"lr": 1, "tp": 4}})
-    right = ids.config_fingerprint({"recipe": {"tp": 4, "lr": 1}, "model": "qwen"})
+    @dataclass
+    class _Recipe:
+        lr: int
+        tp: int
+
+    @dataclass
+    class _Bundle:
+        model: str
+        recipe: _Recipe
+
+    left = ids.config_fingerprint(_Bundle("qwen", _Recipe(1, 4)))
+    right = ids.config_fingerprint(_Bundle("qwen", _Recipe(tp=4, lr=1)))
 
     assert left == right
 
@@ -67,8 +79,9 @@ def test_train_config_keeps_stable_training_run_id(monkeypatch) -> None:
     class DummyDataset(DatasetConfig):
         label_key = "label"
 
+    @dataclass
     class DummyRecipe(BaseTrainRecipe):
-        recipe_type = RecipeType.SLIME
+        recipe_type: RecipeType = field(default=RecipeType.SLIME)
 
     calls = 0
 
