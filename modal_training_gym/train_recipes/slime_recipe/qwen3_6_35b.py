@@ -58,5 +58,5 @@ class Qwen3_6_35b_Recipe(SlimeRecipe):
 
     # ── Container resources ──────────────────────────────────────────────
     ephemeral_disk: int | None = (
-        512 * 1024
-    )  # 512 GiB — 35B MoE checkpoints + volume cache (Modal minimum)
+        1024 * 1024
+    )  # 1 TiB — 35B MoE checkpoint + optimizer state + Ray logs
