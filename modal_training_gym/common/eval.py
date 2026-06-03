@@ -211,9 +211,11 @@ class EvalConfig:
                 re.sub(
                     r"-{2,}",
                     "-",
-                    re.sub(r"[^a-z0-9]+", "-", f"{class_name}-{dataset_name}-{eval_fn_name}".lower()).strip(
-                        "-"
-                    ),
+                    re.sub(
+                        r"[^a-z0-9]+",
+                        "-",
+                        f"{class_name}-{dataset_name}-{eval_fn_name}".lower(),
+                    ).strip("-"),
                 )
                 or "eval-config"
             )

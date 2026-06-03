@@ -23,7 +23,11 @@ from modal_training_gym.common.checkpoint import (
     CheckpointType,
     convert_checkpoint_to_hf,
 )
-from modal_training_gym.common.ids import GymObjectId, config_fingerprint, stable_readable_id
+from modal_training_gym.common.ids import (
+    GymObjectId,
+    config_fingerprint,
+    stable_readable_id,
+)
 from modal_training_gym.common.models import ModelConfig
 from modal_training_gym.common.modal_urls import modal_app_dashboard_url
 from modal_training_gym.deploy_recipes.sglang_recipe import SglangRecipe
@@ -128,7 +132,9 @@ class DeploymentConfig:
         if not self.served_model_name:
             self.served_model_name = default_slug
 
-        deployment_stable_id = self._new_deployment_id(recipe=recipe, model_path=model_path)
+        deployment_stable_id = self._new_deployment_id(
+            recipe=recipe, model_path=model_path
+        )
         deployment_id = deployment_stable_id.value
         checkpoints_volume = self._checkpoints_volume_name()
         checkpoints_mount_path = self._checkpoints_mount_path()

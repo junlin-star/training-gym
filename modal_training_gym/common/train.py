@@ -2,7 +2,11 @@ import dataclasses as _dc
 from typing import cast
 
 from modal_training_gym.common.dataset import DatasetConfig
-from modal_training_gym.common.ids import GymObjectId, config_fingerprint, stable_readable_id
+from modal_training_gym.common.ids import (
+    GymObjectId,
+    config_fingerprint,
+    stable_readable_id,
+)
 from modal_training_gym.common.models import ModelConfig
 from modal_training_gym.common.checkpoint import Checkpoint
 from modal_training_gym.common.train_result import TrainResult
@@ -44,7 +48,7 @@ class TrainConfig:
 
     @property
     def training_run_id(self) -> str:
-        # Maintain same stable id, cannot change across calls on one TrainConfig. 
+        # Maintain same stable id, cannot change across calls on one TrainConfig.
         if self._stable_id is None:
             fingerprint = config_fingerprint(
                 "training",
