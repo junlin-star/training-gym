@@ -96,7 +96,6 @@ def build_sglang_serve_app(
         image=image,
         gpu=gpu_spec,
         scaledown_window=10 * 60,
-        min_containers=1,
         timeout=24 * 60 * 60,
         volumes=volumes,
         secrets=hf_secrets(),
