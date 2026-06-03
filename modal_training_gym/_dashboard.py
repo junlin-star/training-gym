@@ -321,6 +321,10 @@ def fastapi_app():
 
     # ── SPA fallback ─────────────────────────────────────────────────────
 
+    @web.get("/modal-logo.svg")
+    async def favicon():
+        return FileResponse(f"{STATIC_DIR}/modal-logo.svg")
+
     @web.get("/{full_path:path}")
     async def serve_spa(full_path: str):
         return FileResponse(f"{STATIC_DIR}/index.html")
