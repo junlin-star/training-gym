@@ -18,13 +18,20 @@ from pydantic.dataclasses import dataclass
 
 def _merge_recipe(base: SlimeRecipe, overrides: SlimeRecipe) -> SlimeRecipe:
     base_fields = {f.name: getattr(base, f.name) for f in _dc.fields(base)}
+    # Compare against the override type's own defaults so we only override
+    # base values for fields the user explicitly changed.
+    override_defaults = {
+        f.name: f.default
+        for f in _dc.fields(type(overrides))
+        if f.default is not _dc.MISSING
+    }
     for f in _dc.fields(overrides):
         if f.name not in base_fields:
             continue
         user_val = getattr(overrides, f.name)
-        default_val = getattr(base, f.name)
-        if user_val != default_val:
-            base_fields[f.name] = user_val
+        if f.name in override_defaults and user_val == override_defaults[f.name]:
+            continue
+        base_fields[f.name] = user_val
     return type(base)(**base_fields)
 
 
