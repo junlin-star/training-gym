@@ -23,7 +23,7 @@ from modal_training_gym.common.checkpoint import (
     CheckpointType,
     convert_checkpoint_to_hf,
 )
-from modal_training_gym.common.ids import config_fingerprint, unique_readable_id
+from modal_training_gym.common.ids import GymObjectId, config_fingerprint, stable_readable_id
 from modal_training_gym.common.models import ModelConfig
 from modal_training_gym.common.modal_urls import modal_app_dashboard_url
 from modal_training_gym.deploy_recipes.sglang_recipe import SglangRecipe
@@ -84,7 +84,7 @@ class DeploymentConfig:
         *,
         recipe: VllmRecipe | SglangRecipe,
         model_path: str,
-    ) -> tuple[str, str, int]:
+    ) -> GymObjectId:
         fingerprint = config_fingerprint(
             "deployment",
             self.model,
@@ -94,12 +94,11 @@ class DeploymentConfig:
             self.served_model_name,
             model_path,
         )
-        deployment_id, attempt_index = unique_readable_id(
+        return stable_readable_id(
             MetadataStore.DEPLOYMENTS,
             fingerprint,
             id_key="deployment_id",
         )
-        return deployment_id, fingerprint, attempt_index
 
     # TODO: add _merge_recipe for deployment configs
     def serve(self) -> "ModelDeployment":
@@ -129,11 +128,8 @@ class DeploymentConfig:
         if not self.served_model_name:
             self.served_model_name = default_slug
 
-        (
-            deployment_id,
-            deployment_fingerprint,
-            attempt_index,
-        ) = self._new_deployment_id(recipe=recipe, model_path=model_path)
+        deployment_stable_id = self._new_deployment_id(recipe=recipe, model_path=model_path)
+        deployment_id = deployment_stable_id.value
         checkpoints_volume = self._checkpoints_volume_name()
         checkpoints_mount_path = self._checkpoints_mount_path()
 
@@ -204,8 +200,8 @@ class DeploymentConfig:
             modal_app_url=modal_app_url or modal_app_dashboard_url(modal_app_id),
             url=url,
             status=DeploymentStatus.RUNNING.value,
-            config_fingerprint=deployment_fingerprint,
-            attempt_index=attempt_index,
+            config_fingerprint=deployment_stable_id.config_fingerprint,
+            id_created_at=deployment_stable_id.id_created_at,
         )
         deployment.save()
         return deployment
@@ -256,7 +252,7 @@ class ModelDeployment(BaseModel):
     url: str
     status: str = DeploymentStatus.RUNNING.value
     config_fingerprint: str = ""
-    attempt_index: int = 0
+    id_created_at: int = 0
 
     @field_validator("deployment_config", mode="before")
     @classmethod

@@ -10,11 +10,7 @@ from typing import TYPE_CHECKING, Any, Callable
 from pydantic import BaseModel, Field
 
 from modal_training_gym.common.dataset import DatasetRow
-from modal_training_gym.common.ids import (
-    config_fingerprint,
-    slugify,
-    unique_readable_id,
-)
+from modal_training_gym.common.ids import config_fingerprint, stable_readable_id
 from modal_training_gym.utils.metadata import MetadataStore, vol_get, vol_list, vol_put
 
 from modal_training_gym.common.models.base import ParsedResponse
@@ -115,7 +111,7 @@ class EvalResult(BaseModel):
     eval_config_id: str
     deployment_id: str
     config_fingerprint: str = ""
-    attempt_index: int = 0
+    id_created_at: int = 0
     created_at: datetime.datetime = Field(
         default_factory=lambda: datetime.datetime.now(datetime.UTC)
     )
@@ -210,12 +206,18 @@ class EvalConfig:
                 class_name,
                 self.dataset,
                 eval_fn_name,
-                self.prompt_column,
-                self.generate_kwargs,
             )
-            slug = (
-                slugify(f"{class_name}-{dataset_name}-{eval_fn_name}") or "eval-config"
+            raw_slug = (
+                re.sub(
+                    r"-{2,}",
+                    "-",
+                    re.sub(r"[^a-z0-9]+", "-", f"{class_name}-{dataset_name}-{eval_fn_name}".lower()).strip(
+                        "-"
+                    ),
+                )
+                or "eval-config"
             )
+            slug = raw_slug
             self.eval_config_id = f"{slug}-{fingerprint[:6]}"
         if self.eval_fn is None:
             assert self.eval_response_fn is not None, (
@@ -312,23 +314,26 @@ class EvalConfig:
                     )
                 results.append(result)
 
+        created_at = datetime.datetime.now(datetime.UTC)
+        id_created_at = int(created_at.timestamp())
         fingerprint = config_fingerprint(
             "eval",
-            deployment.deployment_id,
             self.eval_config_id,
-            self.generate_kwargs,
+            deployment.deployment_id,
         )
-        eval_id, attempt_index = unique_readable_id(
+        eval_stable_id = stable_readable_id(
             MetadataStore.EVAL_RESULTS,
             fingerprint,
             id_key="eval_id",
+            id_created_at=id_created_at,
         )
         result = EvalResult(
-            eval_id=eval_id,
+            eval_id=eval_stable_id.value,
             deployment_id=deployment.deployment_id,
             eval_config_id=self.eval_config_id,
-            config_fingerprint=fingerprint,
-            attempt_index=attempt_index,
+            config_fingerprint=eval_stable_id.config_fingerprint,
+            id_created_at=eval_stable_id.id_created_at,
+            created_at=created_at,
             rows=results,
         )
         result.save()

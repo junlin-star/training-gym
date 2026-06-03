@@ -113,7 +113,7 @@ class TrainResult:
     checkpoints_mount_path: str = ""
     model_config: "ModelConfig | None" = None
     config_fingerprint: str = ""
-    attempt_index: int = 0
+    id_created_at: int = 0
     extra: dict[str, Any] = field(default_factory=dict)
 
     # ── Persistence ────────────────────────────────────────────────────────

@@ -40,7 +40,7 @@ class TrainingRun(BaseModel):
     dataset_id: str = ""
     deployment_id: str = ""
     config_fingerprint: str = ""
-    attempt_index: int = 0
+    id_created_at: int = 0
     status: TrainingRunStatus = TrainingRunStatus.RUNNING
     created_at: int = 0
     started_at: int = 0

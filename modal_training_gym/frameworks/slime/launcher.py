@@ -122,7 +122,7 @@ def build_slime_app(
     *,
     training_run_id: str,
     config_fingerprint: str = "",
-    attempt_index: int = 0,
+    id_created_at: int = 0,
     slime: SlimeRecipe,
     model: ModelConfig,
     dataset: DatasetConfig,
@@ -680,7 +680,7 @@ def build_slime_app(
             framework=Framework.SLIME,
             config=config_summary,
             config_fingerprint=config_fingerprint,
-            attempt_index=attempt_index,
+            id_created_at=id_created_at,
             created_at=created_at,
             started_at=created_at,
         )
@@ -859,7 +859,7 @@ def build_slime_app(
                 "checkpoints_volume_name": checkpoints_volume_name,
                 "checkpoints_mount_path": checkpoints_mount_path,
                 "config_fingerprint": config_fingerprint,
-                "attempt_index": attempt_index,
+                "id_created_at": id_created_at,
             }
             accepted_fields = set(inspect.signature(TrainResult).parameters)
             result = TrainResult(
