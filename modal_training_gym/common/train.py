@@ -1,11 +1,12 @@
 import dataclasses as _dc
 from typing import cast
-import uuid
 
 from modal_training_gym.common.dataset import DatasetConfig
+from modal_training_gym.common.ids import config_fingerprint, unique_readable_id
 from modal_training_gym.common.models import ModelConfig
 from modal_training_gym.common.checkpoint import Checkpoint
 from modal_training_gym.common.train_result import TrainResult
+from modal_training_gym.utils.metadata import MetadataStore
 from modal_training_gym.common.modal_urls import modal_app_dashboard_url
 from modal_training_gym.frameworks.slime import build_slime_app
 from modal_training_gym.train_recipes.base import BaseTrainRecipe, RecipeType
@@ -35,12 +36,29 @@ class TrainConfig:
     model: ModelConfig
     recipe: BaseTrainRecipe
     checkpoint: Checkpoint | None = None
+    _training_run_id: str = _dc.field(default="", init=False, repr=False)
+    _config_fingerprint: str = _dc.field(default="", init=False, repr=False)
+    _attempt_index: int = _dc.field(default=0, init=False, repr=False)
 
     # ── Public API ────────────────────────────────────────────────────────────
 
     @property
     def training_run_id(self) -> str:
-        return f"{self.model.model_name}.{self.dataset.name}.{uuid.uuid4().hex[:4]}"
+        # Computed once and cached: a stable id for the lifetime of this config.
+        if not self._training_run_id:
+            self._config_fingerprint = config_fingerprint(
+                "training",
+                self.model,
+                self.dataset,
+                self.recipe,
+                self.checkpoint,
+            )
+            self._training_run_id, self._attempt_index = unique_readable_id(
+                MetadataStore.TRAINING_RUNS,
+                self._config_fingerprint,
+                id_key="training_run_id",
+            )
+        return self._training_run_id
 
     def _build_app(self):
         recipe_type = self.recipe.recipe_type
@@ -56,6 +74,8 @@ class TrainConfig:
                 combined = cast(SlimeRecipe, self.recipe)
             return build_slime_app(
                 training_run_id=self.training_run_id,
+                config_fingerprint=self._config_fingerprint,
+                attempt_index=self._attempt_index,
                 slime=combined,
                 model=self.model,
                 dataset=self.dataset,
@@ -67,10 +87,8 @@ class TrainConfig:
         """Build the app, run training, and return the TrainResult."""
         import modal
 
-        # TODO: generate train "human-readable-uuid", save the training run
-        # TODO: look at how wandb generate run id
-        # Put run ids in dashboard to allow users to resume a run
-        print(f"Starting training run with id: {self.training_run_id}")
+        training_run_id = self.training_run_id
+        print(f"Starting training run with id: {training_run_id}")
 
         app = self._build_app()
         result_dict = None

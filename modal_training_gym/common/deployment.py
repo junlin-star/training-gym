@@ -15,7 +15,6 @@ from dataclasses import dataclass
 from enum import Enum
 import inspect
 import threading
-import uuid
 
 from pydantic import BaseModel, ConfigDict, field_serializer, field_validator
 
@@ -24,6 +23,7 @@ from modal_training_gym.common.checkpoint import (
     CheckpointType,
     convert_checkpoint_to_hf,
 )
+from modal_training_gym.common.ids import config_fingerprint, unique_readable_id
 from modal_training_gym.common.models import ModelConfig
 from modal_training_gym.common.modal_urls import modal_app_dashboard_url
 from modal_training_gym.deploy_recipes.sglang_recipe import SglangRecipe
@@ -79,18 +79,27 @@ class DeploymentConfig:
             )
         return model_path
 
-    def _new_deployment_id(self) -> str:
-        model_name = (
-            self.served_model_name or self.model.model_name or self.model.model_path
+    def _new_deployment_id(
+        self,
+        *,
+        recipe: VllmRecipe | SglangRecipe,
+        model_path: str,
+    ) -> tuple[str, str, int]:
+        fingerprint = config_fingerprint(
+            "deployment",
+            self.model,
+            self.checkpoint,
+            recipe,
+            self.app_name,
+            self.served_model_name,
+            model_path,
         )
-        if self.checkpoint is not None:
-            model_name = f"{model_name}-{self.checkpoint.name}"
-
-        recipe_name = (
-            self.recipe.recipe_type.value if self.recipe is not None else "sglang"
+        deployment_id, attempt_index = unique_readable_id(
+            MetadataStore.DEPLOYMENTS,
+            fingerprint,
+            id_key="deployment_id",
         )
-
-        return f"{model_name}.{recipe_name}.{uuid.uuid4().hex[:4]}"
+        return deployment_id, fingerprint, attempt_index
 
     # TODO: add _merge_recipe for deployment configs
     def serve(self) -> "ModelDeployment":
@@ -120,7 +129,11 @@ class DeploymentConfig:
         if not self.served_model_name:
             self.served_model_name = default_slug
 
-        deployment_id = self._new_deployment_id()
+        (
+            deployment_id,
+            deployment_fingerprint,
+            attempt_index,
+        ) = self._new_deployment_id(recipe=recipe, model_path=model_path)
         checkpoints_volume = self._checkpoints_volume_name()
         checkpoints_mount_path = self._checkpoints_mount_path()
 
@@ -191,6 +204,8 @@ class DeploymentConfig:
             modal_app_url=modal_app_url or modal_app_dashboard_url(modal_app_id),
             url=url,
             status=DeploymentStatus.RUNNING.value,
+            config_fingerprint=deployment_fingerprint,
+            attempt_index=attempt_index,
         )
         deployment.save()
         return deployment
@@ -240,6 +255,8 @@ class ModelDeployment(BaseModel):
     modal_app_url: str = ""
     url: str
     status: str = DeploymentStatus.RUNNING.value
+    config_fingerprint: str = ""
+    attempt_index: int = 0
 
     @field_validator("deployment_config", mode="before")
     @classmethod

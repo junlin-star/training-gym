@@ -10,6 +10,11 @@ from typing import TYPE_CHECKING, Any, Callable
 from pydantic import BaseModel, Field
 
 from modal_training_gym.common.dataset import DatasetRow
+from modal_training_gym.common.ids import (
+    config_fingerprint,
+    slugify,
+    unique_readable_id,
+)
 from modal_training_gym.utils.metadata import MetadataStore, vol_get, vol_list, vol_put
 
 from modal_training_gym.common.models.base import ParsedResponse
@@ -109,6 +114,8 @@ class EvalResult(BaseModel):
     eval_id: str
     eval_config_id: str
     deployment_id: str
+    config_fingerprint: str = ""
+    attempt_index: int = 0
     created_at: datetime.datetime = Field(
         default_factory=lambda: datetime.datetime.now(datetime.UTC)
     )
@@ -195,14 +202,21 @@ class EvalConfig:
 
     def __post_init__(self):
         if self.eval_config_id is None:
-            from uuid import uuid4
-
             class_name = type(self).__name__
             dataset_name = type(self.dataset).__name__
             eval_fn_name = _callable_name(self.eval_fn or self.eval_response_fn)
-            self.eval_config_id = (
-                f"{class_name}.{dataset_name}.{eval_fn_name}.{uuid4().hex[:4]}"
+            fingerprint = config_fingerprint(
+                "eval-config",
+                class_name,
+                self.dataset,
+                eval_fn_name,
+                self.prompt_column,
+                self.generate_kwargs,
             )
+            slug = (
+                slugify(f"{class_name}-{dataset_name}-{eval_fn_name}") or "eval-config"
+            )
+            self.eval_config_id = f"{slug}-{fingerprint[:6]}"
         if self.eval_fn is None:
             assert self.eval_response_fn is not None, (
                 "eval_fn or eval_response_fn must be set"
@@ -271,8 +285,6 @@ class EvalConfig:
         debug: bool = False,
         max_concurrency: int = 1,
     ) -> EvalResult:
-        from uuid import uuid4
-
         if max_concurrency < 1:
             raise ValueError("max_concurrency must be >= 1")
 
@@ -300,10 +312,23 @@ class EvalConfig:
                     )
                 results.append(result)
 
+        fingerprint = config_fingerprint(
+            "eval",
+            deployment.deployment_id,
+            self.eval_config_id,
+            self.generate_kwargs,
+        )
+        eval_id, attempt_index = unique_readable_id(
+            MetadataStore.EVAL_RESULTS,
+            fingerprint,
+            id_key="eval_id",
+        )
         result = EvalResult(
-            eval_id=f"eval-{uuid4().hex[:12]}",
+            eval_id=eval_id,
             deployment_id=deployment.deployment_id,
             eval_config_id=self.eval_config_id,
+            config_fingerprint=fingerprint,
+            attempt_index=attempt_index,
             rows=results,
         )
         result.save()
