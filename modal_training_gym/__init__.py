@@ -32,9 +32,17 @@ _EXPORTS = {
         "modal_training_gym.train_recipes.miles_recipe",
         "Kimi_K2_5_Recipe",
     ),
+    "Kimi_K2_5_FullParam_Recipe": (
+        "modal_training_gym.train_recipes.miles_recipe",
+        "Kimi_K2_5_FullParam_Recipe",
+    ),
     "Kimi_K2_6_Recipe": (
         "modal_training_gym.train_recipes.miles_recipe",
         "Kimi_K2_6_Recipe",
+    ),
+    "Kimi_K2_6_FullParam_Recipe": (
+        "modal_training_gym.train_recipes.miles_recipe",
+        "Kimi_K2_6_FullParam_Recipe",
     ),
     "MilesConfig": ("modal_training_gym.train_recipes.miles_recipe", "MilesConfig"),
     "MultiTurn": ("modal_training_gym.train_recipes.slime_recipe", "MultiTurn"),
@@ -77,6 +85,8 @@ __all__ = [
     "HFModelConfiguration",
     "HuggingFaceDataset",
     "list_checkpoints",
+    "Kimi_K2_6",
+    "Kimi_K2_5",
     "METADATA_VOLUME_NAME",
     "MetadataStore",
     "ModelArchitecture",

@@ -16,10 +16,13 @@ tutorial_cli_app = modal.App()
 
 class MathDataset(HuggingFaceDataset):
     hf_repo = "zhuzilin/dapo-math-17k"
-    input_column = "prompt"
-    output_column = "label"
+    input_column = ""
+    output_column = ""
+    input_key = "prompt"
+    label_key = "label"
     output_format = "jsonl"
-    apply_chat_template = False
+    apply_chat_template = True
+    always_prepare = True
 
 
 def build_training_config() -> TrainConfig:

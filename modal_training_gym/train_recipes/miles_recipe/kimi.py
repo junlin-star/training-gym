@@ -23,7 +23,7 @@ class _KimiK2Recipe(MilesConfig):
         "OPEN_TRAINING_INT4_GROUP_SIZE": "32",
     }
 
-    actor_num_nodes: int = 32
+    actor_num_nodes: int = 16
     actor_num_gpus_per_node: int = 8
     colocate: bool = True
     use_miles_router: bool = True
@@ -53,7 +53,7 @@ class _KimiK2Recipe(MilesConfig):
     eps_clip: float = 0.2
     eps_clip_high: float = 0.28
     optimizer: str = "adam"
-    lr: float = 1e-6
+    lr: float = 1e-5
     lr_decay_style: str = "constant"
     weight_decay: float = 0.1
     adam_beta1: float = 0.9
@@ -63,14 +63,27 @@ class _KimiK2Recipe(MilesConfig):
     use_precision_aware_optimizer: bool = True
     use_distributed_optimizer: bool = True
 
+    lora_rank: int = 32
+    lora_alpha: int = 32
+    lora_dropout: float = 0.0
+    target_modules: str = (
+        "q_a_proj,kv_a_proj_with_mqa,o_proj,gate_proj,up_proj,down_proj"
+    )
+    experts_shared_outer_loras: bool = True
+    lora_base_cpu_backup: bool = True
+    no_gradient_accumulation_fusion: bool = True
+    sglang_lora_backend: str = "triton"
+    sglang_lora_use_virtual_experts: bool = True
+    use_tis: bool = True
+
     train_backend: str = "megatron"
     tensor_model_parallel_size: int = 8
     sequence_parallel: bool = True
-    pipeline_model_parallel_size: int = 8
-    context_parallel_size: int = 4
-    expert_model_parallel_size: int = 32
+    pipeline_model_parallel_size: int = 2
+    context_parallel_size: int = 8
+    expert_model_parallel_size: int = 64
     expert_tensor_parallel_size: int = 1
-    decoder_last_pipeline_num_layers: int = 5
+    decoder_last_pipeline_num_layers: int = 30
 
     recompute_granularity: str = "full"
     recompute_method: str = "uniform"
@@ -91,8 +104,29 @@ class _KimiK2Recipe(MilesConfig):
     use_rollout_routing_replay: bool = True
 
 
+class _KimiK2FullParamRecipe(_KimiK2Recipe):
+    actor_num_nodes: int = 32
+    lr: float = 1e-6
+
+    lora_rank: int | None = None
+    lora_alpha: int | None = None
+    lora_dropout: float | None = None
+    target_modules: str | None = None
+    experts_shared_outer_loras: bool = False
+    lora_base_cpu_backup: bool = False
+    no_gradient_accumulation_fusion: bool = False
+    sglang_lora_backend: str | None = None
+    sglang_lora_use_virtual_experts: bool = False
+    use_tis: bool = False
+
+    pipeline_model_parallel_size: int = 8
+    context_parallel_size: int = 4
+    expert_model_parallel_size: int = 32
+    decoder_last_pipeline_num_layers: int = 5
+
+
 class Kimi_K2_5_Recipe(_KimiK2Recipe):
-    """Kimi-K2.5 on 32x8xH200 with Miles INT4 rollout and BF16 reference load."""
+    """Kimi-K2.5 LoRA on 16x8xH200 with Miles INT4 rollout and BF16 reference load."""
 
     source_hf_checkpoint: str = "moonshotai/Kimi-K2.5"
     hf_checkpoint: str = "/checkpoints/Kimi-K2.5-int4"
@@ -100,7 +134,23 @@ class Kimi_K2_5_Recipe(_KimiK2Recipe):
 
 
 class Kimi_K2_6_Recipe(_KimiK2Recipe):
-    """Kimi-K2.6 on 32x8xH200 with Miles INT4 rollout and BF16 reference load."""
+    """Kimi-K2.6 LoRA on 16x8xH200 with Miles INT4 rollout and BF16 reference load."""
+
+    source_hf_checkpoint: str = "moonshotai/Kimi-K2.6"
+    hf_checkpoint: str = "/checkpoints/Kimi-K2.6-int4"
+    ref_load: str = "/checkpoints/Kimi-K2.6-bf16"
+
+
+class Kimi_K2_5_FullParam_Recipe(_KimiK2FullParamRecipe):
+    """Kimi-K2.5 full-param on 32x8xH200 with Miles INT4 rollout and BF16 reference load."""
+
+    source_hf_checkpoint: str = "moonshotai/Kimi-K2.5"
+    hf_checkpoint: str = "/checkpoints/Kimi-K2.5-int4"
+    ref_load: str = "/checkpoints/Kimi-K2.5-bf16"
+
+
+class Kimi_K2_6_FullParam_Recipe(_KimiK2FullParamRecipe):
+    """Kimi-K2.6 full-param on 32x8xH200 with Miles INT4 rollout and BF16 reference load."""
 
     source_hf_checkpoint: str = "moonshotai/Kimi-K2.6"
     hf_checkpoint: str = "/checkpoints/Kimi-K2.6-int4"
