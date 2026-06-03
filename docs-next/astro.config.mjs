@@ -17,6 +17,28 @@ export default defineConfig({
         'Reusable building blocks + runnable examples for RL post-training on Modal.',
       tagline:
         'GRPO, PPO, custom reward and generate functions — runnable on Modal in minutes.',
+      head: [
+        {
+          tag: 'meta',
+          attrs: { property: 'og:image', content: 'https://gym.modal.dev/og-image.png' },
+        },
+        {
+          tag: 'meta',
+          attrs: { property: 'og:image:width', content: '2400' },
+        },
+        {
+          tag: 'meta',
+          attrs: { property: 'og:image:height', content: '1260' },
+        },
+        {
+          tag: 'meta',
+          attrs: { name: 'twitter:card', content: 'summary_large_image' },
+        },
+        {
+          tag: 'meta',
+          attrs: { name: 'twitter:image', content: 'https://gym.modal.dev/og-image.png' },
+        },
+      ],
       social: [
         {
           icon: 'github',
