@@ -57,6 +57,7 @@ from .modal_helpers.utils import (
     get_checkpoint_conversion_policy,
     get_modal_cluster_context,
     prepare_slime_config,
+    resolve_checkpoint_ref,
 )
 from .modal_helpers.patches import encode_patch
 from modal_training_gym.common.checkpoint import (
@@ -66,11 +67,12 @@ from modal_training_gym.common.checkpoint import (
 from modal_training_gym.common.framework import Framework
 
 SLIME_ROOT = "/root/slime"
-# Pin by digest to prevent mutable-tag drift.  Tag: nightly-dev-20260526a
-SLIME_IMAGE = "slimerl/slime@sha256:2568a8283b913eeea86b68397288f9ebdb59ebad4eab11c64ee3ce0c49819c3a"
+# Pin by digest to prevent mutable-tag drift.  Tag: nightly-dev-20260529a
+SLIME_IMAGE = "slimerl/slime@sha256:087a57732cf4fb271729df47530b01a9530144f4339247efc422f03e2b6988e1"
 HARBOR_PKG_VERSION = "0.6.6"
 
 _PATCH_VALIDATION_B64 = encode_patch("patch_validation")
+_PATCH_MEGATRON_BRIDGE_B64 = encode_patch("patch_megatron_bridge")
 _PATCH_TORCH_LOAD_B64 = encode_patch("patch_torch_load")
 _PATCH_GLOBAL_PLAN_B64 = encode_patch("patch_global_plan")
 _PATCH_CHECKPOINT_SAVE_B64 = encode_patch("patch_checkpoint_save")
@@ -83,6 +85,7 @@ def _build_slime_base_image() -> "Image":
         .entrypoint([])
         .run_commands(
             "rm -rf /root/.cache/huggingface",
+            f"echo {_PATCH_MEGATRON_BRIDGE_B64} | base64 -d | python3",
             f"echo {_PATCH_ADVANTAGES_B64} | base64 -d | python3",
         )
     )
@@ -169,6 +172,13 @@ def build_slime_app(
         image = slime.image_overlay(image)
         object.__setattr__(slime, "image_overlay", None)
 
+    for patch in slime.patch_files:
+        image = image.add_local_file(
+            patch,
+            remote_path=f"/tmp/{os.path.basename(patch)}",
+            copy=True,
+        )
+
     if isinstance(dataset, HarborDataset):
         image = image.uv_pip_install(f"harbor=={HARBOR_PKG_VERSION}")
 
@@ -179,6 +189,11 @@ def build_slime_app(
             copy=True,
             ignore=["**/__pycache__", "**/*.pyc", "**/.git", "**/.venv"],
         )
+
+    if slime.image_run_commands:
+        image = image.run_commands(*slime.image_run_commands)
+    if slime.image_env:
+        image = image.env(slime.image_env)
 
     image = image.add_local_python_source("modal_training_gym", copy=True)
     image = mount_tools_dir(image)
@@ -294,6 +309,20 @@ def build_slime_app(
     if slime.custom_generate_function is not None and _get_custom_generate_path():
         object.__setattr__(slime, "custom_generate_function", None)
 
+    # ── SGLang request params auto-wiring ─────────────────────────────────
+    if slime.sglang_request_params:
+        cfg = dict(slime.extra_config or {})
+        cfg["sglang_request_params"] = slime.sglang_request_params
+        if "custom_rm_path" not in cfg:
+            cfg["custom_rm_path"] = (
+                "modal_training_gym.frameworks.slime.opd_reward.reward_func"
+            )
+        if "custom_reward_post_process_path" not in cfg:
+            cfg["custom_reward_post_process_path"] = (
+                "modal_training_gym.frameworks.slime.opd_reward.post_process_rewards"
+            )
+        object.__setattr__(slime, "extra_config", cfg)
+
     # Build train_image AFTER _ship_callable so shipped modules are included.
     train_image = image
     if _has_hybrid_spec:
@@ -382,17 +411,18 @@ def build_slime_app(
         data_volume.commit()
 
     convert_nnodes = get_checkpoint_conversion_policy(slime, model=model)[0]
+    convert_multi_node = convert_nnodes > 1
 
     @app.function(
         image=image,
         gpu=gpu_spec,
         volumes=all_volumes,
         timeout=4 * 60 * 60,
-        experimental_options={"efa_enabled": True},
+        experimental_options={"efa_enabled": True} if convert_multi_node else {},
         serialized=True,
         name="convert_checkpoint",
     )
-    @clustered(convert_nnodes, rdma=True)  # pyright: ignore[reportCallIssue, reportOptionalCall]
+    @clustered(convert_nnodes, rdma=convert_multi_node)  # pyright: ignore[reportCallIssue, reportOptionalCall]
     def convert_checkpoint():
         from huggingface_hub import snapshot_download
 
@@ -403,7 +433,9 @@ def build_slime_app(
         hf_cache_volume.reload()
         checkpoints_volume.reload()
 
-        if model.model_path:
+        if slime.megatron_conversion_hf_checkpoint:
+            hf_path = resolve_checkpoint_ref(slime.megatron_conversion_hf_checkpoint)
+        elif model.model_path:
             hf_path = str(model.model_path)
         else:
             hf_path = snapshot_download(model.model_name, local_files_only=True)
@@ -447,8 +479,12 @@ def build_slime_app(
                 )
         else:
             convert_script = f"{SLIME_ROOT}/tools/convert_hf_to_torch_dist.py"
-        if mmt:
-            model_script = f"{SLIME_ROOT}/scripts/models/{mmt}.sh"
+        if mmt or slime.slime_model_script:
+            model_script = (
+                f"{SLIME_ROOT}/{slime.slime_model_script}"
+                if slime.slime_model_script
+                else f"{SLIME_ROOT}/scripts/models/{mmt}.sh"
+            )
             if needs_preconv:
                 # Strip parallelism flags from MODEL_ARGS so the only
                 # source of TP/PP/EP is our extra_args.  The bridge
@@ -556,19 +592,36 @@ def build_slime_app(
 
     _multi_node = slime.total_nodes > 1
 
+    train_secrets: list[Secret] = []
+    if slime.wandb is not None:
+        train_secrets.append(Secret.from_name(slime.wandb.modal_wandb_secret_name))
+    train_experimental_options: dict[str, Any] = {}
+    if _multi_node:
+        train_experimental_options["efa_enabled"] = True
+
+    train_function_kwargs = dict(slime.train_function_kwargs or {})
+    user_secrets = train_function_kwargs.pop("secrets", None)
+    if user_secrets is not None:
+        if not isinstance(user_secrets, (list, tuple)):
+            user_secrets = [user_secrets]
+        train_secrets.extend(user_secrets)
+    user_experimental_options = train_function_kwargs.pop("experimental_options", None)
+    if user_experimental_options is not None:
+        train_experimental_options.update(user_experimental_options)
+    if train_function_kwargs:
+        unsupported = ", ".join(sorted(train_function_kwargs))
+        raise TypeError(f"Unsupported slime.train_function_kwargs keys: {unsupported}")
+
     @app.function(
         image=train_image,
         gpu=gpu_spec,
+        memory=slime.memory,
+        cloud=slime.cloud,
+        region=slime.region,
         volumes=all_volumes,
-        secrets=[
-            *(
-                []
-                if slime.wandb is None
-                else [Secret.from_name(slime.wandb.modal_wandb_secret_name)]
-            ),
-        ],
+        secrets=train_secrets or None,
         timeout=24 * 60 * 60,
-        experimental_options={"efa_enabled": True} if _multi_node else {},
+        experimental_options=train_experimental_options or None,
         serialized=True,
         name="train",
     )
