@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any, Callable
 from pydantic import BaseModel, Field
 
 from modal_training_gym.common.dataset import DatasetRow
+from modal_training_gym.common.ids import create_hash
 from modal_training_gym.utils.metadata import MetadataStore, vol_get, vol_list, vol_put
 
 from modal_training_gym.common.models.base import ParsedResponse
@@ -195,13 +196,15 @@ class EvalConfig:
 
     def __post_init__(self):
         if self.eval_config_id is None:
-            from uuid import uuid4
-
             class_name = type(self).__name__
             dataset_name = type(self.dataset).__name__
             eval_fn_name = _callable_name(self.eval_fn or self.eval_response_fn)
-            self.eval_config_id = (
-                f"{class_name}.{dataset_name}.{eval_fn_name}.{uuid4().hex[:4]}"
+            self.eval_config_id = create_hash(
+                "eval-config",
+                class_name,
+                dataset_name,
+                eval_fn_name,
+                "",
             )
         if self.eval_fn is None:
             assert self.eval_response_fn is not None, (
@@ -271,8 +274,6 @@ class EvalConfig:
         debug: bool = False,
         max_concurrency: int = 1,
     ) -> EvalResult:
-        from uuid import uuid4
-
         if max_concurrency < 1:
             raise ValueError("max_concurrency must be >= 1")
 
@@ -300,10 +301,19 @@ class EvalConfig:
                     )
                 results.append(result)
 
+        created_at = datetime.datetime.now(datetime.UTC)
+        eval_id = create_hash(
+            "eval",
+            self.eval_config_id,
+            deployment.deployment_id,
+            "",
+            "",
+        )
         result = EvalResult(
-            eval_id=f"eval-{uuid4().hex[:12]}",
+            eval_id=eval_id,
             deployment_id=deployment.deployment_id,
             eval_config_id=self.eval_config_id,
+            created_at=created_at,
             rows=results,
         )
         result.save()

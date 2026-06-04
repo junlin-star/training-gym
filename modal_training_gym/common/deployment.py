@@ -15,7 +15,6 @@ from dataclasses import dataclass
 from enum import Enum
 import inspect
 import threading
-import uuid
 
 from pydantic import BaseModel, ConfigDict, field_serializer, field_validator
 
@@ -24,6 +23,7 @@ from modal_training_gym.common.checkpoint import (
     CheckpointType,
     convert_checkpoint_to_hf,
 )
+from modal_training_gym.common.ids import create_hash
 from modal_training_gym.common.models import ModelConfig
 from modal_training_gym.common.modal_urls import modal_app_dashboard_url
 from modal_training_gym.deploy_recipes.sglang_recipe import SglangRecipe
@@ -79,18 +79,19 @@ class DeploymentConfig:
             )
         return model_path
 
-    def _new_deployment_id(self) -> str:
-        model_name = (
-            self.served_model_name or self.model.model_name or self.model.model_path
+    def _new_deployment_id(
+        self,
+        *,
+        recipe: VllmRecipe | SglangRecipe,
+        model_path: str,
+    ) -> str:
+        return create_hash(
+            self.model.model_name,
+            self.checkpoint.path if self.checkpoint is not None else "",
+            f"{type(recipe).__name__}:{recipe.recipe_type.value}",
+            self.app_name or "",
+            model_path,
         )
-        if self.checkpoint is not None:
-            model_name = f"{model_name}-{self.checkpoint.name}"
-
-        recipe_name = (
-            self.recipe.recipe_type.value if self.recipe is not None else "sglang"
-        )
-
-        return f"{model_name}.{recipe_name}.{uuid.uuid4().hex[:4]}"
 
     # TODO: add _merge_recipe for deployment configs
     def serve(self) -> "ModelDeployment":
@@ -120,7 +121,7 @@ class DeploymentConfig:
         if not self.served_model_name:
             self.served_model_name = default_slug
 
-        deployment_id = self._new_deployment_id()
+        deployment_id = self._new_deployment_id(recipe=recipe, model_path=model_path)
         checkpoints_volume = self._checkpoints_volume_name()
         checkpoints_mount_path = self._checkpoints_mount_path()
 

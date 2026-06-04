@@ -1,8 +1,8 @@
 import dataclasses as _dc
 from typing import cast
-import uuid
 
 from modal_training_gym.common.dataset import DatasetConfig
+from modal_training_gym.common.ids import create_hash
 from modal_training_gym.common.models import ModelConfig
 from modal_training_gym.common.checkpoint import Checkpoint
 from modal_training_gym.common.train_result import TrainResult
@@ -37,12 +37,22 @@ class TrainConfig:
     model: ModelConfig
     recipe: BaseTrainRecipe
     checkpoint: Checkpoint | None = None
+    _stable_id: str | None = _dc.field(default=None, init=False, repr=False)
 
     # ── Public API ────────────────────────────────────────────────────────────
 
     @property
     def training_run_id(self) -> str:
-        return f"{self.model.model_name}.{self.dataset.name}.{uuid.uuid4().hex[:4]}"
+        # Maintain same stable id, cannot change across calls on one TrainConfig.
+        if self._stable_id is None:
+            self._stable_id = create_hash(
+                self.model.model_name,
+                self.checkpoint.path if self.checkpoint is not None else "",
+                f"{type(self.recipe).__name__}:{self.recipe.recipe_type.value}",
+                self.dataset.dataset_id,
+                self.model.model_path or "",
+            )
+        return self._stable_id
 
     def _build_app(self):
         recipe_type = self.recipe.recipe_type
@@ -81,10 +91,8 @@ class TrainConfig:
         """Build the app, run training, and return the TrainResult."""
         import modal
 
-        # TODO: generate train "human-readable-uuid", save the training run
-        # TODO: look at how wandb generate run id
-        # Put run ids in dashboard to allow users to resume a run
-        print(f"Starting training run with id: {self.training_run_id}")
+        training_run_id = self.training_run_id
+        print(f"Starting training run with id: {training_run_id}")
 
         app = self._build_app()
         result_dict = None
