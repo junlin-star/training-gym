@@ -77,6 +77,7 @@ _PATCH_TORCH_LOAD_B64 = encode_patch("patch_torch_load")
 _PATCH_GLOBAL_PLAN_B64 = encode_patch("patch_global_plan")
 _PATCH_CHECKPOINT_SAVE_B64 = encode_patch("patch_checkpoint_save")
 _PATCH_ADVANTAGES_B64 = encode_patch("patch_advantages")
+_PATCH_WEIGHT_SYNC_TIMING_B64 = encode_patch("patch_weight_sync_timing")
 
 
 def _build_slime_base_image() -> "Image":
@@ -87,6 +88,7 @@ def _build_slime_base_image() -> "Image":
             "rm -rf /root/.cache/huggingface",
             f"echo {_PATCH_MEGATRON_BRIDGE_B64} | base64 -d | python3",
             f"echo {_PATCH_ADVANTAGES_B64} | base64 -d | python3",
+            f"echo {_PATCH_WEIGHT_SYNC_TIMING_B64} | base64 -d | python3",
         )
     )
 
@@ -139,7 +141,10 @@ def build_slime_app(
         and getattr(model.architecture, "needs_pre_conversion", False)
     ):
         slug = model.model_name.replace("/", "--")
-        object.__setattr__(slime, "megatron_to_hf_mode", "")
+        # Keep megatron_to_hf_mode (default "bridge") — the bridge path
+        # is dramatically faster for MoE models because it batches expert
+        # conversion instead of the per-parameter EP all-gather +
+        # sequential chunk pipeline in HfWeightIteratorDirect.
         if not slime.ref_load:
             object.__setattr__(slime, "ref_load", f"/checkpoints/torch_dist/{slug}-v31")
 

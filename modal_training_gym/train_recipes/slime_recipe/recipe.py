@@ -164,6 +164,9 @@ class SlimeRecipe(BaseTrainRecipe):
     megatron_to_hf_mode: str = "bridge"
     use_fault_tolerance: bool = True
 
+    # ── Weight sync tuning ────────────────────────────────────────────────
+    update_weight_buffer_size: int | None = None
+
     # ── Reward model ─────────────────────────────────────────────────────────
     rm_type: str | None = None
 
