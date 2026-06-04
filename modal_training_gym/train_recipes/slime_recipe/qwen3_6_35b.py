@@ -40,7 +40,7 @@ class Qwen3_6_35b_Recipe(SlimeRecipe):
     global_batch_size: int = 32
     lr: float = 1e-6
     max_tokens_per_gpu: int = 8192
-    calculate_per_token_loss: bool = True
+    calculate_per_token_loss: bool = False  # GDN layers don't support packed sequences
     balance_data: bool = True
 
     # ── Optimizer ─────────────────────────────────────────────────────────
