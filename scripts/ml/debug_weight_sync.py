@@ -180,11 +180,17 @@ def _launch(variant: str):
     return result
 
 
+# ── Modal local entrypoints ─────────────────────────────────────────────────
+_cli_app = modal.App("weight-sync-debug-cli")
+
+
+@_cli_app.local_entrypoint()
 def train_baseline():
     """Launch baseline run (HfWeightIteratorDirect, slow path)."""
     return _launch("baseline")
 
 
+@_cli_app.local_entrypoint()
 def train_fixed():
     """Launch fixed run (HfWeightIteratorBridge, fast path)."""
     return _launch("fixed")
