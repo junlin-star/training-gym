@@ -172,7 +172,7 @@ def _train():
 
             global_batch_size=32,
             lr=1e-6,
-            max_tokens_per_gpu=8192,
+            use_dynamic_batch_size=False,
             eval_max_response_len=4096,
             n_samples_per_eval_prompt=4,
             save_interval=20,
