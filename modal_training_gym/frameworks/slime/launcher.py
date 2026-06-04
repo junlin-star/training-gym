@@ -72,12 +72,14 @@ SLIME_IMAGE = "slimerl/slime@sha256:087a57732cf4fb271729df47530b01a9530144f43392
 HARBOR_PKG_VERSION = "0.6.6"
 
 _SLIME_PATCHES = Path(__file__).parent / "modal_helpers" / "patches"
-_PATCH_VALIDATION_B64 = encode_patch("patch_validation", _SLIME_PATCHES)
-_PATCH_MEGATRON_BRIDGE_B64 = encode_patch("patch_megatron_bridge", _SLIME_PATCHES)
-_PATCH_TORCH_LOAD_B64 = encode_patch("patch_torch_load", _SLIME_PATCHES)
-_PATCH_GLOBAL_PLAN_B64 = encode_patch("patch_global_plan", _SLIME_PATCHES)
-_PATCH_CHECKPOINT_SAVE_B64 = encode_patch("patch_checkpoint_save", _SLIME_PATCHES)
-_PATCH_ADVANTAGES_B64 = encode_patch("patch_advantages", _SLIME_PATCHES)
+_PATCH_VALIDATION_B64 = encode_patch("patch_validation")
+_PATCH_MEGATRON_BRIDGE_B64 = encode_patch("patch_megatron_bridge")
+_PATCH_TORCH_LOAD_B64 = encode_patch("patch_torch_load")
+_PATCH_GLOBAL_PLAN_B64 = encode_patch("patch_global_plan")
+_PATCH_CHECKPOINT_SAVE_B64 = encode_patch("patch_checkpoint_save")
+_PATCH_ADVANTAGES_B64 = encode_patch("patch_advantages")
+_PATCH_WEIGHT_SYNC_TIMING_B64 = encode_patch("patch_weight_sync_timing")
+_PATCH_BRIDGE_NONE_TASK_B64 = encode_patch("patch_bridge_none_task")
 
 
 def _build_slime_base_image() -> "Image":
@@ -88,6 +90,8 @@ def _build_slime_base_image() -> "Image":
             "rm -rf /root/.cache/huggingface",
             f"echo {_PATCH_MEGATRON_BRIDGE_B64} | base64 -d | python3",
             f"echo {_PATCH_ADVANTAGES_B64} | base64 -d | python3",
+            f"echo {_PATCH_WEIGHT_SYNC_TIMING_B64} | base64 -d | python3",
+            f"echo {_PATCH_BRIDGE_NONE_TASK_B64} | base64 -d | python3",
         )
     )
 
@@ -140,7 +144,10 @@ def build_slime_app(
         and getattr(model.architecture, "needs_pre_conversion", False)
     ):
         slug = model.model_name.replace("/", "--")
-        object.__setattr__(slime, "megatron_to_hf_mode", "")
+        # Keep megatron_to_hf_mode (default "bridge") — the bridge path
+        # is dramatically faster for MoE models because it batches expert
+        # conversion instead of the per-parameter EP all-gather +
+        # sequential chunk pipeline in HfWeightIteratorDirect.
         if not slime.ref_load:
             object.__setattr__(slime, "ref_load", f"/checkpoints/torch_dist/{slug}-v31")
 
