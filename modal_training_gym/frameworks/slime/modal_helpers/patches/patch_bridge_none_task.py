@@ -24,37 +24,24 @@ else:
     if marker in src:
         print("model_bridge.py already patched for None task check")
     else:
-        # Find the line: if isinstance(task.param_weight, DTensor):
-        # and add a None guard before it.
-        old = "if isinstance(task.param_weight, DTensor):"
-        if old in src:
-            new = (
-                f"if task is None:  # {marker}\n"
-                "                    continue\n"
-                "                if isinstance(task.param_weight, DTensor):"
+        # Use regex to detect actual indentation of the target line.
+        m = re.search(
+            r"^( +)(if isinstance\(task\.param_weight, DTensor\):)",
+            src,
+            re.MULTILINE,
+        )
+        if m:
+            indent = m.group(1)
+            old_line = m.group(0)
+            new_line = (
+                f"{indent}if task is None:  # {marker}\n"
+                f"{indent}    continue\n"
+                f"{old_line}"
             )
-            src = src.replace(old, new, 1)
+            src = src.replace(old_line, new_line, 1)
             p.write_text(src)
             print(
                 "Patched model_bridge.py to skip None tasks in stream_weights_megatron_to_hf"
             )
         else:
-            # Try a broader regex match for indentation flexibility
-            m = re.search(
-                r"^( +)(if isinstance\(task\.param_weight, DTensor\):)",
-                src,
-                re.MULTILINE,
-            )
-            if m:
-                indent = m.group(1)
-                old_line = m.group(0)
-                new_line = (
-                    f"{indent}if task is None:  # {marker}\n"
-                    f"{indent}    continue\n"
-                    f"{old_line}"
-                )
-                src = src.replace(old_line, new_line, 1)
-                p.write_text(src)
-                print("Patched model_bridge.py to skip None tasks (regex match)")
-            else:
-                print("WARNING: Could not find target string in model_bridge.py")
+            print("WARNING: Could not find target string in model_bridge.py")
