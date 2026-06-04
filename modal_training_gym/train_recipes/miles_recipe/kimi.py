@@ -233,46 +233,13 @@ class _KimiK2Recipe(MilesConfig):
                 subprocess.run(bf16_cmd, check=True)
 
 
-class _KimiK2FullParamRecipe(_KimiK2Recipe):
-    actor_num_nodes: int = 32
-    lr: float = 1e-6
-
-    lora_rank: int | None = None
-    lora_alpha: int | None = None
-    lora_dropout: float | None = None
-    target_modules: str | None = None
-    experts_shared_outer_loras: bool = False
-    lora_base_cpu_backup: bool = False
-    no_gradient_accumulation_fusion: bool = False
-    sglang_lora_backend: str | None = None
-    sglang_lora_use_virtual_experts: bool = False
-    use_tis: bool = False
-
-    pipeline_model_parallel_size: int = 8
-    context_parallel_size: int = 4
-    expert_model_parallel_size: int = 32
-    decoder_last_pipeline_num_layers: int = 5
-
-
-class Kimi_K2_5_Recipe(_KimiK2Recipe):
+class Kimi_K2_5_LoRA_Recipe(_KimiK2Recipe):
     source_hf_checkpoint: str = "moonshotai/Kimi-K2.5"
     hf_checkpoint: str = "/checkpoints/Kimi-K2.5-int4"
     ref_load: str = "/checkpoints/Kimi-K2.5-bf16"
 
 
-class Kimi_K2_6_Recipe(_KimiK2Recipe):
-    source_hf_checkpoint: str = "moonshotai/Kimi-K2.6"
-    hf_checkpoint: str = "/checkpoints/Kimi-K2.6-int4"
-    ref_load: str = "/checkpoints/Kimi-K2.6-bf16"
-
-
-class Kimi_K2_5_FullParam_Recipe(_KimiK2FullParamRecipe):
-    source_hf_checkpoint: str = "moonshotai/Kimi-K2.5"
-    hf_checkpoint: str = "/checkpoints/Kimi-K2.5-int4"
-    ref_load: str = "/checkpoints/Kimi-K2.5-bf16"
-
-
-class Kimi_K2_6_FullParam_Recipe(_KimiK2FullParamRecipe):
+class Kimi_K2_6_LoRA_Recipe(_KimiK2Recipe):
     source_hf_checkpoint: str = "moonshotai/Kimi-K2.6"
     hf_checkpoint: str = "/checkpoints/Kimi-K2.6-int4"
     ref_load: str = "/checkpoints/Kimi-K2.6-bf16"

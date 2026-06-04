@@ -28,21 +28,13 @@ _EXPORTS = {
     "ModelDeployment": ("modal_training_gym.common.deployment", "ModelDeployment"),
     "Kimi_K2_5": ("modal_training_gym.common.models", "Kimi_K2_5"),
     "Kimi_K2_6": ("modal_training_gym.common.models", "Kimi_K2_6"),
-    "Kimi_K2_5_Recipe": (
+    "Kimi_K2_5_LoRA_Recipe": (
         "modal_training_gym.train_recipes.miles_recipe",
-        "Kimi_K2_5_Recipe",
+        "Kimi_K2_5_LoRA_Recipe",
     ),
-    "Kimi_K2_5_FullParam_Recipe": (
+    "Kimi_K2_6_LoRA_Recipe": (
         "modal_training_gym.train_recipes.miles_recipe",
-        "Kimi_K2_5_FullParam_Recipe",
-    ),
-    "Kimi_K2_6_Recipe": (
-        "modal_training_gym.train_recipes.miles_recipe",
-        "Kimi_K2_6_Recipe",
-    ),
-    "Kimi_K2_6_FullParam_Recipe": (
-        "modal_training_gym.train_recipes.miles_recipe",
-        "Kimi_K2_6_FullParam_Recipe",
+        "Kimi_K2_6_LoRA_Recipe",
     ),
     "MilesConfig": ("modal_training_gym.train_recipes.miles_recipe", "MilesConfig"),
     "MultiTurn": ("modal_training_gym.train_recipes.slime_recipe", "MultiTurn"),
@@ -73,10 +65,8 @@ _EXPORTS = {
 }
 
 __all__ = [
-    "Kimi_K2_6_FullParam_Recipe",
-    "Kimi_K2_5_FullParam_Recipe",
-    "Kimi_K2_6_Recipe",
-    "Kimi_K2_5_Recipe",
+    "Kimi_K2_6_LoRA_Recipe",
+    "Kimi_K2_5_LoRA_Recipe",
     "DatasetConfig",
     "HarborDataset",
     "DeploymentConfig",

@@ -6,7 +6,7 @@ from modal_training_gym.common.modal_urls import modal_app_dashboard_url
 from modal_training_gym import (
     HuggingFaceDataset,
     Kimi_K2_6,
-    Kimi_K2_6_Recipe,
+    Kimi_K2_6_LoRA_Recipe,
     TrainConfig,
 )
 
@@ -29,7 +29,7 @@ def build_training_config() -> TrainConfig:
     return TrainConfig(
         model=Kimi_K2_6(),
         dataset=MathDataset(n_rows=10),
-        recipe=Kimi_K2_6_Recipe(),
+        recipe=Kimi_K2_6_LoRA_Recipe(),
     )
 
 
