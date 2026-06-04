@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 from concurrent.futures import ThreadPoolExecutor
@@ -200,25 +199,13 @@ class EvalConfig:
             class_name = type(self).__name__
             dataset_name = type(self.dataset).__name__
             eval_fn_name = _callable_name(self.eval_fn or self.eval_response_fn)
-            fingerprint = hashlib.sha256(
-                "\x1f".join(
-                    ("eval-config", class_name, dataset_name, eval_fn_name)
-                ).encode()
-            ).hexdigest()
-            raw_slug = (
-                re.sub(
-                    r"-{2,}",
-                    "-",
-                    re.sub(
-                        r"[^a-z0-9]+",
-                        "-",
-                        f"{class_name}-{dataset_name}-{eval_fn_name}".lower(),
-                    ).strip("-"),
-                )
-                or "eval-config"
+            self.eval_config_id = create_hash(
+                "eval-config",
+                class_name,
+                dataset_name,
+                eval_fn_name,
+                "",
             )
-            slug = raw_slug
-            self.eval_config_id = f"{slug}-{fingerprint[:6]}"
         if self.eval_fn is None:
             assert self.eval_response_fn is not None, (
                 "eval_fn or eval_response_fn must be set"
