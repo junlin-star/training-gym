@@ -136,7 +136,7 @@ def _build_config(*, variant: str) -> TrainConfig:
     # 3 rollouts → 3 weight syncs → enough samples to compare.
     recipe.num_rollout = 3
     recipe.save_interval = 999
-    recipe.global_batch_size = 2
+    recipe.global_batch_size = 4
     recipe.n_samples_per_prompt = 2
 
     if variant == "baseline":
