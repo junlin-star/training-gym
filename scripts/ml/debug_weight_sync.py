@@ -46,7 +46,6 @@ import modal
 from modal_training_gym import (
     SlimeRecipe,
     TrainConfig,
-    WandbConfig,
 )
 from modal_training_gym.common.dataset import DatasetConfig
 from modal_training_gym.common.modal_urls import modal_app_dashboard_url
@@ -122,10 +121,7 @@ def _build_config(*, variant: str) -> TrainConfig:
         raise ValueError(f"No base slime recipe for {model.model_name}")
 
     recipe.custom_rm_function = rfm_reward
-    recipe.wandb = WandbConfig(
-        project="weight-sync-debug",
-        group=variant,
-    )
+    recipe.wandb = None  # timing comes from stdout [weight_sync] logs
     recipe.image_overlay = lambda img: img.pip_install("typing-extensions>=4.13.0")
 
     # Terse rollout — only a digit, not a thinking trace.
