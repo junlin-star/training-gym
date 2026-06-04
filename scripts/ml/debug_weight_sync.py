@@ -125,7 +125,6 @@ def _build_config(*, variant: str) -> TrainConfig:
     recipe.wandb = WandbConfig(
         project="weight-sync-debug",
         group=variant,
-        modal_wandb_secret_name="train-secrets",
     )
     recipe.image_overlay = lambda img: img.pip_install("typing-extensions>=4.13.0")
 
