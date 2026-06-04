@@ -78,7 +78,6 @@ _PATCH_TORCH_LOAD_B64 = encode_patch("patch_torch_load")
 _PATCH_GLOBAL_PLAN_B64 = encode_patch("patch_global_plan")
 _PATCH_CHECKPOINT_SAVE_B64 = encode_patch("patch_checkpoint_save")
 _PATCH_ADVANTAGES_B64 = encode_patch("patch_advantages")
-_PATCH_WEIGHT_SYNC_TIMING_B64 = encode_patch("patch_weight_sync_timing")
 _PATCH_BRIDGE_NONE_TASK_B64 = encode_patch("patch_bridge_none_task")
 
 
@@ -90,7 +89,6 @@ def _build_slime_base_image() -> "Image":
             "rm -rf /root/.cache/huggingface",
             f"echo {_PATCH_MEGATRON_BRIDGE_B64} | base64 -d | python3",
             f"echo {_PATCH_ADVANTAGES_B64} | base64 -d | python3",
-            f"echo {_PATCH_WEIGHT_SYNC_TIMING_B64} | base64 -d | python3",
             f"echo {_PATCH_BRIDGE_NONE_TASK_B64} | base64 -d | python3",
         )
     )
