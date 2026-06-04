@@ -121,8 +121,6 @@ def _has_torch_dist_checkpoint(save_path: str) -> bool:
 def build_slime_app(
     *,
     training_run_id: str,
-    config_fingerprint: str = "",
-    id_created_at: int = 0,
     slime: SlimeRecipe,
     model: ModelConfig,
     dataset: DatasetConfig,
@@ -679,8 +677,6 @@ def build_slime_app(
             modal_app_url=modal_app_url or modal_app_dashboard_url(modal_app_id),
             framework=Framework.SLIME,
             config=config_summary,
-            config_fingerprint=config_fingerprint,
-            id_created_at=id_created_at,
             created_at=created_at,
             started_at=created_at,
         )
@@ -858,8 +854,6 @@ def build_slime_app(
                 "model_config": model,
                 "checkpoints_volume_name": checkpoints_volume_name,
                 "checkpoints_mount_path": checkpoints_mount_path,
-                "config_fingerprint": config_fingerprint,
-                "id_created_at": id_created_at,
             }
             accepted_fields = set(inspect.signature(TrainResult).parameters)
             result = TrainResult(

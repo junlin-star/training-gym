@@ -2,15 +2,10 @@ import dataclasses as _dc
 from typing import cast
 
 from modal_training_gym.common.dataset import DatasetConfig
-from modal_training_gym.common.ids import (
-    GymObjectId,
-    config_fingerprint,
-    stable_readable_id,
-)
+from modal_training_gym.common.ids import create_hash
 from modal_training_gym.common.models import ModelConfig
 from modal_training_gym.common.checkpoint import Checkpoint
 from modal_training_gym.common.train_result import TrainResult
-from modal_training_gym.utils.metadata import MetadataStore
 from modal_training_gym.common.modal_urls import modal_app_dashboard_url
 from modal_training_gym.frameworks.miles import build_miles_app
 from modal_training_gym.frameworks.slime import build_slime_app
@@ -42,7 +37,7 @@ class TrainConfig:
     model: ModelConfig
     recipe: BaseTrainRecipe
     checkpoint: Checkpoint | None = None
-    _stable_id: GymObjectId | None = _dc.field(default=None, init=False, repr=False)
+    _stable_id: str | None = _dc.field(default=None, init=False, repr=False)
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -50,19 +45,14 @@ class TrainConfig:
     def training_run_id(self) -> str:
         # Maintain same stable id, cannot change across calls on one TrainConfig.
         if self._stable_id is None:
-            fingerprint = config_fingerprint(
-                "training",
-                self.model,
-                self.dataset,
-                self.recipe,
-                self.checkpoint,
+            self._stable_id = create_hash(
+                self.model.model_name,
+                self.checkpoint.path if self.checkpoint is not None else "",
+                f"{type(self.recipe).__name__}:{self.recipe.recipe_type.value}",
+                self.dataset.dataset_id,
+                self.model.model_path or "",
             )
-            self._stable_id = stable_readable_id(
-                MetadataStore.TRAINING_RUNS,
-                fingerprint,
-                id_key="training_run_id",
-            )
-        return self._stable_id.value
+        return self._stable_id
 
     def _build_app(self):
         recipe_type = self.recipe.recipe_type
@@ -88,11 +78,8 @@ class TrainConfig:
                 combined = _merge_recipe(base_recipe, cast(SlimeRecipe, self.recipe))
             else:
                 combined = cast(SlimeRecipe, self.recipe)
-            assert self._stable_id is not None
             return build_slime_app(
                 training_run_id=self.training_run_id,
-                config_fingerprint=self._stable_id.config_fingerprint,
-                id_created_at=self._stable_id.id_created_at,
                 slime=combined,
                 model=self.model,
                 dataset=self.dataset,

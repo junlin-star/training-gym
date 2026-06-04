@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from concurrent.futures import ThreadPoolExecutor
@@ -10,7 +11,7 @@ from typing import TYPE_CHECKING, Any, Callable
 from pydantic import BaseModel, Field
 
 from modal_training_gym.common.dataset import DatasetRow
-from modal_training_gym.common.ids import config_fingerprint, stable_readable_id
+from modal_training_gym.common.ids import create_hash
 from modal_training_gym.utils.metadata import MetadataStore, vol_get, vol_list, vol_put
 
 from modal_training_gym.common.models.base import ParsedResponse
@@ -110,8 +111,6 @@ class EvalResult(BaseModel):
     eval_id: str
     eval_config_id: str
     deployment_id: str
-    config_fingerprint: str = ""
-    id_created_at: int = 0
     created_at: datetime.datetime = Field(
         default_factory=lambda: datetime.datetime.now(datetime.UTC)
     )
@@ -201,12 +200,11 @@ class EvalConfig:
             class_name = type(self).__name__
             dataset_name = type(self.dataset).__name__
             eval_fn_name = _callable_name(self.eval_fn or self.eval_response_fn)
-            fingerprint = config_fingerprint(
-                "eval-config",
-                class_name,
-                self.dataset,
-                eval_fn_name,
-            )
+            fingerprint = hashlib.sha256(
+                "\x1f".join(
+                    ("eval-config", class_name, dataset_name, eval_fn_name)
+                ).encode()
+            ).hexdigest()
             raw_slug = (
                 re.sub(
                     r"-{2,}",
@@ -317,24 +315,17 @@ class EvalConfig:
                 results.append(result)
 
         created_at = datetime.datetime.now(datetime.UTC)
-        id_created_at = int(created_at.timestamp())
-        fingerprint = config_fingerprint(
+        eval_id = create_hash(
             "eval",
             self.eval_config_id,
             deployment.deployment_id,
-        )
-        eval_stable_id = stable_readable_id(
-            MetadataStore.EVAL_RESULTS,
-            fingerprint,
-            id_key="eval_id",
-            id_created_at=id_created_at,
+            "",
+            "",
         )
         result = EvalResult(
-            eval_id=eval_stable_id.value,
+            eval_id=eval_id,
             deployment_id=deployment.deployment_id,
             eval_config_id=self.eval_config_id,
-            config_fingerprint=eval_stable_id.config_fingerprint,
-            id_created_at=eval_stable_id.id_created_at,
             created_at=created_at,
             rows=results,
         )

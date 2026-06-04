@@ -23,11 +23,7 @@ from modal_training_gym.common.checkpoint import (
     CheckpointType,
     convert_checkpoint_to_hf,
 )
-from modal_training_gym.common.ids import (
-    GymObjectId,
-    config_fingerprint,
-    stable_readable_id,
-)
+from modal_training_gym.common.ids import create_hash
 from modal_training_gym.common.models import ModelConfig
 from modal_training_gym.common.modal_urls import modal_app_dashboard_url
 from modal_training_gym.deploy_recipes.sglang_recipe import SglangRecipe
@@ -88,20 +84,13 @@ class DeploymentConfig:
         *,
         recipe: VllmRecipe | SglangRecipe,
         model_path: str,
-    ) -> GymObjectId:
-        fingerprint = config_fingerprint(
-            "deployment",
-            self.model,
-            self.checkpoint,
-            recipe,
-            self.app_name,
-            self.served_model_name,
+    ) -> str:
+        return create_hash(
+            self.model.model_name,
+            self.checkpoint.path if self.checkpoint is not None else "",
+            f"{type(recipe).__name__}:{recipe.recipe_type.value}",
+            self.app_name or "",
             model_path,
-        )
-        return stable_readable_id(
-            MetadataStore.DEPLOYMENTS,
-            fingerprint,
-            id_key="deployment_id",
         )
 
     # TODO: add _merge_recipe for deployment configs
@@ -132,10 +121,7 @@ class DeploymentConfig:
         if not self.served_model_name:
             self.served_model_name = default_slug
 
-        deployment_stable_id = self._new_deployment_id(
-            recipe=recipe, model_path=model_path
-        )
-        deployment_id = deployment_stable_id.value
+        deployment_id = self._new_deployment_id(recipe=recipe, model_path=model_path)
         checkpoints_volume = self._checkpoints_volume_name()
         checkpoints_mount_path = self._checkpoints_mount_path()
 
@@ -206,8 +192,6 @@ class DeploymentConfig:
             modal_app_url=modal_app_url or modal_app_dashboard_url(modal_app_id),
             url=url,
             status=DeploymentStatus.RUNNING.value,
-            config_fingerprint=deployment_stable_id.config_fingerprint,
-            id_created_at=deployment_stable_id.id_created_at,
         )
         deployment.save()
         return deployment
@@ -257,8 +241,6 @@ class ModelDeployment(BaseModel):
     modal_app_url: str = ""
     url: str
     status: str = DeploymentStatus.RUNNING.value
-    config_fingerprint: str = ""
-    id_created_at: int = 0
 
     @field_validator("deployment_config", mode="before")
     @classmethod

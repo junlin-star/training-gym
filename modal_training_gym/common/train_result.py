@@ -112,8 +112,6 @@ class TrainResult:
     checkpoints_volume_name: str = ""
     checkpoints_mount_path: str = ""
     model_config: "ModelConfig | None" = None
-    config_fingerprint: str = ""
-    id_created_at: int = 0
     extra: dict[str, Any] = field(default_factory=dict)
 
     # ── Persistence ────────────────────────────────────────────────────────

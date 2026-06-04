@@ -39,8 +39,6 @@ class TrainingRun(BaseModel):
     config: Any
     dataset_id: str = ""
     deployment_id: str = ""
-    config_fingerprint: str = ""
-    id_created_at: int = 0
     status: TrainingRunStatus = TrainingRunStatus.RUNNING
     created_at: int = 0
     started_at: int = 0
