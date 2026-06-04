@@ -71,6 +71,13 @@ class SyntheticRFMDataset(DatasetConfig):
 
     def prepare(self, path: str, eval_paths: dict[str, str] | None = None) -> None:
         os.makedirs(os.path.dirname(path), exist_ok=True)
+        self._write_stub(path)
+        if eval_paths:
+            for eval_path in eval_paths.values():
+                os.makedirs(os.path.dirname(eval_path), exist_ok=True)
+                self._write_stub(eval_path)
+
+    def _write_stub(self, path: str) -> None:
         with open(path, "w") as f:
             for i in range(10):
                 user_content = (
