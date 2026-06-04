@@ -4,7 +4,7 @@ import os
 from collections.abc import Callable
 from dataclasses import field
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 from modal_training_gym.train_recipes.base import BaseTrainRecipe, RecipeType
 from pydantic import ConfigDict, model_validator
@@ -399,6 +399,16 @@ class SlimeRecipe(BaseTrainRecipe):
 
     # ── Public API ────────────────────────────────────────────────────────────
 
+    # Boolean fields where ``False`` should emit ``--no-{flag}`` to explicitly
+    # override the slime default.  Most booleans default to False in the gym
+    # and slime alike, so omitting the flag is fine.  These fields are special
+    # because slime defaults them to True internally and the gym needs to be
+    # able to turn them off (e.g. GDN models can't use per-token loss).
+    _NEGATABLE_BOOLS: ClassVar[set[str]] = {
+        "calculate_per_token_loss",
+        "use_dynamic_batch_size",
+    }
+
     def cli_args(
         self,
         dataset: "DatasetConfig | None" = None,
@@ -406,11 +416,14 @@ class SlimeRecipe(BaseTrainRecipe):
     ) -> list[str]:
         out: list[str] = []
         for key, val in self._fields(dataset=dataset, model=model).items():
-            if val is None or val is False or val == "":
+            if val is None or val == "":
                 continue
             flag = f"--{key.replace('_', '-')}"
             if val is True:
                 out.append(flag)
+            elif val is False:
+                if key in self._NEGATABLE_BOOLS:
+                    out.append(f"--no-{key.replace('_', '-')}")
             elif isinstance(val, dict) and key in JSON_CONFIG_FIELDS:
                 out += [flag, json.dumps(val)]
             elif isinstance(val, list):
