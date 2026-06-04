@@ -29,8 +29,23 @@ import argparse
 import json
 import os
 import shutil
+import tempfile
 from collections import defaultdict
 from typing import Any
+
+
+def _get_config_value(cfg: dict[str, Any], *keys: str) -> Any:
+    """Return a config value from top-level config or nested text_config."""
+    for key in keys:
+        value = cfg.get(key)
+        if value is not None:
+            return value
+    text_cfg = cfg.get("text_config") or {}
+    for key in keys:
+        value = text_cfg.get(key)
+        if value is not None:
+            return value
+    return None
 
 
 def _load_config(model_dir: str, config_path: str | None) -> tuple[int, int, int]:
@@ -38,11 +53,14 @@ def _load_config(model_dir: str, config_path: str | None) -> tuple[int, int, int
     cfg_path = config_path or os.path.join(model_dir, "config.json")
     with open(cfg_path) as f:
         cfg = json.load(f)
-    hidden_size = int(cfg.get("hidden_size"))
-    inter_size = int(cfg.get("moe_intermediate_size"))
+
+    hidden_size = int(_get_config_value(cfg, "hidden_size") or 0)
+    inter_size = int(
+        _get_config_value(cfg, "moe_intermediate_size", "intermediate_size") or 0
+    )
+    quant_cfg = _get_config_value(cfg, "quantization_config") or {}
     group_size = int(
-        cfg.get("quantization_config", {})
-        .get("config_groups", {})
+        quant_cfg.get("config_groups", {})
         .get("group_0", {})
         .get("weights", {})
         .get("group_size", 128)
@@ -102,6 +120,20 @@ def _is_quantized_weight_key(key: str) -> bool:
     return False
 
 
+def _is_valid_safetensors(path: str) -> bool:
+    if not os.path.isfile(path):
+        return False
+    try:
+        from safetensors.torch import safe_open  # pyright: ignore[reportMissingImports]
+
+        with safe_open(path, framework="pt") as reader:
+            list(reader.keys())
+    except Exception as exc:
+        print(f"Existing output {path} is invalid; rewriting ({exc})")
+        return False
+    return True
+
+
 def convert_file(
     input_path: str,
     output_path: str,
@@ -113,7 +145,7 @@ def convert_file(
 
     from safetensors.torch import safe_open, save_file  # pyright: ignore[reportMissingImports]
 
-    if skip_existing and os.path.exists(output_path):
+    if skip_existing and _is_valid_safetensors(output_path):
         return
 
     tensors = {}
@@ -159,10 +191,21 @@ def convert_file(
             )
             tensors[f"{prefix}.{proj_name}.weight"] = bf16_weight.to(torch.bfloat16)
 
-    # Save converted file (moved to CPU for compatibility)
+    # Save converted file atomically so failed conversions cannot poison retries.
     cpu_tensors = {k: v.cpu() for k, v in tensors.items()}
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    save_file(cpu_tensors, output_path)
+    fd, tmp_path = tempfile.mkstemp(
+        prefix=f".{os.path.basename(output_path)}.",
+        suffix=".tmp",
+        dir=os.path.dirname(output_path),
+    )
+    os.close(fd)
+    try:
+        save_file(cpu_tensors, tmp_path)
+        os.replace(tmp_path, output_path)
+    finally:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
 
 
 def parse_args() -> argparse.Namespace:
@@ -253,6 +296,8 @@ def main():
         if not fname.endswith(".safetensors"):
             continue
         safetensor_path = os.path.join(output_dir, fname)
+        if not _is_valid_safetensors(safetensor_path):
+            raise RuntimeError(f"Invalid converted safetensors file: {safetensor_path}")
         with safe_open(safetensor_path, framework="pt") as reader:
             for key in reader.keys():
                 weight_map[key] = fname

@@ -113,6 +113,17 @@ class MilesConfig(BaseTrainRecipe):
     adam_beta2: float = 0.98
     optimizer: str = "adam"
 
+    lora_rank: int | None = None
+    lora_alpha: int | None = None
+    lora_dropout: float | None = None
+    target_modules: str | None = None
+    experts_shared_outer_loras: bool = False
+    lora_base_cpu_backup: bool = False
+    no_gradient_accumulation_fusion: bool = False
+    sglang_lora_backend: str | None = None
+    sglang_lora_use_virtual_experts: bool = False
+    use_tis: bool = False
+
     advantage_estimator: str = "grpo"
     eps_clip: float = 0.2
     eps_clip_high: float = 0.28
