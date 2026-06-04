@@ -52,6 +52,7 @@ _SLIME_SKIP = {
     "image_run_commands",
     "image_env",
     "train_function_kwargs",
+    "disable_clustered",
 }
 
 YAML_CONFIG_FIELDS = ("eval_config", "extra_config", "sglang_config")
@@ -98,6 +99,7 @@ class SlimeRecipe(BaseTrainRecipe):
     memory: int | tuple[int, int] | None = None
     cloud: str | None = None
     region: str | None = None
+    disable_clustered: bool = False
     slime_model_script: str = ""
     source_hf_checkpoint: str | None = None
     megatron_conversion_hf_checkpoint: str | None = None

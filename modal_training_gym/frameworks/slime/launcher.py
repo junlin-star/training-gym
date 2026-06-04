@@ -79,6 +79,28 @@ _PATCH_CHECKPOINT_SAVE_B64 = encode_patch("patch_checkpoint_save")
 _PATCH_ADVANTAGES_B64 = encode_patch("patch_advantages")
 
 
+def _maybe_clustered(use_clustered: bool, size: int, *, rdma: bool):
+    """Return a decorator: ``clustered(size, rdma=rdma)`` when ``use_clustered``,
+    else an identity decorator that registers the function as a plain
+    ``@app.function``.
+
+    For a single-node run (``size == 1``) Modal's clustered scheduler is pure
+    overhead: ``ModalRayCluster.discover_cluster(1)`` already short-circuits to
+    ``127.0.0.1``/head/rank-0 and never calls ``modal.experimental.get_cluster_info``,
+    RDMA/EFA are already off, and the body runs identically. Skipping ``@clustered``
+    only changes how the single container is *scheduled* — it dodges the multi-
+    container reservation wait (which can hang for >1h under capacity pressure) and
+    the sub-8-GPU clustered-function deprecation. The function body is unchanged.
+    """
+    if use_clustered:
+        return clustered(size, rdma=rdma)  # pyright: ignore[reportCallIssue, reportOptionalCall]
+
+    def _identity(fn):
+        return fn
+
+    return _identity
+
+
 def _build_slime_base_image() -> "Image":
     return (
         Image.from_registry(SLIME_IMAGE)
@@ -420,7 +442,7 @@ def build_slime_app(
         serialized=True,
         name="convert_checkpoint",
     )
-    @clustered(convert_nnodes, rdma=convert_multi_node)  # pyright: ignore[reportCallIssue, reportOptionalCall]
+    @_maybe_clustered(convert_multi_node, convert_nnodes, rdma=convert_multi_node)
     def convert_checkpoint():
         from huggingface_hub import snapshot_download
 
@@ -589,6 +611,10 @@ def build_slime_app(
         print(f"Saved HF checkpoint to {output_dir}")
 
     _multi_node = slime.total_nodes > 1
+    # Single-node clustered scheduling is pure reservation overhead (see
+    # _maybe_clustered). Auto-skip it for 1 node; `disable_clustered` is an
+    # escape hatch (ignored for multi-node, which always needs the cluster).
+    _use_clustered = _multi_node and not slime.disable_clustered
 
     train_secrets: list[Secret] = []
     if slime.wandb is not None:
@@ -623,7 +649,7 @@ def build_slime_app(
         serialized=True,
         name="train",
     )
-    @clustered(slime.total_nodes, rdma=_multi_node)  # pyright: ignore[reportCallIssue, reportOptionalCall]
+    @_maybe_clustered(_use_clustered, slime.total_nodes, rdma=_multi_node)
     async def train(
         modal_app_id: str = "",
         modal_app_url: str = "",
