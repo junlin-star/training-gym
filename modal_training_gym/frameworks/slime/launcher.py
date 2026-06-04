@@ -24,7 +24,7 @@ import subprocess
 import tempfile
 import textwrap
 import time
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import Any
 from collections.abc import Callable
 from modal import App, Image, Secret, Volume
@@ -59,7 +59,7 @@ from .modal_helpers.utils import (
     prepare_slime_config,
     resolve_checkpoint_ref,
 )
-from .modal_helpers.patches import encode_patch
+from modal_training_gym.common.patches import encode_patch
 from modal_training_gym.common.checkpoint import (
     Checkpoint,
     _get_slime_checkpoint_prefix,
@@ -71,12 +71,13 @@ SLIME_ROOT = "/root/slime"
 SLIME_IMAGE = "slimerl/slime@sha256:087a57732cf4fb271729df47530b01a9530144f4339247efc422f03e2b6988e1"
 HARBOR_PKG_VERSION = "0.6.6"
 
-_PATCH_VALIDATION_B64 = encode_patch("patch_validation")
-_PATCH_MEGATRON_BRIDGE_B64 = encode_patch("patch_megatron_bridge")
-_PATCH_TORCH_LOAD_B64 = encode_patch("patch_torch_load")
-_PATCH_GLOBAL_PLAN_B64 = encode_patch("patch_global_plan")
-_PATCH_CHECKPOINT_SAVE_B64 = encode_patch("patch_checkpoint_save")
-_PATCH_ADVANTAGES_B64 = encode_patch("patch_advantages")
+_SLIME_PATCHES = Path(__file__).parent / "modal_helpers" / "patches"
+_PATCH_VALIDATION_B64 = encode_patch("patch_validation", _SLIME_PATCHES)
+_PATCH_MEGATRON_BRIDGE_B64 = encode_patch("patch_megatron_bridge", _SLIME_PATCHES)
+_PATCH_TORCH_LOAD_B64 = encode_patch("patch_torch_load", _SLIME_PATCHES)
+_PATCH_GLOBAL_PLAN_B64 = encode_patch("patch_global_plan", _SLIME_PATCHES)
+_PATCH_CHECKPOINT_SAVE_B64 = encode_patch("patch_checkpoint_save", _SLIME_PATCHES)
+_PATCH_ADVANTAGES_B64 = encode_patch("patch_advantages", _SLIME_PATCHES)
 
 
 def _build_slime_base_image() -> "Image":

@@ -73,6 +73,10 @@ _EXPORTS = {
 }
 
 __all__ = [
+    "Kimi_K2_6_FullParam_Recipe",
+    "Kimi_K2_5_FullParam_Recipe",
+    "Kimi_K2_6_Recipe",
+    "Kimi_K2_5_Recipe",
     "DatasetConfig",
     "HarborDataset",
     "DeploymentConfig",

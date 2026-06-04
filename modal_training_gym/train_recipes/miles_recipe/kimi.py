@@ -1,6 +1,50 @@
 from __future__ import annotations
 
+import fcntl
+import shlex
+import shutil
+import subprocess
+from pathlib import Path
+
+from modal_training_gym.frameworks.miles.modal_helpers.utils import (
+    resolve_checkpoint_ref,
+)
 from modal_training_gym.train_recipes.miles_recipe.recipe import MilesConfig
+
+
+def _valid_safetensors(path: Path) -> bool:
+    if not path.is_file():
+        return False
+    try:
+        from safetensors.torch import safe_open  # pyright: ignore[reportMissingImports]
+
+        with safe_open(str(path), framework="pt") as reader:
+            list(reader.keys())
+    except Exception as exc:
+        print(f"Invalid safetensors file {path}: {exc}")
+        return False
+    return True
+
+
+def _valid_hf_checkpoint(path: str | Path) -> bool:
+    root = Path(path)
+    if not root.is_dir() or not (root / "config.json").is_file():
+        return False
+    safetensors = sorted(root.glob("*.safetensors"))
+    if not safetensors:
+        return False
+    return all(_valid_safetensors(p) for p in safetensors)
+
+
+def _remove_if_invalid(path: str | Path) -> bool:
+    root = Path(path)
+    if not root.exists():
+        return False
+    if _valid_hf_checkpoint(root):
+        return True
+    print(f"Removing incomplete or invalid checkpoint directory: {root}")
+    shutil.rmtree(root, ignore_errors=True)
+    return False
 
 
 class _KimiK2Recipe(MilesConfig):
@@ -63,16 +107,16 @@ class _KimiK2Recipe(MilesConfig):
     use_precision_aware_optimizer: bool = True
     use_distributed_optimizer: bool = True
 
-    lora_rank: int = 32
-    lora_alpha: int = 32
-    lora_dropout: float = 0.0
-    target_modules: str = (
+    lora_rank: int | None = 32
+    lora_alpha: int | None = 32
+    lora_dropout: float | None = 0.0
+    target_modules: str | None = (
         "q_a_proj,kv_a_proj_with_mqa,o_proj,gate_proj,up_proj,down_proj"
     )
     experts_shared_outer_loras: bool = True
     lora_base_cpu_backup: bool = True
     no_gradient_accumulation_fusion: bool = True
-    sglang_lora_backend: str = "triton"
+    sglang_lora_backend: str | None = "triton"
     sglang_lora_use_virtual_experts: bool = True
     use_tis: bool = True
 
@@ -103,6 +147,91 @@ class _KimiK2Recipe(MilesConfig):
     sglang_server_concurrency: int = 1024
     use_rollout_routing_replay: bool = True
 
+    def download_model(self) -> None:
+        if self.source_hf_checkpoint:
+            resolve_checkpoint_ref(self.source_hf_checkpoint, local_files_only=False)
+
+    def _patch_kimi_source(self, model_dir: Path) -> None:
+        model_file = model_dir / "modeling_kimi_k25.py"
+        if not model_file.is_file():
+            return
+        src = model_file.read_text()
+        if "use_deterministic_attn: bool = False" in src:
+            return
+        ctor_old = """    def __init__(
+        hidden_dim: int,
+        num_layers: int,
+        block_cfg: dict,
+        video_attn_type: str = 'spatial_temporal') -> None:
+"""
+        ctor_new = """    def __init__(
+        hidden_dim: int,
+        num_layers: int,
+        block_cfg: dict,
+        video_attn_type: str = 'spatial_temporal',
+        use_deterministic_attn: bool = False,
+) -> None:
+"""
+        layer_old = """            MoonViTEncoderLayer(
+                **block_cfg,
+                use_deterministic_attn=self.use_deterministic_attn)
+"""
+        layer_new = """            MoonViTEncoderLayer(
+                **block_cfg,
+                use_deterministic_attn=use_deterministic_attn)
+"""
+        if ctor_old in src and layer_old in src:
+            src = src.replace(ctor_old, ctor_new, 1)
+            src = src.replace(layer_old, layer_new, 1)
+            model_file.write_text(src)
+
+    def post_process_model(self) -> None:
+        if not self.source_hf_checkpoint:
+            raise ValueError("Kimi recipes require source_hf_checkpoint")
+
+        source_hf_path = Path(
+            resolve_checkpoint_ref(self.source_hf_checkpoint, local_files_only=False)
+        )
+        self._patch_kimi_source(source_hf_path)
+        int4_path = Path(str(self.hf_checkpoint))
+        bf16_path = Path(str(self.ref_load))
+        lock_path = int4_path.parent / f".{int4_path.name}.postprocess.lock"
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+
+        with open(lock_path, "w") as lock_file:
+            fcntl.flock(lock_file, fcntl.LOCK_EX)
+            if not _remove_if_invalid(int4_path):
+                int4_cmd = [
+                    "python",
+                    "/root/miles/tools/convert_hf_to_int4_direct.py",
+                    "--model-dir",
+                    str(source_hf_path),
+                    "--save-dir",
+                    str(int4_path),
+                    "--group-size",
+                    self.environment["OPEN_TRAINING_INT4_GROUP_SIZE"],
+                ]
+                print(
+                    "\n=== Converting Kimi HF checkpoint to INT4: "
+                    f"{' '.join(shlex.quote(arg) for arg in int4_cmd)} ==="
+                )
+                subprocess.run(int4_cmd, check=True)
+
+            if not _remove_if_invalid(bf16_path):
+                bf16_cmd = [
+                    "python",
+                    "/opt/training-gym/tools/convert_kimi_int4_to_bf16.py",
+                    "--model-dir",
+                    str(source_hf_path),
+                    "--output-dir",
+                    str(bf16_path),
+                ]
+                print(
+                    "\n=== Converting Kimi native INT4 checkpoint to BF16: "
+                    f"{' '.join(shlex.quote(arg) for arg in bf16_cmd)} ==="
+                )
+                subprocess.run(bf16_cmd, check=True)
+
 
 class _KimiK2FullParamRecipe(_KimiK2Recipe):
     actor_num_nodes: int = 32
@@ -126,32 +255,24 @@ class _KimiK2FullParamRecipe(_KimiK2Recipe):
 
 
 class Kimi_K2_5_Recipe(_KimiK2Recipe):
-    """Kimi-K2.5 LoRA on 16x8xH200 with Miles INT4 rollout and BF16 reference load."""
-
     source_hf_checkpoint: str = "moonshotai/Kimi-K2.5"
     hf_checkpoint: str = "/checkpoints/Kimi-K2.5-int4"
     ref_load: str = "/checkpoints/Kimi-K2.5-bf16"
 
 
 class Kimi_K2_6_Recipe(_KimiK2Recipe):
-    """Kimi-K2.6 LoRA on 16x8xH200 with Miles INT4 rollout and BF16 reference load."""
-
     source_hf_checkpoint: str = "moonshotai/Kimi-K2.6"
     hf_checkpoint: str = "/checkpoints/Kimi-K2.6-int4"
     ref_load: str = "/checkpoints/Kimi-K2.6-bf16"
 
 
 class Kimi_K2_5_FullParam_Recipe(_KimiK2FullParamRecipe):
-    """Kimi-K2.5 full-param on 32x8xH200 with Miles INT4 rollout and BF16 reference load."""
-
     source_hf_checkpoint: str = "moonshotai/Kimi-K2.5"
     hf_checkpoint: str = "/checkpoints/Kimi-K2.5-int4"
     ref_load: str = "/checkpoints/Kimi-K2.5-bf16"
 
 
 class Kimi_K2_6_FullParam_Recipe(_KimiK2FullParamRecipe):
-    """Kimi-K2.6 full-param on 32x8xH200 with Miles INT4 rollout and BF16 reference load."""
-
     source_hf_checkpoint: str = "moonshotai/Kimi-K2.6"
     hf_checkpoint: str = "/checkpoints/Kimi-K2.6-int4"
     ref_load: str = "/checkpoints/Kimi-K2.6-bf16"

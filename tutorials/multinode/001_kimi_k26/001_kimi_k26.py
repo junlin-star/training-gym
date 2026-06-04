@@ -1,4 +1,4 @@
-# Kimi K2.6 multinode smoke example for Training Gym.
+# Kimi multinode smoke example for Training Gym.
 
 import modal
 
