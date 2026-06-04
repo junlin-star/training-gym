@@ -58,5 +58,5 @@ class Qwen3_6_35b_Recipe(SlimeRecipe):
 
     # ── Container resources ──────────────────────────────────────────────
     ephemeral_disk: int | None = (
-        1024 * 1024
-    )  # 1 TiB — 35B MoE checkpoint + optimizer state + Ray logs
+        4096 * 1024
+    )  # 4 TiB — volume overlay for 35B checkpoint (model+optimizer ~350 GB) + image/cache/logs
