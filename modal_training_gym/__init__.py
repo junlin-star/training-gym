@@ -17,6 +17,7 @@ _EXPORTS = {
         "HFModelConfiguration",
     ),
     "HuggingFaceDataset": ("modal_training_gym.common.dataset", "HuggingFaceDataset"),
+    "MultimodalDataset": ("modal_training_gym.common.dataset", "MultimodalDataset"),
     "list_checkpoints": ("modal_training_gym.common.checkpoint", "list_checkpoints"),
     "METADATA_VOLUME_NAME": (
         "modal_training_gym.utils.metadata",
@@ -67,6 +68,7 @@ __all__ = [
     "HarborEval",
     "HFModelConfiguration",
     "HuggingFaceDataset",
+    "MultimodalDataset",
     "list_checkpoints",
     "METADATA_VOLUME_NAME",
     "MetadataStore",

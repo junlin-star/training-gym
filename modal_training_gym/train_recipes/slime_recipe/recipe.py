@@ -245,13 +245,16 @@ class SlimeRecipe(BaseTrainRecipe):
             eval_prompt_data = [
                 v for name, path in eval_paths.items() for v in (name, path)
             ]
-        return {
+        fields: dict[str, Any] = {
             "prompt_data": prompt_data,
             "eval_prompt_data": eval_prompt_data,
             "input_key": ds.input_key,
             "label_key": ds.label_key,
             "apply_chat_template": ds.apply_chat_template,
         }
+        if getattr(ds, "multimodal_keys", None):
+            fields["multimodal_keys"] = ds.multimodal_keys
+        return fields
 
     @staticmethod
     def _validate_custom_model_architecture(
