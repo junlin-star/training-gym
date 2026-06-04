@@ -5,7 +5,8 @@ the Qwen35VLMoEBridge generates conversion tasks for vision-model parameters
 that don't exist in the text-only variant.  These tasks are None, which
 crashes at ``task.param_weight`` with an ``AttributeError``.
 
-This patch adds a None check to skip such tasks gracefully.
+This patch adds a None check to skip such tasks gracefully, handling ALL
+occurrences in the file via re.sub.
 
 Executed at image-build time via ``python3 <this file>``.
 """
@@ -24,24 +25,26 @@ else:
     if marker in src:
         print("model_bridge.py already patched for None task check")
     else:
-        # Use regex to detect actual indentation of the target line.
-        m = re.search(
-            r"^( +)(if isinstance\(task\.param_weight, DTensor\):)",
-            src,
-            re.MULTILINE,
-        )
-        if m:
+
+        def _add_none_guard(m: re.Match) -> str:
             indent = m.group(1)
-            old_line = m.group(0)
-            new_line = (
+            original = m.group(0)
+            return (
                 f"{indent}if task is None:  # {marker}\n"
                 f"{indent}    continue\n"
-                f"{old_line}"
+                f"{original}"
             )
-            src = src.replace(old_line, new_line, 1)
-            p.write_text(src)
+
+        new_src, count = re.subn(
+            r"^( +)(if isinstance\(task\.param_weight, DTensor\):)",
+            _add_none_guard,
+            src,
+            flags=re.MULTILINE,
+        )
+        if count > 0:
+            p.write_text(new_src)
             print(
-                "Patched model_bridge.py to skip None tasks in stream_weights_megatron_to_hf"
+                f"Patched model_bridge.py: added None task guard at {count} location(s)"
             )
         else:
             print("WARNING: Could not find target string in model_bridge.py")
