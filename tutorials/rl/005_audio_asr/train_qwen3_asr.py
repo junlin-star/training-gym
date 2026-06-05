@@ -93,17 +93,13 @@ def build_train_config(
             use_dynamic_batch_size=False,
             extra_config={"qkv_format": "bshd", "micro_batch_size": micro_batch_size},
             save_interval=1000,
-            # "bridge" loads the HF checkpoint into Megatron at startup (required —
-            # without it slime asserts args.load is None). It also drives the gym's
-            # post-training megatron→HF export, which FAILS for Qwen3-ASR because the
-            # bridge's MB→HF export doesn't map the audio tower ("Unknown parameter
-            # name: ...thinker.audio_model...k_proj.weight"). Megatron requires
-            # save_interval (can't disable the save), so skip just the export via the
-            # gym flag below. The example's deliverable is the GRPO loop + W&B reward
-            # curve, not an HF checkpoint. (Upstream export-side gap; re-enable once
-            # the bridge maps thinker.audio_model.* on export.)
+            # "bridge" loads the HF checkpoint into Megatron at startup AND drives the
+            # gym's post-training megatron→HF export. slime's hand-written converter
+            # has no qwen3_asr entry (it falls to the qwen2 path and can't map the
+            # audio tower), so the compat shim routes the export through the native
+            # megatron-bridge's AutoBridge — which maps the full model incl. the audio
+            # tower — so the trained model lands as a standard HF checkpoint.
             megatron_to_hf_mode="bridge",
-            disable_hf_conversion=True,
             # The native stack (sglang 0.5.12 + megatron-bridge 0.5.0) supports
             # Qwen3-ASR, so no source overlays / custom bridge / processor shim are
             # needed — just the reward/audio deps + our example modules. Three small
@@ -132,21 +128,25 @@ if __name__ == "__main__":
         description="Audio GRPO on Qwen3-ASR-1.7B (native training-gym stack)."
     )
     parser.add_argument(
-        "--scale",
+        "--minimal",
         action="store_true",
-        help="Run the full 8xH100 single-node variant instead of the 2-GPU demo "
-        "(same proven data slice, just more GPUs + a longer run).",
+        help="Quick 2xH100 demo instead of the default full 8xH100 node "
+        "(fewer GPUs + a shorter run; same example).",
     )
     args = parser.parse_args()
 
     config = (
         build_train_config(
+            actor_num_gpus_per_node=2,
+            num_rollout=8,
+            exp_name="qwen3-asr-grpo-audio-demo",
+        )
+        if args.minimal
+        else build_train_config(
             actor_num_gpus_per_node=8,
             num_rollout=50,
-            exp_name="qwen3-asr-grpo-scale-8gpu",
+            exp_name="qwen3-asr-grpo-8gpu",
         )
-        if args.scale
-        else build_train_config()
     )
     result = config.train()
     print("training_run_id:", result.training_run_id)

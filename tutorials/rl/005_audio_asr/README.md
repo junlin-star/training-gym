@@ -29,36 +29,38 @@ Multinode coming soon!
 
 | File | Role |
 |------|------|
-| `train_qwen3_asr.py` | the `TrainConfig`; `build_train_config(...)` is parametrized (GPU count, batch, clips). Defaults to the 2-GPU demo; `--scale` selects the 8×H100 variant |
+| `train_qwen3_asr.py` | the `TrainConfig`; `build_train_config(...)` Defaults to minimal `H100:2` demo; `--scale` uses `H100:8` |
 | `qwen3_asr_model.py` | `Qwen3ASR` gym `ModelConfig` (Qwen3 dense backbone arch) |
 | `audio_data.py` | `LibriSpeechASRDataset(MultimodalDataset)` |
-| `asr_rollout.py` | `transcription_rollout` — drives the audio-transcription endpoint |
-| `reward.py` | `wer_reward` (−WER) — lives in its own module so it imports cleanly in the training container |
+| `asr_rollout.py` | `transcription_rollout` |
+| `reward.py` | `wer_reward` (−WER) |
 | `_native_qwen3asr_compat.py` | idempotent image-build workarounds for upstream gaps (below) |
 
-## Native-stack notes (upstream gaps worked around)
+## Upstream Workarounds
 
 The native stack (sglang 0.5.12 + megatron-bridge 0.5.0 + transformers 5.6) supports
-Qwen3-ASR, but three small upstream gaps are patched at image build by
-`_native_qwen3asr_compat.py` (each should be reported upstream, then the file can go):
+Qwen3-ASR, but four small upstream gaps are patched at image build by
+`_native_qwen3asr_compat.py`:
 
 1. **bridge config validate-order** — `hf_qwen3_asr` reads `self.thinker_config` in
    `get_text_config()`, which transformers 5.6 calls during `super().__init__()` before
-   it's set. Guarded.
-2. **slime processor loading** — `qwen3_asr` falls to the GLM-4V processor and crashes;
-   use sglang's `Qwen3ASRProcessor`.
+   it's set.
+2. **slime processor loading** — `qwen3_asr` falls to the GLM-4V processor and crashes; instead
+   uses SGLang's `Qwen3ASRProcessor`.
 3. **bridge `pg_collection`** — `Qwen3ASRThinkerModel` hard-raises on a `None`
    `pg_collection`; default to `use_mpu_process_groups()`.
+4. **HF export** — slime's per-param converter has no `qwen3_asr` entry (it falls to
+   the qwen2 path and can't map the audio tower), so route the MB→HF export through
+   the native bridge's `AutoBridge.export_ckpt`, which maps the full model (incl. the
+   `thinker.audio_model.** → thinker.audio_tower.**` audio tower). The trained model
+   is exported as a standard HF checkpoint.
 
-Plus two config choices in `train_qwen3_asr.py`:
+Plus one config choice in `train_qwen3_asr.py`:
 
 - **`qkv_format="bshd"`** (+ `use_dynamic_batch_size=False`, an explicit
   `micro_batch_size`): the native bridge's forward doesn't implement THD/packed
-  sequences, so we use padded batches. (Packed batching is a capability the bridge
-  hasn't wired through yet — worth restoring upstream.)
-- **`disable_hf_conversion=True`**: the bridge's MB→HF export doesn't map the audio
-  tower, so we skip the post-training HF export (the example's deliverable is the
-  training loop + reward curve, not a checkpoint).
+  sequences, so we use padded batches (packed batching is a capability the bridge
+  hasn't wired through yet).
 
 ## Known caveat — GRPO stability at scale
 
