@@ -16,22 +16,19 @@ class Qwen3_6_35B_A3B_Recipe(MilesConfig):
     no_gradient_accumulation_fusion: bool = True
     use_tis: bool = True
 
-    # Pre-convert HF checkpoint to torch_dist format. The Megatron Bridge
-    # crashes with 'NoneType' has no attribute 'megatron_module' when
-    # loading HF weights with expert parallelism.
-    megatron_to_hf_mode: str = ""
-    ref_load: str = "/checkpoints/Qwen3.6-35B-A3B-torch-dist"
+    # Disable MTP — bridge can't map MTP weights. Override the model
+    # script's --mtp-num-layers 1 via CLI args (last value wins).
     mtp_num_layers: int = 0
 
-    # Cluster topology — mirrors the Slime recipe (1 node, TP=2, EP=8)
-    # with CPU optimizer offload for memory.
+    # Cluster topology — 1 node × 8 H100 GPUs
     actor_num_nodes: int = 1
     actor_num_gpus_per_node: int = 8
     colocate: bool = True
 
-    # Training parallelism (Megatron)
+    # Training parallelism — TP=2 without EP to avoid bridge crash.
+    # Experts are replicated on all ranks (EP=1 default). CPU optimizer
+    # offload keeps optimizer states off GPU so 35B MoE fits in 80GB.
     train_backend: str = "megatron"
-    expert_model_parallel_size: int = 8
     tensor_model_parallel_size: int = 2
     sequence_parallel: bool = True
     use_distributed_optimizer: bool = True
@@ -48,7 +45,7 @@ class Qwen3_6_35B_A3B_Recipe(MilesConfig):
     attention_dropout: float = 0.0
     hidden_dropout: float = 0.0
 
-    # Rollout (SGLang)
+    # Rollout (SGLang) — single engine using all 8 GPUs with EP=8
     rollout_num_gpus_per_engine: int = 8
     sglang_ep_size: int = 8
     sglang_mem_fraction_static: float = 0.7
