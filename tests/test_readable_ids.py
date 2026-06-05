@@ -16,7 +16,9 @@ def test_create_hash_has_word_word_hash_shape() -> None:
 
 
 def test_create_hash_suffix_is_stable_for_same_parts(monkeypatch) -> None:
-    monkeypatch.setattr(ids.randomname, "get_name", lambda *, sep: "brisk-river")
+    import randomname
+
+    monkeypatch.setattr(randomname, "get_name", lambda *, sep: "brisk-river")
     first = ids.create_hash("model", "ckpt", "recipe", "app", "path")
     second = ids.create_hash("model", "ckpt", "recipe", "app", "path")
 
@@ -24,7 +26,9 @@ def test_create_hash_suffix_is_stable_for_same_parts(monkeypatch) -> None:
 
 
 def test_create_hash_suffix_differs_for_different_parts(monkeypatch) -> None:
-    monkeypatch.setattr(ids.randomname, "get_name", lambda *, sep: "brisk-river")
+    import randomname
+
+    monkeypatch.setattr(randomname, "get_name", lambda *, sep: "brisk-river")
     first = ids.create_hash("model-a", "ckpt", "recipe", "app", "path")
     second = ids.create_hash("model-b", "ckpt", "recipe", "app", "path")
 
