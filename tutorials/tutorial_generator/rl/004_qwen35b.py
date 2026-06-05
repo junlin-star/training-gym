@@ -152,8 +152,11 @@ def _train():
             n_samples_per_prompt=4,
             sglang_mem_fraction_static=0.75,
             sglang_max_running_requests=512,
-            eval_max_response_len=4096,
+            rollout_max_response_len=1024,
+            eval_max_response_len=1024,
+            eval_interval=None,
             n_samples_per_eval_prompt=4,
+            no_save_optim=True,
         ),
     )
     print("Starting training...")

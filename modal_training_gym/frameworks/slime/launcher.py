@@ -84,6 +84,12 @@ _PATCH_BRIDGE_PER_TOKEN_LOSS_B64 = encode_patch(
     "patch_bridge_provider_per_token_loss", _SLIME_PATCHES
 )
 _PATCH_STOP_TOKEN_DIAG_B64 = encode_patch("patch_stop_token_diagnostic", _SLIME_PATCHES)
+_PATCH_QWEN35_CONVERSION_NAMES_B64 = encode_patch(
+    "patch_qwen35_conversion_names", _SLIME_PATCHES
+)
+_PATCH_SKIP_FINAL_WEIGHT_UPDATE_B64 = encode_patch(
+    "patch_skip_final_weight_update", _SLIME_PATCHES
+)
 
 
 def _build_slime_base_image() -> "Image":
@@ -95,6 +101,8 @@ def _build_slime_base_image() -> "Image":
             f"echo {_PATCH_MEGATRON_BRIDGE_B64} | base64 -d | python3",
             f"echo {_PATCH_ADVANTAGES_B64} | base64 -d | python3",
             f"echo {_PATCH_BRIDGE_NONE_TASK_B64} | base64 -d | python3",
+            f"echo {_PATCH_QWEN35_CONVERSION_NAMES_B64} | base64 -d | python3",
+            f"echo {_PATCH_SKIP_FINAL_WEIGHT_UPDATE_B64} | base64 -d | python3",
             f"echo {_PATCH_STOP_TOKEN_DIAG_B64} | base64 -d | python3",
         )
     )
@@ -146,12 +154,9 @@ def build_slime_app(
         model
         and getattr(model, "architecture", None)
         and getattr(model.architecture, "needs_pre_conversion", False)
+        and slime.megatron_to_hf_mode != "bridge"
     ):
         slug = model.model_name.replace("/", "--")
-        # Keep megatron_to_hf_mode (default "bridge") — the bridge path
-        # is dramatically faster for MoE models because it batches expert
-        # conversion instead of the per-parameter EP all-gather +
-        # sequential chunk pipeline in HfWeightIteratorDirect.
         if not slime.ref_load:
             object.__setattr__(slime, "ref_load", f"/checkpoints/torch_dist/{slug}-v31")
 
@@ -801,8 +806,9 @@ def build_slime_app(
             )
             print(f"Command: {cmd}, runtime_env: {runtime_env}")
 
-            _convert_procs: list[tuple[str, subprocess.Popen]] = []
+            _convert_procs: list[tuple[str, str, subprocess.Popen]] = []
             _converted: set[str] = set()
+            _checkpoint_stats: dict[str, tuple[int, int, float, float]] = {}
             _hf_path: str | None = None
 
             if model and (slime.megatron_to_hf_mode == "bridge" or slime.ref_load):
@@ -814,21 +820,60 @@ def build_slime_app(
                     else _snap(model.model_name, local_files_only=True)
                 )
 
-            def _start_conversions() -> None:
+            def _checkpoint_ready(path: str, *, require_stable: bool) -> bool:
+                expected_ranks = slime.actor_num_nodes * slime.actor_num_gpus_per_node
+                try:
+                    names = os.listdir(path)
+                except FileNotFoundError:
+                    return False
+                for rank in range(expected_ranks):
+                    if not any(
+                        name.startswith(f"__{rank}_") and name.endswith(".distcp")
+                        for name in names
+                    ):
+                        return False
+                if "common.pt" not in names:
+                    return False
+                if not require_stable:
+                    return True
+
+                count = 0
+                size = 0
+                latest_mtime = 0.0
+                for root, _, files in os.walk(path):
+                    for name in files:
+                        try:
+                            st = os.stat(os.path.join(root, name))
+                        except FileNotFoundError:
+                            return False
+                        count += 1
+                        size += st.st_size
+                        latest_mtime = max(latest_mtime, st.st_mtime)
+
+                now = time.monotonic()
+                current = (count, size, latest_mtime)
+                previous = _checkpoint_stats.get(path)
+                if previous is None or previous[:3] != current:
+                    _checkpoint_stats[path] = (*current, now)
+                    return False
+                return now - previous[3] >= 30
+
+            def _start_conversions(*, require_stable: bool = True) -> int:
                 """Scan for new complete checkpoints and start converting them."""
                 if not (
                     model and (slime.megatron_to_hf_mode == "bridge" or slime.ref_load)
                 ):
-                    return
+                    return 0
                 prefix = _get_slime_checkpoint_prefix()
                 if not prefix:
-                    return
+                    return 0
                 tracker = os.path.join(save_root, "latest_checkpointed_iteration.txt")
                 try:
                     with open(tracker) as f:
                         latest = int(f.read().strip())
                 except (OSError, ValueError):
-                    return
+                    return 0
+                started = 0
                 for entry in os.scandir(save_root):
                     if (
                         entry.is_dir()
@@ -843,6 +888,10 @@ def build_slime_app(
                         if os.path.exists(hf_dir):
                             _converted.add(entry.name)
                             continue
+                        if not _checkpoint_ready(
+                            entry.path, require_stable=require_stable
+                        ):
+                            continue
                         hf_path = _hf_path
                         convert_cmd = (
                             f"python {SLIME_ROOT}/tools/convert_torch_dist_to_hf.py "
@@ -853,8 +902,10 @@ def build_slime_app(
                         )
                         print(f"[bg-convert] Starting: {entry.name} → HF")
                         proc = subprocess.Popen(["bash", "-c", convert_cmd])
-                        _convert_procs.append((entry.name, proc))
+                        _convert_procs.append((entry.name, convert_cmd, proc))
                         _converted.add(entry.name)
+                        started += 1
+                return started
 
             async def _background_converter():
                 while not _stop_converter.is_set():
@@ -870,10 +921,25 @@ def build_slime_app(
 
             _stop_converter.set()
             await converter_task
-            _start_conversions()
+            await checkpoints_volume.commit.aio()
+            await checkpoints_volume.reload.aio()
+            if model and (slime.megatron_to_hf_mode == "bridge" or slime.ref_load):
+                for _ in range(5):
+                    if _start_conversions(require_stable=True):
+                        break
+                    await asyncio.sleep(15)
 
-            for name, proc in _convert_procs:
+            for name, convert_cmd, proc in _convert_procs:
                 proc.wait()
+                if proc.returncode != 0:
+                    print(
+                        f"[bg-convert] Conversion failed for {name} "
+                        f"(exit {proc.returncode}); retrying after volume reload."
+                    )
+                    await asyncio.sleep(30)
+                    await checkpoints_volume.reload.aio()
+                    proc = subprocess.Popen(["bash", "-c", convert_cmd])
+                    proc.wait()
                 if proc.returncode != 0:
                     raise RuntimeError(
                         f"Checkpoint conversion failed for {name} (exit {proc.returncode})"
