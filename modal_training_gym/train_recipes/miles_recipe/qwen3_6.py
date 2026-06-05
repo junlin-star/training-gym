@@ -16,24 +16,28 @@ class Qwen3_6_35B_A3B_Recipe(MilesConfig):
     no_gradient_accumulation_fusion: bool = True
     use_tis: bool = True
 
-    # Disable MTP for now — the Megatron Bridge can't map MTP layer
-    # weights from the HF checkpoint, causing AttributeError during
-    # load_weights_hf_to_megatron. The model script sets --mtp-num-layers 1
-    # but CLI args (appended after MODEL_ARGS) override it.
+    # Pre-convert HF checkpoint to torch_dist format. The Megatron Bridge
+    # crashes with 'NoneType' has no attribute 'megatron_module' when
+    # loading HF weights with expert parallelism.
+    megatron_to_hf_mode: str = ""
+    ref_load: str = "/checkpoints/Qwen3.6-35B-A3B-torch-dist"
     mtp_num_layers: int = 0
 
-    # Cluster topology — 2 nodes gives DP=2 with EP=8, so distributed
-    # optimizer can shard states across data-parallel ranks.
-    actor_num_nodes: int = 2
+    # Cluster topology — mirrors the Slime recipe (1 node, TP=2, EP=8)
+    # with CPU optimizer offload for memory.
+    actor_num_nodes: int = 1
     actor_num_gpus_per_node: int = 8
     colocate: bool = True
 
     # Training parallelism (Megatron)
     train_backend: str = "megatron"
     expert_model_parallel_size: int = 8
-    tensor_model_parallel_size: int = 1
-    sequence_parallel: bool = False
+    tensor_model_parallel_size: int = 2
+    sequence_parallel: bool = True
     use_distributed_optimizer: bool = True
+    optimizer_cpu_offload: bool = True
+    overlap_cpu_optimizer_d2h_h2d: bool = True
+    use_precision_aware_optimizer: bool = True
     recompute_granularity: str = "full"
     recompute_method: str = "uniform"
     recompute_num_layers: int = 1
