@@ -42,6 +42,9 @@ def main() -> None:
     with modal.enable_output():
         with training_app.run():
             modal_app_id = training_app.app_id or ""
+            # Pre-convert HF checkpoint to torch_dist (non-bridge mode)
+            training_app.download.remote()
+            training_app.convert_checkpoint.remote()
             result = training_app.train.remote(
                 modal_app_id=modal_app_id,
                 modal_app_url=modal_app_dashboard_url(modal_app_id),

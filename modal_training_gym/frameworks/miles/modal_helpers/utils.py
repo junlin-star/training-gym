@@ -58,7 +58,8 @@ def get_checkpoint_conversion_policy(
                 f"--pipeline-model-parallel-size {pp}",
             ]
         for attr, flag in _CONVERSION_EXTRA_ARGS:
-            if x := getattr(miles_cfg, attr, None):
+            x = getattr(miles_cfg, attr, None)
+            if x is not None:
                 extra_args.append(f"--{flag} {x}")
 
         if model and getattr(model, "architecture", None):
