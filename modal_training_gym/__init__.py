@@ -37,9 +37,9 @@ _EXPORTS = {
         "Kimi_K2_6_LoRA_Recipe",
     ),
     "MilesConfig": ("modal_training_gym.train_recipes.miles_recipe", "MilesConfig"),
-    "Qwen3_6_35B_A3B_LoRA_Recipe": (
+    "Qwen3_6_35B_A3B_Recipe": (
         "modal_training_gym.train_recipes.miles_recipe",
-        "Qwen3_6_35B_A3B_LoRA_Recipe",
+        "Qwen3_6_35B_A3B_Recipe",
     ),
     "MultiTurn": ("modal_training_gym.train_recipes.slime_recipe", "MultiTurn"),
     "parse_qwen3_response": (
@@ -91,7 +91,7 @@ __all__ = [
     "ModelConfig",
     "ModelDeployment",
     "MilesConfig",
-    "Qwen3_6_35B_A3B_LoRA_Recipe",
+    "Qwen3_6_35B_A3B_Recipe",
     "MultiTurn",
     "parse_qwen3_response",
     "ParsedResponse",
