@@ -56,12 +56,12 @@ training_run = TrainConfig(
         # Stop at Qwen3 EOS tokens so responses terminate cleanly
         # <|im_end|>=151645, <|endoftext|>=151643
         rollout_stop_token_ids=[151645, 151643],
-        # Reduce memory fragmentation
         environment={
             "PYTHONPATH": "/root/Megatron-LM/",
             "CUDA_DEVICE_MAX_CONNECTIONS": "1",
             "NCCL_NVLS_ENABLE": "1",
-            "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
+            # Note: do NOT set PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+            # — SGLang's TorchMemorySaver doesn't support it and will crash.
         },
     ),
 )
