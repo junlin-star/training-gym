@@ -54,4 +54,4 @@ class Qwen3_6_35B_A3B_Recipe(MilesConfig):
     # Rollout (SGLang)
     rollout_num_gpus_per_engine: int = 8
     sglang_ep_size: int = 8
-    sglang_mem_fraction_static: float = 0.7
+    sglang_mem_fraction_static: float = 0.5
