@@ -146,12 +146,9 @@ def build_slime_app(
         model
         and getattr(model, "architecture", None)
         and getattr(model.architecture, "needs_pre_conversion", False)
+        and slime.megatron_to_hf_mode != "bridge"
     ):
         slug = model.model_name.replace("/", "--")
-        # Keep megatron_to_hf_mode (default "bridge") — the bridge path
-        # is dramatically faster for MoE models because it batches expert
-        # conversion instead of the per-parameter EP all-gather +
-        # sequential chunk pipeline in HfWeightIteratorDirect.
         if not slime.ref_load:
             object.__setattr__(slime, "ref_load", f"/checkpoints/torch_dist/{slug}-v31")
 
