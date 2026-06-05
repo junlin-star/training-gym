@@ -98,8 +98,8 @@ def _build_slime_base_image() -> "Image":
             f"echo {_PATCH_ADVANTAGES_B64} | base64 -d | python3",
             f"echo {_PATCH_BRIDGE_NONE_TASK_B64} | base64 -d | python3",
             f"echo {_PATCH_BRIDGE_GATE_UP_TRANSPOSE_B64} | base64 -d | python3",
-            # cache-bust: verify patch applied
-            "grep -c 'transpose_on_export' /usr/local/lib/python3.12/dist-packages/megatron/bridge/models/qwen_vl/qwen35_vl_bridge.py 2>/dev/null || echo 'FILE_NOT_FOUND: listing qwen_vl dir' && find /usr/local/lib/python3.12/dist-packages/megatron/bridge/models/ -name '*bridge*' 2>/dev/null | head -20",
+            # cache-bust v2: force rebuild and verify patch applied
+            "echo 'CACHE_BUST_V2: verifying gate_up_proj transpose patch' && grep -n 'transpose_on_export' /usr/local/lib/python3.12/dist-packages/megatron/bridge/models/qwen_vl/qwen35_vl_bridge.py 2>/dev/null || (echo 'FILE_NOT_FOUND at expected path, searching...' && find /usr/local/lib/python3.12/dist-packages/ -path '*/qwen*bridge*' -type f 2>/dev/null | head -20 && find /usr/local/lib/python3.12/dist-packages/ -name '*vl_bridge*' -type f 2>/dev/null | head -20)",
         )
     )
 
