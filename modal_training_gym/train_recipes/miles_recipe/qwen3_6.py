@@ -16,6 +16,12 @@ class Qwen3_6_35B_A3B_Recipe(MilesConfig):
     no_gradient_accumulation_fusion: bool = True
     use_tis: bool = True
 
+    # Disable MTP for now — the Megatron Bridge can't map MTP layer
+    # weights from the HF checkpoint, causing AttributeError during
+    # load_weights_hf_to_megatron. The model script sets --mtp-num-layers 1
+    # but CLI args (appended after MODEL_ARGS) override it.
+    mtp_num_layers: int = 0
+
     # Cluster topology
     actor_num_nodes: int = 1
     actor_num_gpus_per_node: int = 8
