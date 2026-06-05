@@ -22,10 +22,11 @@ class Qwen3_6_35B_A3B_Recipe(MilesConfig):
     ref_load: str = "/checkpoints/Qwen3.6-35B-A3B-torch-dist-ep8"
     mtp_num_layers: int = 0
 
-    # Cluster topology — 2 nodes × 8 H100 GPUs (DP=2)
-    actor_num_nodes: int = 2
+    # Cluster topology — disaggregated: 1 train node + 1 rollout node
+    actor_num_nodes: int = 1
     actor_num_gpus_per_node: int = 8
-    colocate: bool = True
+    colocate: bool = False
+    rollout_num_gpus: int = 8
 
     # Training parallelism — EP=8 on 8 GPUs (TP*EP must <= world_size)
     train_backend: str = "megatron"
@@ -46,7 +47,7 @@ class Qwen3_6_35B_A3B_Recipe(MilesConfig):
     no_check_for_nan_in_loss_and_grad: bool = True
     attention_dropout: float = 0.0
     hidden_dropout: float = 0.0
-    max_tokens_per_gpu: int = 2048
+    max_tokens_per_gpu: int = 4096
 
     # Reward model — rule-based math verifier
     rm_type: str = "deepscaler"
@@ -54,4 +55,4 @@ class Qwen3_6_35B_A3B_Recipe(MilesConfig):
     # Rollout (SGLang)
     rollout_num_gpus_per_engine: int = 8
     sglang_ep_size: int = 8
-    sglang_mem_fraction_static: float = 0.5
+    sglang_mem_fraction_static: float = 0.7
