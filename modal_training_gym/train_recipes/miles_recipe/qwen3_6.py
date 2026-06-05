@@ -46,7 +46,7 @@ class Qwen3_6_35B_A3B_Recipe(MilesConfig):
     no_check_for_nan_in_loss_and_grad: bool = True
     attention_dropout: float = 0.0
     hidden_dropout: float = 0.0
-    max_tokens_per_gpu: int = 4096
+    max_tokens_per_gpu: int = 2048
 
     # Reward model — rule-based math verifier
     rm_type: str = "deepscaler"
