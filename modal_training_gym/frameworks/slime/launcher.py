@@ -806,7 +806,7 @@ def build_slime_app(
             )
             print(f"Command: {cmd}, runtime_env: {runtime_env}")
 
-            _convert_procs: list[tuple[str, subprocess.Popen]] = []
+            _convert_procs: list[tuple[str, str, subprocess.Popen]] = []
             _converted: set[str] = set()
             _checkpoint_stats: dict[str, tuple[int, int, float, float]] = {}
             _hf_path: str | None = None
@@ -858,21 +858,22 @@ def build_slime_app(
                     return False
                 return now - previous[3] >= 30
 
-            def _start_conversions(*, require_stable: bool = True) -> None:
+            def _start_conversions(*, require_stable: bool = True) -> int:
                 """Scan for new complete checkpoints and start converting them."""
                 if not (
                     model and (slime.megatron_to_hf_mode == "bridge" or slime.ref_load)
                 ):
-                    return
+                    return 0
                 prefix = _get_slime_checkpoint_prefix()
                 if not prefix:
-                    return
+                    return 0
                 tracker = os.path.join(save_root, "latest_checkpointed_iteration.txt")
                 try:
                     with open(tracker) as f:
                         latest = int(f.read().strip())
                 except (OSError, ValueError):
-                    return
+                    return 0
+                started = 0
                 for entry in os.scandir(save_root):
                     if (
                         entry.is_dir()
@@ -901,8 +902,10 @@ def build_slime_app(
                         )
                         print(f"[bg-convert] Starting: {entry.name} → HF")
                         proc = subprocess.Popen(["bash", "-c", convert_cmd])
-                        _convert_procs.append((entry.name, proc))
+                        _convert_procs.append((entry.name, convert_cmd, proc))
                         _converted.add(entry.name)
+                        started += 1
+                return started
 
             async def _background_converter():
                 while not _stop_converter.is_set():
@@ -918,11 +921,25 @@ def build_slime_app(
 
             _stop_converter.set()
             await converter_task
+            await checkpoints_volume.commit.aio()
             await checkpoints_volume.reload.aio()
-            _start_conversions(require_stable=False)
+            if model and (slime.megatron_to_hf_mode == "bridge" or slime.ref_load):
+                for _ in range(5):
+                    if _start_conversions(require_stable=True):
+                        break
+                    await asyncio.sleep(15)
 
-            for name, proc in _convert_procs:
+            for name, convert_cmd, proc in _convert_procs:
                 proc.wait()
+                if proc.returncode != 0:
+                    print(
+                        f"[bg-convert] Conversion failed for {name} "
+                        f"(exit {proc.returncode}); retrying after volume reload."
+                    )
+                    await asyncio.sleep(30)
+                    await checkpoints_volume.reload.aio()
+                    proc = subprocess.Popen(["bash", "-c", convert_cmd])
+                    proc.wait()
                 if proc.returncode != 0:
                     raise RuntimeError(
                         f"Checkpoint conversion failed for {name} (exit {proc.returncode})"
