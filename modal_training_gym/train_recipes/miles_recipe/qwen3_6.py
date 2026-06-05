@@ -47,6 +47,9 @@ class Qwen3_6_35B_A3B_Recipe(MilesConfig):
     attention_dropout: float = 0.0
     hidden_dropout: float = 0.0
 
+    # Reward model — rule-based math verifier
+    rm_type: str = "deepscaler"
+
     # Rollout (SGLang)
     rollout_num_gpus_per_engine: int = 8
     sglang_ep_size: int = 8
