@@ -23,7 +23,7 @@ class Qwen3_6_35b_Recipe(SlimeRecipe):
     expert_tensor_parallel_size: int = 1
 
     # ── Rollout ───────────────────────────────────────────────────────────
-    rollout_num_gpus_per_engine: int = 4
+    rollout_num_gpus_per_engine: int = 8
     num_rollout: int = 1
     rollout_batch_size: int = 8
     rollout_max_response_len: int = 4096
@@ -32,8 +32,8 @@ class Qwen3_6_35b_Recipe(SlimeRecipe):
     rollout_stop_token_ids: list[int] | None = None  # set in validation script
     sglang_mem_fraction_static: float = 0.75
     sglang_enable_dp_attention: bool = True
-    sglang_dp_size: int | None = 4
-    sglang_ep_size: int | None = 4
+    sglang_dp_size: int | None = 2
+    sglang_ep_size: int | None = 8
     sglang_enable_dp_lm_head: bool = True
     sglang_cuda_graph_bs: list[int] | None = None
     sglang_max_running_requests: int | None = 512
