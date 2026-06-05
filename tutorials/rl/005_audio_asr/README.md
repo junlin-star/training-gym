@@ -1,36 +1,35 @@
 # 005 — Audio GRPO on Qwen3-ASR-1.7B
 
-Reinforcement learning (GRPO) on an **audio** model end-to-end through the gym, on the
-native training-gym `main` stack. The loop:
+Reinforcement learning (GRPO) on an **audio** model end-to-end through the gym in training-gym. The loop:
 
-1. Load LibriSpeech audio clips via `LibriSpeechASRDataset` (a `MultimodalDataset` with
-   `modality="audio"` — the gym's multimodal passthrough wires `--multimodal-keys`).
+1. Load LibriSpeech audio clips via `LibriSpeechASRDataset` 
+  - a `MultimodalDataset` with `modality="audio"` 
 2. slime serves Qwen3-ASR on SGLang's `/v1/audio/transcriptions` endpoint; our custom
    `transcription_rollout` posts each clip's audio and collects the transcript.
 3. `wer_reward` scores the transcript as **−WER** against the reference.
 4. That reward drives a GRPO update through slime/Megatron.
 
-This is the first **audio** RL example in the gym and exercises the multimodal path
-distinct from text/vision.
 
 ## Run it
 
+This model is small enough that you don't need a whole node of GPUs. To run the minimal version, try:
 ```bash
-# 2×H100 single node — the canonical demo (quick, bounded reward curve)
+# 2×H100 single node — quickest test
 uv run python tutorials/rl/005_audio_asr/train_qwen3_asr.py
-
-# 8×H100 single node — same example scaled out
-uv run python tutorials/rl/005_audio_asr/train_qwen3_asr_scale.py
+```
+For a whole-node version, add `--scale` (8×H100, same example, longer run):
+```bash
+# 8×H100 single node
+uv run python tutorials/rl/005_audio_asr/train_qwen3_asr.py --scale
 ```
 
-Both stream reward (−WER) + `pg_loss`/`grad_norm` to W&B (project `qwen3-asr-rl`).
+Multinode coming soon!
 
 ## Files
 
 | File | Role |
 |------|------|
-| `train_qwen3_asr.py` | the `TrainConfig`; `build_train_config(...)` is parametrized (GPU count, batch, clips) so the scale variant reuses it |
-| `train_qwen3_asr_scale.py` | thin 8×H100 wrapper over `build_train_config` |
+| `train_qwen3_asr.py` | the `TrainConfig`; `build_train_config(...)` is parametrized (GPU count, batch, clips). Defaults to the 2-GPU demo; `--scale` selects the 8×H100 variant |
 | `qwen3_asr_model.py` | `Qwen3ASR` gym `ModelConfig` (Qwen3 dense backbone arch) |
 | `audio_data.py` | `LibriSpeechASRDataset(MultimodalDataset)` |
 | `asr_rollout.py` | `transcription_rollout` — drives the audio-transcription endpoint |

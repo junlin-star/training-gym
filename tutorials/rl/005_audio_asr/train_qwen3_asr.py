@@ -126,5 +126,27 @@ def build_train_config(
 
 
 if __name__ == "__main__":
-    result = build_train_config().train()
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Audio GRPO on Qwen3-ASR-1.7B (native training-gym stack)."
+    )
+    parser.add_argument(
+        "--scale",
+        action="store_true",
+        help="Run the full 8xH100 single-node variant instead of the 2-GPU demo "
+        "(same proven data slice, just more GPUs + a longer run).",
+    )
+    args = parser.parse_args()
+
+    config = (
+        build_train_config(
+            actor_num_gpus_per_node=8,
+            num_rollout=50,
+            exp_name="qwen3-asr-grpo-scale-8gpu",
+        )
+        if args.scale
+        else build_train_config()
+    )
+    result = config.train()
     print("training_run_id:", result.training_run_id)
