@@ -450,6 +450,9 @@ class SlimeRecipe(BaseTrainRecipe):
 
     @classmethod
     def get_base_recipe(cls, model_config: ModelConfig) -> "SlimeRecipe | None":
+        from modal_training_gym.train_recipes.slime_recipe.glm_4_7 import (
+            GLM_4_7_Recipe,
+        )
         from modal_training_gym.train_recipes.slime_recipe.qwen3_1_7b import (
             Qwen3_1_7b_Recipe,
         )
@@ -469,6 +472,8 @@ class SlimeRecipe(BaseTrainRecipe):
             Qwen3_6_35b_Recipe,
         )
 
+        if model_config.model_name == "zai-org/GLM-4.7":
+            return GLM_4_7_Recipe()
         if model_config.model_name == "Qwen/Qwen3-1.7B":
             return Qwen3_1_7b_Recipe()
         if model_config.model_name == "Qwen/Qwen3-4B":
