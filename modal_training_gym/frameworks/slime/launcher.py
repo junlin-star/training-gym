@@ -72,13 +72,17 @@ SLIME_IMAGE = "slimerl/slime@sha256:087a57732cf4fb271729df47530b01a9530144f43392
 HARBOR_PKG_VERSION = "0.6.6"
 
 _SLIME_PATCHES = Path(__file__).parent / "modal_helpers" / "patches"
-_PATCH_VALIDATION_B64 = encode_patch("patch_validation")
-_PATCH_MEGATRON_BRIDGE_B64 = encode_patch("patch_megatron_bridge")
-_PATCH_TORCH_LOAD_B64 = encode_patch("patch_torch_load")
-_PATCH_GLOBAL_PLAN_B64 = encode_patch("patch_global_plan")
-_PATCH_CHECKPOINT_SAVE_B64 = encode_patch("patch_checkpoint_save")
-_PATCH_ADVANTAGES_B64 = encode_patch("patch_advantages")
-_PATCH_BRIDGE_NONE_TASK_B64 = encode_patch("patch_bridge_none_task")
+_PATCH_VALIDATION_B64 = encode_patch("patch_validation", _SLIME_PATCHES)
+_PATCH_MEGATRON_BRIDGE_B64 = encode_patch("patch_megatron_bridge", _SLIME_PATCHES)
+_PATCH_TORCH_LOAD_B64 = encode_patch("patch_torch_load", _SLIME_PATCHES)
+_PATCH_GLOBAL_PLAN_B64 = encode_patch("patch_global_plan", _SLIME_PATCHES)
+_PATCH_CHECKPOINT_SAVE_B64 = encode_patch("patch_checkpoint_save", _SLIME_PATCHES)
+_PATCH_ADVANTAGES_B64 = encode_patch("patch_advantages", _SLIME_PATCHES)
+_PATCH_BRIDGE_NONE_TASK_B64 = encode_patch("patch_bridge_none_task", _SLIME_PATCHES)
+_PATCH_GDN_PACKED_SEQ_B64 = encode_patch("patch_gdn_packed_seq", _SLIME_PATCHES)
+_PATCH_BRIDGE_PER_TOKEN_LOSS_B64 = encode_patch(
+    "patch_bridge_provider_per_token_loss", _SLIME_PATCHES
+)
 
 
 def _build_slime_base_image() -> "Image":
@@ -149,6 +153,19 @@ def build_slime_app(
         if not slime.ref_load:
             object.__setattr__(slime, "ref_load", f"/checkpoints/torch_dist/{slug}-v31")
 
+    # ── GDN compatibility ─────────────────────────────────────────────────
+    # Models with Gated Delta Net (GDN) layers (use_gated_attention=True)
+    # don't support packed sequences in the older Megatron-LM bundled with
+    # slime.  Slime's get_batch() always creates PackedSeqParams for THD
+    # format, which GDN rejects with NotImplementedError.  A build-time
+    # patch (patch_gdn_packed_seq.py) neutralises the raise so GDN falls
+    # back to unpacked processing.
+    _has_gdn = (
+        model
+        and getattr(model, "architecture", None)
+        and getattr(model.architecture, "use_gated_attention", False)
+    )
+
     caller_module = resolve_caller_module()
     if caller_module is not None and caller_module.__name__ != "__main__":
         cloudpickle.register_pickle_by_value(caller_module)
@@ -200,6 +217,7 @@ def build_slime_app(
         image = image.env(slime.image_env)
 
     image = image.add_local_python_source("modal_training_gym", copy=True)
+    image = image.uv_pip_install("randomname")
     image = mount_tools_dir(image)
 
     if caller_script is not None:
@@ -334,6 +352,14 @@ def build_slime_app(
             f"echo {_PATCH_TORCH_LOAD_B64} | base64 -d | python3",
             f"echo {_PATCH_GLOBAL_PLAN_B64} | base64 -d | python3",
             f"echo {_PATCH_CHECKPOINT_SAVE_B64} | base64 -d | python3",
+        )
+    if _has_gdn:
+        train_image = train_image.run_commands(
+            f"echo {_PATCH_GDN_PACKED_SEQ_B64} | base64 -d | python3",
+        )
+    if slime.megatron_to_hf_mode == "bridge":
+        train_image = train_image.run_commands(
+            f"echo {_PATCH_BRIDGE_PER_TOKEN_LOSS_B64} | base64 -d | python3",
         )
 
     # ── Volumes ──────────────────────────────────────────────────────────────

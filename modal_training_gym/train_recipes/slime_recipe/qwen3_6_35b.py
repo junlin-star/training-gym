@@ -6,11 +6,12 @@ from modal_training_gym.train_recipes.slime_recipe.recipe import SlimeRecipe
 
 @dataclass(config=ConfigDict(extra="forbid", arbitrary_types_allowed=True))
 class Qwen3_6_35b_Recipe(SlimeRecipe):
-    """Qwen3.6-35B-A3B (MoE) on 1×8×H100 with TP2/PP1/CP2/EP8, colocated GRPO."""
+    """Qwen3.6-35B-A3B (MoE) on 2×8×H100 with TP2/EP8, colocated GRPO."""
 
     gpu_type: str = "H100"
+
     colocate: bool = True
-    actor_num_nodes: int = 1
+    actor_num_nodes: int = 2
     actor_num_gpus_per_node: int = 8
 
     # ── Parallelism ───────────────────────────────────────────────────────
@@ -39,8 +40,8 @@ class Qwen3_6_35b_Recipe(SlimeRecipe):
     n_samples_per_prompt: int = 8
     global_batch_size: int = 32
     lr: float = 1e-6
-    max_tokens_per_gpu: int = 8192
-    calculate_per_token_loss: bool = False  # GDN layers don't support packed sequences
+    max_tokens_per_gpu: int = 4096
+    calculate_per_token_loss: bool = True
     balance_data: bool = True
 
     # ── Optimizer ─────────────────────────────────────────────────────────
