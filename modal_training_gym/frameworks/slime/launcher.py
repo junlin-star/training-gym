@@ -800,6 +800,7 @@ def build_slime_app(
 
             _convert_procs: list[tuple[str, subprocess.Popen]] = []
             _converted: set[str] = set()
+            _checkpoint_stats: dict[str, tuple[int, int, float, float]] = {}
             _hf_path: str | None = None
 
             if model and (slime.megatron_to_hf_mode == "bridge" or slime.ref_load):
@@ -811,7 +812,45 @@ def build_slime_app(
                     else _snap(model.model_name, local_files_only=True)
                 )
 
-            def _start_conversions() -> None:
+            def _checkpoint_ready(path: str, *, require_stable: bool) -> bool:
+                expected_ranks = slime.actor_num_nodes * slime.actor_num_gpus_per_node
+                try:
+                    names = os.listdir(path)
+                except FileNotFoundError:
+                    return False
+                for rank in range(expected_ranks):
+                    if not any(
+                        name.startswith(f"__{rank}_") and name.endswith(".distcp")
+                        for name in names
+                    ):
+                        return False
+                if "common.pt" not in names:
+                    return False
+                if not require_stable:
+                    return True
+
+                count = 0
+                size = 0
+                latest_mtime = 0.0
+                for root, _, files in os.walk(path):
+                    for name in files:
+                        try:
+                            st = os.stat(os.path.join(root, name))
+                        except FileNotFoundError:
+                            return False
+                        count += 1
+                        size += st.st_size
+                        latest_mtime = max(latest_mtime, st.st_mtime)
+
+                now = time.monotonic()
+                current = (count, size, latest_mtime)
+                previous = _checkpoint_stats.get(path)
+                if previous is None or previous[:3] != current:
+                    _checkpoint_stats[path] = (*current, now)
+                    return False
+                return now - previous[3] >= 30
+
+            def _start_conversions(*, require_stable: bool = True) -> None:
                 """Scan for new complete checkpoints and start converting them."""
                 if not (
                     model and (slime.megatron_to_hf_mode == "bridge" or slime.ref_load)
@@ -840,6 +879,10 @@ def build_slime_app(
                         if os.path.exists(hf_dir):
                             _converted.add(entry.name)
                             continue
+                        if not _checkpoint_ready(
+                            entry.path, require_stable=require_stable
+                        ):
+                            continue
                         hf_path = _hf_path
                         convert_cmd = (
                             f"python {SLIME_ROOT}/tools/convert_torch_dist_to_hf.py "
@@ -867,7 +910,8 @@ def build_slime_app(
 
             _stop_converter.set()
             await converter_task
-            _start_conversions()
+            await checkpoints_volume.reload.aio()
+            _start_conversions(require_stable=False)
 
             for name, proc in _convert_procs:
                 proc.wait()
