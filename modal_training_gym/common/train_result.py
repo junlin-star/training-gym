@@ -118,6 +118,8 @@ class TrainResult:
 
     def _to_dict(self) -> dict[str, Any]:
         d = asdict(self)
+        if isinstance(d.get("framework"), Framework):
+            d["framework"] = d["framework"].value
         if self.model_config is not None:
             d["model_config"] = {
                 "model_name": self.model_config.model_name,
