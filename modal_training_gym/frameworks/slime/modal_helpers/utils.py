@@ -42,15 +42,13 @@ def get_checkpoint_conversion_policy(
     tp = slime_cfg.tensor_model_parallel_size
     pp = getattr(slime_cfg, "pipeline_model_parallel_size", 1)
 
-    needs_preconv = (
-        model
-        and getattr(model, "architecture", None)
-        and getattr(model.architecture, "needs_pre_conversion", False)
+    uses_mbridge_conversion = (
+        getattr(slime_cfg, "megatron_to_hf_mode", "bridge") != "bridge"
     )
     ep = getattr(slime_cfg, "expert_model_parallel_size", 1) or 1
     etp = getattr(slime_cfg, "expert_tensor_parallel_size", 1) or 1
 
-    if needs_preconv:
+    if uses_mbridge_conversion:
         # Match ALL training parallelism dims exactly so Megatron
         # doesn't attempt any re-sharding at load time (re-sharding
         # triggers BytesIO errors in dist_checkpointing).
@@ -74,14 +72,14 @@ def get_checkpoint_conversion_policy(
 
         extra_args: list[str] = []
         conv_tp = tp
-        if needs_preconv:
+        if uses_mbridge_conversion:
             pp = 1
         if conv_tp > 1 or pp > 1:
             extra_args += [
                 f"--tensor-model-parallel-size {conv_tp}",
                 f"--pipeline-model-parallel-size {pp}",
             ]
-        if needs_preconv:
+        if uses_mbridge_conversion:
             extra_args += [
                 f"--expert-model-parallel-size {ep}",
                 f"--expert-tensor-parallel-size {etp}",

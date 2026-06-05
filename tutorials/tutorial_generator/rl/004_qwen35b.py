@@ -40,10 +40,9 @@ def _intro():
     3. Feed that score back as a GRPO reward through SLIME.
     4. Compare base vs. trained accuracy.
 
-    Qwen3.6-35B-A3B uses a newer HuggingFace architecture class
-    (`Qwen3_5MoeForConditionalGeneration`) that requires checkpoint
-    pre-conversion. The training gym handles this automatically when
-    `megatron_model_type` is set on the model's architecture spec.
+    Qwen3.6-35B-A3B uses slime's default mbridge conversion path:
+    `megatron_to_hf_mode=""` pre-converts the HuggingFace checkpoint
+    before training instead of loading the base checkpoint through bridge mode.
     """
 
 

@@ -142,16 +142,8 @@ def build_slime_app(
     SlimeRecipe._validate_custom_model_architecture(model)
     SlimeRecipe._validate_dataset(dataset)
 
-    if (
-        model
-        and getattr(model, "architecture", None)
-        and getattr(model.architecture, "needs_pre_conversion", False)
-    ):
+    if model and getattr(slime, "megatron_to_hf_mode", "bridge") != "bridge":
         slug = model.model_name.replace("/", "--")
-        # Keep megatron_to_hf_mode (default "bridge") — the bridge path
-        # is dramatically faster for MoE models because it batches expert
-        # conversion instead of the per-parameter EP all-gather +
-        # sequential chunk pipeline in HfWeightIteratorDirect.
         if not slime.ref_load:
             object.__setattr__(slime, "ref_load", f"/checkpoints/torch_dist/{slug}-v31")
 
@@ -495,12 +487,13 @@ def build_slime_app(
         import importlib.util
 
         mmt = ""
-        needs_preconv = False
+        uses_mbridge_conversion = (
+            getattr(slime, "megatron_to_hf_mode", "bridge") != "bridge"
+        )
         if model and getattr(model, "architecture", None):
             mmt = getattr(model.architecture, "megatron_model_type", "")
-            needs_preconv = bool(mmt)
 
-        if num_nodes > 1 or needs_preconv:
+        if num_nodes > 1 or uses_mbridge_conversion:
             spec = importlib.util.find_spec(
                 "modal_training_gym.frameworks.slime.modal_helpers.convert_hf_to_torch_dist"
             )
@@ -517,12 +510,10 @@ def build_slime_app(
                 if slime.slime_model_script
                 else f"{SLIME_ROOT}/scripts/models/{mmt}.sh"
             )
-            if needs_preconv:
+            if uses_mbridge_conversion:
                 # Strip parallelism flags from MODEL_ARGS so the only
-                # source of TP/PP/EP is our extra_args.  The bridge
-                # (AutoBridge) needs MODEL_ARGS to correctly map HF
-                # weights.  Extra_args (from ModelArchitecture) are
-                # appended LAST so they override any duplicates.
+                # source of TP/PP/EP is our conversion policy. Extra_args
+                # are appended last so they override any duplicates.
                 filter_cmd = (
                     "CONV_ARGS=(); SKIP=0; "
                     'for a in "${MODEL_ARGS[@]}"; do '
@@ -561,7 +552,7 @@ def build_slime_app(
         env = {**os.environ, **slime.environment}
         if num_nodes > 1:
             env["SKIP_RELEASE_RENAME"] = "1"
-        if needs_preconv:
+        if uses_mbridge_conversion:
             env["SKIP_PP_AUTOINFLATE"] = "1"
 
         print(
