@@ -13,6 +13,7 @@ class Qwen3_6_35B_A3B_Recipe(MilesConfig):
     miles_model_script: str = "scripts/models/qwen3.6-35B-A3B.sh"
     hf_checkpoint: str = "Qwen/Qwen3.6-35B-A3B"
     memory: tuple[int, int] = (1024, 2 * 1024 * 1024)
+    ephemeral_disk: int = 2048000
     skip_eval_before_train: bool = True
     no_gradient_accumulation_fusion: bool = True
     use_tis: bool = True

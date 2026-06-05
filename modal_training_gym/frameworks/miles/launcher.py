@@ -470,6 +470,7 @@ def build_miles_app(
         ],
         timeout=24 * 60 * 60,
         experimental_options={"efa_enabled": True} if _multi_node else {},
+        ephemeral_disk=miles.ephemeral_disk,
         serialized=True,
         name="train",
     )

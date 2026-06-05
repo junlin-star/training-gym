@@ -25,6 +25,7 @@ _MILES_SKIP = {
     "docker_image",
     "gpu_type",
     "memory",
+    "ephemeral_disk",
     "cloud",
     "region",
     "name",
@@ -58,6 +59,7 @@ class MilesConfig(BaseTrainRecipe):
     docker_image: str = "radixark/miles:dev-202605291323"
     gpu_type: str = "H100"
     memory: tuple[int, int] | None = None
+    ephemeral_disk: int | None = None
     cloud: str | None = None
     region: str | None = None
     name: str = ""
