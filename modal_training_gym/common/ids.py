@@ -3,8 +3,6 @@ from __future__ import annotations
 import datetime
 import hashlib
 
-import randomname
-
 
 def create_hash(
     model_name: str,
@@ -13,6 +11,8 @@ def create_hash(
     app_name: str,
     model_path: str,
 ) -> str:
+    import randomname
+
     created_at = str(int(datetime.datetime.now(datetime.UTC).timestamp()))
 
     slug = randomname.get_name(sep="-").lower()
