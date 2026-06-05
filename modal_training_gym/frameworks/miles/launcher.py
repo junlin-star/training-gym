@@ -382,26 +382,15 @@ def build_miles_app(
             raise RuntimeError("Miles checkpoint conversion script not found")
 
         ep = getattr(miles, "expert_model_parallel_size", 1) or 1
-        if miles.miles_model_script and ep > 1:
-            # Strip parallelism flags from MODEL_ARGS so the only
-            # source of TP/PP/EP is our extra_args.
-            filter_cmd = (
-                "CONV_ARGS=(); SKIP=0; "
-                'for a in "${MODEL_ARGS[@]}"; do '
-                '  if [ "$SKIP" = 1 ]; then SKIP=0; continue; fi; '
-                '  case "$a" in '
-                "    --tensor-model-parallel-size|--pipeline-model-parallel-size"
-                "|--expert-model-parallel-size|--expert-tensor-parallel-size"
-                "|--context-parallel-size|--transformer-pipeline-model-parallel-size"
-                ") SKIP=1; continue ;; "
-                "  esac; "
-                '  CONV_ARGS+=("$a"); '
-                "done"
-            )
+        if ep > 1:
+            # When EP>1, skip the model script entirely for conversion —
+            # the model script bakes in parallelism settings (TP=8, PP=8,
+            # transformer-pipeline-model-parallel-size=8) for large clusters.
+            # Even with filtering, validate_args can auto-inflate PP from
+            # remaining flags.  All required architecture args are already in
+            # extra_args from the model object.
             cmd = (
-                f"source {MILES_ROOT}/{miles.miles_model_script} && {filter_cmd} && "
                 f"torchrun {' '.join(torchrun_args)} {convert_script} "
-                '"${CONV_ARGS[@]}" '
                 f"{' '.join(extra_args)} "
                 f"--hf-checkpoint {shlex.quote(hf_path)} --save {shlex.quote(save_path)}"
             )
