@@ -43,8 +43,14 @@ Qwen3-ASR, but four small upstream gaps are patched at image build by `_native_q
 1. **bridge config validate-order** — `hf_qwen3_asr` reads `self.thinker_config` in `get_text_config()`, which transformers 5.6 calls during `super().__init__()` before it's set.
 2. **slime processor loading** — `qwen3_asr` falls to the GLM-4V processor and crashes; instead uses SGLang's `Qwen3ASRProcessor`.
 3. **bridge `pg_collection`** — `Qwen3ASRThinkerModel` hard-raises on a `None` `pg_collection`; default to `use_mpu_process_groups()`.
-4. **HF export** — slime's per-param converter has no `qwen3_asr` entry (it falls to
-   the qwen2 path and can't map the audio tower), so route the MB→HF export through the native bridge's `AutoBridge.export_ckpt`, which maps the full model (incl. the `thinker.audio_model.** → thinker.audio_tower.**` audio tower). The trained model is exported as a standard HF checkpoint.
+4. **HF export** — slime's MB→HF tool dispatches `"qwen3"` to the qwen2 converter,
+   which can't map the audio tower (`Unknown parameter name: ...thinker.audio_model...`).
+   Ship a `qwen3_asr` converter into slime's `megatron_to_hf` (mirrors megatron-bridge's
+   mapping_registry: standard Qwen3 decoder splits + `thinker.audio_model.* →
+   thinker.audio_tower.*` passthrough) and dispatch to it before the generic `qwen3`
+   branch. Uses slime's own checkpoint loader (no `megatron.bridge.training`, avoiding a
+   version skew with the bundled Megatron-LM). The trained model exports as a standard,
+   loadable HF checkpoint.
 
 Plus one config choice in `train_qwen3_asr.py`:
 
