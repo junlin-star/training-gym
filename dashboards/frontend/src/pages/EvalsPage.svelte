@@ -837,6 +837,31 @@
                         <pre class="example-section-text">{row.response}</pre>
                       </div>
                     {/if}
+                    {#if row.metadata?.reference}
+                      <div class="example-section">
+                        <span class="example-section-label">Reference</span>
+                        <pre class="example-section-text">{row.metadata.reference}</pre>
+                      </div>
+                    {/if}
+                    {#if row.metadata?.audio}
+                      <div class="example-section">
+                        <span class="example-section-label">Audio</span>
+                        <audio
+                          class="example-audio"
+                          controls
+                          preload="none"
+                          src={row.metadata.audio}
+                        ></audio>
+                      </div>
+                    {/if}
+                    {#if row.metadata?.wer != null}
+                      <div class="example-section">
+                        <span class="example-section-label">WER</span>
+                        <span class="example-section-score">
+                          {Number(row.metadata.wer).toFixed(3)}
+                        </span>
+                      </div>
+                    {/if}
                     <div class="example-section">
                       <span class="example-section-label">Score</span>
                       <span class="example-section-score" style:color={scoreColor(row.score)}>
@@ -844,10 +869,17 @@
                       </span>
                     </div>
                     {#if row.metadata && Object.keys(row.metadata).length}
-                      <div class="example-section">
-                        <span class="example-section-label">Metadata</span>
-                        <pre class="example-section-text">{JSON.stringify(row.metadata, null, 2)}</pre>
-                      </div>
+                      {@const extraMeta = Object.fromEntries(
+                        Object.entries(row.metadata).filter(
+                          ([k]) => !["audio", "reference", "wer", "hyp"].includes(k),
+                        ),
+                      )}
+                      {#if Object.keys(extraMeta).length}
+                        <div class="example-section">
+                          <span class="example-section-label">Metadata</span>
+                          <pre class="example-section-text">{JSON.stringify(extraMeta, null, 2)}</pre>
+                        </div>
+                      {/if}
                     {/if}
                   </div>
                 {/if}
@@ -1573,6 +1605,13 @@
     font-size: 14px;
     font-weight: 600;
     font-variant-numeric: tabular-nums;
+  }
+
+  .example-audio {
+    width: 100%;
+    height: 36px;
+    border-radius: 6px;
+    filter: saturate(0.9);
   }
 
   .examples-loading,
