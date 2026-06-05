@@ -127,6 +127,7 @@ class SlimeRecipe(BaseTrainRecipe):
 
     # ── Rollout (optional) ─────────────────────────────────────────────────
     rollout_shuffle: bool = True
+    rollout_stop_token_ids: list[int] | None = None
     sglang_mem_fraction_static: float = 0.75
 
     # ── Training ────────────────────────────────────────────────────────────
