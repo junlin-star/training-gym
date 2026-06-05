@@ -82,14 +82,15 @@ def _main_impl() -> None:
     # - **`rm_type="deepscaler"`** — slime's built-in math reward that
     #   extracts and compares numerical answers. No custom reward function
     #   or sandbox needed.
-    # - The model's `megatron_model_type` triggers automatic checkpoint
-    #   pre-conversion from HF to Megatron format before training starts.
+    # - `megatron_to_hf_mode=""` uses slime's default mbridge conversion path,
+    #   so the HF checkpoint is pre-converted before training starts.
 
     training_run = TrainConfig(
         model=Qwen3_6_35B(),
         dataset=dataset,
         recipe=Qwen3_6_35b_Recipe(
             rm_type="deepscaler",
+            megatron_to_hf_mode="",
             n_samples_per_prompt=4,
             sglang_mem_fraction_static=0.75,
             sglang_max_running_requests=512,

@@ -53,6 +53,7 @@ class Qwen3_6_35b_Recipe(SlimeRecipe):
     attention_backend: str = "flash"
 
     # ── Checkpointing / eval ──────────────────────────────────────────────
+    megatron_to_hf_mode: str = ""
     save_interval: int = 20
     eval_interval: int | None = 20
     eval_max_response_len: int = 4096
