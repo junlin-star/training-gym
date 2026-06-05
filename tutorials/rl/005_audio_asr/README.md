@@ -4,8 +4,7 @@ Reinforcement learning (GRPO) on an **audio** model end-to-end through the gym i
 
 1. Load LibriSpeech audio clips via `LibriSpeechASRDataset` 
   - a `MultimodalDataset` with `modality="audio"` 
-2. slime serves Qwen3-ASR on SGLang's `/v1/audio/transcriptions` endpoint; our custom
-   `transcription_rollout` posts each clip's audio and collects the transcript.
+2. slime serves Qwen3-ASR on SGLang's `/v1/audio/transcriptions` endpoint; our custom `transcription_rollout` posts each clip's audio and collects the transcript.
 3. `wer_reward` scores the transcript as **−WER** against the reference.
 4. That reward drives a GRPO update through slime/Megatron.
 
@@ -39,34 +38,18 @@ Multinode coming soon!
 ## Upstream Workarounds
 
 The native stack (sglang 0.5.12 + megatron-bridge 0.5.0 + transformers 5.6) supports
-Qwen3-ASR, but four small upstream gaps are patched at image build by
-`_native_qwen3asr_compat.py`:
+Qwen3-ASR, but four small upstream gaps are patched at image build by `_native_qwen3asr_compat.py`:
 
-1. **bridge config validate-order** — `hf_qwen3_asr` reads `self.thinker_config` in
-   `get_text_config()`, which transformers 5.6 calls during `super().__init__()` before
-   it's set.
-2. **slime processor loading** — `qwen3_asr` falls to the GLM-4V processor and crashes; instead
-   uses SGLang's `Qwen3ASRProcessor`.
-3. **bridge `pg_collection`** — `Qwen3ASRThinkerModel` hard-raises on a `None`
-   `pg_collection`; default to `use_mpu_process_groups()`.
+1. **bridge config validate-order** — `hf_qwen3_asr` reads `self.thinker_config` in `get_text_config()`, which transformers 5.6 calls during `super().__init__()` before it's set.
+2. **slime processor loading** — `qwen3_asr` falls to the GLM-4V processor and crashes; instead uses SGLang's `Qwen3ASRProcessor`.
+3. **bridge `pg_collection`** — `Qwen3ASRThinkerModel` hard-raises on a `None` `pg_collection`; default to `use_mpu_process_groups()`.
 4. **HF export** — slime's per-param converter has no `qwen3_asr` entry (it falls to
-   the qwen2 path and can't map the audio tower), so route the MB→HF export through
-   the native bridge's `AutoBridge.export_ckpt`, which maps the full model (incl. the
-   `thinker.audio_model.** → thinker.audio_tower.**` audio tower). The trained model
-   is exported as a standard HF checkpoint.
+   the qwen2 path and can't map the audio tower), so route the MB→HF export through the native bridge's `AutoBridge.export_ckpt`, which maps the full model (incl. the `thinker.audio_model.** → thinker.audio_tower.**` audio tower). The trained model is exported as a standard HF checkpoint.
 
 Plus one config choice in `train_qwen3_asr.py`:
 
-- **`qkv_format="bshd"`** (+ `use_dynamic_batch_size=False`, an explicit
-  `micro_batch_size`): the native bridge's forward doesn't implement THD/packed
-  sequences, so we use padded batches (packed batching is a capability the bridge
-  hasn't wired through yet).
+- **`qkv_format="bshd"`** (+ `use_dynamic_batch_size=False`, an explicit `micro_batch_size`): the native bridge's forward doesn't implement THD/packed sequences, so we use padded batches (packed batching is a capability the bridge hasn't wired through yet).
 
 ## Known caveat — GRPO stability at scale
 
-Validated green end-to-end at both 2×H100 and 8×H100 on this data slice. On a larger
-slice (`n_clips=64`) we hit a `NaN` grad from a numerically pathological clip — with
-`micro_batch_size=1` (forced by the no-packing limitation) a single bad sample isn't
-diluted. `clip_grad=1.0` absorbs ordinary spikes; the proven slice trains clean. Tuning
-GRPO stability on larger/noisier audio data (advantage handling, packing) is a good
-follow-up.
+Validated green end-to-end at both 2×H100 and 8×H100 on this data slice. On a larger slice (`n_clips=64`) we hit a `NaN` grad from a numerically pathological clip — with `micro_batch_size=1` (forced by the no-packing limitation) a single bad sample isn't diluted. `clip_grad=1.0` absorbs ordinary spikes; the proven slice trains clean. Tuning GRPO stability on larger/noisier audio data (advantage handling, packing) is a good follow-up.
