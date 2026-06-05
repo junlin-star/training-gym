@@ -95,6 +95,7 @@ def _main_impl() -> None:
             sglang_max_running_requests=512,
             rollout_max_response_len=1024,
             eval_max_response_len=1024,
+            eval_interval=None,
             n_samples_per_eval_prompt=4,
             no_save_optim=True,
         ),

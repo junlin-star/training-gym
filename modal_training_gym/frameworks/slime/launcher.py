@@ -87,6 +87,9 @@ _PATCH_STOP_TOKEN_DIAG_B64 = encode_patch("patch_stop_token_diagnostic", _SLIME_
 _PATCH_QWEN35_CONVERSION_NAMES_B64 = encode_patch(
     "patch_qwen35_conversion_names", _SLIME_PATCHES
 )
+_PATCH_SKIP_FINAL_WEIGHT_UPDATE_B64 = encode_patch(
+    "patch_skip_final_weight_update", _SLIME_PATCHES
+)
 
 
 def _build_slime_base_image() -> "Image":
@@ -99,6 +102,7 @@ def _build_slime_base_image() -> "Image":
             f"echo {_PATCH_ADVANTAGES_B64} | base64 -d | python3",
             f"echo {_PATCH_BRIDGE_NONE_TASK_B64} | base64 -d | python3",
             f"echo {_PATCH_QWEN35_CONVERSION_NAMES_B64} | base64 -d | python3",
+            f"echo {_PATCH_SKIP_FINAL_WEIGHT_UPDATE_B64} | base64 -d | python3",
             f"echo {_PATCH_STOP_TOKEN_DIAG_B64} | base64 -d | python3",
         )
     )
