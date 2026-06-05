@@ -383,8 +383,10 @@ def build_miles_app(
 
         ep = getattr(miles, "expert_model_parallel_size", 1) or 1
         if miles.miles_model_script and ep > 1:
-            # Strip ALL parallelism and pipeline flags from MODEL_ARGS so
-            # the only source of TP/PP/EP/MTP is our extra_args.
+            # Strip parallelism, pipeline, and unsupported flags from
+            # MODEL_ARGS so the only source of TP/PP/EP/MTP is extra_args.
+            # Value-taking flags (SKIP=1 to also drop the next token);
+            # boolean flags are dropped without consuming the next token.
             filter_cmd = (
                 "CONV_ARGS=(); SKIP=0; "
                 'for a in "${MODEL_ARGS[@]}"; do '
@@ -395,8 +397,9 @@ def build_miles_app(
                 "|--context-parallel-size|--transformer-pipeline-model-parallel-size"
                 "|--mtp-num-layers|--virtual-pipeline-model-parallel-size"
                 "|--decoder-last-pipeline-num-layers"
-                "|--use-gated-attention|--attention-output-gate"
                 ") SKIP=1; continue ;; "
+                "    --use-gated-attention|--attention-output-gate"
+                ") continue ;; "
                 "  esac; "
                 '  CONV_ARGS+=("$a"); '
                 "done"
