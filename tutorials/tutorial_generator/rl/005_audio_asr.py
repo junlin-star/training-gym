@@ -73,6 +73,7 @@ def _imports():
         Qwen3ASR_Recipe,
         TrainConfig,
         WandbConfig,
+        evaluate_asr,
     )
 
 
@@ -174,3 +175,23 @@ def _train():
     print("Starting training...")
     train_result = training_run.train()
     print(f"Training run id: {train_result.training_run_id}")
+
+
+@markdown
+def _eval_intro():
+    """
+    ## Evaluate and watch it on the dashboard
+
+    Training exports a standard HF checkpoint, so we can evaluate it directly.
+    `evaluate_asr` serves the trained model, transcribes the clips, scores −WER,
+    and writes the per-clip results — audio, reference, hypothesis, WER — to the
+    gym dashboard's **Evals** panel, tied to this run. Open the dashboard
+    (`training-gym setup` prints the URL) and you'll see each clip with an audio
+    player next to its reference and score.
+    """
+
+
+@code
+def _eval():
+    eval_result = evaluate_asr(train_result, dataset)
+    print(f"Eval: mean WER {eval_result['mean_wer']:.3f} over {eval_result['rows']} clips")

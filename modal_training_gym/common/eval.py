@@ -526,3 +526,175 @@ class HarborEval(EvalConfig):
         if self.eval_fn is None and self.eval_response_fn is None:
             self.eval_fn = self._harbor_eval_fn
         super().__post_init__()
+
+
+# ── ASR transcription eval ───────────────────────────────────────────────
+#
+# Post-training evaluator for ASR models (e.g. Qwen3-ASR): serves the trained
+# HF checkpoint on SGLang's /v1/audio/transcriptions, transcribes the dataset's
+# clips, and writes an EvalResult with the dashboard panel's contract
+# ({audio, reference, wer, hyp}). It's the gym-owned plumbing behind the one-line
+# eval in the audio tutorial, so the example file stays short:
+#
+#     result = TrainConfig(...).train()
+#     evaluate_asr(result, LibriSpeechASRDataset(n_rows=8))
+#
+# Dashboard audio is downsampled to 8 kHz mono so eval payloads stay light;
+# transcription uses the full-resolution clip, so WER is unaffected.
+
+_ASR_DASHBOARD_SR = 8000  # stored (playable) dashboard audio sample rate
+
+
+def _asr_serve_and_eval(dataset, hf_dir: str, n_clips: int) -> dict:
+    import base64
+    import datetime
+    import io
+    import subprocess
+    import time
+
+    import jiwer
+    import librosa
+    import requests
+    import soundfile as sf
+
+    print(f"=== serving {hf_dir} ===")
+    port = 30000
+    proc = subprocess.Popen([
+        "python", "-m", "sglang.launch_server",
+        "--model-path", hf_dir,
+        "--served-model-name", "qwen3-asr",
+        "--trust-remote-code",
+        "--host", "127.0.0.1", "--port", str(port),
+        "--mem-fraction-static", "0.80",
+    ])
+    base = f"http://127.0.0.1:{port}"
+    deadline = time.time() + 1800
+    ready = False
+    while time.time() < deadline:
+        if proc.poll() is not None:
+            raise RuntimeError(f"sglang server exited early (code {proc.returncode})")
+        try:
+            if requests.get(f"{base}/health", timeout=5).status_code == 200:
+                ready = True
+                break
+        except Exception:
+            pass
+        time.sleep(10)
+    if not ready:
+        proc.terminate()
+        raise RuntimeError("sglang server never became healthy")
+    print("=== sglang healthy; running ASR eval ===")
+
+    rows = dataset._build_rows()[:n_clips]
+    results: list[EvalRowResult] = []
+    try:
+        for i, row in enumerate(rows):
+            data_uri = row["audios"][0]
+            ref = (row["label"] or "").lower().strip()
+            b64 = data_uri.split(",", 1)[1] if data_uri.startswith("data:") else data_uri
+            arr, sr = sf.read(io.BytesIO(base64.b64decode(b64)))
+
+            # Transcribe the full-resolution clip (WER must reflect real audio).
+            buf = io.BytesIO()
+            sf.write(buf, arr, sr, format="WAV")
+            buf.seek(0)
+            r = requests.post(
+                f"{base}/v1/audio/transcriptions",
+                files={"file": ("clip.wav", buf, "audio/wav")},
+                data={"model": "qwen3-asr", "temperature": "0.0"},
+                timeout=120,
+            )
+            r.raise_for_status()
+            hyp = (r.json().get("text") or "").lower().strip()
+            w = float(jiwer.wer(ref, hyp)) if ref else 0.0
+            print(f"[{i}] WER={w:.3f} ref={ref[:48]!r} hyp={hyp[:48]!r}")
+
+            # Light, downsampled clip for the dashboard player.
+            small = librosa.resample(arr.astype("float32"), orig_sr=sr, target_sr=_ASR_DASHBOARD_SR)
+            sbuf = io.BytesIO()
+            sf.write(sbuf, small, _ASR_DASHBOARD_SR, format="WAV", subtype="PCM_16")
+            small_uri = "data:audio/wav;base64," + base64.b64encode(sbuf.getvalue()).decode()
+
+            # Score is word accuracy (1 − WER) in [0, 1] — higher is better, matching
+            # the dashboard's score model/histogram. Raw WER stays in metadata.
+            results.append(
+                EvalRowResult(
+                    score=max(0.0, 1.0 - w),
+                    response=hyp,
+                    prompt=row["prompt"],
+                    metadata={"audio": small_uri, "reference": ref, "wer": w, "hyp": hyp},
+                )
+            )
+    finally:
+        proc.terminate()
+
+    label = hf_dir.rstrip("/").split("/checkpoints/", 1)[-1].split("/")[0] or "trained"
+    eval_config_id = "qwen3-asr-librispeech-wer"
+    deployment_id = f"qwen3-asr-1.7b-{label}"
+    eval_id = create_hash(
+        "eval", eval_config_id, deployment_id, str(datetime.datetime.now(datetime.UTC)), ""
+    )
+    result = EvalResult(
+        eval_id=eval_id,
+        deployment_id=deployment_id,
+        eval_config_id=eval_config_id,
+        rows=results,
+    )
+    result.save()
+    mean_wer = sum(r.metadata["wer"] for r in results) / len(results)
+    print(f"saved EvalResult {eval_id}  mean WER={mean_wer:.3f}  ({len(results)} rows) -> dashboard")
+    return {"eval_id": eval_id, "mean_wer": mean_wer, "rows": len(results)}
+
+
+def evaluate_asr(result, dataset, *, n_clips: int = 8, gpu_type: str = "H100") -> dict:
+    """Serve ``result``'s trained checkpoint, eval ``dataset``, publish to the dashboard.
+
+    Spins up a short-lived 1×GPU Modal app (the native slime image serves Qwen3-ASR
+    on ``/v1/audio/transcriptions`` directly), transcribes the clips, scores word
+    accuracy (1 − WER), and writes a gym :class:`EvalResult` to the shared metadata
+    volume the dashboard reads. Returns ``{"eval_id", "mean_wer", "rows"}``.
+    """
+    import modal
+
+    from modal_training_gym.common.checkpoint import list_checkpoints
+    from modal_training_gym.frameworks.slime.launcher import SLIME_IMAGE
+
+    checkpoints = list_checkpoints(result.training_run_id)
+    if not checkpoints:
+        raise RuntimeError(f"no checkpoints for run {result.training_run_id}")
+    hf = [c for c in checkpoints if c.path.rstrip("/").endswith("_hf")]
+    ckpt = (hf or checkpoints)[-1]
+    if not ckpt.path.rstrip("/").endswith("_hf"):
+        raise RuntimeError(
+            f"latest checkpoint {ckpt.path!r} is not an HF export; "
+            "ensure the run exported (megatron_to_hf_mode='bridge')."
+        )
+    vol_name = ckpt.checkpoints_volume_name or f"{result.app_name}-checkpoints"
+    mount_path = ckpt.checkpoints_mount_path or "/checkpoints"
+
+    image = (
+        modal.Image.from_registry(SLIME_IMAGE)
+        .entrypoint([])
+        .run_commands("rm -rf /root/.cache/huggingface")  # let the hf-cache volume mount
+        .uv_pip_install("jiwer", "librosa", "soundfile", "randomname")
+        .add_local_python_source("modal_training_gym", copy=True)
+    )
+
+    app = modal.App("qwen3-asr-eval", image=image)
+    remote = app.function(
+        gpu=gpu_type,
+        timeout=2400,
+        volumes={
+            mount_path: modal.Volume.from_name(vol_name, create_if_missing=True),
+            "/root/.cache/huggingface": modal.Volume.from_name(
+                "huggingface-cache", create_if_missing=True
+            ),
+        },
+        secrets=[modal.Secret.from_name("huggingface-secret")],
+        serialized=True,
+    )(_asr_serve_and_eval)
+
+    with app.run():
+        out = remote.remote(dataset, ckpt.path, n_clips)
+    print(f"eval published to dashboard: {out}")
+    return out

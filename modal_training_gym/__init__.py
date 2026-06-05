@@ -10,6 +10,7 @@ _EXPORTS = {
     "EvalConfigDurable": ("modal_training_gym.common.eval", "EvalConfigDurable"),
     "EvalResult": ("modal_training_gym.common.eval", "EvalResult"),
     "EvalRowResult": ("modal_training_gym.common.eval", "EvalRowResult"),
+    "evaluate_asr": ("modal_training_gym.common.eval", "evaluate_asr"),
     "extract_code": ("modal_training_gym.common.eval", "extract_code"),
     "HarborEval": ("modal_training_gym.common.eval", "HarborEval"),
     "HFModelConfiguration": (
@@ -73,6 +74,7 @@ __all__ = [
     "EvalConfigDurable",
     "EvalResult",
     "EvalRowResult",
+    "evaluate_asr",
     "extract_code",
     "HarborEval",
     "HFModelConfiguration",

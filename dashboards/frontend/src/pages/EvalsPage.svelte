@@ -393,7 +393,12 @@
       count: 0,
     }));
     for (const row of rows) {
-      const idx = Math.min(Math.floor(row.score * HISTOGRAM_BINS), HISTOGRAM_BINS - 1);
+      // Clamp into [0, BINS-1]: scores can fall outside [0,1] (e.g. a reward-style
+      // metric), and a negative score would index bins[-n] → undefined → crash.
+      const idx = Math.max(
+        0,
+        Math.min(Math.floor(row.score * HISTOGRAM_BINS), HISTOGRAM_BINS - 1),
+      );
       bins[idx].count++;
     }
     const maxCount = Math.max(...bins.map((b) => b.count));
