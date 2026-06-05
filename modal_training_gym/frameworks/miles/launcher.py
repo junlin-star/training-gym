@@ -140,6 +140,7 @@ def build_miles_app(
         image = image.uv_pip_install(f"harbor=={HARBOR_PKG_VERSION}")
 
     image = image.add_local_python_source("modal_training_gym", copy=True)
+    image = image.uv_pip_install("randomname")
     image = mount_tools_dir(image)
 
     if caller_script is not None:
