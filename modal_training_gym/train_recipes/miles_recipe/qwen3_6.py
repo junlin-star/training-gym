@@ -24,8 +24,8 @@ class Qwen3_6_35B_A3B_Recipe(MilesConfig):
     ref_load: str = "/checkpoints/Qwen3.6-35B-A3B-torch-dist-ep8"
     mtp_num_layers: int = 0
 
-    # Cluster topology — disaggregated: 2 train nodes (DP=2) + 1 rollout node
-    actor_num_nodes: int = 2
+    # Cluster topology — disaggregated: 1 train node + 1 rollout node
+    actor_num_nodes: int = 1
     actor_num_gpus_per_node: int = 8
     colocate: bool = False
     rollout_num_gpus: int = 8
