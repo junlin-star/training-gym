@@ -3,9 +3,8 @@
 
 # # Audio GRPO on Qwen3-ASR-1.7B
 #
-# Most RL tutorials train a text model. This one trains an **audio** model —
-# [Qwen3-ASR-1.7B](https://huggingface.co/Qwen/Qwen3-ASR-1.7B), a speech
-# recognizer — end-to-end with GRPO, and the only thing you write is the reward.
+# This tutorial demonstrates training [Qwen3-ASR-1.7B](https://huggingface.co/Qwen/Qwen3-ASR-1.7B)-- a speech
+# recognizer — end-to-end with GRPO.
 #
 # The loop:
 #
@@ -18,11 +17,9 @@
 #    against the reference text.
 # 4. That reward drives a GRPO update through slime/Megatron.
 #
-# Everything audio-specific — serving on the transcription endpoint, padded
-# (bshd) batches the bridge requires, the audio I/O dependencies, the upstream
-# compat shims, and the trained-model HF export — is handled by the gym when you
-# pick `model=Qwen3ASR()` and `recipe=Qwen3ASR_Recipe(...)`. You just bring the
-# reward.
+# The Training Gym takes care of the nitty gritty compatibility matching--
+# you just pick `model=Qwen3ASR()` and `recipe=Qwen3ASR_Recipe(...)`,
+# and bring the reward.
 # Run with:
 # ```
 # uv run python tutorials/rl/005_audio_asr/005_audio_asr.py
@@ -94,7 +91,7 @@ def _main_impl() -> None:
     # rollout, padded (bshd) batches, the lighter SGLang memory fraction, and the
     # many-samples/high-temperature settings that surface reward variance — so the
     # recipe you write only sets the reward and (optionally) W&B logging. It defaults
-    # to a 2×H100 single node; pass `actor_num_gpus_per_node=8` (and a larger
+    # to a `H100:2` single node; pass `actor_num_gpus_per_node=8` (and a larger
     # `num_rollout`) to use a full node.
     #
     # `TrainConfig.train()` builds the Modal app, runs GRPO, and exports the trained
