@@ -846,6 +846,15 @@
                     {#if row.metadata?.audio}
                       <div class="example-section">
                         <span class="example-section-label">Audio</span>
+                        <!-- TODO(ben/joy): metadata.audio is passed straight to the
+                          browser <audio> element, so it only renders what the browser
+                          natively decodes from a data-URI (wav/mp3/ogg/flac/aac/webm);
+                          anything else shows a silent/broken player. Gate-check media
+                          here: validate the data-URI MIME against a renderable set and
+                          fall back to a download link when unsupported (and pick the
+                          element by modality once we also show image/video). Upstream
+                          fix is to normalize to a canonical container at the dataset
+                          boundary (see MultimodalDataset.modality). -->
                         <audio
                           class="example-audio"
                           controls

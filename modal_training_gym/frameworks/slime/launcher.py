@@ -79,7 +79,9 @@ _PATCH_CHECKPOINT_SAVE_B64 = encode_patch("patch_checkpoint_save")
 _PATCH_ADVANTAGES_B64 = encode_patch("patch_advantages")
 
 
-def _maybe_clustered(use_clustered: bool, size: int, *, rdma: bool):
+def _clustered_if(
+    use_clustered: bool, size: int, *, rdma: bool
+) -> Callable[[Callable], Callable]:
     """Return a decorator: ``clustered(size, rdma=rdma)`` when ``use_clustered``,
     else an identity decorator that registers the function as a plain
     ``@app.function``.
@@ -154,6 +156,23 @@ def build_slime_app(
 
     SlimeRecipe._validate_custom_model_architecture(model)
     SlimeRecipe._validate_dataset(dataset)
+
+    # Models whose bridge forward can't do THD packing (e.g. Qwen3-ASR) must train
+    # on padded (bshd) batches. Enforce it here so a recipe that leaves slime's
+    # default thd packing on fails fast with a fix, not a deep "packed_seq_params is
+    # not supported" crash. Qwen3ASR_Recipe sets these; bare SlimeRecipe users get
+    # this pointer.
+    if model and getattr(model, "requires_bshd", False):
+        cfg = slime.extra_config or {}
+        if cfg.get("qkv_format") != "bshd" or slime.use_dynamic_batch_size:
+            raise ValueError(
+                f"{model.model_name} requires padded (bshd) batches: its "
+                "megatron-bridge forward doesn't implement THD sequence packing. "
+                'Set extra_config={"qkv_format": "bshd", "micro_batch_size": N} and '
+                "use_dynamic_batch_size=False — or use Qwen3ASR_Recipe, which sets "
+                f"these. Got qkv_format={cfg.get('qkv_format')!r}, "
+                f"use_dynamic_batch_size={slime.use_dynamic_batch_size}."
+            )
 
     if (
         model
@@ -234,6 +253,26 @@ def build_slime_app(
     if _has_hybrid_spec:
         image = image.run_commands(
             f"echo {_PATCH_VALIDATION_B64} | base64 -d | python3",
+        )
+
+    # Model-declared compat shims for upstream gaps (e.g. Qwen3-ASR's bridge /
+    # processor / export patches). Applied to the base image so both the
+    # conversion and training images (train_image = image, below) inherit them,
+    # and after the local mounts above so a mounted slime can't overlay them.
+    # Each patch is idempotent; gated on the model declaring it, so non-ASR runs
+    # are untouched.
+    _model_pip_packages = list(getattr(model, "pip_packages", None) or []) if model else []
+    if _model_pip_packages:
+        image = image.uv_pip_install(*_model_pip_packages)
+
+    _compat_patches = (
+        list(getattr(model.architecture, "compat_patches", None) or [])
+        if model and getattr(model, "architecture", None)
+        else []
+    )
+    for _patch_name in _compat_patches:
+        image = image.run_commands(
+            f"echo {encode_patch(_patch_name)} | base64 -d | python3",
         )
 
     def _get_custom_generate_path() -> str:
@@ -446,7 +485,7 @@ def build_slime_app(
         serialized=True,
         name="convert_checkpoint",
     )
-    @_maybe_clustered(convert_multi_node, convert_nnodes, rdma=convert_multi_node)
+    @_clustered_if(convert_multi_node, convert_nnodes, rdma=convert_multi_node)
     def convert_checkpoint():
         from huggingface_hub import snapshot_download
 
@@ -616,7 +655,7 @@ def build_slime_app(
 
     _multi_node = slime.total_nodes > 1
     # Single-node clustered scheduling is pure reservation overhead (see
-    # _maybe_clustered). Auto-skip it for 1 node; `disable_clustered` is an
+    # _clustered_if). Auto-skip it for 1 node; `disable_clustered` is an
     # escape hatch (ignored for multi-node, which always needs the cluster).
     _use_clustered = _multi_node and not slime.disable_clustered
 
@@ -653,7 +692,7 @@ def build_slime_app(
         serialized=True,
         name="train",
     )
-    @_maybe_clustered(_use_clustered, slime.total_nodes, rdma=_multi_node)
+    @_clustered_if(_use_clustered, slime.total_nodes, rdma=_multi_node)
     async def train(
         modal_app_id: str = "",
         modal_app_url: str = "",
@@ -812,8 +851,6 @@ def build_slime_app(
 
             def _start_conversions() -> None:
                 """Scan for new complete checkpoints and start converting them."""
-                if getattr(slime, "disable_hf_conversion", False):
-                    return
                 if not (
                     model and (slime.megatron_to_hf_mode == "bridge" or slime.ref_load)
                 ):

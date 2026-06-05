@@ -53,7 +53,6 @@ _SLIME_SKIP = {
     "image_env",
     "train_function_kwargs",
     "disable_clustered",
-    "disable_hf_conversion",
 }
 
 YAML_CONFIG_FIELDS = ("eval_config", "extra_config", "sglang_config")
@@ -100,11 +99,12 @@ class SlimeRecipe(BaseTrainRecipe):
     memory: int | tuple[int, int] | None = None
     cloud: str | None = None
     region: str | None = None
+    # Force-skip Modal's clustered scheduler even on a multi-node run. The launcher
+    # already auto-skips it for single-node (size==1) runs (see _clustered_if); set
+    # this to also opt a multi-node run out of the clustered reservation — e.g. to
+    # dodge the multi-container scheduling wait when you've sized the run to land on
+    # one host anyway. The function body is unchanged either way.
     disable_clustered: bool = False
-    # Skip the post-training megatron→HF checkpoint conversion. Useful when the model
-    # trains via the bridge but its MB→HF export is unsupported (e.g. Qwen3-ASR's
-    # audio tower), so a failed optional export shouldn't fail a successful run.
-    disable_hf_conversion: bool = False
     slime_model_script: str = ""
     source_hf_checkpoint: str | None = None
     megatron_conversion_hf_checkpoint: str | None = None
@@ -478,7 +478,12 @@ class SlimeRecipe(BaseTrainRecipe):
         from modal_training_gym.train_recipes.slime_recipe.qwen3_6_35b import (
             Qwen3_6_35b_Recipe,
         )
+        from modal_training_gym.train_recipes.slime_recipe.qwen3_asr import (
+            Qwen3ASR_Recipe,
+        )
 
+        if model_config.model_name == "Qwen/Qwen3-ASR-1.7B":
+            return Qwen3ASR_Recipe()
         if model_config.model_name == "Qwen/Qwen3-1.7B":
             return Qwen3_1_7b_Recipe()
         if model_config.model_name == "Qwen/Qwen3-4B":

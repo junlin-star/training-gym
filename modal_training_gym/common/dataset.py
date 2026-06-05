@@ -558,12 +558,18 @@ class MultimodalDataset(DatasetConfig):
     inspects them.
 
     Pass ``rows=[{"prompt": str, "media": list, "label": Any}, ...]`` or
-    subclass and override ``rows()``.
+    subclass and override the ``rows`` property.
     """
 
     input_key: str = "prompt"
     label_key: str = "label"
-    modality: str = "image"  # "image" | "audio" | "video"
+    modality: Literal["image", "audio", "video"] = "audio"
+    # TODO(ben/joy): gate-check media at this boundary so the evals dashboard can
+    # reliably visualize it. Two parts: (1) normalize each emitted media item to a
+    # canonical, browser-renderable container per modality (audio->wav, image->png/
+    # jpeg) instead of trusting whatever format the user brings — LibriSpeechASRDataset
+    # already re-encodes to wav, make it the convention here; (2) validate the data-URI
+    # MIME matches `modality`. Pairs with the dashboard fallback in EvalsPage.svelte.
     media_column: str = ""
     output_format: str = "jsonl"
 
@@ -585,10 +591,11 @@ class MultimodalDataset(DatasetConfig):
             self.dataset_id = f"mm-{self.modality}-{uuid.uuid4()}"
         self._validate()
 
-    def rows(self) -> list[dict[str, Any]]:
+    @property
+    def rows(self) -> list[DatasetRow]:
         return self._rows
 
-    def _to_row(self, r: dict[str, Any]) -> dict[str, Any]:
+    def _to_row(self, r: dict[str, Any]) -> DatasetRow:
         media = r["media"]
         return {
             self.input_key: r["prompt"],
@@ -596,8 +603,8 @@ class MultimodalDataset(DatasetConfig):
             self.label_key: r["label"],
         }
 
-    def load(self) -> list[dict[str, Any]]:
-        return [self._to_row(r) for r in self.rows()]
+    def load(self) -> list[DatasetRow]:
+        return [self._to_row(r) for r in self.rows]
 
     def _write_jsonl(self, rows: list[dict[str, Any]], path: str) -> None:
         Path(path).parent.mkdir(parents=True, exist_ok=True)

@@ -43,6 +43,15 @@ _EXPORTS = {
     "Qwen3_30B": ("modal_training_gym.common.models", "Qwen3_30B"),
     "Qwen3_32B": ("modal_training_gym.common.models", "Qwen3_32B"),
     "Qwen3_6_35B": ("modal_training_gym.common.models", "Qwen3_6_35B"),
+    "Qwen3ASR": ("modal_training_gym.common.models", "Qwen3ASR"),
+    "Qwen3ASR_Recipe": (
+        "modal_training_gym.train_recipes.slime_recipe",
+        "Qwen3ASR_Recipe",
+    ),
+    "LibriSpeechASRDataset": (
+        "modal_training_gym.common.datasets.librispeech_asr",
+        "LibriSpeechASRDataset",
+    ),
     "score_in_sandbox": ("modal_training_gym.common.eval", "score_in_sandbox"),
     "SlimeRecipe": ("modal_training_gym.train_recipes.slime_recipe", "SlimeRecipe"),
     "SlimeRecipeBlock": (
@@ -87,6 +96,9 @@ __all__ = [
     "Qwen3_30B",
     "Qwen3_32B",
     "Qwen3_6_35B",
+    "Qwen3ASR",
+    "Qwen3ASR_Recipe",
+    "LibriSpeechASRDataset",
     "score_in_sandbox",
     "SlimeRecipe",
     "setup",

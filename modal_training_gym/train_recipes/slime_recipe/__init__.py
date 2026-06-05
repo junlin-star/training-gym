@@ -11,6 +11,7 @@ from modal_training_gym.train_recipes.slime_recipe.qwen3_4b import Qwen3_4b_Reci
 from modal_training_gym.train_recipes.slime_recipe.qwen3_6_35b import (
     Qwen3_6_35b_Recipe,
 )
+from modal_training_gym.train_recipes.slime_recipe.qwen3_asr import Qwen3ASR_Recipe
 
 __all__ = [
     "MultiTurn",
@@ -22,4 +23,5 @@ __all__ = [
     "Qwen3_14b_Recipe",
     "Qwen3_32b_Recipe",
     "Qwen3_6_35b_Recipe",
+    "Qwen3ASR_Recipe",
 ]
