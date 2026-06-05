@@ -35,8 +35,16 @@ def get_checkpoint_conversion_policy(
     actor_nodes = getattr(miles_cfg, "actor_num_nodes", 1)
     tp = getattr(miles_cfg, "tensor_model_parallel_size", 1)
     pp = getattr(miles_cfg, "pipeline_model_parallel_size", 1)
+    ep = getattr(miles_cfg, "expert_model_parallel_size", 1) or 1
+    etp = getattr(miles_cfg, "expert_tensor_parallel_size", 1) or 1
 
-    world_size = tp * pp if (tp > 1 or pp > 1) else gpus_per_node
+    # When EP>1 we must convert with the full training parallelism so
+    # Megatron doesn't attempt re-sharding at load time.
+    if ep > 1:
+        pp = 1
+        world_size = actor_nodes * gpus_per_node
+    else:
+        world_size = tp * pp if (tp > 1 or pp > 1) else gpus_per_node
     max_world_size = actor_nodes * gpus_per_node
     if world_size > max_world_size:
         raise ValueError(
@@ -56,6 +64,11 @@ def get_checkpoint_conversion_policy(
             extra_args += [
                 f"--tensor-model-parallel-size {tp}",
                 f"--pipeline-model-parallel-size {pp}",
+            ]
+        if ep > 1:
+            extra_args += [
+                f"--expert-model-parallel-size {ep}",
+                f"--expert-tensor-parallel-size {etp}",
             ]
         for attr, flag in _CONVERSION_EXTRA_ARGS:
             x = getattr(miles_cfg, attr, None)

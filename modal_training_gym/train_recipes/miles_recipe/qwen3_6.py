@@ -19,7 +19,7 @@ class Qwen3_6_35B_A3B_Recipe(MilesConfig):
     # Pre-convert HF → torch_dist to bypass the Megatron Bridge crash
     # with EP>1 ('NoneType' has no attribute 'megatron_module').
     megatron_to_hf_mode: str = ""
-    ref_load: str = "/checkpoints/Qwen3.6-35B-A3B-torch-dist"
+    ref_load: str = "/checkpoints/Qwen3.6-35B-A3B-torch-dist-tp2ep8"
     mtp_num_layers: int = 0
 
     # Cluster topology — 1 node × 8 H100 GPUs
@@ -27,11 +27,12 @@ class Qwen3_6_35B_A3B_Recipe(MilesConfig):
     actor_num_gpus_per_node: int = 8
     colocate: bool = True
 
-    # Training parallelism (Megatron)
+    # Training parallelism — mirrors the proven Slime Qwen3_6_35b_Recipe
     train_backend: str = "megatron"
     expert_model_parallel_size: int = 8
-    tensor_model_parallel_size: int = 1
-    sequence_parallel: bool = False
+    expert_tensor_parallel_size: int = 1
+    tensor_model_parallel_size: int = 2
+    sequence_parallel: bool = True
     use_distributed_optimizer: bool = True
     optimizer_cpu_offload: bool = True
     overlap_cpu_optimizer_d2h_h2d: bool = True
