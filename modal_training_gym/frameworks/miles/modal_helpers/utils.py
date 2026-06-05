@@ -79,40 +79,61 @@ def get_checkpoint_conversion_policy(
 
         if model and getattr(model, "architecture", None):
             arch = model.architecture
-            # Use the canonical to_megatron_args() when available (covers
-            # MoE flags, normalization, rotary, etc.).
-            if hasattr(arch, "to_megatron_args"):
-                extra_args += arch.to_megatron_args()
-            else:
-                for attr, flag in [
-                    ("num_layers", "num-layers"),
-                    ("hidden_size", "hidden-size"),
-                    ("ffn_hidden_size", "ffn-hidden-size"),
-                    ("num_attention_heads", "num-attention-heads"),
-                    ("num_query_groups", "num-query-groups"),
-                    ("kv_channels", "kv-channels"),
-                    ("vocab_size", "vocab-size"),
-                    ("norm_epsilon", "norm-epsilon"),
-                    ("rotary_base", "rotary-base"),
-                ]:
-                    val = getattr(arch, attr, 0)
-                    if val:
-                        extra_args.append(f"--{flag} {val}")
-                if arch.group_query_attention:
-                    extra_args.append("--group-query-attention")
-                if arch.swiglu:
-                    extra_args.append("--swiglu")
-                if arch.disable_bias_linear:
-                    extra_args.append("--disable-bias-linear")
-                if arch.qk_layernorm:
-                    extra_args.append("--qk-layernorm")
-                if arch.untie_embeddings_and_output_weights:
-                    extra_args.append("--untie-embeddings-and-output-weights")
-                if arch.normalization and arch.normalization != "LayerNorm":
-                    extra_args.append(f"--normalization {arch.normalization}")
-                if arch.use_rotary_position_embeddings:
-                    extra_args.append("--use-rotary-position-embeddings")
-                    extra_args.append("--position-embedding-type rope")
+            for attr, flag in [
+                ("num_layers", "num-layers"),
+                ("hidden_size", "hidden-size"),
+                ("ffn_hidden_size", "ffn-hidden-size"),
+                ("num_attention_heads", "num-attention-heads"),
+                ("num_query_groups", "num-query-groups"),
+                ("kv_channels", "kv-channels"),
+                ("vocab_size", "vocab-size"),
+                ("norm_epsilon", "norm-epsilon"),
+                ("rotary_base", "rotary-base"),
+                ("num_experts", "num-experts"),
+                ("moe_ffn_hidden_size", "moe-ffn-hidden-size"),
+                (
+                    "moe_shared_expert_intermediate_size",
+                    "moe-shared-expert-intermediate-size",
+                ),
+                ("moe_router_topk", "moe-router-topk"),
+            ]:
+                val = getattr(arch, attr, 0)
+                if val:
+                    extra_args.append(f"--{flag} {val}")
+            if arch.group_query_attention:
+                extra_args.append("--group-query-attention")
+            if arch.swiglu:
+                extra_args.append("--swiglu")
+            if arch.disable_bias_linear:
+                extra_args.append("--disable-bias-linear")
+            if arch.qk_layernorm:
+                extra_args.append("--qk-layernorm")
+            if arch.untie_embeddings_and_output_weights:
+                extra_args.append("--untie-embeddings-and-output-weights")
+            if arch.normalization and arch.normalization != "LayerNorm":
+                extra_args.append(f"--normalization {arch.normalization}")
+            if arch.use_rotary_position_embeddings:
+                extra_args.append("--use-rotary-position-embeddings")
+                extra_args.append("--position-embedding-type rope")
+            if getattr(arch, "moe_grouped_gemm", False):
+                extra_args.append("--moe-grouped-gemm")
+            if getattr(arch, "moe_shared_expert_gate", False):
+                extra_args.append("--moe-shared-expert-gate")
+            for str_attr, str_flag in [
+                ("moe_router_score_function", "moe-router-score-function"),
+                ("moe_token_drop_policy", "moe-token-drop-policy"),
+                ("moe_router_dtype", "moe-router-dtype"),
+            ]:
+                val = getattr(arch, str_attr, "")
+                if val:
+                    extra_args.append(f"--{str_flag} {val}")
+            if getattr(arch, "moe_permute_fusion", False):
+                extra_args.append("--moe-permute-fusion")
+            moe_aux = getattr(arch, "moe_aux_loss_coeff", None)
+            if moe_aux is not None:
+                extra_args.append(f"--moe-aux-loss-coeff {moe_aux}")
+            if getattr(arch, "apply_layernorm_1p", False):
+                extra_args.append("--apply-layernorm-1p")
 
         return num_nodes, nproc_per_node, extra_args
 
