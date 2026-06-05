@@ -56,7 +56,7 @@ class Qwen3_6_35B_A3B_Recipe(MilesConfig):
 
     # Enable thinking mode so the model reasons through math problems
     apply_chat_template_kwargs: dict = {"enable_thinking": True}
-    rollout_max_response_len: int = 16384
+    rollout_max_response_len: int = 4096
 
     # Rollout (SGLang)
     rollout_num_gpus_per_engine: int = 8
