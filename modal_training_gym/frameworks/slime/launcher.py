@@ -86,6 +86,9 @@ _PATCH_BRIDGE_PER_TOKEN_LOSS_B64 = encode_patch(
 _PATCH_BRIDGE_GATE_UP_TRANSPOSE_B64 = encode_patch(
     "patch_bridge_gate_up_transpose", _SLIME_PATCHES
 )
+_PATCH_WEIGHT_SYNC_DIAG_B64 = encode_patch(
+    "patch_weight_sync_diagnostic", _SLIME_PATCHES
+)
 
 
 def _build_slime_base_image() -> "Image":
@@ -98,8 +101,9 @@ def _build_slime_base_image() -> "Image":
             f"echo {_PATCH_ADVANTAGES_B64} | base64 -d | python3",
             f"echo {_PATCH_BRIDGE_NONE_TASK_B64} | base64 -d | python3",
             f"echo {_PATCH_BRIDGE_GATE_UP_TRANSPOSE_B64} | base64 -d | python3",
-            # cache-bust v2: force rebuild and verify patch applied
-            "echo 'CACHE_BUST_V2: verifying gate_up_proj transpose patch' && grep -n 'transpose_on_export' /usr/local/lib/python3.12/dist-packages/megatron/bridge/models/qwen_vl/qwen35_vl_bridge.py 2>/dev/null || (echo 'FILE_NOT_FOUND at expected path, searching...' && find /usr/local/lib/python3.12/dist-packages/ -path '*/qwen*bridge*' -type f 2>/dev/null | head -20 && find /usr/local/lib/python3.12/dist-packages/ -name '*vl_bridge*' -type f 2>/dev/null | head -20)",
+            f"echo {_PATCH_WEIGHT_SYNC_DIAG_B64} | base64 -d | python3",
+            # cache-bust v3: force rebuild and verify patches applied
+            "echo 'CACHE_BUST_V3: verifying patches' && grep -n 'transpose_on_export' /usr/local/lib/python3.12/dist-packages/megatron/bridge/models/qwen_vl/qwen35_vl_bridge.py && grep -c 'PATCHED_WEIGHT_SYNC_DIAGNOSTIC' /root/slime/slime/backends/megatron_utils/update_weight/hf_weight_iterator_bridge.py",
         )
     )
 
