@@ -244,7 +244,14 @@ class MilesConfig(BaseTrainRecipe):
             "moe_token_drop_policy": arch.moe_token_drop_policy,
             "moe_router_dtype": arch.moe_router_dtype,
             "moe_aux_loss_coeff": arch.moe_aux_loss_coeff,
-            "spec": arch.megatron_spec,
+            "spec": (
+                [
+                    s.replace("slime_plugins", "miles_plugins")
+                    for s in arch.megatron_spec
+                ]
+                if arch.megatron_spec
+                else None
+            ),
             "rotary_percent": arch.rotary_percent
             if arch.rotary_percent != 1.0
             else None,
