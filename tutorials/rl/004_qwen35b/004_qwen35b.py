@@ -96,6 +96,7 @@ def _main_impl() -> None:
             rollout_max_response_len=1024,
             eval_max_response_len=1024,
             n_samples_per_eval_prompt=4,
+            no_save_optim=True,
         ),
     )
     print("Starting training...")
