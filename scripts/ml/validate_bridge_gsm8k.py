@@ -61,7 +61,6 @@ training_run = TrainConfig(
             "PYTHONPATH": "/root/Megatron-LM/",
             "CUDA_DEVICE_MAX_CONNECTIONS": "1",
             "NCCL_NVLS_ENABLE": "1",
-            "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
         },
     ),
 )
