@@ -16,8 +16,10 @@ import time
 
 RAY_SYSTEM_CONFIG_ARG = "--system-config"
 RAY_HEALTH_CHECK_SYSTEM_CONFIG = {
-    "health_check_timeout_ms": 60_000,
-    "health_check_failure_threshold": 10,
+    "health_check_initial_delay_ms": 5_000,
+    "health_check_period_ms": 10_000,
+    "health_check_timeout_ms": 600_000,
+    "health_check_failure_threshold": 120,
 }
 
 
@@ -58,9 +60,7 @@ def start_ray_head(
     if extra_start_args:
         cmd.extend(extra_start_args)
     if not _has_system_config(cmd):
-        cmd.append(
-            f"{RAY_SYSTEM_CONFIG_ARG}={json.dumps(RAY_HEALTH_CHECK_SYSTEM_CONFIG)}"
-        )
+        cmd.extend([RAY_SYSTEM_CONFIG_ARG, json.dumps(RAY_HEALTH_CHECK_SYSTEM_CONFIG)])
     subprocess.Popen(cmd)
 
     for _ in range(init_retries):
