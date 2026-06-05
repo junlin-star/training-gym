@@ -1,6 +1,66 @@
 from __future__ import annotations
 
+import re
+from typing import Any
+
 from modal_training_gym.train_recipes.miles_recipe.recipe import MilesConfig
+
+
+def _normalize(s: str) -> str:
+    s = str(s).strip()
+    s = s.split("=")[-1]
+    for old, new in [
+        ("$", ""),
+        ("\\$", ""),
+        (",", ""),
+        (" ", ""),
+        ("\\text{", ""),
+        ("}", ""),
+        ("\\boxed{", ""),
+    ]:
+        s = s.replace(old, new)
+    return s.strip()
+
+
+def _extract_answer(response: str) -> str:
+    """Extract math answer from model response using multiple patterns."""
+    # 1. \boxed{...}
+    boxed = re.findall(r"\\boxed\{([^}]+)\}", response)
+    if boxed:
+        return boxed[-1].strip()
+    # 2. Answer: ...
+    answer_line = re.findall(r"(?i)Answer\s*:\s*([^\n]+)", response)
+    if answer_line:
+        return answer_line[-1].strip()
+    # 3. Bare number after </think> tags
+    post_think = re.split(r"</think>\s*", response)
+    if len(post_think) > 1:
+        text = post_think[-1].strip()
+        nums = re.findall(r"-?[\d.]+", text)
+        if nums:
+            return nums[0]
+    # 4. Last number in response
+    nums = re.findall(r"-?[\d.]+", response)
+    if nums:
+        return nums[-1]
+    return "[INVALID]"
+
+
+async def _math_rm(args: Any, sample: Any, **kwargs: Any) -> float:
+    """Custom reward: extract answer with flexible format matching."""
+    response = getattr(sample, "response", "")
+    label = getattr(sample, "label", "")
+    pred = _normalize(_extract_answer(response))
+    gt = _normalize(str(label))
+    try:
+        gt = str(int(float(gt)))
+    except (ValueError, OverflowError):
+        pass
+    try:
+        pred = str(int(float(pred)))
+    except (ValueError, OverflowError):
+        pass
+    return 1.0 if pred == gt else 0.0
 
 
 class Qwen3_6_35B_A3B_Recipe(MilesConfig):
@@ -51,8 +111,8 @@ class Qwen3_6_35B_A3B_Recipe(MilesConfig):
     hidden_dropout: float = 0.0
     max_tokens_per_gpu: int = 2048
 
-    # Reward model — rule-based math verifier
-    rm_type: str = "deepscaler"
+    # Custom reward — flexible math answer extraction
+    custom_rm_function: Any = _math_rm
 
     # Enable thinking mode so the model reasons through math problems
     apply_chat_template_kwargs: dict = {"enable_thinking": True}
