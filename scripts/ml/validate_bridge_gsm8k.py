@@ -59,11 +59,7 @@ training_run = TrainConfig(
         environment={
             "PYTHONPATH": "/root/Megatron-LM/",
             "CUDA_DEVICE_MAX_CONNECTIONS": "1",
-            # Disable RDMA/IB — the H100 nodes in joy-agent-dev
-            # don't have reliable InfiniBand connectivity between them.
-            # TCP fallback is slower but functional.
-            "NCCL_IB_DISABLE": "1",
-            "NCCL_NET": "Socket",
+            "NCCL_NVLS_ENABLE": "1",
         },
     ),
 )
