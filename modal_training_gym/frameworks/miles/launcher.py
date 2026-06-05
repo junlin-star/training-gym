@@ -381,7 +381,31 @@ def build_miles_app(
         if not convert_script:
             raise RuntimeError("Miles checkpoint conversion script not found")
 
-        if miles.miles_model_script:
+        ep = getattr(miles, "expert_model_parallel_size", 1) or 1
+        if miles.miles_model_script and ep > 1:
+            # Strip parallelism flags from MODEL_ARGS so the only
+            # source of TP/PP/EP is our extra_args.
+            filter_cmd = (
+                "CONV_ARGS=(); SKIP=0; "
+                'for a in "${MODEL_ARGS[@]}"; do '
+                '  if [ "$SKIP" = 1 ]; then SKIP=0; continue; fi; '
+                '  case "$a" in '
+                "    --tensor-model-parallel-size|--pipeline-model-parallel-size"
+                "|--expert-model-parallel-size|--expert-tensor-parallel-size"
+                "|--context-parallel-size|--transformer-pipeline-model-parallel-size"
+                ") SKIP=1; continue ;; "
+                "  esac; "
+                '  CONV_ARGS+=("$a"); '
+                "done"
+            )
+            cmd = (
+                f"source {MILES_ROOT}/{miles.miles_model_script} && {filter_cmd} && "
+                f"torchrun {' '.join(torchrun_args)} {convert_script} "
+                '"${CONV_ARGS[@]}" '
+                f"{' '.join(extra_args)} "
+                f"--hf-checkpoint {shlex.quote(hf_path)} --save {shlex.quote(save_path)}"
+            )
+        elif miles.miles_model_script:
             cmd = (
                 f"source {MILES_ROOT}/{miles.miles_model_script} && "
                 f"torchrun {' '.join(torchrun_args)} {convert_script} "
@@ -398,6 +422,8 @@ def build_miles_app(
         env = {**os.environ, **miles.environment}
         if num_nodes > 1:
             env["SKIP_RELEASE_RENAME"] = "1"
+        if ep > 1:
+            env["SKIP_PP_AUTOINFLATE"] = "1"
 
         print(
             f"Conversion layout: nodes={num_nodes}, nproc_per_node={nproc_per_node}, "
