@@ -13,10 +13,11 @@ from pathlib import Path
 TARGET = Path("/root/slime/train.py")
 MARKER = "PATCHED_SKIP_FINAL_WEIGHT_UPDATE"
 
-OLD = """        if args.offload_rollout:
+OLD = """        offload_train(actor_trains_this_step)
+        if args.offload_rollout:
             ray.get(rollout_manager.onload_weights.remote())
-        if not args.critic_train_only:
-            actor_model.update_weights()
+        actor_model.update_weights()
+
         if args.offload_rollout:
             ray.get(rollout_manager.onload_kv.remote())
 
@@ -24,13 +25,13 @@ OLD = """        if args.offload_rollout:
             ray.get(rollout_manager.eval.remote(rollout_id))
 """
 
-NEW = f"""        run_eval = should_run_periodic_action(rollout_id, args.eval_interval, num_rollout_per_epoch)
+NEW = f"""        offload_train(actor_trains_this_step)
+        run_eval = should_run_periodic_action(rollout_id, args.eval_interval, num_rollout_per_epoch)
         needs_rollout_weights = rollout_id < args.num_rollout - 1 or run_eval
         if needs_rollout_weights:  # {MARKER}
             if args.offload_rollout:
                 ray.get(rollout_manager.onload_weights.remote())
-            if not args.critic_train_only:
-                actor_model.update_weights()
+            actor_model.update_weights()
             if args.offload_rollout:
                 ray.get(rollout_manager.onload_kv.remote())
 
