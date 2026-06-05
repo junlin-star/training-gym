@@ -405,8 +405,20 @@ def build_miles_app(
                 '  CONV_ARGS+=("$a"); '
                 "done"
             )
+            # The miles convert_hf_to_torch_dist.py auto-inflates PP to
+            # world_size when PP=1 and world_size>1.  For EP>1 conversions
+            # that need PP=1 we must neutralise that logic.  Patch the
+            # script in-place so the condition also requires
+            # SKIP_PP_AUTOINFLATE to be unset.
+            patch_cmd = (
+                f"sed -i 's/if args.pipeline_model_parallel_size == 1 and world_size > 1:/"
+                f"if args.pipeline_model_parallel_size == 1 and world_size > 1 "
+                f'and not os.environ.get("SKIP_PP_AUTOINFLATE"):/\' '
+                f"{convert_script}"
+            )
             cmd = (
                 f"source {MILES_ROOT}/{miles.miles_model_script} && {filter_cmd} && "
+                f"{patch_cmd} && "
                 f"torchrun {' '.join(torchrun_args)} {convert_script} "
                 '"${CONV_ARGS[@]}" '
                 f"{' '.join(extra_args)} "
