@@ -37,6 +37,8 @@ _MILES_SKIP = {
     "wandb",
     "custom_rm_function",
     "custom_generate_function",
+    "use_gated_attention",
+    "attention_output_gate",
 }
 
 YAML_CONFIG_FIELDS = ("eval_config", "custom_config_path", "sglang_config")
