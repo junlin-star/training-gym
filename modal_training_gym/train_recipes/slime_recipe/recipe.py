@@ -172,7 +172,6 @@ class SlimeRecipe(BaseTrainRecipe):
     load: str = ""
     megatron_to_hf_mode: str = "bridge"
     use_fault_tolerance: bool = True
-    no_save_optim: bool = False
 
     # ── Reward model ─────────────────────────────────────────────────────────
     rm_type: str | None = None

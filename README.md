@@ -87,7 +87,7 @@ rest of the cells run as-is.
 
 | Tutorial | Summary | Difficulty | Framework | Launch |
 |---|---|---|---|---|
-| [`000_agent_sandbox`](tutorials/agent/000_agent_sandbox/000_agent_sandbox.ipynb) | Build an LLM agent harness with a self-hosted model and Modal Sandbox tool execution | Beginner | Modal Sandbox | <a href="https://modal.com/notebooks/new/https://github.com/modal-projects/training-gym/blob/devin/1780684896-qwen35b-tutorial-bridge-ref-load/tutorials/agent/000_agent_sandbox/000_agent_sandbox.ipynb" target="_blank" rel="nofollow noopener noreferrer"><img src="https://modal-cdn.com/open-in-modal.svg" alt="Open in Modal"></a> |
+| [`000_agent_sandbox`](tutorials/agent/000_agent_sandbox/000_agent_sandbox.ipynb) | Build an LLM agent harness with a self-hosted model and Modal Sandbox tool execution | Beginner | Modal Sandbox | <a href="https://modal.com/notebooks/new/https://github.com/modal-projects/training-gym/blob/alessio/increase-num-rollout-actor-gpus/tutorials/agent/000_agent_sandbox/000_agent_sandbox.ipynb" target="_blank" rel="nofollow noopener noreferrer"><img src="https://modal-cdn.com/open-in-modal.svg" alt="Open in Modal"></a> |
 
 ### multinode
 
