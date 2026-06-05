@@ -59,9 +59,11 @@ training_run = TrainConfig(
         environment={
             "PYTHONPATH": "/root/Megatron-LM/",
             "CUDA_DEVICE_MAX_CONNECTIONS": "1",
-            "NCCL_NVLS_ENABLE": "1",
-            # Note: do NOT set PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-            # — SGLang's TorchMemorySaver doesn't support it and will crash.
+            # Disable RDMA/IB — the H100 nodes in joy-agent-dev
+            # don't have reliable InfiniBand connectivity between them.
+            # TCP fallback is slower but functional.
+            "NCCL_IB_DISABLE": "1",
+            "NCCL_NET": "Socket",
         },
     ),
 )
