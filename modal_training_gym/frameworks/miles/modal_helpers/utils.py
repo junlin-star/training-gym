@@ -60,7 +60,9 @@ def get_checkpoint_conversion_policy(
             continue
 
         extra_args: list[str] = []
-        if tp > 1 or pp > 1:
+        # Always pass parallelism flags to override any values baked
+        # into the model script's MODEL_ARGS.
+        if tp > 1 or pp > 1 or ep > 1:
             extra_args += [
                 f"--tensor-model-parallel-size {tp}",
                 f"--pipeline-model-parallel-size {pp}",
