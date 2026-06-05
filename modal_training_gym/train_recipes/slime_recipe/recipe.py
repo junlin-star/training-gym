@@ -53,6 +53,7 @@ _SLIME_SKIP = {
     "image_env",
     "train_function_kwargs",
     "disable_clustered",
+    "disable_hf_conversion",
 }
 
 YAML_CONFIG_FIELDS = ("eval_config", "extra_config", "sglang_config")
@@ -100,6 +101,10 @@ class SlimeRecipe(BaseTrainRecipe):
     cloud: str | None = None
     region: str | None = None
     disable_clustered: bool = False
+    # Skip the post-training megatron→HF checkpoint conversion. Useful when the model
+    # trains via the bridge but its MB→HF export is unsupported (e.g. Qwen3-ASR's
+    # audio tower), so a failed optional export shouldn't fail a successful run.
+    disable_hf_conversion: bool = False
     slime_model_script: str = ""
     source_hf_checkpoint: str | None = None
     megatron_conversion_hf_checkpoint: str | None = None

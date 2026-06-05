@@ -271,6 +271,10 @@ def build_slime_app(
                 remote_path=f"/root/{fn_module_name}.py",
                 copy=True,
             )
+            # Point the slime arg at the shipped module's symbol. Without this the
+            # file is shipped but the path stays unset, so a custom_rm_function
+            # defined outside the entrypoint silently falls back to rule-based RM.
+            set_path(f"{fn_module_name}.{getattr(fn, '__name__', fallback_name)}")
             return
         fn_name = getattr(fn, "__name__", fallback_name)
         try:
@@ -808,6 +812,8 @@ def build_slime_app(
 
             def _start_conversions() -> None:
                 """Scan for new complete checkpoints and start converting them."""
+                if getattr(slime, "disable_hf_conversion", False):
+                    return
                 if not (
                     model and (slime.megatron_to_hf_mode == "bridge" or slime.ref_load)
                 ):
