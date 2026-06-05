@@ -22,8 +22,9 @@ class Qwen3_6_35B_A3B_Recipe(MilesConfig):
     # but CLI args (appended after MODEL_ARGS) override it.
     mtp_num_layers: int = 0
 
-    # Cluster topology
-    actor_num_nodes: int = 1
+    # Cluster topology — 2 nodes gives DP=2 with EP=8, so distributed
+    # optimizer can shard states across data-parallel ranks.
+    actor_num_nodes: int = 2
     actor_num_gpus_per_node: int = 8
     colocate: bool = True
 
