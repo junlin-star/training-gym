@@ -390,8 +390,9 @@ def build_miles_app(
             filter_cmd = (
                 "CONV_ARGS=(); SKIP=0; "
                 'for a in "${MODEL_ARGS[@]}"; do '
-                '  if [ "$SKIP" = 1 ]; then SKIP=0; continue; fi; '
+                '  if [ "$SKIP" -gt 0 ]; then SKIP=$((SKIP-1)); continue; fi; '
                 '  case "$a" in '
+                "    --spec) SKIP=2; continue ;; "
                 "    --tensor-model-parallel-size|--pipeline-model-parallel-size"
                 "|--expert-model-parallel-size|--expert-tensor-parallel-size"
                 "|--context-parallel-size|--transformer-pipeline-model-parallel-size"

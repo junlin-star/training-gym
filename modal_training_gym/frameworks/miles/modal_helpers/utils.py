@@ -71,8 +71,6 @@ def get_checkpoint_conversion_policy(
             extra_args += [
                 f"--expert-model-parallel-size {ep}",
                 f"--expert-tensor-parallel-size {etp}",
-                # Prevent Megatron/spec from auto-inflating PP via MTP
-                f"--transformer-pipeline-model-parallel-size {pp}",
             ]
         for attr, flag in _CONVERSION_EXTRA_ARGS:
             x = getattr(miles_cfg, attr, None)
