@@ -12,6 +12,7 @@ _EXPORTS = {
     "EvalRowResult": ("modal_training_gym.common.eval", "EvalRowResult"),
     "extract_code": ("modal_training_gym.common.eval", "extract_code"),
     "HarborEval": ("modal_training_gym.common.eval", "HarborEval"),
+    "GLM_4_7": ("modal_training_gym.common.models", "GLM_4_7"),
     "HFModelConfiguration": (
         "modal_training_gym.common.models",
         "HFModelConfiguration",
@@ -68,6 +69,7 @@ __all__ = [
     "Kimi_K2_6_LoRA_Recipe",
     "Kimi_K2_5_LoRA_Recipe",
     "DatasetConfig",
+    "GLM_4_7",
     "HarborDataset",
     "DeploymentConfig",
     "EvalConfig",

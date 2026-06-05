@@ -726,8 +726,8 @@ def build_slime_app(
                 has_snapshot = snapshots_dir.is_dir() and any(snapshots_dir.iterdir())
                 if not has_snapshot:
                     print(f"Downloading model {model.model_name}...")
-                    model.download()
-                    await hf_cache_volume.commit.aio()
+                model.download()  # Always run (idempotent; applies config patches to cached snapshots)
+                await hf_cache_volume.commit.aio()
 
             if dataset:
                 prompt_data, eval_paths = SlimeRecipe._resolve_data_paths(dataset)
