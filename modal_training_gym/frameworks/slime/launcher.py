@@ -442,18 +442,17 @@ def build_slime_app(
         data_volume.commit()
 
     convert_nnodes = get_checkpoint_conversion_policy(slime, model=model)[0]
-    convert_multi_node = convert_nnodes > 1
 
     @app.function(
         image=image,
         gpu=gpu_spec,
         volumes=all_volumes,
         timeout=4 * 60 * 60,
-        experimental_options={"efa_enabled": True} if convert_multi_node else {},
+        experimental_options={"efa_enabled": True},
         serialized=True,
         name="convert_checkpoint",
     )
-    @clustered(convert_nnodes, rdma=convert_multi_node)  # pyright: ignore[reportCallIssue, reportOptionalCall]
+    @clustered(convert_nnodes, rdma=True)  # pyright: ignore[reportCallIssue, reportOptionalCall]
     def convert_checkpoint():
         from huggingface_hub import snapshot_download
 
@@ -595,14 +594,10 @@ def build_slime_app(
         checkpoints_volume.commit()
         print(f"Saved HF checkpoint to {output_dir}")
 
-    _multi_node = slime.total_nodes > 1
-
     train_secrets: list[Secret] = []
     if slime.wandb is not None:
         train_secrets.append(Secret.from_name(slime.wandb.modal_wandb_secret_name))
-    train_experimental_options: dict[str, Any] = {}
-    if _multi_node:
-        train_experimental_options["efa_enabled"] = True
+    train_experimental_options: dict[str, Any] = {"efa_enabled": True}
 
     train_function_kwargs = dict(slime.train_function_kwargs or {})
     user_secrets = train_function_kwargs.pop("secrets", None)
@@ -632,7 +627,7 @@ def build_slime_app(
         serialized=True,
         name="train",
     )
-    @clustered(slime.total_nodes, rdma=_multi_node)  # pyright: ignore[reportCallIssue, reportOptionalCall]
+    @clustered(slime.total_nodes, rdma=True)  # pyright: ignore[reportCallIssue, reportOptionalCall]
     async def train(
         modal_app_id: str = "",
         modal_app_url: str = "",
