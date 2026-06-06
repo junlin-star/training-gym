@@ -84,6 +84,7 @@ _PATCH_BRIDGE_PER_TOKEN_LOSS_B64 = encode_patch(
     "patch_bridge_provider_per_token_loss", _SLIME_PATCHES
 )
 _PATCH_STOP_TOKEN_DIAG_B64 = encode_patch("patch_stop_token_diagnostic", _SLIME_PATCHES)
+_PATCH_NO_SAVE_OPTIM_B64 = encode_patch("patch_no_save_optim", _SLIME_PATCHES)
 
 
 def _build_slime_base_image() -> "Image":
@@ -239,6 +240,10 @@ def build_slime_app(
         image = image.run_commands(
             f"echo {_PATCH_VALIDATION_B64} | base64 -d | python3",
         )
+
+    image = image.run_commands(
+        f"echo {_PATCH_NO_SAVE_OPTIM_B64} | base64 -d | python3",
+    )
 
     def _get_custom_generate_path() -> str:
         cfg = slime.extra_config
