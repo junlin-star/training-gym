@@ -151,6 +151,7 @@ def _train():
         recipe=Qwen3_6_35b_Recipe(
             rm_type="deepscaler",
             megatron_to_hf_mode="",
+            num_rollout=10,
         ),
     )
     print("Starting training...")
