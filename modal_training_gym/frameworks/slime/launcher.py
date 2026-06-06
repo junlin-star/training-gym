@@ -104,6 +104,13 @@ def _has_torch_dist_checkpoint(save_path: str) -> bool:
     if not os.path.isdir(save_path):
         return False
 
+    def _is_complete_checkpoint_dir(path: str) -> bool:
+        try:
+            names = os.listdir(path)
+        except OSError:
+            return False
+        return "common.pt" in names and any(name.endswith(".distcp") for name in names)
+
     tracker_path = os.path.join(save_path, "latest_checkpointed_iteration.txt")
     if os.path.isfile(tracker_path):
         try:
@@ -112,15 +119,16 @@ def _has_torch_dist_checkpoint(save_path: str) -> bool:
         except OSError:
             marker = ""
         if marker == "release":
-            return os.path.isdir(os.path.join(save_path, "release"))
+            return _is_complete_checkpoint_dir(os.path.join(save_path, "release"))
         if marker.isdigit():
             iter_dir = f"iter_{int(marker):07d}"
-            return os.path.isdir(os.path.join(save_path, iter_dir))
+            return _is_complete_checkpoint_dir(os.path.join(save_path, iter_dir))
 
     try:
         return any(
             entry.is_dir()
             and (entry.name == "release" or entry.name.startswith("iter_"))
+            and _is_complete_checkpoint_dir(entry.path)
             for entry in os.scandir(save_path)
         )
     except OSError:
@@ -465,15 +473,27 @@ def build_slime_app(
             hf_path = snapshot_download(model.model_name, local_files_only=True)
         save_path = str(slime.ref_load)
 
-        if _has_torch_dist_checkpoint(save_path):
-            print(
-                f"Found existing torch_dist checkpoint at {save_path}; skipping conversion."
-            )
-            return
         num_nodes, nproc_per_node, extra_args = get_checkpoint_conversion_policy(
             slime, model=model
         )
         node_rank, master_addr, _, nnodes = get_modal_cluster_context(num_nodes)
+
+        has_checkpoint = _has_torch_dist_checkpoint(save_path)
+        if has_checkpoint:
+            print(
+                f"Found existing torch_dist checkpoint at {save_path}; skipping conversion."
+            )
+            return
+        if os.path.exists(save_path):
+            if node_rank == 0:
+                import shutil
+
+                print(f"Removing incomplete torch_dist checkpoint at {save_path}.")
+                shutil.rmtree(save_path, ignore_errors=True)
+                checkpoints_volume.commit()
+            else:
+                time.sleep(5)
+                checkpoints_volume.reload()
 
         torchrun_args = [f"--nproc-per-node={nproc_per_node}"]
         if nnodes > 1:
