@@ -349,17 +349,15 @@ def _train():
                 "CUDA_DEVICE_MAX_CONNECTIONS": "1",
                 "NCCL_NVLS_ENABLE": "1",
             },
-            extra_config={
-                "over_sampling_batch_size": 48,
-                "dynamic_sampling_filter_path": (
-                    "slime.rollout.filter_hub.dynamic_sampling_filters."
-                    "check_reward_nonzero_std"
-                ),
-                "kl_coef": 0.0,
-                "balance_data": True,
-                "calculate_per_token_loss": True,
-                "rollout_top_p": 1.0,
-            },
+            over_sampling_batch_size=48,
+            dynamic_sampling_filter_path=(
+                "slime.rollout.filter_hub.dynamic_sampling_filters."
+                "check_reward_nonzero_std"
+            ),
+            kl_coef=0.0,
+            balance_data=True,
+            calculate_per_token_loss=True,
+            rollout_top_p=1.0,
         ),
     )
     train_result = training_run.train()

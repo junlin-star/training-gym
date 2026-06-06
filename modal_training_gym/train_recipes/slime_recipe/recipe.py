@@ -122,11 +122,19 @@ class SlimeRecipe(BaseTrainRecipe):
     use_kl_loss: bool = False
     kl_loss_type: str = "low_var_kl"
     kl_loss_coef: float = 0.0
+    kl_coef: float = 0.0
     entropy_coef: float = 0.0
+    calculate_per_token_loss: bool = False
     ref_load: str = ""
+
+    # ── Dynamic sampling (DAPO) ────────────────────────────────────────────
+    over_sampling_batch_size: int | None = None
+    dynamic_sampling_filter_path: str | None = None
+    balance_data: bool = False
 
     # ── Rollout (optional) ─────────────────────────────────────────────────
     rollout_shuffle: bool = True
+    rollout_top_p: float = 1.0
     sglang_mem_fraction_static: float = 0.75
 
     # ── Training ────────────────────────────────────────────────────────────
