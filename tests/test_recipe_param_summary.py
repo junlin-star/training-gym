@@ -196,6 +196,31 @@ def test_serialized_recipe_fields():
     json.dumps(fields)
 
 
+def test_serialized_slime_params_include_full_debug_fields():
+    """Dashboard debug payload includes full Slime CLI params, not just a summary."""
+    from modal_training_gym.frameworks.slime.launcher import _serialize_slime_params
+
+    recipe = Qwen3_4b_Recipe(
+        rollout_stop_token_ids=[151643, 151645],
+        train_env_vars={"WANDB_API_KEY": "secret-value", "SAFE_FLAG": "1"},
+    )
+    fields = _serialize_slime_params(
+        recipe, dataset=_make_dataset(), model=_make_model()
+    )
+
+    assert fields["gpu_type"] == "H100"
+    assert fields["n_samples_per_prompt"] == 8
+    assert fields["train_env_vars"]["WANDB_API_KEY"] == "[redacted]"
+    assert fields["train_env_vars"]["SAFE_FLAG"] == "1"
+    assert fields["rollout_stop_token_ids"] == [151643, 151645]
+    assert fields["prompt_data"] == "/data/some_dataset/train.parquet"
+    assert fields["num_layers"] == 36
+
+    import json
+
+    json.dumps(fields)
+
+
 def test_param_summary_values_are_json_serializable():
     """All values in the param summary must be JSON-serializable."""
     import json

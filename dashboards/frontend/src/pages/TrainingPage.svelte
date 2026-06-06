@@ -37,12 +37,20 @@
     () => allRuns.find((run) => run.run_id === selectedRunId) || null,
   );
 
+  let selectedRecipe = $derived.by(() => {
+    if (!selectedRun) return {};
+    return selectedRun.config?.recipe || selectedRun.config?.preset || {};
+  });
+
   let selectedRecipeEntries = $derived.by(() => {
-    if (!selectedRun) return [];
-    const recipe = selectedRun.config?.recipe || selectedRun.config?.preset || {};
-    return Object.entries(recipe).filter(
+    return Object.entries(selectedRecipe).filter(
       ([, value]) => value !== undefined && value !== null && String(value) !== "",
     );
+  });
+
+  let selectedRecipeJson = $derived.by(() => {
+    if (!Object.keys(selectedRecipe).length) return "";
+    return JSON.stringify(selectedRecipe, null, 2);
   });
 
   function selectRun(runId) {
@@ -63,6 +71,10 @@
     }
     if (typeof value === "object") return JSON.stringify(value);
     return String(value);
+  }
+
+  function isSlimeRun(run) {
+    return String(run?.framework || "").toLowerCase() === "slime";
   }
 
   function runDuration(run) {
@@ -273,6 +285,13 @@
           </span>
         </div>
       </section>
+
+      {#if isSlimeRun(selectedRun) && selectedRecipeJson}
+        <section class="drawer-section">
+          <h3 class="drawer-section-title">Full Slime parameters</h3>
+          <pre class="drawer-json">{selectedRecipeJson}</pre>
+        </section>
+      {/if}
 
       <section class="drawer-section">
         <h3 class="drawer-section-title">Training recipe</h3>
@@ -574,6 +593,21 @@
     color: var(--muted);
     font-size: 12px;
     line-height: 16px;
+  }
+
+  .drawer-json {
+    border: 1px solid var(--color-c-gray-10, #2f2f2f);
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--panel-alt) 74%, black);
+    color: var(--text);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    line-height: 16px;
+    margin: 0;
+    max-height: 360px;
+    overflow: auto;
+    padding: 10px;
+    white-space: pre;
   }
 
   .empty {
