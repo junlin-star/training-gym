@@ -147,7 +147,7 @@ def build_slime_app(
     SlimeRecipe._validate_custom_model_architecture(model)
     SlimeRecipe._validate_dataset(dataset)
 
-    if model and getattr(slime, "megatron_to_hf_mode", "bridge") != "bridge":
+    if model and getattr(slime, "megatron_to_hf_mode", "") != "bridge":
         slug = model.model_name.replace("/", "--")
         if not slime.ref_load:
             object.__setattr__(slime, "ref_load", f"/checkpoints/torch_dist/{slug}-v31")

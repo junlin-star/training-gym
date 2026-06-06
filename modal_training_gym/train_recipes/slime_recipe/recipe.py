@@ -170,7 +170,7 @@ class SlimeRecipe(BaseTrainRecipe):
     # ── Checkpointing (optional) ───────────────────────────────────────────
     save: str = "/checkpoints"
     load: str = ""
-    megatron_to_hf_mode: str = "bridge"
+    megatron_to_hf_mode: str = ""
     use_fault_tolerance: bool = True
 
     # ── Reward model ─────────────────────────────────────────────────────────
