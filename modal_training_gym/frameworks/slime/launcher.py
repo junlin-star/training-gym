@@ -152,6 +152,43 @@ def _serialize_recipe_value(value: Any) -> Any:
     return repr(value)
 
 
+def _is_sensitive_recipe_field(name: str) -> bool:
+    normalized = name.lower()
+    if normalized.endswith("token_id") or normalized.endswith("token_ids"):
+        return False
+    return (
+        any(
+            marker in normalized
+            for marker in ("api_key", "access_key", "secret", "password", "token")
+        )
+        or normalized == "wandb_key"
+    )
+
+
+def _serialize_slime_param_value(name: str, value: Any) -> Any:
+    if _is_sensitive_recipe_field(name):
+        return "[redacted]" if value not in (None, "", False) else value
+    if isinstance(value, dict):
+        return {
+            str(k): _serialize_slime_param_value(str(k), v) for k, v in value.items()
+        }
+    if isinstance(value, list | tuple | set):
+        return [_serialize_slime_param_value(name, v) for v in value]
+    return _serialize_recipe_value(value)
+
+
+def _serialize_slime_params(
+    recipe: SlimeRecipe,
+    *,
+    dataset: DatasetConfig | None = None,
+    model: ModelConfig | None = None,
+) -> dict[str, Any]:
+    return {
+        key: _serialize_slime_param_value(key, value)
+        for key, value in recipe._fields(dataset=dataset, model=model).items()
+    }
+
+
 def _serialize_recipe_fields(recipe: SlimeRecipe) -> dict[str, Any]:
     return {
         field.name: _serialize_recipe_value(getattr(recipe, field.name))
@@ -689,11 +726,7 @@ def build_slime_app(
         print(f"Training run id: {training_run_id}")
         config_summary: dict = {
             "model": {"model_name": model.model_name} if model else {},
-            "recipe": {
-                "gpu_type": slime.gpu_type,
-                "actor_num_nodes": slime.actor_num_nodes,
-                "actor_num_gpus_per_node": slime.actor_num_gpus_per_node,
-            },
+            "recipe": _serialize_slime_params(slime, dataset=dataset, model=model),
             "wandb": (
                 {"project": slime.wandb.project, "group": slime.wandb.group}
                 if slime.wandb
