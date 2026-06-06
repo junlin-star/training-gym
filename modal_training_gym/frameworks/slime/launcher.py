@@ -506,13 +506,10 @@ def build_slime_app(
         import importlib.util
 
         mmt = ""
-        uses_mbridge_conversion = (
-            getattr(slime, "megatron_to_hf_mode", "bridge") != "bridge"
-        )
         if model and getattr(model, "architecture", None):
             mmt = getattr(model.architecture, "megatron_model_type", "")
 
-        if num_nodes > 1 or uses_mbridge_conversion:
+        if num_nodes > 1:
             spec = importlib.util.find_spec(
                 "modal_training_gym.frameworks.slime.modal_helpers.convert_hf_to_torch_dist"
             )
@@ -529,38 +526,13 @@ def build_slime_app(
                 if slime.slime_model_script
                 else f"{SLIME_ROOT}/scripts/models/{mmt}.sh"
             )
-            if uses_mbridge_conversion:
-                # Strip parallelism flags from MODEL_ARGS so the only
-                # source of TP/PP/EP is our conversion policy. Extra_args
-                # are appended last so they override any duplicates.
-                filter_cmd = (
-                    "CONV_ARGS=(); SKIP=0; "
-                    'for a in "${MODEL_ARGS[@]}"; do '
-                    '  if [ "$SKIP" = 1 ]; then SKIP=0; continue; fi; '
-                    '  case "$a" in '
-                    "    --tensor-model-parallel-size|--pipeline-model-parallel-size"
-                    "|--expert-model-parallel-size|--expert-tensor-parallel-size"
-                    "|--context-parallel-size) SKIP=1; continue ;; "
-                    "  esac; "
-                    '  CONV_ARGS+=("$a"); '
-                    "done"
-                )
-                cmd = (
-                    f"source {model_script} && {filter_cmd} && "
-                    f'echo "CONV_ARGS=${{CONV_ARGS[*]}}" && '
-                    f"torchrun {' '.join(torchrun_args)} {convert_script} "
-                    '"${CONV_ARGS[@]}" '
-                    f"{' '.join(extra_args)} "
-                    f"--hf-checkpoint {shlex.quote(hf_path)} --save {shlex.quote(save_path)}"
-                )
-            else:
-                cmd = (
-                    f"source {model_script} && "
-                    f"torchrun {' '.join(torchrun_args)} {convert_script} "
-                    '"${MODEL_ARGS[@]}" '
-                    f"{' '.join(extra_args)} "
-                    f"--hf-checkpoint {shlex.quote(hf_path)} --save {shlex.quote(save_path)}"
-                )
+            cmd = (
+                f"source {model_script} && "
+                f"torchrun {' '.join(torchrun_args)} {convert_script} "
+                '"${MODEL_ARGS[@]}" '
+                f"{' '.join(extra_args)} "
+                f"--hf-checkpoint {shlex.quote(hf_path)} --save {shlex.quote(save_path)}"
+            )
         else:
             cmd = (
                 f"torchrun {' '.join(torchrun_args)} {convert_script} "
@@ -571,9 +543,6 @@ def build_slime_app(
         env = {**os.environ, **slime.environment}
         if num_nodes > 1:
             env["SKIP_RELEASE_RENAME"] = "1"
-        if uses_mbridge_conversion:
-            env["SKIP_PP_AUTOINFLATE"] = "1"
-
         print(
             f"Conversion layout: nodes={num_nodes}, "
             f"nproc_per_node={nproc_per_node}, node_rank={node_rank}"

@@ -42,16 +42,7 @@ def get_checkpoint_conversion_policy(
     tp = slime_cfg.tensor_model_parallel_size
     pp = getattr(slime_cfg, "pipeline_model_parallel_size", 1)
 
-    uses_mbridge_conversion = (
-        getattr(slime_cfg, "megatron_to_hf_mode", "bridge") != "bridge"
-    )
-    ep = getattr(slime_cfg, "expert_model_parallel_size", 1) or 1
-    etp = getattr(slime_cfg, "expert_tensor_parallel_size", 1) or 1
-
-    if uses_mbridge_conversion:
-        world_size = actor_nodes * gpus_per_node
-    else:
-        world_size = tp * pp if (tp > 1 or pp > 1) else gpus_per_node
+    world_size = tp * pp if (tp > 1 or pp > 1) else gpus_per_node
     max_world_size = actor_nodes * gpus_per_node
     if world_size > max_world_size:
         raise ValueError(
@@ -67,16 +58,10 @@ def get_checkpoint_conversion_policy(
             continue
 
         extra_args: list[str] = []
-        conv_tp = tp
-        if conv_tp > 1 or pp > 1:
+        if tp > 1 or pp > 1:
             extra_args += [
-                f"--tensor-model-parallel-size {conv_tp}",
+                f"--tensor-model-parallel-size {tp}",
                 f"--pipeline-model-parallel-size {pp}",
-            ]
-        if uses_mbridge_conversion:
-            extra_args += [
-                f"--expert-model-parallel-size {ep}",
-                f"--expert-tensor-parallel-size {etp}",
             ]
         for attr, flag in _CONVERSION_EXTRA_ARGS:
             if x := getattr(slime_cfg, attr, None):

@@ -61,7 +61,7 @@ class Qwen3_6_35b_Recipe(SlimeRecipe):
 
     # ── Checkpointing / eval ──────────────────────────────────────────────
     megatron_to_hf_mode: str = ""
-    ref_load: str = "/checkpoints/torch_dist/Qwen3.6-35B-A3B_torch_dist_tp2pp2"
+    ref_load: str = "/checkpoints/Qwen3.6-35B-A3B_torch_dist_tp2pp2"
     save_interval: int = 20
     eval_interval: int | None = None
     eval_max_response_len: int = 4096
