@@ -17,6 +17,7 @@ Then: `uv run modal run <tutorial_file>.py::train`.
 
 import asyncio
 import base64
+import dataclasses as _dc
 import inspect
 import os
 import shlex
@@ -27,6 +28,7 @@ import time
 from pathlib import Path, PurePosixPath
 from typing import Any
 from collections.abc import Callable
+from enum import Enum
 from modal import App, Image, Secret, Volume
 
 from modal_training_gym.common import hf_secrets
@@ -130,6 +132,31 @@ def _has_torch_dist_checkpoint(save_path: str) -> bool:
         )
     except OSError:
         return False
+
+
+def _serialize_recipe_value(value: Any) -> Any:
+    if value is None or isinstance(value, str | int | float | bool):
+        return value
+    if isinstance(value, Enum):
+        return value.value
+    if isinstance(value, Path | PurePosixPath):
+        return str(value)
+    if isinstance(value, dict):
+        return {str(k): _serialize_recipe_value(v) for k, v in value.items()}
+    if isinstance(value, list | tuple | set):
+        return [_serialize_recipe_value(v) for v in value]
+    if callable(value):
+        module = getattr(value, "__module__", "")
+        name = getattr(value, "__qualname__", getattr(value, "__name__", ""))
+        return f"{module}.{name}" if module and name else repr(value)
+    return repr(value)
+
+
+def _serialize_recipe_fields(recipe: SlimeRecipe) -> dict[str, Any]:
+    return {
+        field.name: _serialize_recipe_value(getattr(recipe, field.name))
+        for field in _dc.fields(recipe)
+    }
 
 
 def build_slime_app(
