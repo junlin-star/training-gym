@@ -650,6 +650,7 @@ def build_slime_app(
     user_experimental_options = train_function_kwargs.pop("experimental_options", None)
     if user_experimental_options is not None:
         train_experimental_options.update(user_experimental_options)
+    train_ephemeral_disk = train_function_kwargs.pop("ephemeral_disk", None)
     if train_function_kwargs:
         unsupported = ", ".join(sorted(train_function_kwargs))
         raise TypeError(f"Unsupported slime.train_function_kwargs keys: {unsupported}")
@@ -662,6 +663,7 @@ def build_slime_app(
         region=slime.region,
         volumes=all_volumes,
         secrets=train_secrets or None,
+        ephemeral_disk=train_ephemeral_disk,
         timeout=24 * 60 * 60,
         experimental_options=train_experimental_options or None,
         serialized=True,
