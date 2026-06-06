@@ -3,7 +3,7 @@
 
 TUTORIAL_METADATA = {
     "framework": "`slime`",
-    "cluster_shape": "2 × 8×H100",
+    "cluster_shape": "1 × 8×H100",
     "summary": "Train Qwen3.6-35B-A3B on DAPO-math with GRPO",
     "difficulty": "Advanced",
     "order": 25,
@@ -40,10 +40,9 @@ def _intro():
     3. Feed that score back as a GRPO reward through SLIME.
     4. Compare base vs. trained accuracy.
 
-    Qwen3.6-35B-A3B uses a newer HuggingFace architecture class
-    (`Qwen3_5MoeForConditionalGeneration`) that requires checkpoint
-    pre-conversion. The training gym handles this automatically when
-    `megatron_model_type` is set on the model's architecture spec.
+    Qwen3.6-35B-A3B uses slime's default mbridge conversion path:
+    `megatron_to_hf_mode=""` pre-converts the HuggingFace checkpoint
+    before training instead of loading the base checkpoint through bridge mode.
     """
 
 
@@ -129,16 +128,18 @@ def _train_intro():
     """
     ## Train with SLIME
 
-    This MoE model needs 2 × 8×H100 (16 GPUs) with TP2, CP2, EP8,
-    and optimizer CPU offload, matching the official Slime parallelism
-    for Qwen3.6-35B-A3B.
+    This MoE model runs on 1 × 8×H100 with TP2, PP2, CP2, EP4,
+    and optimizer CPU offload, matching the native Slime parallelism
+    that works for Qwen3.6-35B-A3B.
 
     Key points:
     - **`rm_type="deepscaler"`** — slime's built-in math reward that
       extracts and compares numerical answers. No custom reward function
       or sandbox needed.
-    - The model's `megatron_model_type` triggers automatic checkpoint
-      pre-conversion from HF to Megatron format before training starts.
+    - `megatron_to_hf_mode=""` uses slime's default mbridge conversion path,
+      so the HF checkpoint is pre-converted before training starts.
+    - Built-in slime model args come from
+      `scripts/models/qwen3.5-35B-A3B.sh`; the tutorial does not patch slime.
     """
 
 
@@ -149,14 +150,7 @@ def _train():
         dataset=dataset,
         recipe=Qwen3_6_35b_Recipe(
             rm_type="deepscaler",
-            n_samples_per_prompt=4,
-            sglang_mem_fraction_static=0.75,
-            sglang_max_running_requests=512,
-            rollout_max_response_len=1024,
-            eval_max_response_len=1024,
-            eval_interval=None,
-            n_samples_per_eval_prompt=4,
-            no_save_optim=True,
+            megatron_to_hf_mode="",
         ),
     )
     print("Starting training...")

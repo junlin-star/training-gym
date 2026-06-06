@@ -60,10 +60,7 @@ from .modal_helpers.utils import (
     resolve_checkpoint_ref,
 )
 from modal_training_gym.common.patches import encode_patch
-from modal_training_gym.common.checkpoint import (
-    Checkpoint,
-    _get_slime_checkpoint_prefix,
-)
+from modal_training_gym.common.checkpoint import Checkpoint
 from modal_training_gym.common.framework import Framework
 
 SLIME_ROOT = "/root/slime"
@@ -84,12 +81,6 @@ _PATCH_BRIDGE_PER_TOKEN_LOSS_B64 = encode_patch(
     "patch_bridge_provider_per_token_loss", _SLIME_PATCHES
 )
 _PATCH_STOP_TOKEN_DIAG_B64 = encode_patch("patch_stop_token_diagnostic", _SLIME_PATCHES)
-_PATCH_QWEN35_CONVERSION_NAMES_B64 = encode_patch(
-    "patch_qwen35_conversion_names", _SLIME_PATCHES
-)
-_PATCH_SKIP_FINAL_WEIGHT_UPDATE_B64 = encode_patch(
-    "patch_skip_final_weight_update", _SLIME_PATCHES
-)
 
 
 def _build_slime_base_image() -> "Image":
@@ -101,8 +92,6 @@ def _build_slime_base_image() -> "Image":
             f"echo {_PATCH_MEGATRON_BRIDGE_B64} | base64 -d | python3",
             f"echo {_PATCH_ADVANTAGES_B64} | base64 -d | python3",
             f"echo {_PATCH_BRIDGE_NONE_TASK_B64} | base64 -d | python3",
-            f"echo {_PATCH_QWEN35_CONVERSION_NAMES_B64} | base64 -d | python3",
-            f"echo {_PATCH_SKIP_FINAL_WEIGHT_UPDATE_B64} | base64 -d | python3",
             f"echo {_PATCH_STOP_TOKEN_DIAG_B64} | base64 -d | python3",
         )
     )
@@ -112,6 +101,13 @@ def _has_torch_dist_checkpoint(save_path: str) -> bool:
     if not os.path.isdir(save_path):
         return False
 
+    def _is_complete_checkpoint_dir(path: str) -> bool:
+        try:
+            names = os.listdir(path)
+        except OSError:
+            return False
+        return "common.pt" in names and any(name.endswith(".distcp") for name in names)
+
     tracker_path = os.path.join(save_path, "latest_checkpointed_iteration.txt")
     if os.path.isfile(tracker_path):
         try:
@@ -120,15 +116,16 @@ def _has_torch_dist_checkpoint(save_path: str) -> bool:
         except OSError:
             marker = ""
         if marker == "release":
-            return os.path.isdir(os.path.join(save_path, "release"))
+            return _is_complete_checkpoint_dir(os.path.join(save_path, "release"))
         if marker.isdigit():
             iter_dir = f"iter_{int(marker):07d}"
-            return os.path.isdir(os.path.join(save_path, iter_dir))
+            return _is_complete_checkpoint_dir(os.path.join(save_path, iter_dir))
 
     try:
         return any(
             entry.is_dir()
             and (entry.name == "release" or entry.name.startswith("iter_"))
+            and _is_complete_checkpoint_dir(entry.path)
             for entry in os.scandir(save_path)
         )
     except OSError:
@@ -150,12 +147,7 @@ def build_slime_app(
     SlimeRecipe._validate_custom_model_architecture(model)
     SlimeRecipe._validate_dataset(dataset)
 
-    if (
-        model
-        and getattr(model, "architecture", None)
-        and getattr(model.architecture, "needs_pre_conversion", False)
-        and slime.megatron_to_hf_mode != "bridge"
-    ):
+    if model and getattr(slime, "megatron_to_hf_mode", "") != "bridge":
         slug = model.model_name.replace("/", "--")
         if not slime.ref_load:
             object.__setattr__(slime, "ref_load", f"/checkpoints/torch_dist/{slug}-v31")
@@ -171,6 +163,7 @@ def build_slime_app(
         model
         and getattr(model, "architecture", None)
         and getattr(model.architecture, "use_gated_attention", False)
+        and not slime.slime_model_script
     )
 
     caller_module = resolve_caller_module()
@@ -195,6 +188,7 @@ def build_slime_app(
         model
         and getattr(model, "architecture", None)
         and getattr(model.architecture, "megatron_spec", None)
+        and not slime.slime_model_script
     )
     if slime.image_overlay is not None:
         image = slime.image_overlay(image)
@@ -448,18 +442,17 @@ def build_slime_app(
         data_volume.commit()
 
     convert_nnodes = get_checkpoint_conversion_policy(slime, model=model)[0]
-    convert_multi_node = convert_nnodes > 1
 
     @app.function(
         image=image,
         gpu=gpu_spec,
         volumes=all_volumes,
         timeout=4 * 60 * 60,
-        experimental_options={"efa_enabled": True} if convert_multi_node else {},
+        experimental_options={"efa_enabled": True},
         serialized=True,
         name="convert_checkpoint",
     )
-    @clustered(convert_nnodes, rdma=convert_multi_node)  # pyright: ignore[reportCallIssue, reportOptionalCall]
+    @clustered(convert_nnodes, rdma=True)  # pyright: ignore[reportCallIssue, reportOptionalCall]
     def convert_checkpoint():
         from huggingface_hub import snapshot_download
 
@@ -478,15 +471,25 @@ def build_slime_app(
             hf_path = snapshot_download(model.model_name, local_files_only=True)
         save_path = str(slime.ref_load)
 
-        if _has_torch_dist_checkpoint(save_path):
-            print(
-                f"Found existing torch_dist checkpoint at {save_path}; skipping conversion."
-            )
-            return
         num_nodes, nproc_per_node, extra_args = get_checkpoint_conversion_policy(
             slime, model=model
         )
         node_rank, master_addr, _, nnodes = get_modal_cluster_context(num_nodes)
+
+        if os.path.exists(save_path):
+            if _has_torch_dist_checkpoint(save_path):
+                if node_rank == 0:
+                    print(f"Using existing torch_dist checkpoint at {save_path}.")
+                return
+            if node_rank == 0:
+                import shutil
+
+                print(f"Removing incomplete torch_dist checkpoint at {save_path}.")
+                shutil.rmtree(save_path, ignore_errors=True)
+                checkpoints_volume.commit()
+            else:
+                time.sleep(5)
+                checkpoints_volume.reload()
 
         torchrun_args = [f"--nproc-per-node={nproc_per_node}"]
         if nnodes > 1:
@@ -500,12 +503,10 @@ def build_slime_app(
         import importlib.util
 
         mmt = ""
-        needs_preconv = False
         if model and getattr(model, "architecture", None):
             mmt = getattr(model.architecture, "megatron_model_type", "")
-            needs_preconv = bool(mmt)
 
-        if num_nodes > 1 or needs_preconv:
+        if num_nodes > 1:
             spec = importlib.util.find_spec(
                 "modal_training_gym.frameworks.slime.modal_helpers.convert_hf_to_torch_dist"
             )
@@ -522,40 +523,13 @@ def build_slime_app(
                 if slime.slime_model_script
                 else f"{SLIME_ROOT}/scripts/models/{mmt}.sh"
             )
-            if needs_preconv:
-                # Strip parallelism flags from MODEL_ARGS so the only
-                # source of TP/PP/EP is our extra_args.  The bridge
-                # (AutoBridge) needs MODEL_ARGS to correctly map HF
-                # weights.  Extra_args (from ModelArchitecture) are
-                # appended LAST so they override any duplicates.
-                filter_cmd = (
-                    "CONV_ARGS=(); SKIP=0; "
-                    'for a in "${MODEL_ARGS[@]}"; do '
-                    '  if [ "$SKIP" = 1 ]; then SKIP=0; continue; fi; '
-                    '  case "$a" in '
-                    "    --tensor-model-parallel-size|--pipeline-model-parallel-size"
-                    "|--expert-model-parallel-size|--expert-tensor-parallel-size"
-                    "|--context-parallel-size) SKIP=1; continue ;; "
-                    "  esac; "
-                    '  CONV_ARGS+=("$a"); '
-                    "done"
-                )
-                cmd = (
-                    f"source {model_script} && {filter_cmd} && "
-                    f'echo "CONV_ARGS=${{CONV_ARGS[*]}}" && '
-                    f"torchrun {' '.join(torchrun_args)} {convert_script} "
-                    '"${CONV_ARGS[@]}" '
-                    f"{' '.join(extra_args)} "
-                    f"--hf-checkpoint {shlex.quote(hf_path)} --save {shlex.quote(save_path)}"
-                )
-            else:
-                cmd = (
-                    f"source {model_script} && "
-                    f"torchrun {' '.join(torchrun_args)} {convert_script} "
-                    '"${MODEL_ARGS[@]}" '
-                    f"{' '.join(extra_args)} "
-                    f"--hf-checkpoint {shlex.quote(hf_path)} --save {shlex.quote(save_path)}"
-                )
+            cmd = (
+                f"source {model_script} && "
+                f"torchrun {' '.join(torchrun_args)} {convert_script} "
+                '"${MODEL_ARGS[@]}" '
+                f"{' '.join(extra_args)} "
+                f"--hf-checkpoint {shlex.quote(hf_path)} --save {shlex.quote(save_path)}"
+            )
         else:
             cmd = (
                 f"torchrun {' '.join(torchrun_args)} {convert_script} "
@@ -566,9 +540,6 @@ def build_slime_app(
         env = {**os.environ, **slime.environment}
         if num_nodes > 1:
             env["SKIP_RELEASE_RENAME"] = "1"
-        if needs_preconv:
-            env["SKIP_PP_AUTOINFLATE"] = "1"
-
         print(
             f"Conversion layout: nodes={num_nodes}, "
             f"nproc_per_node={nproc_per_node}, node_rank={node_rank}"
@@ -627,14 +598,10 @@ def build_slime_app(
         checkpoints_volume.commit()
         print(f"Saved HF checkpoint to {output_dir}")
 
-    _multi_node = slime.total_nodes > 1
-
     train_secrets: list[Secret] = []
     if slime.wandb is not None:
         train_secrets.append(Secret.from_name(slime.wandb.modal_wandb_secret_name))
-    train_experimental_options: dict[str, Any] = {}
-    if _multi_node:
-        train_experimental_options["efa_enabled"] = True
+    train_experimental_options: dict[str, Any] = {"efa_enabled": True}
 
     train_function_kwargs = dict(slime.train_function_kwargs or {})
     user_secrets = train_function_kwargs.pop("secrets", None)
@@ -645,6 +612,7 @@ def build_slime_app(
     user_experimental_options = train_function_kwargs.pop("experimental_options", None)
     if user_experimental_options is not None:
         train_experimental_options.update(user_experimental_options)
+    train_ephemeral_disk = train_function_kwargs.pop("ephemeral_disk", None)
     if train_function_kwargs:
         unsupported = ", ".join(sorted(train_function_kwargs))
         raise TypeError(f"Unsupported slime.train_function_kwargs keys: {unsupported}")
@@ -657,12 +625,13 @@ def build_slime_app(
         region=slime.region,
         volumes=all_volumes,
         secrets=train_secrets or None,
+        ephemeral_disk=train_ephemeral_disk,
         timeout=24 * 60 * 60,
         experimental_options=train_experimental_options or None,
         serialized=True,
         name="train",
     )
-    @clustered(slime.total_nodes, rdma=_multi_node)  # pyright: ignore[reportCallIssue, reportOptionalCall]
+    @clustered(slime.total_nodes, rdma=True)  # pyright: ignore[reportCallIssue, reportOptionalCall]
     async def train(
         modal_app_id: str = "",
         modal_app_url: str = "",
@@ -806,145 +775,9 @@ def build_slime_app(
             )
             print(f"Command: {cmd}, runtime_env: {runtime_env}")
 
-            _convert_procs: list[tuple[str, str, subprocess.Popen]] = []
-            _converted: set[str] = set()
-            _checkpoint_stats: dict[str, tuple[int, int, float, float]] = {}
-            _hf_path: str | None = None
-
-            if model and (slime.megatron_to_hf_mode == "bridge" or slime.ref_load):
-                from huggingface_hub import snapshot_download as _snap
-
-                _hf_path = (
-                    str(model.model_path)
-                    if model.model_path
-                    else _snap(model.model_name, local_files_only=True)
-                )
-
-            def _checkpoint_ready(path: str, *, require_stable: bool) -> bool:
-                expected_ranks = slime.actor_num_nodes * slime.actor_num_gpus_per_node
-                try:
-                    names = os.listdir(path)
-                except FileNotFoundError:
-                    return False
-                for rank in range(expected_ranks):
-                    if not any(
-                        name.startswith(f"__{rank}_") and name.endswith(".distcp")
-                        for name in names
-                    ):
-                        return False
-                if "common.pt" not in names:
-                    return False
-                if not require_stable:
-                    return True
-
-                count = 0
-                size = 0
-                latest_mtime = 0.0
-                for root, _, files in os.walk(path):
-                    for name in files:
-                        try:
-                            st = os.stat(os.path.join(root, name))
-                        except FileNotFoundError:
-                            return False
-                        count += 1
-                        size += st.st_size
-                        latest_mtime = max(latest_mtime, st.st_mtime)
-
-                now = time.monotonic()
-                current = (count, size, latest_mtime)
-                previous = _checkpoint_stats.get(path)
-                if previous is None or previous[:3] != current:
-                    _checkpoint_stats[path] = (*current, now)
-                    return False
-                return now - previous[3] >= 30
-
-            def _start_conversions(*, require_stable: bool = True) -> int:
-                """Scan for new complete checkpoints and start converting them."""
-                if not (
-                    model and (slime.megatron_to_hf_mode == "bridge" or slime.ref_load)
-                ):
-                    return 0
-                prefix = _get_slime_checkpoint_prefix()
-                if not prefix:
-                    return 0
-                tracker = os.path.join(save_root, "latest_checkpointed_iteration.txt")
-                try:
-                    with open(tracker) as f:
-                        latest = int(f.read().strip())
-                except (OSError, ValueError):
-                    return 0
-                started = 0
-                for entry in os.scandir(save_root):
-                    if (
-                        entry.is_dir()
-                        and entry.name.startswith(prefix)
-                        and not entry.name.endswith("_hf")
-                        and entry.name not in _converted
-                    ):
-                        iter_num = entry.name.replace(prefix, "").lstrip("_")
-                        if not iter_num.isdigit() or int(iter_num) > latest:
-                            continue
-                        hf_dir = f"{entry.path}_hf"
-                        if os.path.exists(hf_dir):
-                            _converted.add(entry.name)
-                            continue
-                        if not _checkpoint_ready(
-                            entry.path, require_stable=require_stable
-                        ):
-                            continue
-                        hf_path = _hf_path
-                        convert_cmd = (
-                            f"python {SLIME_ROOT}/tools/convert_torch_dist_to_hf.py "
-                            f"--input-dir {shlex.quote(entry.path)} "
-                            f"--output-dir {shlex.quote(hf_dir)} "
-                            f"--origin-hf-dir {shlex.quote(hf_path)} "
-                            f"--force"
-                        )
-                        print(f"[bg-convert] Starting: {entry.name} → HF")
-                        proc = subprocess.Popen(["bash", "-c", convert_cmd])
-                        _convert_procs.append((entry.name, convert_cmd, proc))
-                        _converted.add(entry.name)
-                        started += 1
-                return started
-
-            async def _background_converter():
-                while not _stop_converter.is_set():
-                    _start_conversions()
-                    await asyncio.sleep(15)
-
-            _stop_converter = asyncio.Event()
-            converter_task = asyncio.ensure_future(_background_converter())
-
             async with cluster.forward_dashboard() as tunnel:
                 print(f"Ray dashboard: {tunnel.url}")
                 await cluster.submit_and_tail(cmd, runtime_env=runtime_env)
-
-            _stop_converter.set()
-            await converter_task
-            await checkpoints_volume.commit.aio()
-            await checkpoints_volume.reload.aio()
-            if model and (slime.megatron_to_hf_mode == "bridge" or slime.ref_load):
-                for _ in range(5):
-                    if _start_conversions(require_stable=True):
-                        break
-                    await asyncio.sleep(15)
-
-            for name, convert_cmd, proc in _convert_procs:
-                proc.wait()
-                if proc.returncode != 0:
-                    print(
-                        f"[bg-convert] Conversion failed for {name} "
-                        f"(exit {proc.returncode}); retrying after volume reload."
-                    )
-                    await asyncio.sleep(30)
-                    await checkpoints_volume.reload.aio()
-                    proc = subprocess.Popen(["bash", "-c", convert_cmd])
-                    proc.wait()
-                if proc.returncode != 0:
-                    raise RuntimeError(
-                        f"Checkpoint conversion failed for {name} (exit {proc.returncode})"
-                    )
-                print(f"[bg-convert] Converted {name}")
 
             result_kwargs = {
                 "app_name": app_name,
