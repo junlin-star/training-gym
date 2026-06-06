@@ -286,28 +286,23 @@ def _train_intro():
 
     The recipe below is slime's reference Qwen3-4B layout (TP=2, 8192-token
     responses, `max_tokens_per_gpu=9216`) with the DAPO modifications layered on
-    top of GRPO. DAPO ([Yu et al., 2025](https://arxiv.org/abs/2503.14476))
-    introduces four changes, each of which maps to a `SlimeRecipe` field:
+    top of GRPO. We follow the paper's recipe for the most part, but with some modifications for speed. ([Yu et al., 2025](https://arxiv.org/abs/2503.14476))
 
-    - **Clip-Higher** — decouples the PPO clip range so the upper bound is larger
-      than the lower bound, giving low-probability tokens more room to grow and
-      preventing entropy collapse. Set via `eps_clip=0.2` (lower) and
-      `eps_clip_high=0.28` (upper).
-    - **Dynamic Sampling** — oversamples prompts and filters out groups whose
-      samples all receive the same reward (zero advantage), so every batch carries
-      a useful gradient signal. Set via `over_sampling_batch_size=48` and
-      `dynamic_sampling_filter_path=...check_reward_nonzero_std`.
-    - **Token-level policy-gradient loss** — averages the loss over all tokens
-      rather than per-sequence, so long reasoning traces contribute in proportion
-      to their length. Enabled with `calculate_per_token_loss=True`.
-    - **Overlong Reward Shaping** — replaces the hard truncation penalty with a
-      soft length penalty that ramps up as responses approach the max length
-      (the `dapo_overlong_rm` reward above). DAPO also drops the KL penalty
-      entirely, which we do with `use_kl_loss=False` and `kl_coef=0.0`.
+    Highlights — the core DAPO knobs are kept as the paper specifies, and a few
+    are scaled down for a faster tutorial run:
 
-    On 8×H100 the training actor and the sglang rollout engines are colocated; with
-    TP=2 the model + optimizer shard across two GPUs, leaving room for the long
-    reasoning traces.
+    - **Clip-Higher** (`eps_clip=0.2`, `eps_clip_high=0.28`) — from the paper; the
+      asymmetric upper bound is DAPO's signature change.
+    - **No KL penalty** (`use_kl_loss=False`, `kl_coef=0.0`) — from the paper,
+      which drops the KL term entirely.
+    - **Token-level policy-gradient loss** (`calculate_per_token_loss=True`) —
+      from the paper.
+    - **Dynamic sampling** (`over_sampling_batch_size=48` plus the zero-variance
+      reward filter) — from the paper.
+    - **8 samples per prompt** (`n_samples_per_prompt=8`) — fewer than the paper's
+      16, for speed.
+    - **Overlong buffer of 2048 tokens** — smaller than the paper's 4096, for speed.
+    - **8192-token response cap** — shorter than the paper's 16384, for speed.
 
     This tutorial runs a short 15-rollout job to demonstrate the DAPO training setup.
     For a more meaningful accuracy gain, increase the rollout count.
