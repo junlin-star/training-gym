@@ -92,11 +92,6 @@ def _main_impl() -> None:
         recipe=Qwen3_6_35b_Recipe(
             rm_type="deepscaler",
             megatron_to_hf_mode="",
-            n_samples_per_prompt=4,
-            sglang_mem_fraction_static=0.75,
-            sglang_max_running_requests=512,
-            eval_max_response_len=4096,
-            n_samples_per_eval_prompt=4,
         ),
     )
     print("Starting training...")
