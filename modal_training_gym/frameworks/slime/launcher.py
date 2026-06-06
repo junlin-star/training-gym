@@ -477,10 +477,14 @@ def build_slime_app(
         node_rank, master_addr, _, nnodes = get_modal_cluster_context(num_nodes)
 
         if os.path.exists(save_path):
+            if _has_torch_dist_checkpoint(save_path):
+                if node_rank == 0:
+                    print(f"Using existing torch_dist checkpoint at {save_path}.")
+                return
             if node_rank == 0:
                 import shutil
 
-                print(f"Removing existing torch_dist checkpoint at {save_path}.")
+                print(f"Removing incomplete torch_dist checkpoint at {save_path}.")
                 shutil.rmtree(save_path, ignore_errors=True)
                 checkpoints_volume.commit()
             else:
