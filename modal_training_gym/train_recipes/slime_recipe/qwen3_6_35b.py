@@ -6,20 +6,22 @@ from modal_training_gym.train_recipes.slime_recipe.recipe import SlimeRecipe
 
 @dataclass(config=ConfigDict(extra="forbid", arbitrary_types_allowed=True))
 class Qwen3_6_35b_Recipe(SlimeRecipe):
-    """Qwen3.6-35B-A3B (MoE) on 2×8×H100 with TP2/EP8, colocated GRPO."""
+    """Qwen3.6-35B-A3B (MoE) on 1×8×H100 with TP2/PP2/CP2/EP4."""
 
     gpu_type: str = "H100"
+    slime_model_script: str = "scripts/models/qwen3.5-35B-A3B.sh"
+    hf_checkpoint: str = "Qwen/Qwen3.6-35B-A3B"
 
     colocate: bool = True
-    actor_num_nodes: int = 2
+    actor_num_nodes: int = 1
     actor_num_gpus_per_node: int = 8
 
     # ── Parallelism ───────────────────────────────────────────────────────
     tensor_model_parallel_size: int = 2
     sequence_parallel: bool = True
-    pipeline_model_parallel_size: int = 1
-    context_parallel_size: int = 1
-    expert_model_parallel_size: int = 8
+    pipeline_model_parallel_size: int = 2
+    context_parallel_size: int = 2
+    expert_model_parallel_size: int = 4
     expert_tensor_parallel_size: int = 1
 
     # ── Rollout ───────────────────────────────────────────────────────────
@@ -40,7 +42,7 @@ class Qwen3_6_35b_Recipe(SlimeRecipe):
     n_samples_per_prompt: int = 8
     global_batch_size: int = 32
     lr: float = 1e-6
-    max_tokens_per_gpu: int = 4096
+    max_tokens_per_gpu: int = 8192
     calculate_per_token_loss: bool = True
     balance_data: bool = True
 
@@ -54,7 +56,7 @@ class Qwen3_6_35b_Recipe(SlimeRecipe):
 
     # ── Checkpointing / eval ──────────────────────────────────────────────
     megatron_to_hf_mode: str = ""
-    no_save_optim: bool = True
+    ref_load: str = "/checkpoints/torch_dist/Qwen3.6-35B-A3B_torch_dist_tp2pp2"
     save_interval: int = 20
-    eval_interval: int | None = 20
+    eval_interval: int | None = None
     eval_max_response_len: int = 4096

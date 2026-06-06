@@ -3,7 +3,7 @@
 
 TUTORIAL_METADATA = {
     "framework": "`slime`",
-    "cluster_shape": "2 × 8×H100",
+    "cluster_shape": "1 × 8×H100",
     "summary": "Train Qwen3.6-35B-A3B on DAPO-math with GRPO",
     "difficulty": "Advanced",
     "order": 25,
@@ -128,9 +128,9 @@ def _train_intro():
     """
     ## Train with SLIME
 
-    This MoE model needs 2 × 8×H100 (16 GPUs) with TP2, CP2, EP8,
-    and optimizer CPU offload, matching the official Slime parallelism
-    for Qwen3.6-35B-A3B.
+    This MoE model runs on 1 × 8×H100 with TP2, PP2, CP2, EP4,
+    and optimizer CPU offload, matching the native Slime parallelism
+    that works for Qwen3.6-35B-A3B.
 
     Key points:
     - **`rm_type="deepscaler"`** — slime's built-in math reward that
@@ -138,8 +138,8 @@ def _train_intro():
       or sandbox needed.
     - `megatron_to_hf_mode=""` uses slime's default mbridge conversion path,
       so the HF checkpoint is pre-converted before training starts.
-    - `no_save_optim=True` keeps tutorial checkpoints focused on deployable
-      model weights instead of optimizer resume state.
+    - Built-in slime model args come from
+      `scripts/models/qwen3.5-35B-A3B.sh`; the tutorial does not patch slime.
     """
 
 
@@ -151,7 +151,6 @@ def _train():
         recipe=Qwen3_6_35b_Recipe(
             rm_type="deepscaler",
             megatron_to_hf_mode="",
-            no_save_optim=True,
             n_samples_per_prompt=4,
             sglang_mem_fraction_static=0.75,
             sglang_max_running_requests=512,

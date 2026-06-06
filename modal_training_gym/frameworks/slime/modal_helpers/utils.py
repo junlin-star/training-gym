@@ -49,10 +49,6 @@ def get_checkpoint_conversion_policy(
     etp = getattr(slime_cfg, "expert_tensor_parallel_size", 1) or 1
 
     if uses_mbridge_conversion:
-        # Match ALL training parallelism dims exactly so Megatron
-        # doesn't attempt any re-sharding at load time (re-sharding
-        # triggers BytesIO errors in dist_checkpointing).
-        pp = 1
         world_size = actor_nodes * gpus_per_node
     else:
         world_size = tp * pp if (tp > 1 or pp > 1) else gpus_per_node
@@ -72,8 +68,6 @@ def get_checkpoint_conversion_policy(
 
         extra_args: list[str] = []
         conv_tp = tp
-        if uses_mbridge_conversion:
-            pp = 1
         if conv_tp > 1 or pp > 1:
             extra_args += [
                 f"--tensor-model-parallel-size {conv_tp}",
@@ -88,7 +82,11 @@ def get_checkpoint_conversion_policy(
             if x := getattr(slime_cfg, attr, None):
                 extra_args.append(f"--{flag} {x}")
 
-        if model and getattr(model, "architecture", None):
+        if (
+            model
+            and getattr(model, "architecture", None)
+            and not getattr(slime_cfg, "slime_model_script", "")
+        ):
             arch = model.architecture
             _arch_fields = [
                 ("num_layers", "num-layers"),

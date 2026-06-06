@@ -81,7 +81,6 @@ _PATCH_BRIDGE_PER_TOKEN_LOSS_B64 = encode_patch(
     "patch_bridge_provider_per_token_loss", _SLIME_PATCHES
 )
 _PATCH_STOP_TOKEN_DIAG_B64 = encode_patch("patch_stop_token_diagnostic", _SLIME_PATCHES)
-_PATCH_NO_SAVE_OPTIM_B64 = encode_patch("patch_no_save_optim", _SLIME_PATCHES)
 
 
 def _build_slime_base_image() -> "Image":
@@ -164,6 +163,7 @@ def build_slime_app(
         model
         and getattr(model, "architecture", None)
         and getattr(model.architecture, "use_gated_attention", False)
+        and not slime.slime_model_script
     )
 
     caller_module = resolve_caller_module()
@@ -188,6 +188,7 @@ def build_slime_app(
         model
         and getattr(model, "architecture", None)
         and getattr(model.architecture, "megatron_spec", None)
+        and not slime.slime_model_script
     )
     if slime.image_overlay is not None:
         image = slime.image_overlay(image)
@@ -237,10 +238,6 @@ def build_slime_app(
         image = image.run_commands(
             f"echo {_PATCH_VALIDATION_B64} | base64 -d | python3",
         )
-
-    image = image.run_commands(
-        f"echo {_PATCH_NO_SAVE_OPTIM_B64} | base64 -d | python3",
-    )
 
     def _get_custom_generate_path() -> str:
         cfg = slime.extra_config
