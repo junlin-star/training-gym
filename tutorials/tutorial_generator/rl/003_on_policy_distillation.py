@@ -371,8 +371,8 @@ def _train():
 
             gpu_type="H100",
             colocate=True,
-            actor_num_gpus_per_node=1,
-            rollout_num_gpus=1,
+            actor_num_gpus_per_node=8,
+            rollout_num_gpus=8,
             tensor_model_parallel_size=1,
             sequence_parallel=False,
             rollout_num_gpus_per_engine=1,

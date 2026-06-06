@@ -135,6 +135,7 @@ class SlimeRecipe(BaseTrainRecipe):
     # ── Rollout (optional) ─────────────────────────────────────────────────
     rollout_shuffle: bool = True
     rollout_top_p: float = 1.0
+    rollout_stop_token_ids: list[int] | None = None
     sglang_mem_fraction_static: float = 0.75
 
     # ── Training ────────────────────────────────────────────────────────────
@@ -171,6 +172,7 @@ class SlimeRecipe(BaseTrainRecipe):
     load: str = ""
     megatron_to_hf_mode: str = "bridge"
     use_fault_tolerance: bool = True
+    no_save_optim: bool = False
 
     # ── Reward model ─────────────────────────────────────────────────────────
     rm_type: str | None = None

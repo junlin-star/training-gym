@@ -8,10 +8,27 @@
   verl, …) subclass or compose this.
 """
 
+import json
 import asyncio
 import inspect
 import subprocess
 import time
+
+RAY_SYSTEM_CONFIG_ARG = "--system-config"
+RAY_HEALTH_CHECK_SYSTEM_CONFIG = {
+    "health_check_initial_delay_ms": 5_000,
+    "health_check_period_ms": 10_000,
+    "health_check_timeout_ms": 600_000,
+    "health_check_failure_threshold": 120,
+}
+
+
+def _has_system_config(args: list[str]) -> bool:
+    return any(
+        arg == RAY_SYSTEM_CONFIG_ARG or arg.startswith(f"{RAY_SYSTEM_CONFIG_ARG}=")
+        for arg in args
+    )
+
 
 RAY_PORT = 6379
 RAY_DASHBOARD_PORT = 8265
@@ -42,6 +59,8 @@ def start_ray_head(
     ]
     if extra_start_args:
         cmd.extend(extra_start_args)
+    if not _has_system_config(cmd):
+        cmd.extend([RAY_SYSTEM_CONFIG_ARG, json.dumps(RAY_HEALTH_CHECK_SYSTEM_CONFIG)])
     subprocess.Popen(cmd)
 
     for _ in range(init_retries):
