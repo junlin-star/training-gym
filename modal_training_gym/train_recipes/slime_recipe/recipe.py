@@ -170,9 +170,8 @@ class SlimeRecipe(BaseTrainRecipe):
     # ── Checkpointing (optional) ───────────────────────────────────────────
     save: str = "/checkpoints"
     load: str = ""
-    megatron_to_hf_mode: str = "bridge"
+    megatron_to_hf_mode: str = ""
     use_fault_tolerance: bool = True
-    no_save_optim: bool = False
 
     # ── Reward model ─────────────────────────────────────────────────────────
     rm_type: str | None = None
@@ -392,7 +391,7 @@ class SlimeRecipe(BaseTrainRecipe):
             fields[f.name] = getattr(self, f.name)
         if dataset is not None:
             fields.update(self._dataset_to_fields(dataset))
-        if model is not None:
+        if model is not None and not self.slime_model_script:
             fields.update(self._model_to_fields(model))
         if self.wandb is not None:
             fields.update(self._wandb_to_fields(self.wandb))

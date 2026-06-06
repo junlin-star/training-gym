@@ -99,22 +99,17 @@ class TrainConfig:
         with modal.enable_output():
             with app.run():
                 modal_app_id = app.app_id or ""
-                needs_slime_preconv = (
-                    isinstance(self.recipe, SlimeRecipe)
-                    and self.model
-                    and getattr(self.model, "architecture", None)
-                    and getattr(self.model.architecture, "needs_pre_conversion", False)
-                )
                 needs_miles_raw_conversion = (
                     isinstance(self.recipe, MilesConfig)
                     and getattr(self.recipe, "megatron_to_hf_mode", "bridge")
                     != "bridge"
                 )
-                if needs_slime_preconv or needs_miles_raw_conversion:
+                if isinstance(self.recipe, SlimeRecipe):
                     app.download.remote()
                     app.convert_checkpoint.remote()
-                elif isinstance(self.recipe, SlimeRecipe) and not self.recipe.colocate:
+                elif needs_miles_raw_conversion:
                     app.download.remote()
+                    app.convert_checkpoint.remote()
                 result_dict = app.train.remote(
                     modal_app_id=modal_app_id,
                     modal_app_url=modal_app_dashboard_url(modal_app_id),
