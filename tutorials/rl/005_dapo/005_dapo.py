@@ -207,7 +207,25 @@ def _main_impl() -> None:
     # ## Training
     #
     # The recipe below is slime's reference Qwen3-4B layout (TP=2, 8192-token
-    # responses, `max_tokens_per_gpu=9216`) with the DAPO modifications. 
+    # responses, `max_tokens_per_gpu=9216`) with the DAPO modifications layered on
+    # top of GRPO. DAPO ([Yu et al., 2025](https://arxiv.org/abs/2503.14476))
+    # introduces four changes, each of which maps to a `SlimeRecipe` field:
+    #
+    # - **Clip-Higher** — decouples the PPO clip range so the upper bound is larger
+    #   than the lower bound, giving low-probability tokens more room to grow and
+    #   preventing entropy collapse. Set via `eps_clip=0.2` (lower) and
+    #   `eps_clip_high=0.28` (upper).
+    # - **Dynamic Sampling** — oversamples prompts and filters out groups whose
+    #   samples all receive the same reward (zero advantage), so every batch carries
+    #   a useful gradient signal. Set via `over_sampling_batch_size=48` and
+    #   `dynamic_sampling_filter_path=...check_reward_nonzero_std`.
+    # - **Token-level policy-gradient loss** — averages the loss over all tokens
+    #   rather than per-sequence, so long reasoning traces contribute in proportion
+    #   to their length. Enabled with `calculate_per_token_loss=True`.
+    # - **Overlong Reward Shaping** — replaces the hard truncation penalty with a
+    #   soft length penalty that ramps up as responses approach the max length
+    #   (the `dapo_overlong_rm` reward above). DAPO also drops the KL penalty
+    #   entirely, which we do with `use_kl_loss=False` and `kl_coef=0.0`.
     #
     # On 8×H100 the training actor and the sglang rollout engines are colocated; with
     # TP=2 the model + optimizer shard across two GPUs, leaving room for the long
