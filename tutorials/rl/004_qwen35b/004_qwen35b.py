@@ -83,6 +83,8 @@ def _main_impl() -> None:
     #   or sandbox needed.
     # - `megatron_to_hf_mode=""` uses slime's default mbridge conversion path,
     #   so the HF checkpoint is pre-converted before training starts.
+    # - `no_save_optim=True` keeps tutorial checkpoints focused on deployable
+    #   model weights instead of optimizer resume state.
 
     training_run = TrainConfig(
         model=Qwen3_6_35B(),
@@ -90,6 +92,7 @@ def _main_impl() -> None:
         recipe=Qwen3_6_35b_Recipe(
             rm_type="deepscaler",
             megatron_to_hf_mode="",
+            no_save_optim=True,
             n_samples_per_prompt=4,
             sglang_mem_fraction_static=0.75,
             sglang_max_running_requests=512,
