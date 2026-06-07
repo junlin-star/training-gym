@@ -1,12 +1,12 @@
 # pyright: reportUndefinedVariable=false
-"""Tutorial source for `005_audio_asr` — parsed by generate_tutorial.py."""
+"""Tutorial source for `006_audio_asr` — parsed by generate_tutorial.py."""
 
 TUTORIAL_METADATA = {
     "framework": "`slime`",
     "cluster_shape": "1 × 2×H100",
     "summary": "Audio GRPO on Qwen3-ASR-1.7B — transcribe LibriSpeech, reward −WER",
     "difficulty": "Intermediate",
-    "order": 30,
+    "order": 40,
     "api_classes": [
         "Qwen3ASR",
         "Qwen3ASR_Recipe",
@@ -51,7 +51,7 @@ def _run_instructions():
     """
     Run with:
     ```
-    uv run python tutorials/rl/005_audio_asr/005_audio_asr.py
+    uv run python tutorials/rl/006_audio_asr/006_audio_asr.py
     ```
     """
 
