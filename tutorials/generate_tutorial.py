@@ -314,9 +314,7 @@ def _split_py_code_cell(
     lines = source.splitlines(keepends=True)
     blocks: list[tuple[str, str]] = []
 
-    stmt_scopes = [
-        _stmt_belongs_at_module_scope(stmt, globals_used_by_defs) for stmt in tree.body
-    ]
+    stmt_scopes = _resolve_module_scope_statements(tree.body, globals_used_by_defs)
     group_start = 0
 
     for i in range(1, len(tree.body) + 1):
@@ -333,6 +331,34 @@ def _split_py_code_cell(
         group_start = i
 
     return blocks
+
+
+def _resolve_module_scope_statements(
+    statements: list[ast.stmt],
+    globals_used_by_defs: set[str],
+) -> list[bool]:
+    stmt_scopes = [
+        _stmt_belongs_at_module_scope(stmt, globals_used_by_defs) for stmt in statements
+    ]
+
+    changed = True
+    while changed:
+        changed = False
+        names_required_by_module_scope = set(globals_used_by_defs)
+        for stmt, belongs_at_module_scope in zip(statements, stmt_scopes, strict=True):
+            if belongs_at_module_scope:
+                names_required_by_module_scope.update(_module_scope_references(stmt))
+
+        for i, stmt in enumerate(statements):
+            if stmt_scopes[i]:
+                continue
+            if isinstance(stmt, (ast.Assign, ast.AnnAssign, ast.AugAssign)) and (
+                _assigned_names(stmt) & names_required_by_module_scope
+            ):
+                stmt_scopes[i] = True
+                changed = True
+
+    return stmt_scopes
 
 
 def _stmt_belongs_at_module_scope(
@@ -353,6 +379,48 @@ def _stmt_belongs_at_module_scope(
     if isinstance(stmt, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
         return bool(_assigned_names(stmt) & globals_used_by_defs)
     return False
+
+
+def _module_scope_references(stmt: ast.stmt) -> set[str]:
+    if isinstance(stmt, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+        nodes: list[ast.AST] = []
+        if isinstance(stmt, ast.Assign):
+            nodes.extend(stmt.targets)
+            nodes.append(stmt.value)
+        elif isinstance(stmt, ast.AnnAssign):
+            nodes.append(stmt.target)
+            nodes.append(stmt.annotation)
+            if stmt.value is not None:
+                nodes.append(stmt.value)
+        else:
+            nodes.append(stmt.target)
+            nodes.append(stmt.value)
+        return _referenced_names(nodes)
+
+    if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        nodes = [*stmt.decorator_list, *stmt.args.defaults, *stmt.args.kw_defaults]
+        if stmt.returns is not None:
+            nodes.append(stmt.returns)
+        return _referenced_names([node for node in nodes if node is not None])
+
+    if isinstance(stmt, ast.ClassDef):
+        return _referenced_names([*stmt.decorator_list, *stmt.bases, *stmt.keywords])
+
+    return _referenced_names([stmt])
+
+
+def _referenced_names(nodes: list[ast.AST]) -> set[str]:
+    refs: set[str] = set()
+
+    class ReferenceVisitor(ast.NodeVisitor):
+        def visit_Name(self, node: ast.Name) -> None:
+            if isinstance(node.ctx, ast.Load):
+                refs.add(node.id)
+
+    visitor = ReferenceVisitor()
+    for node in nodes:
+        visitor.visit(node)
+    return refs
 
 
 def _assigned_names(stmt: ast.Assign | ast.AnnAssign | ast.AugAssign) -> set[str]:

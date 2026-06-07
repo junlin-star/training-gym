@@ -510,6 +510,9 @@ def build_slime_app(
     @app.function(
         image=image,
         gpu=gpu_spec,
+        memory=slime.memory,
+        cloud=slime.cloud,
+        region=slime.region,
         volumes=all_volumes,
         timeout=4 * 60 * 60,
         experimental_options={"efa_enabled": True},
