@@ -1,3 +1,5 @@
+from dataclasses import field
+
 from pydantic import ConfigDict
 from pydantic.dataclasses import dataclass
 
@@ -9,8 +11,19 @@ class GLM_4_7_Recipe(SlimeRecipe):
     """GLM-4.7 (355B-A32B MoE) on 8x8xH200, non-colocated GSPO."""
 
     gpu_type: str = "H200"
+    memory: int | tuple[int, int] | None = (128, 2_097_152)
+    slime_model_script: str = "scripts/models/glm4.5-355B-A32B.sh"
+    hf_checkpoint: str = "zai-org/GLM-4.7"
+    environment: dict[str, str] = field(
+        default_factory=lambda: {
+            "PYTHONPATH": "/root/Megatron-LM/",
+            "CUDA_DEVICE_MAX_CONNECTIONS": "1",
+            "NCCL_NVLS_ENABLE": "1",
+            "DEPRECATED_MEGATRON_COMPATIBLE": "1",
+        }
+    )
     colocate: bool = False
-    rollout_num_gpus: int = 64
+    rollout_num_gpus: int | None = 64
     tensor_model_parallel_size: int = 8
     sequence_parallel: bool = True
     rollout_num_gpus_per_engine: int = 32
@@ -52,8 +65,8 @@ class GLM_4_7_Recipe(SlimeRecipe):
 
     # Rollout sglang
     sglang_enable_dp_attention: bool = True
-    sglang_dp_size: int = 4
-    sglang_ep_size: int = 32
+    sglang_dp_size: int | None = 4
+    sglang_ep_size: int | None = 32
     sglang_enable_dp_lm_head: bool = True
     sglang_moe_dense_tp_size: int = 1
     # EAGLE speculative decoding disabled: it requires
