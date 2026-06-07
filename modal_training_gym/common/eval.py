@@ -545,10 +545,12 @@ class HarborEval(EvalConfig):
 _ASR_DASHBOARD_SR = 8000  # stored (playable) dashboard audio sample rate
 
 
-def _asr_serve_and_eval(dataset, hf_dir: str, n_clips: int) -> dict:
+def _asr_serve_and_eval(dataset, hf_dir: str, n_clips: int, model_name: str) -> dict:
     import base64
     import datetime
+    import importlib.util
     import io
+    import os
     import subprocess
     import time
 
@@ -556,6 +558,25 @@ def _asr_serve_and_eval(dataset, hf_dir: str, n_clips: int) -> dict:
     import librosa
     import requests
     import soundfile as sf
+    from huggingface_hub import snapshot_download
+
+    # A fresh run yields a torch_dist checkpoint (main exports HF as a separate step),
+    # so export it to HF here before serving. patch_qwen3asr_export (applied at image
+    # build) gives slime's converter the qwen3_asr mapping incl. the audio tower.
+    if not os.path.exists(os.path.join(hf_dir, "config.json")):
+        out_dir = hf_dir.rstrip("/") + "_hf"
+        if not os.path.exists(os.path.join(out_dir, "config.json")):
+            origin = snapshot_download(model_name)
+            spec = importlib.util.find_spec(
+                "modal_training_gym.frameworks.slime.modal_helpers.convert_torch_dist_to_hf"
+            )
+            print(f"=== exporting {hf_dir} -> {out_dir} (torch_dist -> HF) ===")
+            subprocess.run(
+                ["python", spec.origin, "--input-dir", hf_dir,
+                 "--output-dir", out_dir, "--origin-hf-dir", origin, "--force"],
+                check=True,
+            )
+        hf_dir = out_dir
 
     print(f"=== serving {hf_dir} ===")
     port = 30000
@@ -654,28 +675,40 @@ def evaluate_asr(result, dataset, *, n_clips: int = 8, gpu_type: str = "H100") -
     accuracy (1 − WER), and writes a gym :class:`EvalResult` to the shared metadata
     volume the dashboard reads. Returns ``{"eval_id", "mean_wer", "rows"}``.
     """
+    from pathlib import Path
+
     import modal
 
+    import modal_training_gym
     from modal_training_gym.common.checkpoint import list_checkpoints
+    from modal_training_gym.common.patches import encode_patch
     from modal_training_gym.frameworks.slime.launcher import SLIME_IMAGE
 
     checkpoints = list_checkpoints(result.training_run_id)
     if not checkpoints:
         raise RuntimeError(f"no checkpoints for run {result.training_run_id}")
+    # Prefer an existing HF export; otherwise take the latest checkpoint and let the
+    # eval container export it (a fresh run is torch_dist — main does HF export as a
+    # separate step). _asr_serve_and_eval converts in-container when needed.
     hf = [c for c in checkpoints if c.path.rstrip("/").endswith("_hf")]
     ckpt = (hf or checkpoints)[-1]
-    if not ckpt.path.rstrip("/").endswith("_hf"):
-        raise RuntimeError(
-            f"latest checkpoint {ckpt.path!r} is not an HF export; "
-            "ensure the run exported (megatron_to_hf_mode='bridge')."
-        )
     vol_name = ckpt.checkpoints_volume_name or f"{result.app_name}-checkpoints"
     mount_path = ckpt.checkpoints_mount_path or "/checkpoints"
+    model_name = getattr(getattr(result, "model_config", None), "model_name", "") \
+        or "Qwen/Qwen3-ASR-1.7B"
+    _patches = (
+        Path(modal_training_gym.__file__).parent
+        / "frameworks" / "slime" / "modal_helpers" / "patches"
+    )
 
     image = (
         modal.Image.from_registry(SLIME_IMAGE)
         .entrypoint([])
         .run_commands("rm -rf /root/.cache/huggingface")  # let the hf-cache volume mount
+        # qwen3_asr Megatron->HF converter, so a torch_dist checkpoint exports in-container
+        .run_commands(
+            f"echo {encode_patch('patch_qwen3asr_export', _patches)} | base64 -d | python3"
+        )
         .uv_pip_install("jiwer", "librosa", "soundfile", "randomname")
         .add_local_python_source("modal_training_gym", copy=True)
     )
@@ -695,6 +728,6 @@ def evaluate_asr(result, dataset, *, n_clips: int = 8, gpu_type: str = "H100") -
     )(_asr_serve_and_eval)
 
     with app.run():
-        out = remote.remote(dataset, ckpt.path, n_clips)
+        out = remote.remote(dataset, ckpt.path, n_clips, model_name)
     print(f"eval published to dashboard: {out}")
     return out
