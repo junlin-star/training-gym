@@ -350,7 +350,9 @@ def build_slime_app(
     # and after the local mounts above so a mounted slime can't overlay them.
     # Each patch is idempotent; gated on the model declaring it, so non-ASR runs
     # are untouched.
-    _model_pip_packages = list(getattr(model, "pip_packages", None) or []) if model else []
+    _model_pip_packages = (
+        list(getattr(model, "pip_packages", None) or []) if model else []
+    )
     if _model_pip_packages:
         image = image.uv_pip_install(*_model_pip_packages)
 

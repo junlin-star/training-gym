@@ -13,7 +13,9 @@ from modal_training_gym.common.dataset import MultimodalDataset
 
 # The <audio> placeholder is where slime injects the media (same convention as
 # <image> for VLMs): one placeholder per audio item in the row's media column.
-INSTRUCTION = "<audio>\nTranscribe the speech to text. Respond with only the transcript."
+INSTRUCTION = (
+    "<audio>\nTranscribe the speech to text. Respond with only the transcript."
+)
 
 
 class LibriSpeechASRDataset(MultimodalDataset):
@@ -50,11 +52,17 @@ class LibriSpeechASRDataset(MultimodalDataset):
         rows = []
         for ex in ds:
             audio = ex["audio"]
-            data = audio["bytes"] if audio.get("bytes") else open(audio["path"], "rb").read()
+            data = (
+                audio["bytes"]
+                if audio.get("bytes")
+                else open(audio["path"], "rb").read()
+            )
             arr, sr = _sf.read(_io.BytesIO(data))
             buf = _io.BytesIO()
             _sf.write(buf, arr, sr, format="WAV")
-            data_uri = "data:audio/wav;base64," + b64.b64encode(buf.getvalue()).decode("ascii")
+            data_uri = "data:audio/wav;base64," + b64.b64encode(buf.getvalue()).decode(
+                "ascii"
+            )
             rows.append(
                 {
                     self.input_key: INSTRUCTION,

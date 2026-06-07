@@ -42,16 +42,16 @@ class Qwen3ASR(HFModelConfiguration):
         ffn_hidden_size=6144,
         num_attention_heads=16,
         group_query_attention=True,
-        num_query_groups=8,          # num_key_value_heads
-        kv_channels=128,             # head_dim (explicit; != hidden/heads in general)
+        num_query_groups=8,  # num_key_value_heads
+        kv_channels=128,  # head_dim (explicit; != hidden/heads in general)
         vocab_size=151936,
         normalization="RMSNorm",
         norm_epsilon=1e-6,
-        swiglu=True,                 # hidden_act = silu
-        disable_bias_linear=True,    # Qwen3 dropped qkv bias
-        qk_layernorm=True,           # Qwen3 family adds qk-layernorm
+        swiglu=True,  # hidden_act = silu
+        disable_bias_linear=True,  # Qwen3 dropped qkv bias
+        qk_layernorm=True,  # Qwen3 family adds qk-layernorm
         use_rotary_position_embeddings=True,
-        rotary_base=1000000,         # rope_theta
+        rotary_base=1000000,  # rope_theta
         compat_patches=[
             "patch_qwen3asr_bridge_config",
             "patch_qwen3asr_processor",

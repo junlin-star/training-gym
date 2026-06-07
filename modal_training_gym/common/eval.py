@@ -572,22 +572,41 @@ def _asr_serve_and_eval(dataset, hf_dir: str, n_clips: int, model_name: str) -> 
             )
             print(f"=== exporting {hf_dir} -> {out_dir} (torch_dist -> HF) ===")
             subprocess.run(
-                ["python", spec.origin, "--input-dir", hf_dir,
-                 "--output-dir", out_dir, "--origin-hf-dir", origin, "--force"],
+                [
+                    "python",
+                    spec.origin,
+                    "--input-dir",
+                    hf_dir,
+                    "--output-dir",
+                    out_dir,
+                    "--origin-hf-dir",
+                    origin,
+                    "--force",
+                ],
                 check=True,
             )
         hf_dir = out_dir
 
     print(f"=== serving {hf_dir} ===")
     port = 30000
-    proc = subprocess.Popen([
-        "python", "-m", "sglang.launch_server",
-        "--model-path", hf_dir,
-        "--served-model-name", "qwen3-asr",
-        "--trust-remote-code",
-        "--host", "127.0.0.1", "--port", str(port),
-        "--mem-fraction-static", "0.80",
-    ])
+    proc = subprocess.Popen(
+        [
+            "python",
+            "-m",
+            "sglang.launch_server",
+            "--model-path",
+            hf_dir,
+            "--served-model-name",
+            "qwen3-asr",
+            "--trust-remote-code",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            str(port),
+            "--mem-fraction-static",
+            "0.80",
+        ]
+    )
     base = f"http://127.0.0.1:{port}"
     deadline = time.time() + 1800
     ready = False
@@ -612,7 +631,9 @@ def _asr_serve_and_eval(dataset, hf_dir: str, n_clips: int, model_name: str) -> 
         for i, row in enumerate(rows):
             data_uri = row["audios"][0]
             ref = (row["label"] or "").lower().strip()
-            b64 = data_uri.split(",", 1)[1] if data_uri.startswith("data:") else data_uri
+            b64 = (
+                data_uri.split(",", 1)[1] if data_uri.startswith("data:") else data_uri
+            )
             arr, sr = sf.read(io.BytesIO(base64.b64decode(b64)))
 
             # Transcribe the full-resolution clip (WER must reflect real audio).
@@ -631,10 +652,14 @@ def _asr_serve_and_eval(dataset, hf_dir: str, n_clips: int, model_name: str) -> 
             print(f"[{i}] WER={w:.3f} ref={ref[:48]!r} hyp={hyp[:48]!r}")
 
             # Light, downsampled clip for the dashboard player.
-            small = librosa.resample(arr.astype("float32"), orig_sr=sr, target_sr=_ASR_DASHBOARD_SR)
+            small = librosa.resample(
+                arr.astype("float32"), orig_sr=sr, target_sr=_ASR_DASHBOARD_SR
+            )
             sbuf = io.BytesIO()
             sf.write(sbuf, small, _ASR_DASHBOARD_SR, format="WAV", subtype="PCM_16")
-            small_uri = "data:audio/wav;base64," + base64.b64encode(sbuf.getvalue()).decode()
+            small_uri = (
+                "data:audio/wav;base64," + base64.b64encode(sbuf.getvalue()).decode()
+            )
 
             # Score is word accuracy (1 − WER) in [0, 1] — higher is better, matching
             # the dashboard's score model/histogram. Raw WER stays in metadata.
@@ -643,7 +668,12 @@ def _asr_serve_and_eval(dataset, hf_dir: str, n_clips: int, model_name: str) -> 
                     score=max(0.0, 1.0 - w),
                     response=hyp,
                     prompt=row["prompt"],
-                    metadata={"audio": small_uri, "reference": ref, "wer": w, "hyp": hyp},
+                    metadata={
+                        "audio": small_uri,
+                        "reference": ref,
+                        "wer": w,
+                        "hyp": hyp,
+                    },
                 )
             )
     finally:
@@ -653,7 +683,11 @@ def _asr_serve_and_eval(dataset, hf_dir: str, n_clips: int, model_name: str) -> 
     eval_config_id = "qwen3-asr-librispeech-wer"
     deployment_id = f"qwen3-asr-1.7b-{label}"
     eval_id = create_hash(
-        "eval", eval_config_id, deployment_id, str(datetime.datetime.now(datetime.UTC)), ""
+        "eval",
+        eval_config_id,
+        deployment_id,
+        str(datetime.datetime.now(datetime.UTC)),
+        "",
     )
     result = EvalResult(
         eval_id=eval_id,
@@ -663,7 +697,9 @@ def _asr_serve_and_eval(dataset, hf_dir: str, n_clips: int, model_name: str) -> 
     )
     result.save()
     mean_wer = sum(r.metadata["wer"] for r in results) / len(results)
-    print(f"saved EvalResult {eval_id}  mean WER={mean_wer:.3f}  ({len(results)} rows) -> dashboard")
+    print(
+        f"saved EvalResult {eval_id}  mean WER={mean_wer:.3f}  ({len(results)} rows) -> dashboard"
+    )
     return {"eval_id": eval_id, "mean_wer": mean_wer, "rows": len(results)}
 
 
@@ -694,17 +730,24 @@ def evaluate_asr(result, dataset, *, n_clips: int = 8, gpu_type: str = "H100") -
     ckpt = (hf or checkpoints)[-1]
     vol_name = ckpt.checkpoints_volume_name or f"{result.app_name}-checkpoints"
     mount_path = ckpt.checkpoints_mount_path or "/checkpoints"
-    model_name = getattr(getattr(result, "model_config", None), "model_name", "") \
+    model_name = (
+        getattr(getattr(result, "model_config", None), "model_name", "")
         or "Qwen/Qwen3-ASR-1.7B"
+    )
     _patches = (
         Path(modal_training_gym.__file__).parent
-        / "frameworks" / "slime" / "modal_helpers" / "patches"
+        / "frameworks"
+        / "slime"
+        / "modal_helpers"
+        / "patches"
     )
 
     image = (
         modal.Image.from_registry(SLIME_IMAGE)
         .entrypoint([])
-        .run_commands("rm -rf /root/.cache/huggingface")  # let the hf-cache volume mount
+        .run_commands(
+            "rm -rf /root/.cache/huggingface"
+        )  # let the hf-cache volume mount
         # qwen3_asr Megatron->HF converter, so a torch_dist checkpoint exports in-container
         .run_commands(
             f"echo {encode_patch('patch_qwen3asr_export', _patches)} | base64 -d | python3"

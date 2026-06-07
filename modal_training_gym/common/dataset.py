@@ -599,7 +599,9 @@ class MultimodalDataset(DatasetConfig):
         media = r["media"]
         return {
             self.input_key: r["prompt"],
-            self.media_column: list(media) if isinstance(media, (list, tuple)) else [media],
+            self.media_column: list(media)
+            if isinstance(media, (list, tuple))
+            else [media],
             self.label_key: r["label"],
         }
 

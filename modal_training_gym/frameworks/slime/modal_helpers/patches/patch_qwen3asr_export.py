@@ -88,7 +88,9 @@ def main() -> None:
         print("compat: qwen3_asr HF converter already wired")
         return
     if "from .qwen2 import convert_qwen2_to_hf\n" not in s:
-        print("compat: WARNING - megatron_to_hf __init__ shape changed; skipping export")
+        print(
+            "compat: WARNING - megatron_to_hf __init__ shape changed; skipping export"
+        )
         return
     s = s.replace(
         "from .qwen2 import convert_qwen2_to_hf\n",
@@ -100,7 +102,9 @@ def main() -> None:
         "        converted_named_tensors = convert_qwen2_to_hf(args, name, param)\n"
     )
     if dispatch_anchor not in s:
-        print("compat: WARNING - megatron_to_hf dispatch shape changed; skipping export")
+        print(
+            "compat: WARNING - megatron_to_hf dispatch shape changed; skipping export"
+        )
         return
     s = s.replace(
         dispatch_anchor,
