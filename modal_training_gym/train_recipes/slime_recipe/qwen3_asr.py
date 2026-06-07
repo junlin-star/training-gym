@@ -69,3 +69,9 @@ class Qwen3ASR_Recipe(SlimeRecipe):
 
     # Save at the final rollout so the run produces a checkpoint to export to HF.
     save_interval: int = 8
+
+    # Qwen3-ASR loads + exports through megatron.bridge (the image's bridge has a
+    # qwen3_asr mapping; mbridge does not). The gym default flipped to "" (mbridge)
+    # upstream, so pin "bridge" here: it loads HF directly (no torch_dist
+    # pre-conversion) and drives the post-training HF export.
+    megatron_to_hf_mode: str = "bridge"

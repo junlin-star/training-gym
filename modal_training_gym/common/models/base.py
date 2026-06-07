@@ -77,10 +77,9 @@ class ModelArchitecture:
     ## Checkpoint Conversion
 
     megatron_model_type : str
-        Slime/Megatron model type string for pre-conversion (e.g.
-        ``"qwen3.5-35B-A3B"``). When set, the launcher pre-converts
-        the HF checkpoint to torch_dist format before training instead
-        of relying on bridge-mode auto-detection. Default ``""``.
+        Slime/Megatron model type string for checkpoint conversion (e.g.
+        ``"qwen3.5-35B-A3B"``). Used when the training recipe selects
+        a non-bridge conversion mode. Default ``""``.
 
     ## Normalization Extras
 
@@ -143,10 +142,6 @@ class ModelArchitecture:
     use_rotary_position_embeddings: bool = True
     rotary_base: int = 10000
     rotary_percent: float = 1.0
-
-    @property
-    def needs_pre_conversion(self) -> bool:
-        return bool(self.megatron_model_type)
 
     def to_megatron_args(self) -> list[str]:
         """Generate Megatron-LM CLI flags from this architecture spec."""

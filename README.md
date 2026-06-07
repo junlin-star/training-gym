@@ -82,12 +82,21 @@ rest of the cells run as-is.
 | [`002_multiturn`](tutorials/rl/002_multiturn/002_multiturn.ipynb) | Multi-turn number-guessing RL with custom generate and reward functions | Intermediate | `slime` | <a href="https://modal.com/notebooks/new/https://github.com/modal-projects/training-gym/blob/ben/multimodal-dataset/tutorials/rl/002_multiturn/002_multiturn.ipynb" target="_blank" rel="nofollow noopener noreferrer"><img src="https://modal-cdn.com/open-in-modal.svg" alt="Open in Modal"></a> |
 | [`003_on_policy_distillation`](tutorials/rl/003_on_policy_distillation/003_on_policy_distillation.ipynb) | On-policy distillation on math — Qwen3-8B teacher, Qwen3-4B student | Intermediate | `slime` | <a href="https://modal.com/notebooks/new/https://github.com/modal-projects/training-gym/blob/ben/multimodal-dataset/tutorials/rl/003_on_policy_distillation/003_on_policy_distillation.ipynb" target="_blank" rel="nofollow noopener noreferrer"><img src="https://modal-cdn.com/open-in-modal.svg" alt="Open in Modal"></a> |
 | [`005_audio_asr`](tutorials/rl/005_audio_asr/005_audio_asr.ipynb) | Audio GRPO on Qwen3-ASR-1.7B — transcribe LibriSpeech, reward −WER | Intermediate | `slime` | <a href="https://modal.com/notebooks/new/https://github.com/modal-projects/training-gym/blob/ben/multimodal-dataset/tutorials/rl/005_audio_asr/005_audio_asr.ipynb" target="_blank" rel="nofollow noopener noreferrer"><img src="https://modal-cdn.com/open-in-modal.svg" alt="Open in Modal"></a> |
+| [`005_dapo`](tutorials/rl/005_dapo/005_dapo.ipynb) | DAPO on math with Qwen3-4B | Advanced | `slime` | <a href="https://modal.com/notebooks/new/https://github.com/modal-projects/training-gym/blob/ben/multimodal-dataset/tutorials/rl/005_dapo/005_dapo.ipynb" target="_blank" rel="nofollow noopener noreferrer"><img src="https://modal-cdn.com/open-in-modal.svg" alt="Open in Modal"></a> |
 
 ### Agents
 
 | Tutorial | Summary | Difficulty | Framework | Launch |
 |---|---|---|---|---|
 | [`000_agent_sandbox`](tutorials/agent/000_agent_sandbox/000_agent_sandbox.ipynb) | Build an LLM agent harness with a self-hosted model and Modal Sandbox tool execution | Beginner | Modal Sandbox | <a href="https://modal.com/notebooks/new/https://github.com/modal-projects/training-gym/blob/ben/multimodal-dataset/tutorials/agent/000_agent_sandbox/000_agent_sandbox.ipynb" target="_blank" rel="nofollow noopener noreferrer"><img src="https://modal-cdn.com/open-in-modal.svg" alt="Open in Modal"></a> |
+
+### multinode
+
+| Tutorial | Summary | Difficulty | Framework | Launch |
+|---|---|---|---|---|
+| [`000_kimi_k25`](tutorials/multinode/000_kimi_k25/000_kimi_k25.ipynb) | Kimi K2.5 LoRA GRPO training on 128 GPUs with DAPO-Math-17k | Advanced | `miles` | <a href="https://modal.com/notebooks/new/https://github.com/modal-projects/training-gym/blob/ben/multimodal-dataset/tutorials/multinode/000_kimi_k25/000_kimi_k25.ipynb" target="_blank" rel="nofollow noopener noreferrer"><img src="https://modal-cdn.com/open-in-modal.svg" alt="Open in Modal"></a> |
+| [`001_kimi_k26`](tutorials/multinode/001_kimi_k26/001_kimi_k26.ipynb) | Kimi K2.6 LoRA GRPO training on 128 GPUs with DAPO-Math-17k | Advanced | `miles` | <a href="https://modal.com/notebooks/new/https://github.com/modal-projects/training-gym/blob/ben/multimodal-dataset/tutorials/multinode/001_kimi_k26/001_kimi_k26.ipynb" target="_blank" rel="nofollow noopener noreferrer"><img src="https://modal-cdn.com/open-in-modal.svg" alt="Open in Modal"></a> |
+| [`002_glm_4_7`](tutorials/multinode/002_glm_4_7/002_glm_4_7.ipynb) | GLM-4.7 355B MoE full-weight GSPO training on 64 GPUs with DAPO-Math-17k | Advanced | `slime` | <a href="https://modal.com/notebooks/new/https://github.com/modal-projects/training-gym/blob/ben/multimodal-dataset/tutorials/multinode/002_glm_4_7/002_glm_4_7.ipynb" target="_blank" rel="nofollow noopener noreferrer"><img src="https://modal-cdn.com/open-in-modal.svg" alt="Open in Modal"></a> |
 <!-- END TUTORIAL TABLE -->
 
 See [`tutorials/README.md`](tutorials/README.md) for how to run the `.py`

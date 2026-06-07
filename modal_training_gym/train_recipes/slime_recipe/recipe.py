@@ -129,11 +129,20 @@ class SlimeRecipe(BaseTrainRecipe):
     use_kl_loss: bool = False
     kl_loss_type: str = "low_var_kl"
     kl_loss_coef: float = 0.0
+    kl_coef: float = 0.0
     entropy_coef: float = 0.0
+    calculate_per_token_loss: bool = False
     ref_load: str = ""
+
+    # ── Dynamic sampling (DAPO) ────────────────────────────────────────────
+    over_sampling_batch_size: int | None = None
+    dynamic_sampling_filter_path: str | None = None
+    balance_data: bool = False
 
     # ── Rollout (optional) ─────────────────────────────────────────────────
     rollout_shuffle: bool = True
+    rollout_top_p: float = 1.0
+    rollout_stop_token_ids: list[int] | None = None
     sglang_mem_fraction_static: float = 0.75
 
     # ── Training ────────────────────────────────────────────────────────────
@@ -168,7 +177,7 @@ class SlimeRecipe(BaseTrainRecipe):
     # ── Checkpointing (optional) ───────────────────────────────────────────
     save: str = "/checkpoints"
     load: str = ""
-    megatron_to_hf_mode: str = "bridge"
+    megatron_to_hf_mode: str = ""
     use_fault_tolerance: bool = True
 
     # ── Reward model ─────────────────────────────────────────────────────────
@@ -392,7 +401,7 @@ class SlimeRecipe(BaseTrainRecipe):
             fields[f.name] = getattr(self, f.name)
         if dataset is not None:
             fields.update(self._dataset_to_fields(dataset))
-        if model is not None:
+        if model is not None and not self.slime_model_script:
             fields.update(self._model_to_fields(model))
         if self.wandb is not None:
             fields.update(self._wandb_to_fields(self.wandb))
@@ -460,6 +469,9 @@ class SlimeRecipe(BaseTrainRecipe):
 
     @classmethod
     def get_base_recipe(cls, model_config: ModelConfig) -> "SlimeRecipe | None":
+        from modal_training_gym.train_recipes.slime_recipe.glm_4_7 import (
+            GLM_4_7_Recipe,
+        )
         from modal_training_gym.train_recipes.slime_recipe.qwen3_1_7b import (
             Qwen3_1_7b_Recipe,
         )
@@ -484,6 +496,8 @@ class SlimeRecipe(BaseTrainRecipe):
 
         if model_config.model_name == "Qwen/Qwen3-ASR-1.7B":
             return Qwen3ASR_Recipe()
+        if model_config.model_name == "zai-org/GLM-4.7":
+            return GLM_4_7_Recipe()
         if model_config.model_name == "Qwen/Qwen3-1.7B":
             return Qwen3_1_7b_Recipe()
         if model_config.model_name == "Qwen/Qwen3-4B":

@@ -14,7 +14,7 @@ TUTORIAL_METADATA = {
         "EvalRowResult",
         "ModelDeployment",
         "Qwen3_6_35B",
-        "SlimeRecipe",
+        "Qwen3_6_35b_Recipe",
         "TrainConfig",
     ],
 }
@@ -40,10 +40,9 @@ def _intro():
     3. Feed that score back as a GRPO reward through SLIME.
     4. Compare base vs. trained accuracy.
 
-    Qwen3.6-35B-A3B uses a newer HuggingFace architecture class
-    (`Qwen3_5MoeForConditionalGeneration`) that requires checkpoint
-    pre-conversion. The training gym handles this automatically when
-    `megatron_model_type` is set on the model's architecture spec.
+    Qwen3.6-35B-A3B uses slime's default mbridge conversion path:
+    `megatron_to_hf_mode=""` pre-converts the HuggingFace checkpoint
+    before training instead of loading the base checkpoint through bridge mode.
     """
 
 
@@ -73,11 +72,11 @@ def _imports():
         HuggingFaceDataset,
         ModelDeployment,
         Qwen3_6_35B,
-        SlimeRecipe,
         TrainConfig,
         list_checkpoints,
     )
     from modal_training_gym.deploy_recipes.sglang_recipe import Qwen3_6_35b_SglangRecipe
+    from modal_training_gym.train_recipes.slime_recipe import Qwen3_6_35b_Recipe
 
 
 @markdown
@@ -129,16 +128,18 @@ def _train_intro():
     """
     ## Train with SLIME
 
-    This MoE model fits on a single node — 1 × 8×H100 (8 GPUs) with
-    TP2, PP1, EP8, and optimizer CPU offload, matching the official
-    Slime recipe for Qwen3.6-35B-A3B.
+    This MoE model runs on 1 × 8×H100 with TP2, PP2, CP2, EP4,
+    and optimizer CPU offload, matching the native Slime parallelism
+    that works for Qwen3.6-35B-A3B.
 
     Key points:
     - **`rm_type="deepscaler"`** — slime's built-in math reward that
       extracts and compares numerical answers. No custom reward function
       or sandbox needed.
-    - The model's `megatron_model_type` triggers automatic checkpoint
-      pre-conversion from HF to Megatron format before training starts.
+    - `megatron_to_hf_mode=""` uses slime's default mbridge conversion path,
+      so the HF checkpoint is pre-converted before training starts.
+    - Built-in slime model args come from
+      `scripts/models/qwen3.5-35B-A3B.sh`; the tutorial does not patch slime.
     """
 
 
@@ -147,36 +148,10 @@ def _train():
     training_run = TrainConfig(
         model=Qwen3_6_35B(),
         dataset=dataset,
-        recipe=SlimeRecipe(
+        recipe=Qwen3_6_35b_Recipe(
             rm_type="deepscaler",
-
-            gpu_type="H100",
-            colocate=True,
-            actor_num_nodes=1,
-            actor_num_gpus_per_node=8,
-            tensor_model_parallel_size=2,
-            sequence_parallel=True,
-
-            rollout_num_gpus_per_engine=4,
-            num_rollout=1,
-            rollout_batch_size=8,
-            n_samples_per_prompt=4,
-            rollout_max_response_len=4096,
-            rollout_temperature=1.0,
-            sglang_mem_fraction_static=0.75,
-            sglang_enable_dp_attention=True,
-            sglang_dp_size=4,
-            sglang_ep_size=4,
-            sglang_enable_dp_lm_head=True,
-            sglang_max_running_requests=512,
-
-            global_batch_size=32,
-            lr=1e-6,
-            max_tokens_per_gpu=8192,
-            eval_max_response_len=4096,
-            n_samples_per_eval_prompt=4,
-            save_interval=20,
-            eval_interval=20,
+            megatron_to_hf_mode="",
+            num_rollout=10,
         ),
     )
     print("Starting training...")

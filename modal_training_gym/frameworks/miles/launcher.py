@@ -1,9 +1,11 @@
 import asyncio
 import base64
+import hashlib
 import inspect
 import os
 import shlex
 import subprocess
+import shutil
 import tempfile
 import textwrap
 import time
@@ -34,6 +36,7 @@ from modal_training_gym.train_recipes.miles_recipe.recipe import (
     HF_CACHE_PATH,
     MilesConfig,
 )
+from modal_training_gym.common.patches import encode_patch
 from modal_training_gym.frameworks.miles.modal_helpers.utils import (
     build_train_cmd,
     get_checkpoint_conversion_policy,
@@ -44,12 +47,18 @@ from modal_training_gym.frameworks.miles.modal_helpers.utils import (
 MILES_ROOT = "/root/miles"
 HARBOR_PKG_VERSION = "0.6.6"
 
+_MILES_PATCHES = Path(__file__).parent / "modal_helpers" / "patches"
+_PATCH_SGLANG_ABORT_B64 = encode_patch("patch_sglang_abort", _MILES_PATCHES)
+
 
 def _build_miles_base_image(miles: MilesConfig) -> Image:
     image = (
         Image.from_registry(miles.docker_image)
         .entrypoint([])
-        .run_commands(f"rm -rf {HF_CACHE_PATH} 2>/dev/null || true")
+        .run_commands(
+            f"rm -rf {HF_CACHE_PATH} 2>/dev/null || true",
+            f"echo {_PATCH_SGLANG_ABORT_B64} | base64 -d | python3",
+        )
     )
     if miles.image_env:
         image = image.env(miles.image_env)
@@ -131,6 +140,7 @@ def build_miles_app(
         image = image.uv_pip_install(f"harbor=={HARBOR_PKG_VERSION}")
 
     image = image.add_local_python_source("modal_training_gym", copy=True)
+    image = image.uv_pip_install("randomname")
     image = mount_tools_dir(image)
 
     if caller_script is not None:
@@ -273,6 +283,7 @@ def build_miles_app(
         checkpoints_volume.reload()
         model.download()
         miles.download_model()
+        miles.post_process_model()
         hf_cache_volume.commit()
         checkpoints_volume.commit()
 
@@ -438,6 +449,85 @@ def build_miles_app(
         os.environ["SGLANG_HOST_IP"] = cluster.node_ip
         os.environ["HOST_IP"] = cluster.node_ip
 
+        prep_id = hashlib.sha1(training_run_id.encode("utf-8")).hexdigest()[:16]
+        prep_marker = os.path.join(
+            checkpoints_mount_path, f".training_gym_prepared_{prep_id}"
+        )
+        prep_error = f"{prep_marker}.error"
+
+        async def _prepare_shared_inputs() -> None:
+            if model:
+                cache_dir = (
+                    HF_CACHE_PATH
+                    / "hub"
+                    / ("models--" + model.model_name.replace("/", "--"))
+                )
+                snapshots_dir = cache_dir / "snapshots"
+                has_snapshot = snapshots_dir.is_dir() and any(snapshots_dir.iterdir())
+                model_path = getattr(model, "model_path", None)
+                has_model_path = True
+                if model_path:
+                    model_path_obj = Path(model_path)
+                    has_model_path = model_path_obj.exists() and (
+                        not model_path_obj.is_dir() or any(model_path_obj.iterdir())
+                    )
+                if not has_snapshot or not has_model_path:
+                    print(f"Downloading model {model.model_name}...")
+                    model.download()
+                if hasattr(model, "prepare_runtime_cache"):
+                    model.prepare_runtime_cache()
+
+            miles.download_model()
+            miles.post_process_model()
+            await hf_cache_volume.commit.aio()
+            await checkpoints_volume.commit.aio()
+
+            prompt_data, eval_paths = MilesConfig._resolve_data_paths(dataset)
+            needs_prepare = not os.path.exists(prompt_data)
+            if dataset.always_prepare and os.path.exists(prompt_data):
+                data_dir = os.path.dirname(prompt_data)
+                print(f"always_prepare=True - removing {data_dir}")
+                shutil.rmtree(data_dir, ignore_errors=True)
+                needs_prepare = True
+            if needs_prepare:
+                print(f"Preparing dataset ({prompt_data})...")
+                dataset.prepare(prompt_data, eval_paths)
+                await data_volume.commit.aio()
+            dataset.validate_prepared(prompt_data)
+            for ep in (eval_paths or {}).values():
+                if os.path.exists(ep):
+                    dataset.validate_prepared(ep)
+
+        if cluster.is_head:
+            try:
+                await _prepare_shared_inputs()
+            except BaseException as exc:
+                os.makedirs(os.path.dirname(prep_error), exist_ok=True)
+                with open(prep_error, "w") as f:
+                    f.write(repr(exc))
+                await checkpoints_volume.commit.aio()
+                raise
+            os.makedirs(os.path.dirname(prep_marker), exist_ok=True)
+            with open(prep_marker, "w") as f:
+                f.write(str(time.time()))
+            await checkpoints_volume.commit.aio()
+        else:
+            deadline = time.time() + 4 * 60 * 60
+            while True:
+                await asyncio.gather(
+                    hf_cache_volume.reload.aio(),
+                    data_volume.reload.aio(),
+                    checkpoints_volume.reload.aio(),
+                )
+                if os.path.exists(prep_marker):
+                    break
+                if os.path.exists(prep_error):
+                    with open(prep_error) as f:
+                        raise RuntimeError(f"Head preparation failed: {f.read()}")
+                if time.time() > deadline:
+                    raise TimeoutError("Timed out waiting for head preparation marker")
+                await asyncio.sleep(5)
+
         cluster.start_ray()
 
         if not cluster.is_head:
@@ -478,45 +568,6 @@ def build_miles_app(
         print(f"TrainingRun recorded: {training_run_id}")
 
         try:
-            if model:
-                cache_dir = (
-                    HF_CACHE_PATH
-                    / "hub"
-                    / ("models--" + model.model_name.replace("/", "--"))
-                )
-                snapshots_dir = cache_dir / "snapshots"
-                has_snapshot = snapshots_dir.is_dir() and any(snapshots_dir.iterdir())
-                model_path = getattr(model, "model_path", None)
-                has_model_path = True
-                if model_path:
-                    model_path_obj = Path(model_path)
-                    has_model_path = model_path_obj.exists() and (
-                        not model_path_obj.is_dir() or any(model_path_obj.iterdir())
-                    )
-                if not has_snapshot or not has_model_path:
-                    print(f"Downloading model {model.model_name}...")
-                    model.download()
-                    await hf_cache_volume.commit.aio()
-                    await checkpoints_volume.commit.aio()
-
-            prompt_data, eval_paths = MilesConfig._resolve_data_paths(dataset)
-            needs_prepare = not os.path.exists(prompt_data)
-            if dataset.always_prepare and os.path.exists(prompt_data):
-                import shutil
-
-                data_dir = os.path.dirname(prompt_data)
-                print(f"always_prepare=True - removing {data_dir}")
-                shutil.rmtree(data_dir, ignore_errors=True)
-                needs_prepare = True
-            if needs_prepare:
-                print(f"Preparing dataset ({prompt_data})...")
-                dataset.prepare(prompt_data, eval_paths)
-                await data_volume.commit.aio()
-            dataset.validate_prepared(prompt_data)
-            for ep in (eval_paths or {}).values():
-                if os.path.exists(ep):
-                    dataset.validate_prepared(ep)
-
             prepare_miles_config(miles, model, tempfile.mkdtemp())
 
             if wandb_key := os.environ.get("WANDB_API_KEY", ""):

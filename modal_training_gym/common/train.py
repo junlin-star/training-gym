@@ -1,4 +1,8 @@
 import dataclasses as _dc
+from collections.abc import Mapping, Sequence
+from enum import Enum
+from pathlib import Path
+from typing import Any
 from typing import cast
 
 from modal_training_gym.common.dataset import DatasetConfig
@@ -22,10 +26,74 @@ def _merge_recipe(base: SlimeRecipe, overrides: SlimeRecipe) -> SlimeRecipe:
         if f.name not in base_fields:
             continue
         user_val = getattr(overrides, f.name)
-        default_val = getattr(base, f.name)
-        if user_val != default_val:
+        default_val = _field_default(f)
+        if default_val is _dc.MISSING or user_val != default_val:
             base_fields[f.name] = user_val
     return type(base)(**base_fields)
+
+
+def _field_default(field: _dc.Field) -> Any:
+    if field.default is not _dc.MISSING:
+        return field.default
+    if field.default_factory is not _dc.MISSING:
+        return field.default_factory()
+    return _dc.MISSING
+
+
+def _json_safe(value: Any) -> Any:
+    if value is None or isinstance(value, str | int | float | bool):
+        return value
+    if isinstance(value, Enum):
+        return value.value
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, Mapping):
+        return {str(k): _json_safe(v) for k, v in value.items()}
+    if isinstance(value, Sequence) and not isinstance(value, str | bytes | bytearray):
+        return [_json_safe(v) for v in value]
+    if callable(value):
+        module = getattr(value, "__module__", "")
+        name = getattr(value, "__qualname__", getattr(value, "__name__", ""))
+        return f"{module}.{name}" if module and name else repr(value)
+    return repr(value)
+
+
+def _recipe_param_summary(
+    user_recipe: SlimeRecipe,
+    combined_recipe: SlimeRecipe,
+    base_recipe: SlimeRecipe | None,
+) -> dict[str, dict[str, Any]]:
+    params: dict[str, dict[str, Any]] = {}
+    slime_defaults = {
+        field.name: _field_default(field) for field in _dc.fields(SlimeRecipe)
+    }
+
+    for field in _dc.fields(combined_recipe):
+        name = field.name
+        value = getattr(combined_recipe, name)
+        default = slime_defaults.get(name, _field_default(field))
+        user_value = getattr(user_recipe, name, _dc.MISSING)
+        base_value = (
+            getattr(base_recipe, name, _dc.MISSING) if base_recipe else _dc.MISSING
+        )
+
+        if user_value is not _dc.MISSING and (
+            default is _dc.MISSING or user_value != default
+        ):
+            source = "user"
+        elif (
+            base_value is not _dc.MISSING
+            and default is not _dc.MISSING
+            and base_value != default
+            and value == base_value
+        ):
+            source = "preset"
+        else:
+            source = "default"
+
+        params[name] = {"value": _json_safe(value), "source": source}
+
+    return params
 
 
 @dataclass(config=ConfigDict(extra="forbid", arbitrary_types_allowed=True))
@@ -87,6 +155,19 @@ class TrainConfig:
             )
         raise ValueError(f"Unknown recipe type: {recipe_type}")
 
+    def recipe_param_summary(self) -> dict[str, dict[str, Any]]:
+        if not isinstance(self.recipe, SlimeRecipe):
+            return {}
+        base_recipe = SlimeRecipe.get_base_recipe(self.model)
+        combined = (
+            _merge_recipe(base_recipe, cast(SlimeRecipe, self.recipe))
+            if base_recipe is not None
+            else cast(SlimeRecipe, self.recipe)
+        )
+        return _recipe_param_summary(
+            cast(SlimeRecipe, self.recipe), combined, base_recipe
+        )
+
     def train(self) -> TrainResult:
         """Build the app, run training, and return the TrainResult."""
         import modal
@@ -99,18 +180,15 @@ class TrainConfig:
         with modal.enable_output():
             with app.run():
                 modal_app_id = app.app_id or ""
-                needs_slime_preconv = (
-                    isinstance(self.recipe, SlimeRecipe)
-                    and self.model
-                    and getattr(self.model, "architecture", None)
-                    and getattr(self.model.architecture, "needs_pre_conversion", False)
-                )
                 needs_miles_raw_conversion = (
                     isinstance(self.recipe, MilesConfig)
                     and getattr(self.recipe, "megatron_to_hf_mode", "bridge")
                     != "bridge"
                 )
-                if needs_slime_preconv or needs_miles_raw_conversion:
+                if isinstance(self.recipe, SlimeRecipe):
+                    app.download.remote()
+                    app.convert_checkpoint.remote()
+                elif needs_miles_raw_conversion:
                     app.download.remote()
                     app.convert_checkpoint.remote()
                 result_dict = app.train.remote(
