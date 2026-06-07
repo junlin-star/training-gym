@@ -18,6 +18,7 @@ from .kimi_k2_5 import Kimi_K2_5
 from .kimi_k2_6 import Kimi_K2_6
 from .qwen3_6_35b import Qwen3_6_35B
 from .qwen3_asr import Qwen3ASR
+from .qwen3_vl_8b import Qwen3VL_8B
 
 __all__ = [
     "HFModelConfiguration",
@@ -40,4 +41,5 @@ __all__ = [
     "parse_qwen3_response",
     "Qwen3_6_35B",
     "Qwen3ASR",
+    "Qwen3VL_8B",
 ]
