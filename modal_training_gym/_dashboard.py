@@ -70,8 +70,8 @@ def fastapi_app():
     from modal_training_gym.utils.metadata import (
         MetadataStore,
         vol_get,
+        vol_compact_summary_items,
         vol_get_summary_items,
-        vol_list,
         vol_put_summary_items,
     )
 
@@ -255,21 +255,16 @@ def fastapi_app():
         sort_key: Callable[[dict[str, Any]], Any],
         reverse: bool = True,
     ) -> list[dict[str, Any]]:
-        summary_items = await load_list_summary(summary_store)
-        canonical_items = await run_in_threadpool(vol_list, item_store)
-        items_by_id = {
-            item[item_id_key]: item
-            for item in summary_items
-            if item.get(item_id_key) is not None
-        }
-        for item in canonical_items:
-            item_id = item.get(item_id_key)
-            if item_id is None:
-                continue
-            items_by_id[item_id] = {**items_by_id.get(item_id, {}), **item}
-        items = sorted(items_by_id.values(), key=sort_key, reverse=reverse)
+        items = await run_in_threadpool(
+            vol_compact_summary_items,
+            summary_store,
+            item_store,
+            item_id_key=item_id_key,
+            sort_key=sort_key,
+            reverse=reverse,
+        )
         items, changed = add_modal_app_urls(items)
-        if changed or len(items) != len(summary_items):
+        if changed:
             await run_in_threadpool(vol_put_summary_items, summary_store, items)
         return items
 

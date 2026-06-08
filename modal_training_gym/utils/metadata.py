@@ -5,7 +5,7 @@ from __future__ import annotations
 import io
 import json
 from enum import Enum
-from typing import Any
+from typing import Any, Callable
 
 METADATA_VOLUME_NAME = "training-gym-metadata"
 
@@ -205,6 +205,46 @@ async def vol_put_summary_items_async(
     await vol_put_async(store, key, {payload_key: items})
 
 
+def vol_compact_summary_items(
+    summary_store: MetadataStore | str,
+    item_store: MetadataStore | str,
+    *,
+    item_id_key: str,
+    key: str = SUMMARY_KEY,
+    payload_key: str = SUMMARY_ITEMS_KEY,
+    sort_key: Callable[[dict[str, Any]], Any] | None = None,
+    reverse: bool = False,
+) -> list[dict[str, Any]]:
+    """Rebuild a denormalized summary from canonical per-item metadata files.
+
+    Summary files are a list cache. Writers persist the canonical item file first,
+    then best-effort update the summary. If parallel read-modify-write summary
+    upserts clobber each other, compaction merges the canonical files back into
+    the summary so list readers become self-healing.
+    """
+    summary_items = (
+        vol_get_summary_items(summary_store, key=key, payload_key=payload_key) or []
+    )
+    canonical_items = vol_list(item_store)
+
+    items_by_id = {
+        item[item_id_key]: item
+        for item in summary_items
+        if item.get(item_id_key) is not None
+    }
+    for item in canonical_items:
+        item_id = item.get(item_id_key)
+        if item_id is None:
+            continue
+        items_by_id[item_id] = {**items_by_id.get(item_id, {}), **item}
+
+    items = list(items_by_id.values())
+    if sort_key is not None:
+        items.sort(key=sort_key, reverse=reverse)
+    vol_put_summary_items(summary_store, items, key=key, payload_key=payload_key)
+    return items
+
+
 def vol_upsert_summary_item(
     store: MetadataStore | str,
     item: dict[str, Any],
@@ -267,6 +307,7 @@ __all__ = [
     "vol_get_summary_items_async",
     "vol_put_summary_items",
     "vol_put_summary_items_async",
+    "vol_compact_summary_items",
     "vol_upsert_summary_item",
     "vol_upsert_summary_item_async",
 ]
