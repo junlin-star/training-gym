@@ -30,6 +30,7 @@ from modal_training_gym.common.modal_urls import modal_app_dashboard_url
 from modal_training_gym.common.models import ModelConfig
 from modal_training_gym.common.ray_cluster import ModalRayCluster
 from modal_training_gym.common.run import TrainingRun, TrainingRunStatus
+from modal_training_gym.common.status import MilesStatus
 from modal_training_gym.common.train_result import TrainResult
 from modal_training_gym.train_recipes.miles_recipe.recipe import (
     CHECKPOINTS_PATH,
@@ -457,7 +458,51 @@ def build_miles_app(
         )
         prep_error = f"{prep_marker}.error"
 
+        run_record: TrainingRun | None = None
+
+        if cluster.is_head:
+            created_at = int(time.time())
+            print(f"Training run id: {training_run_id}")
+            config_summary = {
+                "model": {"model_name": model.model_name} if model else {},
+                "recipe": {
+                    "gpu_type": miles.gpu_type,
+                    "actor_num_nodes": miles.actor_num_nodes,
+                    "actor_num_gpus_per_node": miles.actor_num_gpus_per_node,
+                },
+                "wandb": (
+                    {"project": miles.wandb.project, "group": miles.wandb.group}
+                    if miles.wandb
+                    else {}
+                ),
+                "dataset": {
+                    "hf_repo": getattr(dataset, "hf_repo", ""),
+                    "name": type(dataset).__name__,
+                },
+                "lr": miles.lr,
+                "global_batch_size": miles.global_batch_size,
+            }
+            run_record = TrainingRun(
+                training_run_id=training_run_id,
+                modal_app_id=modal_app_id,
+                modal_app_url=modal_app_url,
+                framework=Framework.MILES,
+                config=config_summary,
+                framework_status=MilesStatus.INITIALIZING,
+                created_at=created_at,
+                started_at=created_at,
+            )
+            await run_record.save_async()
+            print(f"TrainingRun recorded: {training_run_id}")
+
+        async def _set_framework_status(status: MilesStatus) -> None:
+            if run_record is None:
+                return
+            run_record.framework_status = status
+            await run_record.save_async()
+
         async def _prepare_shared_inputs() -> None:
+            await _set_framework_status(MilesStatus.DOWNLOAD_MODEL)
             if model:
                 cache_dir = (
                     HF_CACHE_PATH
@@ -480,10 +525,12 @@ def build_miles_app(
                     model.prepare_runtime_cache()
 
             miles.download_model()
+            await _set_framework_status(MilesStatus.CONVERT_MODEL)
             miles.post_process_model()
             await hf_cache_volume.commit.aio()
             await checkpoints_volume.commit.aio()
 
+            await _set_framework_status(MilesStatus.PREPARE_DATASET)
             prompt_data, eval_paths = MilesConfig._resolve_data_paths(dataset)
             needs_prepare = not os.path.exists(prompt_data)
             if dataset.always_prepare and os.path.exists(prompt_data):
@@ -504,6 +551,15 @@ def build_miles_app(
             try:
                 await _prepare_shared_inputs()
             except BaseException as exc:
+                if run_record is not None:
+                    finished_at = int(time.time())
+                    run_record.status = TrainingRunStatus.FAILED
+                    run_record.ended_at = finished_at
+                    run_record.completed_at = finished_at
+                    run_record.duration_seconds = max(
+                        0, finished_at - run_record.started_at
+                    )
+                    await run_record.save_async()
                 os.makedirs(os.path.dirname(prep_error), exist_ok=True)
                 with open(prep_error, "w") as f:
                     f.write(repr(exc))
@@ -535,39 +591,7 @@ def build_miles_app(
         if not cluster.is_head:
             await cluster.wait_forever()
             return
-
-        created_at = int(time.time())
-        print(f"Training run id: {training_run_id}")
-        config_summary = {
-            "model": {"model_name": model.model_name} if model else {},
-            "recipe": {
-                "gpu_type": miles.gpu_type,
-                "actor_num_nodes": miles.actor_num_nodes,
-                "actor_num_gpus_per_node": miles.actor_num_gpus_per_node,
-            },
-            "wandb": (
-                {"project": miles.wandb.project, "group": miles.wandb.group}
-                if miles.wandb
-                else {}
-            ),
-            "dataset": {
-                "hf_repo": getattr(dataset, "hf_repo", ""),
-                "name": type(dataset).__name__,
-            },
-            "lr": miles.lr,
-            "global_batch_size": miles.global_batch_size,
-        }
-        run_record = TrainingRun(
-            training_run_id=training_run_id,
-            modal_app_id=modal_app_id,
-            modal_app_url=modal_app_url,
-            framework=Framework.MILES,
-            config=config_summary,
-            created_at=created_at,
-            started_at=created_at,
-        )
-        await run_record.save_async()
-        print(f"TrainingRun recorded: {training_run_id}")
+        assert run_record is not None
 
         try:
             prepare_miles_config(miles, model, tempfile.mkdtemp())
@@ -622,6 +646,7 @@ def build_miles_app(
             )
             print(f"Command: {cmd}, runtime_env: {runtime_env}")
 
+            await _set_framework_status(MilesStatus.TRAINING)
             async with cluster.forward_dashboard() as tunnel:
                 print(f"Ray dashboard: {tunnel.url}")
                 await cluster.submit_and_tail(cmd, runtime_env=runtime_env)

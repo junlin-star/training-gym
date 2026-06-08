@@ -11,6 +11,7 @@ from typing import Any
 from pydantic import BaseModel
 
 from modal_training_gym.common.framework import Framework
+from modal_training_gym.common.status import FrameworkStatus
 from modal_training_gym.utils.metadata import (
     MetadataStore,
     vol_get,
@@ -40,6 +41,7 @@ class TrainingRun(BaseModel):
     dataset_id: str = ""
     deployment_id: str = ""
     status: TrainingRunStatus = TrainingRunStatus.RUNNING
+    framework_status: FrameworkStatus | None = None
     created_at: int = 0
     started_at: int = 0
     ended_at: int | None = None
