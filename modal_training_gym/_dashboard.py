@@ -61,7 +61,7 @@ STATIC_DIR = "/app/frontend/dist"
 @app.function(min_containers=1)
 @modal.asgi_app()
 def fastapi_app():
-    from fastapi import FastAPI, HTTPException
+    from fastapi import BackgroundTasks, FastAPI, HTTPException
     from fastapi.concurrency import run_in_threadpool
     from fastapi.responses import FileResponse, JSONResponse
     from fastapi.staticfiles import StaticFiles
@@ -92,6 +92,62 @@ def fastapi_app():
         "evals": asyncio.Lock(),
         "deployments": asyncio.Lock(),
     }
+    _compact_lock = asyncio.Lock()
+
+    async def _run_compact() -> None:
+        """Compact all summary stores from canonical metadata."""
+        for summary_store, item_store, id_key, sk, rev in [
+            (
+                MetadataStore.TRAINING_RUNS_SUMMARY,
+                MetadataStore.TRAINING_RUNS,
+                "training_run_id",
+                lambda item: (
+                    int(item.get("created_at", 0) or 0),
+                    str(item.get("training_run_id", "")),
+                ),
+                True,
+            ),
+            (
+                MetadataStore.TRAIN_RESULTS_SUMMARY,
+                MetadataStore.TRAIN_RESULTS,
+                "training_run_id",
+                lambda item: str(item.get("training_run_id", "")),
+                True,
+            ),
+            (
+                MetadataStore.DEPLOYMENTS_SUMMARY,
+                MetadataStore.DEPLOYMENTS,
+                "deployment_id",
+                lambda item: (
+                    str(item.get("deployment_config", {}).get("app_name", "")),
+                    str(item.get("deployment_id", "")),
+                ),
+                True,
+            ),
+        ]:
+            await run_in_threadpool(
+                vol_compact_summary_items,
+                summary_store,
+                item_store,
+                item_id_key=id_key,
+                sort_key=sk,
+                reverse=rev,
+            )
+        for key in cache_entries:
+            cache_entries[key] = (0.0, [])
+
+    def _maybe_compact(background_tasks: "BackgroundTasks") -> None:
+        """Schedule a background compact if no other compact is in progress."""
+        if _compact_lock.locked():
+            return
+
+        async def _guarded_compact() -> None:
+            if _compact_lock.locked():
+                return
+            async with _compact_lock:
+                await _run_compact()
+
+        background_tasks.add_task(_guarded_compact)
 
     web.mount("/assets", StaticFiles(directory=f"{STATIC_DIR}/assets"), name="assets")
 
@@ -259,21 +315,23 @@ def fastapi_app():
     # ── Training runs ────────────────────────────────────────────────────
 
     @web.get("/api/runs")
-    async def runs():
+    async def runs(background_tasks: BackgroundTasks):
         try:
             data = await get_cached_list("runs", load_runs)
         except Exception:
             data = []
+        _maybe_compact(background_tasks)
         return JSONResponse(data)
 
     # ── Train results ────────────────────────────────────────────────────
 
     @web.get("/api/train-results")
-    async def train_results():
+    async def train_results(background_tasks: BackgroundTasks):
         try:
             data = await get_cached_list("train_results", load_train_results)
         except Exception:
             data = []
+        _maybe_compact(background_tasks)
         return JSONResponse(data)
 
     @web.get("/api/train-results/{training_run_id}")
@@ -313,62 +371,22 @@ def fastapi_app():
     # ── Deployments ──────────────────────────────────────────────────────
 
     @web.get("/api/deployments")
-    async def deployments():
+    async def deployments(background_tasks: BackgroundTasks):
         try:
             data = await get_cached_list("deployments", load_deployments)
         except Exception:
             data = []
+        _maybe_compact(background_tasks)
         return JSONResponse(data)
 
     # ── Compaction (on-demand repair) ─────────────────────────────────────
 
     @web.post("/api/compact")
     async def compact():
-        """Rebuild summary caches from canonical per-item metadata files.
-
-        Call after parallel launches to recover items lost to concurrent
-        summary read-modify-write races. This is intentionally not on the
-        read path to avoid a vol_list penalty on every dashboard load.
-        """
-        runs = await run_in_threadpool(
-            vol_compact_summary_items,
-            MetadataStore.TRAINING_RUNS_SUMMARY,
-            MetadataStore.TRAINING_RUNS,
-            item_id_key="training_run_id",
-            sort_key=lambda item: (
-                int(item.get("created_at", 0) or 0),
-                str(item.get("training_run_id", "")),
-            ),
-            reverse=True,
-        )
-        results = await run_in_threadpool(
-            vol_compact_summary_items,
-            MetadataStore.TRAIN_RESULTS_SUMMARY,
-            MetadataStore.TRAIN_RESULTS,
-            item_id_key="training_run_id",
-            sort_key=lambda item: str(item.get("training_run_id", "")),
-            reverse=True,
-        )
-        deps = await run_in_threadpool(
-            vol_compact_summary_items,
-            MetadataStore.DEPLOYMENTS_SUMMARY,
-            MetadataStore.DEPLOYMENTS,
-            item_id_key="deployment_id",
-            sort_key=lambda item: (
-                str(item.get("deployment_config", {}).get("app_name", "")),
-                str(item.get("deployment_id", "")),
-            ),
-            reverse=True,
-        )
-        for key in cache_entries:
-            cache_entries[key] = (0.0, [])
-        return JSONResponse(
-            {
-                "runs": len(runs),
-                "train_results": len(results),
-                "deployments": len(deps),
-            }
-        )
+        """Rebuild summary caches from canonical per-item metadata files."""
+        async with _compact_lock:
+            await _run_compact()
+        return JSONResponse({"status": "compacted"})
 
     # ── SPA fallback ─────────────────────────────────────────────────────
 
