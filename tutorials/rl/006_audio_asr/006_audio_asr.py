@@ -91,6 +91,8 @@ class LibriSpeechASRDataset(MultimodalDataset):
         ds = ds.select(range(min(self.n_rows, len(ds))))
         # decode=False avoids the torchcodec dependency; decode with soundfile.
         ds = ds.cast_column("audio", Audio(decode=False))
+        # Demo-scale: materializes every clip as an inline base64 row in memory.
+        # Fine for a handful of clips; for large corpora stream / store by reference.
         rows = []
         for ex in ds:
             audio = ex["audio"]

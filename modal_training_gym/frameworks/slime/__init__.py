@@ -1,21 +1,16 @@
 """slime framework package.
 
-``build_slime_app`` is exported lazily: importing it pulls in the launcher, which
-imports ``modal``. The transcription rollout in this package runs *inside* the
-slime training image (where ``modal`` isn't installed) and is imported by slime via
-``importlib.import_module``, which runs this ``__init__``. Eagerly importing the
-launcher here would drag ``modal`` into that import and crash the rollout — so we
-defer it via ``__getattr__`` instead.
+``build_slime_app`` is re-exported lazily so importing a sibling module (e.g. the
+in-image transcription rollout) doesn't pull in the launcher, which imports
+``modal`` — unavailable in the slime training image.
 """
 
 from __future__ import annotations
 
-from typing import Any
-
 __all__ = ["build_slime_app"]
 
 
-def __getattr__(name: str) -> Any:
+def __getattr__(name: str):
     if name == "build_slime_app":
         from .launcher import build_slime_app
 

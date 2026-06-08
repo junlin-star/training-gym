@@ -220,11 +220,8 @@ def build_slime_app(
     SlimeRecipe._validate_custom_model_architecture(model)
     SlimeRecipe._validate_dataset(dataset)
 
-    # Models whose bridge forward can't do THD packing (e.g. Qwen3-ASR) must train
-    # on padded (bshd) batches. Enforce it here so a recipe that leaves slime's
-    # default thd packing on fails fast with a fix, not a deep "packed_seq_params is
-    # not supported" crash. Qwen3_ASR_1_7b_Recipe sets these; bare SlimeRecipe users
-    # get this pointer.
+    # Models that can't do THD packing (model.requires_bshd, e.g. Qwen3-ASR) must
+    # train on padded (bshd) batches; fail fast with the fix if the recipe didn't.
     if model and getattr(model, "requires_bshd", False):
         cfg = slime.extra_config or {}
         if cfg.get("qkv_format") != "bshd" or slime.use_dynamic_batch_size:
@@ -695,11 +692,12 @@ def build_slime_app(
         checkpoints_volume.commit()
         print(f"Saved HF checkpoint to {output_dir}")
 
+    # Cluster only for multi-node runs: a single node runs as one plain
+    # @app.function (clustering one container is pure reservation overhead), and a
+    # multi-node Ray cluster needs Modal's clustered scheduler to co-schedule the
+    # containers and wire up rank-0/RDMA.
     _multi_node = slime.total_nodes > 1
-    # Single-node clustered scheduling is pure reservation overhead (see
-    # clustered_if). Auto-skip it for 1 node; `disable_clustered` is an
-    # escape hatch (ignored for multi-node, which always needs the cluster).
-    _use_clustered = _multi_node and not slime.disable_clustered
+    _use_clustered = _multi_node
 
     train_secrets: list[Secret] = []
     if slime.wandb is not None:
