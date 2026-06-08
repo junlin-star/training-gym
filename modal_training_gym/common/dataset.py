@@ -567,8 +567,9 @@ class MultimodalDataset(DatasetConfig):
     # TODO(ben/joy): gate-check media at this boundary so the evals dashboard can
     # reliably visualize it. Two parts: (1) normalize each emitted media item to a
     # canonical, browser-renderable container per modality (audio->wav, image->png/
-    # jpeg) instead of trusting whatever format the user brings — LibriSpeechASRDataset
-    # already re-encodes to wav, make it the convention here; (2) validate the data-URI
+    # jpeg) instead of trusting whatever format the user brings — the audio tutorial's
+    # dataset already re-encodes to wav, make it the convention here; (2) validate the
+    # data-URI
     # MIME matches `modality`. Pairs with the dashboard fallback in EvalsPage.svelte.
     media_column: str = ""
     output_format: str = "jsonl"

@@ -100,7 +100,7 @@ class SlimeRecipe(BaseTrainRecipe):
     cloud: str | None = None
     region: str | None = None
     # Force-skip Modal's clustered scheduler even on a multi-node run. The launcher
-    # already auto-skips it for single-node (size==1) runs (see _clustered_if); set
+    # already auto-skips it for single-node (size==1) runs (see clustered_if); set
     # this to also opt a multi-node run out of the clustered reservation — e.g. to
     # dodge the multi-container scheduling wait when you've sized the run to land on
     # one host anyway. The function body is unchanged either way.
@@ -490,12 +490,12 @@ class SlimeRecipe(BaseTrainRecipe):
         from modal_training_gym.train_recipes.slime_recipe.qwen3_6_35b import (
             Qwen3_6_35b_Recipe,
         )
-        from modal_training_gym.train_recipes.slime_recipe.qwen3_asr import (
-            Qwen3ASR_Recipe,
+        from modal_training_gym.train_recipes.slime_recipe.qwen3_asr_1_7b import (
+            Qwen3_ASR_1_7b_Recipe,
         )
 
         if model_config.model_name == "Qwen/Qwen3-ASR-1.7B":
-            return Qwen3ASR_Recipe()
+            return Qwen3_ASR_1_7b_Recipe()
         if model_config.model_name == "zai-org/GLM-4.7":
             return GLM_4_7_Recipe()
         if model_config.model_name == "Qwen/Qwen3-1.7B":

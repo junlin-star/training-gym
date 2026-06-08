@@ -131,11 +131,6 @@ class ModelArchitecture:
     moe_aux_loss_coeff: float | None = None
     megatron_spec: list[str] | None = None
     megatron_model_type: str = ""
-    # Names of compat patch files (in frameworks/slime/modal_helpers/patches/) to
-    # apply at image build for this model — for upstream gaps a model needs until
-    # they're fixed upstream (e.g. Qwen3-ASR's bridge/processor/export shims). The
-    # launcher applies these only when this model is used.
-    compat_patches: list[str] | None = None
     apply_layernorm_1p: bool = False
     use_gated_attention: bool = False
     attention_output_gate: bool = False

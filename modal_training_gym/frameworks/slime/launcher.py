@@ -32,7 +32,6 @@ from enum import Enum
 from modal import App, Image, Secret, Volume
 
 from modal_training_gym.common import hf_secrets
-from modal.experimental import clustered
 
 import cloudpickle
 
@@ -44,7 +43,7 @@ from modal_training_gym.common.framework import (
 )
 from modal_training_gym.common.models import ModelConfig
 from modal_training_gym.common.modal_urls import modal_app_dashboard_url
-from modal_training_gym.common.ray_cluster import ModalRayCluster
+from modal_training_gym.common.ray_cluster import ModalRayCluster, clustered_if
 from modal_training_gym.common.run import TrainingRun, TrainingRunStatus
 from modal_training_gym.common.train_result import TrainResult
 
@@ -83,30 +82,15 @@ _PATCH_BRIDGE_PER_TOKEN_LOSS_B64 = encode_patch(
     "patch_bridge_provider_per_token_loss", _SLIME_PATCHES
 )
 _PATCH_STOP_TOKEN_DIAG_B64 = encode_patch("patch_stop_token_diagnostic", _SLIME_PATCHES)
-
-
-def _clustered_if(
-    use_clustered: bool, size: int, *, rdma: bool
-) -> Callable[[Callable], Callable]:
-    """Return a decorator: ``clustered(size, rdma=rdma)`` when ``use_clustered``,
-    else an identity decorator that registers the function as a plain
-    ``@app.function``.
-
-    For a single-node run (``size == 1``) Modal's clustered scheduler is pure
-    overhead: ``ModalRayCluster.discover_cluster(1)`` already short-circuits to
-    ``127.0.0.1``/head/rank-0 and never calls ``modal.experimental.get_cluster_info``,
-    RDMA/EFA are already off, and the body runs identically. Skipping ``@clustered``
-    only changes how the single container is *scheduled* — it dodges the multi-
-    container reservation wait (which can hang for >1h under capacity pressure) and
-    the sub-8-GPU clustered-function deprecation. The function body is unchanged.
-    """
-    if use_clustered:
-        return clustered(size, rdma=rdma)  # pyright: ignore[reportCallIssue, reportOptionalCall]
-
-    def _identity(fn):
-        return fn
-
-    return _identity
+# The Qwen3-ASR Megatron->HF converter (registers the qwen3_asr mapping incl. the
+# audio tower). It lives in the base image — not the ASR recipe — because torch_dist
+# -> HF conversion runs in the shared convert_checkpoint_to_hf path (deploy/eval),
+# which has no recipe; baking it here makes both train-time export and deploy-time
+# conversion ASR-capable. Additive + idempotent, so non-ASR runs are untouched.
+_PATCH_QWEN3_ASR_EXPORT_B64 = encode_patch(
+    "patch_qwen3_asr_export",
+    _SLIME_PATCHES / "model_specific_patches" / "qwen3_asr",
+)
 
 
 def _build_slime_base_image() -> "Image":
@@ -119,6 +103,7 @@ def _build_slime_base_image() -> "Image":
             f"echo {_PATCH_ADVANTAGES_B64} | base64 -d | python3",
             f"echo {_PATCH_BRIDGE_NONE_TASK_B64} | base64 -d | python3",
             f"echo {_PATCH_STOP_TOKEN_DIAG_B64} | base64 -d | python3",
+            f"echo {_PATCH_QWEN3_ASR_EXPORT_B64} | base64 -d | python3",
         )
     )
 
@@ -238,8 +223,8 @@ def build_slime_app(
     # Models whose bridge forward can't do THD packing (e.g. Qwen3-ASR) must train
     # on padded (bshd) batches. Enforce it here so a recipe that leaves slime's
     # default thd packing on fails fast with a fix, not a deep "packed_seq_params is
-    # not supported" crash. Qwen3ASR_Recipe sets these; bare SlimeRecipe users get
-    # this pointer.
+    # not supported" crash. Qwen3_ASR_1_7b_Recipe sets these; bare SlimeRecipe users
+    # get this pointer.
     if model and getattr(model, "requires_bshd", False):
         cfg = slime.extra_config or {}
         if cfg.get("qkv_format") != "bshd" or slime.use_dynamic_batch_size:
@@ -247,7 +232,7 @@ def build_slime_app(
                 f"{model.model_name} requires padded (bshd) batches: its "
                 "megatron-bridge forward doesn't implement THD sequence packing. "
                 'Set extra_config={"qkv_format": "bshd", "micro_batch_size": N} and '
-                "use_dynamic_batch_size=False — or use Qwen3ASR_Recipe, which sets "
+                "use_dynamic_batch_size=False — or use Qwen3_ASR_1_7b_Recipe, which sets "
                 f"these. Got qkv_format={cfg.get('qkv_format')!r}, "
                 f"use_dynamic_batch_size={slime.use_dynamic_batch_size}."
             )
@@ -342,28 +327,6 @@ def build_slime_app(
     if _has_hybrid_spec:
         image = image.run_commands(
             f"echo {_PATCH_VALIDATION_B64} | base64 -d | python3",
-        )
-
-    # Model-declared compat shims for upstream gaps (e.g. Qwen3-ASR's bridge /
-    # processor / export patches). Applied to the base image so both the
-    # conversion and training images (train_image = image, below) inherit them,
-    # and after the local mounts above so a mounted slime can't overlay them.
-    # Each patch is idempotent; gated on the model declaring it, so non-ASR runs
-    # are untouched.
-    _model_pip_packages = (
-        list(getattr(model, "pip_packages", None) or []) if model else []
-    )
-    if _model_pip_packages:
-        image = image.uv_pip_install(*_model_pip_packages)
-
-    _compat_patches = (
-        list(getattr(model.architecture, "compat_patches", None) or [])
-        if model and getattr(model, "architecture", None)
-        else []
-    )
-    for _patch_name in _compat_patches:
-        image = image.run_commands(
-            f"echo {encode_patch(_patch_name, _SLIME_PATCHES)} | base64 -d | python3",
         )
 
     def _get_custom_generate_path() -> str:
@@ -583,7 +546,7 @@ def build_slime_app(
         serialized=True,
         name="convert_checkpoint",
     )
-    @_clustered_if(convert_nnodes > 1, convert_nnodes, rdma=convert_nnodes > 1)
+    @clustered_if(convert_nnodes > 1, convert_nnodes, rdma=convert_nnodes > 1)
     def convert_checkpoint():
         from huggingface_hub import snapshot_download
 
@@ -731,7 +694,7 @@ def build_slime_app(
 
     _multi_node = slime.total_nodes > 1
     # Single-node clustered scheduling is pure reservation overhead (see
-    # _clustered_if). Auto-skip it for 1 node; `disable_clustered` is an
+    # clustered_if). Auto-skip it for 1 node; `disable_clustered` is an
     # escape hatch (ignored for multi-node, which always needs the cluster).
     _use_clustered = _multi_node and not slime.disable_clustered
 
@@ -768,7 +731,7 @@ def build_slime_app(
         serialized=True,
         name="train",
     )
-    @_clustered_if(_use_clustered, slime.total_nodes, rdma=_multi_node)
+    @clustered_if(_use_clustered, slime.total_nodes, rdma=_multi_node)
     async def train(
         modal_app_id: str = "",
         modal_app_url: str = "",

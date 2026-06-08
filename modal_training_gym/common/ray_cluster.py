@@ -12,9 +12,36 @@ import asyncio
 import inspect
 import subprocess
 import time
+from collections.abc import Callable
+
+from modal.experimental import clustered
 
 RAY_PORT = 6379
 RAY_DASHBOARD_PORT = 8265
+
+
+def clustered_if(
+    use_clustered: bool, size: int, *, rdma: bool
+) -> Callable[[Callable], Callable]:
+    """Return a decorator: ``clustered(size, rdma=rdma)`` when ``use_clustered``,
+    else an identity decorator that registers the function as a plain
+    ``@app.function``.
+
+    For a single-node run (``size == 1``) Modal's clustered scheduler is pure
+    overhead: ``ModalRayCluster.discover_cluster(1)`` already short-circuits to
+    ``127.0.0.1``/head/rank-0 and never calls ``modal.experimental.get_cluster_info``,
+    RDMA/EFA are already off, and the body runs identically. Skipping ``@clustered``
+    only changes how the single container is *scheduled* — it dodges the multi-
+    container reservation wait (which can hang for >1h under capacity pressure) and
+    the sub-8-GPU clustered-function deprecation. The function body is unchanged.
+    """
+    if use_clustered:
+        return clustered(size, rdma=rdma)  # pyright: ignore[reportCallIssue, reportOptionalCall]
+
+    def _identity(fn: Callable) -> Callable:
+        return fn
+
+    return _identity
 
 
 def start_ray_head(
