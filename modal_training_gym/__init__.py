@@ -24,6 +24,10 @@ _EXPORTS = {
         "METADATA_VOLUME_NAME",
     ),
     "MetadataStore": ("modal_training_gym.utils.metadata", "MetadataStore"),
+    "ModalCaptureError": (
+        "modal_training_gym.common.modal_refs",
+        "ModalCaptureError",
+    ),
     "ModelArchitecture": ("modal_training_gym.common.models", "ModelArchitecture"),
     "ModelConfig": ("modal_training_gym.common.models", "ModelConfig"),
     "ModelDeployment": ("modal_training_gym.common.deployment", "ModelDeployment"),
@@ -85,6 +89,7 @@ __all__ = [
     "Kimi_K2_5",
     "METADATA_VOLUME_NAME",
     "MetadataStore",
+    "ModalCaptureError",
     "ModelArchitecture",
     "ModelConfig",
     "ModelDeployment",
