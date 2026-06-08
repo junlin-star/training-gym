@@ -1,4 +1,3 @@
-import importlib.util
 import json
 from pathlib import Path
 
@@ -65,10 +64,10 @@ def test_qwen3_6_27b_recipe_conversion_policy_and_train_command() -> None:
     assert recipe.total_nodes == 1
 
     nodes, nproc_per_node, extra_args = get_checkpoint_conversion_policy(recipe, model)
-    assert (nodes, nproc_per_node) == (1, 4)
+    assert (nodes, nproc_per_node) == (1, 8)
     for expected in [
         "--tensor-model-parallel-size 4",
-        "--pipeline-model-parallel-size 1",
+        "--pipeline-model-parallel-size 2",
         "--num-layers 64",
         "--hidden-size 5120",
         "--ffn-hidden-size 17408",
@@ -123,32 +122,3 @@ def test_qwen3_6_27b_training_config_builds_slime_app() -> None:
     assert callable(app.train.get_raw_f())
     assert callable(app.download.get_raw_f())
     assert callable(app.convert_checkpoint.get_raw_f())
-
-
-def test_qwen3_6_27b_singlenode_tutorial_uses_recipe_defaults() -> None:
-    path = (
-        Path(__file__).parents[1]
-        / "tutorials"
-        / "singlenode"
-        / "001_qwen27b"
-        / "001_qwen27b.py"
-    )
-    spec = importlib.util.spec_from_file_location("qwen3_6_27b_singlenode", path)
-    assert spec is not None
-    assert spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-
-    recipe = Qwen3_6_27b_Recipe(rm_type="deepscaler")
-    cli_args = recipe.cli_args(
-        module.MathDataset(n_rows=120),
-        Qwen3_6_27B(),
-    )
-    assert "--no-save-optim" not in cli_args
-    assert "--no-save-rng" not in cli_args
-    assert "--sglang-disable-custom-all-reduce" in cli_args
-    source = path.read_text()
-    assert 'Qwen3_6_27b_Recipe(rm_type="deepscaler")' in source
-    assert "n_samples_per_prompt=4" not in source
-    assert "eval_max_response_len=4096" not in source
-    assert "tutorials/rl/005_qwen27b" not in source

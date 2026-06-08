@@ -1,3 +1,5 @@
+from dataclasses import field
+
 from pydantic import ConfigDict
 from pydantic.dataclasses import dataclass
 
@@ -9,6 +11,9 @@ class Qwen3_6_27b_Recipe(SlimeRecipe):
     """Qwen3.6-27B dense hybrid model on 1×8×H100 with TP4×PP2, colocated GRPO."""
 
     gpu_type: str = "H100"
+    train_function_kwargs: dict[str, int] = field(
+        default_factory=lambda: {"ephemeral_disk": 1_048_576}
+    )
     colocate: bool = True
 
     actor_num_nodes: int = 1
