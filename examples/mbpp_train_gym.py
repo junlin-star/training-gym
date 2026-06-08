@@ -48,6 +48,7 @@ from huggingface_hub import hf_hub_download
 
 MBPP_REPO = "Muennighoff/mbpp"
 PROMPT_STYLE = "correctness-first-brevity-v1"
+DEFAULT_BREVITY_WEIGHT = 0.1
 SYSTEM_PROMPT = (
     "You are an expert Python programmer. Solve the task by writing the "
     "shortest correct Python implementation you can. Correctness is required; "
@@ -159,7 +160,7 @@ def correctness_first_brevity_reward(
     total: int,
     completion_chars: int,
     reference_chars: int,
-    brevity_weight: float = 0.1,
+    brevity_weight: float = DEFAULT_BREVITY_WEIGHT,
 ) -> tuple[float, dict[str, float | bool | int]]:
     if total <= 0:
         return 0.0, {
@@ -190,6 +191,10 @@ def correctness_first_brevity_reward(
         "completion_chars": completion_chars,
         "reference_chars": reference_chars,
     }
+
+
+def reward_brevity_weight() -> float:
+    return float(os.environ.get("MBPP_BREVITY_WEIGHT", DEFAULT_BREVITY_WEIGHT))
 
 
 def run_mbpp_asserts_in_sandbox(
@@ -485,6 +490,7 @@ async def mbpp_rm(args, sample, **kwargs) -> float:
         total=total,
         completion_chars=len(code.strip()),
         reference_chars=len(task.reference_code.strip()),
+        brevity_weight=reward_brevity_weight(),
     )
     sample.metadata = {
         **(getattr(sample, "metadata", None) or {}),
@@ -526,6 +532,7 @@ def build_recipe(args: argparse.Namespace) -> SlimeRecipe:
             "split_seed": str(args.split_seed),
             "prompt_style": PROMPT_STYLE,
         },
+        train_env_vars={"MBPP_BREVITY_WEIGHT": str(args.brevity_weight)},
         image_overlay=lambda image: image.run_commands(
             "uv pip install --system modal>=1.4.0"
         ),
@@ -542,6 +549,8 @@ def save_eval_result(
     test_size: int,
     eval_kind: str,
     training_run_id: str = "",
+    brevity_weight: float = DEFAULT_BREVITY_WEIGHT,
+    run_label: str = "",
 ) -> EvalResult:
     dataset_name = f"mbpp-sanitized-seed{split_seed}-test{test_size}"
     eval_config_id = create_hash(
@@ -549,7 +558,10 @@ def save_eval_result(
         "MBPPTrainEval",
         model_key,
         "mbpp_sandbox",
-        f"{dataset_name}:{PROMPT_STYLE}:{eval_kind}:{training_run_id}",
+        (
+            f"{dataset_name}:{PROMPT_STYLE}:{eval_kind}:{training_run_id}:"
+            f"{brevity_weight}:{run_label}"
+        ),
     )
     EvalConfigDurable(
         eval_config_id=eval_config_id,
@@ -563,6 +575,8 @@ def save_eval_result(
             "train_size": train_size,
             "test_size": test_size,
             "prompt_style": PROMPT_STYLE,
+            "brevity_weight": brevity_weight,
+            "run_label": run_label,
             "max_tokens": 512,
             "temperature": 0.0,
         },
@@ -594,8 +608,10 @@ def run_dashboard_eval(
     train_size: int,
     test_size: int,
     eval_kind: str,
-    training_run_id: str = "",
     max_concurrency: int,
+    training_run_id: str = "",
+    brevity_weight: float = DEFAULT_BREVITY_WEIGHT,
+    run_label: str = "",
 ) -> EvalResult:
     rows: list[EvalRowResult] = []
     total = len(tasks)
@@ -623,6 +639,8 @@ def run_dashboard_eval(
         test_size=test_size,
         eval_kind=eval_kind,
         training_run_id=training_run_id,
+        brevity_weight=brevity_weight,
+        run_label=run_label,
     )
     all_pass = sum(1 for row in rows if row.metadata.get("all_tests_passed"))
     avg_chars = sum(int(row.metadata.get("completion_chars", 0)) for row in rows) / len(
@@ -640,6 +658,9 @@ def train_and_eval_model(model_key: str, args: argparse.Namespace) -> None:
     model_cls = MODEL_REGISTRY[model_key]
     model = model_cls()
     slug = model_slug(model_key)
+    run_slug = slug
+    if args.run_label:
+        run_slug = f"{slug}-{args.run_label.lower().replace('_', '-')}"
     train_tasks, test_tasks = split_mbpp_tasks(
         subset=args.subset,
         train_size=args.train_size,
@@ -655,8 +676,8 @@ def train_and_eval_model(model_key: str, args: argparse.Namespace) -> None:
         print(f"{model_key}: serving base model for held-out eval")
         base_deployment = DeploymentConfig(
             model=model,
-            app_name=f"{slug}-mbpp-base-serve",
-            served_model_name=f"{slug}-mbpp-base",
+            app_name=f"{run_slug}-mbpp-base-serve",
+            served_model_name=f"{run_slug}-mbpp-base",
         ).serve()
         base_deployment.wait_until_ready()
         run_dashboard_eval(
@@ -667,6 +688,8 @@ def train_and_eval_model(model_key: str, args: argparse.Namespace) -> None:
             train_size=args.train_size,
             test_size=args.test_size,
             eval_kind="base-test",
+            brevity_weight=args.brevity_weight,
+            run_label=args.run_label,
             max_concurrency=args.max_concurrency,
         )
 
@@ -676,7 +699,7 @@ def train_and_eval_model(model_key: str, args: argparse.Namespace) -> None:
         test_size=args.test_size,
         split_seed=args.split_seed,
         train_repeats=args.train_repeats,
-        path_suffix=slug,
+        path_suffix=run_slug,
     )
     training_run = TrainConfig(
         model=model,
@@ -694,8 +717,8 @@ def train_and_eval_model(model_key: str, args: argparse.Namespace) -> None:
     trained_deployment = DeploymentConfig(
         model=model_cls(),
         checkpoint=checkpoint,
-        app_name=f"{slug}-mbpp-trained-serve",
-        served_model_name=f"{slug}-mbpp-trained",
+        app_name=f"{run_slug}-mbpp-trained-serve",
+        served_model_name=f"{run_slug}-mbpp-trained",
     ).serve()
     trained_deployment.wait_until_ready()
     run_dashboard_eval(
@@ -707,6 +730,8 @@ def train_and_eval_model(model_key: str, args: argparse.Namespace) -> None:
         test_size=args.test_size,
         eval_kind="trained-test",
         training_run_id=train_result.training_run_id,
+        brevity_weight=args.brevity_weight,
+        run_label=args.run_label,
         max_concurrency=args.max_concurrency,
     )
 
@@ -732,6 +757,8 @@ def main() -> None:
     parser.add_argument("--n-samples-per-eval-prompt", type=int, default=4)
     parser.add_argument("--max-response-len", type=int, default=512)
     parser.add_argument("--temperature", type=float, default=0.9)
+    parser.add_argument("--brevity-weight", type=float, default=DEFAULT_BREVITY_WEIGHT)
+    parser.add_argument("--run-label", default="")
     parser.add_argument("--max-tokens-per-gpu", type=int, default=8192)
     parser.add_argument("--gpu-type", default="H100")
     parser.add_argument("--max-concurrency", type=int, default=4)
