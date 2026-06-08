@@ -115,6 +115,8 @@ def run_eval(
     model_name: str,
     tasks: list[MBPPTask],
     *,
+    subset: str,
+    limit: int,
     max_concurrency: int = 4,
 ) -> None:
     model_cls = MODEL_REGISTRY[model_name]
@@ -126,13 +128,21 @@ def run_eval(
     deployment.wait_until_ready()
     print(f"  Ready at {deployment.url}")
 
+    dataset_name = f"mbpp-{subset}-first-{limit}"
     eval_config_id = create_hash(
-        "eval-config", "MBPPEval", model_name, "mbpp_sandbox", ""
+        "eval-config", "MBPPEval", model_name, "mbpp_sandbox", dataset_name
     )
     eval_config = EvalConfigDurable(
         eval_config_id=eval_config_id,
-        dataset_name="mbpp-sanitized",
+        dataset_name=dataset_name,
         eval_fn_name="mbpp_sandbox",
+        generate_kwargs={
+            "model": model_name,
+            "subset": subset,
+            "limit": limit,
+            "max_tokens": 512,
+            "temperature": 0.0,
+        },
     )
     eval_config.save()
 
@@ -200,6 +210,8 @@ def main() -> None:
         run_eval(
             model_name,
             tasks,
+            subset=args.subset,
+            limit=args.limit,
             max_concurrency=args.max_concurrency,
         )
 
