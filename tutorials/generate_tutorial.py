@@ -25,9 +25,7 @@ from __future__ import annotations
 import argparse
 import ast
 import json
-import os
 import pathlib
-import subprocess
 import symtable
 import textwrap
 import urllib.parse
@@ -49,6 +47,7 @@ _README_BEGIN = "<!-- BEGIN TUTORIAL TABLE -->"
 _README_END = "<!-- END TUTORIAL TABLE -->"
 _REPO_SLUG = "modal-projects/training-gym"
 _BADGE_IMG = "https://modal-cdn.com/open-in-modal.svg"
+_BRANCH = "main"
 
 _MARKDOWN = "markdown"
 _CODE = "code"
@@ -70,44 +69,6 @@ _BUCKET_DISPLAY = {
     "agent": "Agents",
     "misc": "Misc",
 }
-
-
-def _branch_exists_on_origin(branch: str) -> bool:
-    if not branch:
-        return False
-    result = subprocess.run(
-        ["git", "ls-remote", "--exit-code", "--heads", "origin", branch],
-        cwd=REPO_ROOT,
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    return result.returncode == 0
-
-
-def _resolve_branch() -> str:
-    for env_var in ("GITHUB_REF_NAME", "VERCEL_GIT_COMMIT_REF"):
-        value = os.getenv(env_var)
-        if value and _branch_exists_on_origin(value):
-            return value
-
-    result = subprocess.run(
-        ["git", "branch", "--show-current"],
-        cwd=REPO_ROOT,
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    branch = result.stdout.strip()
-    if _branch_exists_on_origin(branch):
-        return branch
-
-    return "main"
-
-
-_BRANCH = _resolve_branch()
-
-
 # Injected before every tutorial's first code cell so missing secrets fail
 # fast locally instead of mid-launch on a Modal worker.
 _HF_SECRET_CHECK_MARKDOWN = (
@@ -123,8 +84,9 @@ _NOTEBOOK_GPU_NOTE_MARKDOWN = (
     "> itself only needs to issue API calls."
 )
 _MULTINODE_DISCLAIMER_MARKDOWN = (
-    "> **Multi-node workspace required:** To run this example, your workspace must have\n"
-    "> have multi-node enabled. Contact [support@modal.com](mailto:support@modal.com) to get access."
+    "> **Multi-node workspace required:** This is a multi-node example. To run it,\n"
+    "> your Modal workspace must have multi-node enabled. Contact\n"
+    "> [support@modal.com](mailto:support@modal.com) to enable multi-node."
 )
 _HF_SECRET_CHECK_CODE = (
     "import modal\n"
