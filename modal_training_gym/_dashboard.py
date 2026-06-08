@@ -61,7 +61,7 @@ STATIC_DIR = "/app/frontend/dist"
 @app.function(min_containers=1)
 @modal.asgi_app()
 def fastapi_app():
-    from fastapi import BackgroundTasks, FastAPI, HTTPException
+    from fastapi import FastAPI, HTTPException
     from fastapi.concurrency import run_in_threadpool
     from fastapi.responses import FileResponse, JSONResponse
     from fastapi.staticfiles import StaticFiles
@@ -136,10 +136,10 @@ def fastapi_app():
         for key in cache_entries:
             cache_entries[key] = (0.0, [])
 
-    def _maybe_compact(background_tasks: "BackgroundTasks") -> None:
-        """Schedule a background compact if no other compact is in progress."""
+    def _make_compact_task() -> Any:
+        """Return a BackgroundTask that compacts summaries, or None if already running."""
         if _compact_lock.locked():
-            return
+            return None
 
         async def _guarded_compact() -> None:
             if _compact_lock.locked():
@@ -147,7 +147,9 @@ def fastapi_app():
             async with _compact_lock:
                 await _run_compact()
 
-        background_tasks.add_task(_guarded_compact)
+        from starlette.background import BackgroundTask
+
+        return BackgroundTask(_guarded_compact)
 
     web.mount("/assets", StaticFiles(directory=f"{STATIC_DIR}/assets"), name="assets")
 
@@ -315,24 +317,22 @@ def fastapi_app():
     # ── Training runs ────────────────────────────────────────────────────
 
     @web.get("/api/runs")
-    async def runs(background_tasks: BackgroundTasks):
+    async def runs():
         try:
             data = await get_cached_list("runs", load_runs)
         except Exception:
             data = []
-        _maybe_compact(background_tasks)
-        return JSONResponse(data)
+        return JSONResponse(data, background=_make_compact_task())
 
     # ── Train results ────────────────────────────────────────────────────
 
     @web.get("/api/train-results")
-    async def train_results(background_tasks: BackgroundTasks):
+    async def train_results():
         try:
             data = await get_cached_list("train_results", load_train_results)
         except Exception:
             data = []
-        _maybe_compact(background_tasks)
-        return JSONResponse(data)
+        return JSONResponse(data, background=_make_compact_task())
 
     @web.get("/api/train-results/{training_run_id}")
     async def train_result(training_run_id: str):
@@ -371,13 +371,12 @@ def fastapi_app():
     # ── Deployments ──────────────────────────────────────────────────────
 
     @web.get("/api/deployments")
-    async def deployments(background_tasks: BackgroundTasks):
+    async def deployments():
         try:
             data = await get_cached_list("deployments", load_deployments)
         except Exception:
             data = []
-        _maybe_compact(background_tasks)
-        return JSONResponse(data)
+        return JSONResponse(data, background=_make_compact_task())
 
     # ── Compaction (on-demand repair) ─────────────────────────────────────
 
