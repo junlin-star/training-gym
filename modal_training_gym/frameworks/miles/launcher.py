@@ -25,6 +25,7 @@ from modal_training_gym.common.framework import (
     mount_tools_dir,
     resolve_caller_module,
 )
+from modal_training_gym.common.modal_refs import register_modal_cloudpickle_reducers
 from modal_training_gym.common.modal_urls import modal_app_dashboard_url
 from modal_training_gym.common.models import ModelConfig
 from modal_training_gym.common.ray_cluster import ModalRayCluster
@@ -108,6 +109,7 @@ def build_miles_app(
     caller_module = resolve_caller_module()
     if caller_module is not None and caller_module.__name__ != "__main__":
         cloudpickle.register_pickle_by_value(caller_module)
+    register_modal_cloudpickle_reducers()
 
     caller_script = None
     if caller_module is not None:
