@@ -213,7 +213,7 @@
                     {#if showFrameworkStatus(run) && stageLabel}
                       <span class="stage-pill" aria-label={stageLabel}>
                         <span class="stage-spinner">
-                          <Loader2 size={14} />
+                          <Loader2 size={16} />
                         </span>
                         <span>{stageLabel}</span>
                       </span>
@@ -306,7 +306,7 @@
             <span class="drawer-key">Stage</span>
             <span class="stage-pill" aria-label={frameworkStatusLabel(selectedRun)}>
               <span class="stage-spinner">
-                <Loader2 size={14} />
+                <Loader2 size={16} />
               </span>
               <span>{frameworkStatusLabel(selectedRun)}</span>
             </span>
