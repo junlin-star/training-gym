@@ -40,20 +40,23 @@ def _iter_content_items(prompt: Any):
             yield from content
 
 
-def _extract_audio_bytes(sample: Any) -> bytes:
-    """Pull raw audio bytes out of a slime Sample.
+def _audio_ref(sample: Any) -> Any:
+    """Pull the raw audio reference (data-URI / bytes) off a slime Sample.
 
     Our ``MultimodalDataset`` runs with ``apply_chat_template=False``, so slime keeps
     ``sample.prompt`` a conversation list and the audio rides in the message content
     as ``{"type": "audio", "audio": <data-uri>}`` (slime's ``process_vision_info``
     extracts only images/videos, so audio never reaches ``multimodal_inputs``). Fail
     loudly if it's missing — a silent miss would train on audio-free prompts.
+
+    This is the slime ``Sample -> data`` seam; decoding ``data -> bytes`` is the
+    framework-agnostic :func:`modal_training_gym.common.audio.coerce_audio_bytes`.
     """
     for item in _iter_content_items(getattr(sample, "prompt", None)):
         if isinstance(item, dict) and (item.get("type") == "audio" or "audio" in item):
-            audio = coerce_audio_bytes(item.get("audio") or item.get("audio_url"))
-            if audio:
-                return audio
+            ref = item.get("audio") or item.get("audio_url")
+            if ref:
+                return ref
     raise RuntimeError(
         "transcription_rollout: no audio on the slime Sample. Expected a "
         "conversation-list prompt with a {'type': 'audio', 'audio': <data-uri>} item."
@@ -176,7 +179,12 @@ async def transcription_rollout(args: Any, sample: Any, sampling_params: dict) -
     """
     import aiohttp
 
-    audio_bytes = _extract_audio_bytes(sample)
+    audio_bytes = coerce_audio_bytes(_audio_ref(sample))  # Sample -> data -> bytes
+    if audio_bytes is None:
+        raise RuntimeError(
+            "transcription_rollout: the Sample's audio reference did not decode to "
+            "bytes (expected raw bytes or a base64 / data-URI string)."
+        )
     model = getattr(args, "served_model_name", None) or "qwen3-asr"
     temperature = float(sampling_params.get("temperature", 1.0))
     hint = getattr(sample, "prompt_text", "") or ""
