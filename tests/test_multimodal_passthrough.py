@@ -23,7 +23,9 @@ _RECIPE_KW = dict(
 
 
 def _flags(args):
-    return {args[i]: args[i + 1] for i in range(len(args) - 1) if args[i].startswith("--")}
+    return {
+        args[i]: args[i + 1] for i in range(len(args) - 1) if args[i].startswith("--")
+    }
 
 
 @pytest.mark.parametrize("modality", ["image", "audio", "video"])

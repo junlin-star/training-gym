@@ -19,7 +19,10 @@ def main() -> None:
         "modeling_qwen3_asr/thinker_model.py"
     ):
         s = p.read_text()
-        if "use_mpu_process_groups()" in s and "pg_collection = ProcessGroupCollection" in s:
+        if (
+            "use_mpu_process_groups()" in s
+            and "pg_collection = ProcessGroupCollection" in s
+        ):
             print("compat: bridge pg_collection already defaulted:", p)
             continue
         needle = (

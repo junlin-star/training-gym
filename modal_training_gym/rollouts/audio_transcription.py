@@ -32,6 +32,7 @@ from typing import Any
 
 # ── audio extraction (defensive — slime's Sample carries multimodal a few ways) ─
 
+
 def _data_uri_to_bytes(data_uri: str) -> bytes:
     """Strip a `data:audio/<fmt>;base64,...` prefix and decode."""
     if data_uri.startswith("data:"):
@@ -67,7 +68,9 @@ def _extract_audio_bytes(sample: Any) -> bytes:
             content = msg.get("content") if isinstance(msg, dict) else None
             if isinstance(content, list):
                 for item in content:
-                    if isinstance(item, dict) and (item.get("type") == "audio" or "audio" in item):
+                    if isinstance(item, dict) and (
+                        item.get("type") == "audio" or "audio" in item
+                    ):
                         b = _coerce_audio(item.get("audio") or item.get("audio_url"))
                         if b:
                             return b
@@ -95,6 +98,7 @@ def _extract_audio_bytes(sample: Any) -> bytes:
 
 
 # ── SGLang URL (defensive — slime exposes the rollout endpoint a few ways) ────
+
 
 def _router_base(args: Any) -> str | None:
     ip = getattr(args, "sglang_router_ip", None)
@@ -124,7 +128,11 @@ def _candidate_engine_bases(args: Any) -> list[str]:
             bases.append(v if v.startswith("http") else f"http://{v}")
 
     base_port = int(getattr(args, "sglang_server_port", None) or 15000)
-    n_engines = int(getattr(args, "rollout_num_gpus", 0) or getattr(args, "actor_num_gpus_per_node", 1) or 1)
+    n_engines = int(
+        getattr(args, "rollout_num_gpus", 0)
+        or getattr(args, "actor_num_gpus_per_node", 1)
+        or 1
+    )
     ports = [base_port + 2 * i for i in range(max(n_engines, 1) + 1)]
 
     hosts = []
@@ -187,11 +195,16 @@ async def _discover_engine_bases(args: Any, sess) -> list[str]:
         # /workers (sglang_router > 0.2.1) → {"workers": [{"url": ...}]};
         # /list_workers (older) → {"urls": [...]}.
         for path, extract in (
-            ("/workers", lambda b: [w["url"] for w in b.get("workers", []) if w.get("url")]),
+            (
+                "/workers",
+                lambda b: [w["url"] for w in b.get("workers", []) if w.get("url")],
+            ),
             ("/list_workers", lambda b: list(b.get("urls", []))),
         ):
             try:
-                async with sess.get(router + path, timeout=aiohttp.ClientTimeout(total=15)) as r:
+                async with sess.get(
+                    router + path, timeout=aiohttp.ClientTimeout(total=15)
+                ) as r:
                     if r.status != 200:
                         continue
                     urls = extract(await r.json())
@@ -288,7 +301,9 @@ def _render_asr_prompt_text(prompt, tok) -> str:
         return tok.apply_chat_template(msgs, tokenize=False, add_generation_prompt=True)
     except Exception:
         # fallback: minimal Qwen chat format
-        user = next((m["content"] for m in msgs if m["role"] == "user"), _AUDIO_PLACEHOLDER)
+        user = next(
+            (m["content"] for m in msgs if m["role"] == "user"), _AUDIO_PLACEHOLDER
+        )
         return f"<|im_start|>user\n{user}<|im_end|>\n<|im_start|>assistant\n"
 
 
@@ -339,7 +354,9 @@ def _build_form(audio_bytes: bytes, model: str, temperature: float, prompt: str 
     import aiohttp
 
     form = aiohttp.FormData()
-    form.add_field("file", io.BytesIO(audio_bytes), filename="clip.wav", content_type="audio/wav")
+    form.add_field(
+        "file", io.BytesIO(audio_bytes), filename="clip.wav", content_type="audio/wav"
+    )
     form.add_field("model", model)
     form.add_field("temperature", str(temperature))
     if prompt:
