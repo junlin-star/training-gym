@@ -122,6 +122,10 @@ _NOTEBOOK_GPU_NOTE_MARKDOWN = (
     "> serving happens on Modal-managed GPU workers spun up by the SDK — the notebook\n"
     "> itself only needs to issue API calls."
 )
+_MULTINODE_DISCLAIMER_MARKDOWN = (
+    "> **Multi-node workspace required:** To run this example, your workspace must have\n"
+    "> have multi-node enabled. Contact [support@modal.com](mailto:support@modal.com) to get access."
+)
 _HF_SECRET_CHECK_CODE = (
     "import modal\n"
     "\n"
@@ -182,7 +186,9 @@ def _find_shell_command(node: ast.FunctionDef | ast.AsyncFunctionDef) -> str | N
     return None
 
 
-def _extract_cells(source: str) -> list[Cell]:
+def _extract_cells(
+    source: str, *, include_multinode_disclaimer: bool = False
+) -> list[Cell]:
     tree = ast.parse(source)
     lines = source.splitlines(keepends=True)
     cells: list[Cell] = []
@@ -209,7 +215,22 @@ def _extract_cells(source: str) -> list[Cell]:
             body_src = "".join(lines[start:end])
             body_src = textwrap.dedent(body_src).rstrip("\n")
             cells.append(Cell(kind="code", source=body_src, targets=targets))
-    return _inject_hf_secret_check(cells)
+    cells = _inject_hf_secret_check(cells)
+    if include_multinode_disclaimer:
+        cells = _inject_multinode_disclaimer(cells)
+    return cells
+
+
+def _inject_multinode_disclaimer(cells: list[Cell]) -> list[Cell]:
+    """Prepend the multi-node workspace warning to multi-node tutorials."""
+    return [
+        Cell(
+            kind="markdown",
+            source=_MULTINODE_DISCLAIMER_MARKDOWN,
+            targets=frozenset({_PY, _NB}),
+        ),
+        *cells,
+    ]
 
 
 def _inject_hf_secret_check(cells: list[Cell]) -> list[Cell]:
@@ -511,9 +532,9 @@ def generate_one(
     input_path: pathlib.Path, output_root: pathlib.Path
 ) -> tuple[pathlib.Path, pathlib.Path]:
     source = input_path.read_text()
-    cells = _extract_cells(source)
     name = input_path.stem
     bucket = _bucket_for(input_path)
+    cells = _extract_cells(source, include_multinode_disclaimer=bucket == "multinode")
     out_dir = output_root / bucket / name
     out_dir.mkdir(parents=True, exist_ok=True)
     py_path = out_dir / f"{name}.py"
