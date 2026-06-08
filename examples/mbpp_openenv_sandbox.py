@@ -349,6 +349,7 @@ class MBPPCodingEnv(Environment[MBPPSubmitCode, MBPPCodingObservation, State]):
         *,
         app_name: str = DEFAULT_APP_NAME,
         sandbox_timeout_sec: int = 10,
+        brevity_weight: float = 0.1,
     ) -> None:
         super().__init__()
         if not tasks:
@@ -357,6 +358,7 @@ class MBPPCodingEnv(Environment[MBPPSubmitCode, MBPPCodingObservation, State]):
         self._tasks = tasks
         self._app_name = app_name
         self._sandbox_timeout_sec = sandbox_timeout_sec
+        self._brevity_weight = brevity_weight
         self._state = State(episode_id=str(uuid4()), step_count=0)
         self._current_task = tasks[0]
 
@@ -412,6 +414,7 @@ class MBPPCodingEnv(Environment[MBPPSubmitCode, MBPPCodingObservation, State]):
             total=total,
             completion_chars=len(code.strip()),
             reference_chars=len(self._current_task.reference_code.strip()),
+            brevity_weight=self._brevity_weight,
         )
         timing_profile["reward_sec"] = time.perf_counter() - phase_start
         sandbox_timing = result.get("timing_profile")
@@ -461,6 +464,7 @@ def score_mbpp_completion(
     completion: str,
     app_name: str = DEFAULT_APP_NAME,
     timeout_sec: int = 10,
+    brevity_weight: float = 0.1,
 ) -> tuple[float, dict[str, object]]:
     timing_profile: dict[str, object] = {}
     total_start = time.perf_counter()
@@ -483,6 +487,7 @@ def score_mbpp_completion(
         total=total,
         completion_chars=len(code.strip()),
         reference_chars=len(task.reference_code.strip()),
+        brevity_weight=brevity_weight,
     )
     timing_profile["reward_sec"] = time.perf_counter() - phase_start
     sandbox_timing = result.get("timing_profile")
