@@ -278,16 +278,35 @@ class ModelDeployment(BaseModel):
             "served_model_name": value.served_model_name,
         }
 
-    def generate(self, prompt: str, ensure_ready: bool = True, **kwargs) -> str:
+    def generate(
+        self,
+        prompt: str,
+        ensure_ready: bool = True,
+        images: list[str] | None = None,
+        **kwargs,
+    ) -> str:
         import time
 
         import requests
 
         if ensure_ready:
             self.wait_until_ready()
+        # Multimodal: when images are supplied, send OpenAI-style structured content
+        # (text + image_url parts) so vision models actually see the image. Without
+        # this the request is text-only. Plain text str preserves prior behavior.
+        if images:
+            content: object = [
+                {"type": "text", "text": prompt},
+                *(
+                    {"type": "image_url", "image_url": {"url": image}}
+                    for image in images
+                ),
+            ]
+        else:
+            content = prompt
         body = {
             "model": self.deployment_config.served_model_name,
-            "messages": [{"role": "user", "content": prompt}],
+            "messages": [{"role": "user", "content": content}],
             **kwargs,
         }
         transient_status_codes = {502, 503, 504}

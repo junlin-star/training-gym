@@ -6,9 +6,13 @@ tower (a ViT with patch size 16, depth 27) is loaded by SGLang straight from the
 HF checkpoint. The architecture below (from ``config.json`` → ``text_config``)
 drives Megatron *training*.
 
-Note: compat patches for the vision tower (bridge config, export converter, etc.)
-will likely be needed once megatron-bridge support is verified — similar to the
-Qwen3-ASR audio tower patches.
+Megatron-bridge support: AutoBridge loads/trains the full VL model natively (no
+ViT shim needed — verified empirically). The one gap is the MB→HF *export*:
+slime's torch_dist converter assumes a single decoder stack and chokes on the
+vision tower. With the ViT frozen during RL (see ``Qwen3VL_Recipe``), the
+``patch_qwen3vl_export`` shim skips ``vision_model.*`` and
+``export_merge_from_origin_hf`` refills it from the base HF weights, so only the
+trained language backbone is converted. Report upstream; drop once fixed there.
 """
 
 from __future__ import annotations
@@ -20,7 +24,8 @@ class Qwen3VL_8B(HFModelConfiguration):
     """Qwen3-VL-8B-Instruct (vision-language, 8B parameters) from Alibaba.
 
     Pre-configured with ``ModelArchitecture`` for the text backbone. The vision
-    tower is frozen during RL training and handled by SGLang for rollouts.
+    tower is frozen during RL training (``Qwen3VL_Recipe.freeze_params_name_list``)
+    and handled by SGLang for rollouts.
     """
 
     response_parser = staticmethod(parse_qwen3_response)
@@ -50,4 +55,8 @@ class Qwen3VL_8B(HFModelConfiguration):
         untie_embeddings_and_output_weights=True,
         use_rotary_position_embeddings=True,
         rotary_base=5000000,
+        # slime's MB->HF converter can't express the vision tower; skip it and
+        # refill the frozen ViT + projector from the base HF weights on export.
+        compat_patches=["patch_qwen3vl_export"],
+        export_merge_from_origin_hf=True,
     )

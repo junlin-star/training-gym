@@ -94,7 +94,11 @@ class ScreenSpotDataset(MultimodalDataset):
     n_rows: int = 800
     row_offset: int = 0
     always_prepare: bool = True
-    apply_chat_template: bool = False
+    # True so slime renders the prompt + image into a single chat-templated
+    # string (with vision tokens) before the Qwen3-VL processor tokenizes it.
+    # With False the rollout hands the processor a raw message list and crashes
+    # ('dict' object has no attribute 'replace').
+    apply_chat_template: bool = True
 
     def __init__(self, **kwargs):
         super().__init__(rows=[], **kwargs)
@@ -132,7 +136,7 @@ class ScreenSpotDataset(MultimodalDataset):
             )
         return rows
 
-    def load(self) -> list[dict]:
+    def load(self, split: str = "all") -> list[dict]:
         return self._build_rows()
 
     def prepare(self, path, eval_paths=None):
@@ -199,10 +203,15 @@ async def grounding_reward(args, sample, **kwargs) -> float:
 def grounding_eval_fn(
     deployment: ModelDeployment, example: dict
 ) -> EvalRowResult:
-    prompt = example.get("prompt", "")
+    # Drop the slime "<image>" placeholder: the eval sends the screenshot as a
+    # separate image_url part, so the marker would just be stray text here.
+    prompt = example.get("prompt", "").replace("<image>", "").strip()
     label = example.get("label", "")
+    images = example.get("images", [])
 
-    response = deployment.generate(prompt, ensure_ready=False)
+    # Pass the screenshot through — a text-only request would grade the model
+    # without ever showing it the GUI.
+    response = deployment.generate(prompt, images=images, ensure_ready=False)
 
     pred = _parse_coordinates(response)
     if pred is None:

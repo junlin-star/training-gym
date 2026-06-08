@@ -122,6 +122,10 @@ def _dataset_intro():
 
 @code
 def _dataset():
+    # One "<image>" placeholder per image: slime's _build_messages splits the
+    # prompt on "<image>" to interleave the image column, and asserts the count
+    # matches (one screenshot here). apply_chat_template then renders it into the
+    # Qwen3-VL vision tokens.
     GROUNDING_PROMPT = (
         "<image>\n"
         "You are a GUI agent. Given the screenshot, click on the element "
@@ -142,7 +146,11 @@ def _dataset():
         n_rows: int = 800
         row_offset: int = 0
         always_prepare: bool = True
-        apply_chat_template: bool = False
+        # True so slime renders the prompt + image into a single chat-templated
+        # string (with vision tokens) before the Qwen3-VL processor tokenizes it.
+        # With False the rollout hands the processor a raw message list and crashes
+        # ('dict' object has no attribute 'replace').
+        apply_chat_template: bool = True
 
         def __init__(self, **kwargs):
             super().__init__(rows=[], **kwargs)
@@ -180,7 +188,7 @@ def _dataset():
                 )
             return rows
 
-        def load(self) -> list[dict]:
+        def load(self, split: str = "all") -> list[dict]:
             return self._build_rows()
 
         def prepare(self, path, eval_paths=None):
@@ -279,10 +287,15 @@ def _eval_helpers():
     def grounding_eval_fn(
         deployment: ModelDeployment, example: dict
     ) -> EvalRowResult:
-        prompt = example.get("prompt", "")
+        # Drop the slime "<image>" placeholder: the eval sends the screenshot as a
+        # separate image_url part, so the marker would just be stray text here.
+        prompt = example.get("prompt", "").replace("<image>", "").strip()
         label = example.get("label", "")
+        images = example.get("images", [])
 
-        response = deployment.generate(prompt, ensure_ready=False)
+        # Pass the screenshot through — a text-only request would grade the model
+        # without ever showing it the GUI.
+        response = deployment.generate(prompt, images=images, ensure_ready=False)
 
         pred = _parse_coordinates(response)
         if pred is None:

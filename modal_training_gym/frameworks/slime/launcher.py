@@ -717,12 +717,19 @@ def build_slime_app(
                 "modal_training_gym.frameworks.slime.modal_helpers.convert_torch_dist_to_hf not found"
             )
 
+        _add_missing = bool(
+            getattr(
+                getattr(model, "architecture", None),
+                "export_merge_from_origin_hf",
+                False,
+            )
+        )
         cmd = (
             f"python {convert_script} "
             f"--input-dir {shlex.quote(input_dir)} "
             f"--output-dir {shlex.quote(output_dir)} "
             f"--origin-hf-dir {shlex.quote(hf_path)} "
-            f"--force"
+            f"--force" + (" --add-missing-from-origin-hf" if _add_missing else "")
         )
         print(f"Converting: {cmd}")
         subprocess.run(["bash", "-c", cmd], check=True)

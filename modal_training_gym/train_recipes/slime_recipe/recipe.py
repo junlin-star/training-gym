@@ -180,6 +180,11 @@ class SlimeRecipe(BaseTrainRecipe):
     megatron_to_hf_mode: str = ""
     use_fault_tolerance: bool = True
 
+    # Regex patterns of parameter names to freeze (slime's
+    # --freeze-params-name-list, matched with re.search). Used e.g. to freeze a
+    # VL model's vision tower so RL only updates the language backbone.
+    freeze_params_name_list: list[str] | None = None
+
     # ── Reward model ─────────────────────────────────────────────────────────
     rm_type: str | None = None
 

@@ -136,6 +136,12 @@ class ModelArchitecture:
     # they're fixed upstream (e.g. Qwen3-ASR's bridge/processor/export shims). The
     # launcher applies these only when this model is used.
     compat_patches: list[str] | None = None
+    # When exporting a megatron checkpoint back to HF, fill any weights the
+    # converter doesn't emit from the origin HF checkpoint (slime's
+    # --add-missing-from-origin-hf). Needed for multi-tower models (e.g. Qwen3-VL)
+    # whose frozen vision tower is skipped by the converter and sourced from the
+    # base HF weights instead. Default ``False`` keeps single-tower exports strict.
+    export_merge_from_origin_hf: bool = False
     apply_layernorm_1p: bool = False
     use_gated_attention: bool = False
     attention_output_gate: bool = False
