@@ -5,8 +5,8 @@ Usage:
     # Preview the matrix without launching jobs:
     uv run modal run examples/mbpp_modal_sweep.py --dry-run
 
-    # Launch the default 12-job matrix in Modal-controlled waves:
-    uv run modal run examples/mbpp_modal_sweep.py --max-parallel 12
+    # Launch the default 12-job matrix with no controller-side concurrency cap:
+    uv run modal run examples/mbpp_modal_sweep.py
 """
 
 from __future__ import annotations
@@ -104,7 +104,9 @@ def build_combos(
     return combos
 
 
-def chunked(items: list[SweepCombo], chunk_size: int) -> list[list[SweepCombo]]:
+def chunked(items: list[SweepCombo], chunk_size: int | None) -> list[list[SweepCombo]]:
+    if chunk_size is None:
+        return [items]
     return [items[i : i + chunk_size] for i in range(0, len(items), chunk_size)]
 
 
@@ -115,7 +117,6 @@ def chunked(items: list[SweepCombo], chunk_size: int) -> list[list[SweepCombo]]:
         modal.Secret.from_name("wandb-secret"),
     ],
     timeout=60 * 60 * 24,
-    max_containers=12,
     name="run_combo",
 )
 def run_combo(combo_payload: dict[str, object], settings_payload: dict[str, object]):
@@ -199,7 +200,7 @@ def main(
     rollouts: str = ",".join(str(item) for item in DEFAULT_ROLLOUTS),
     brevity_weights: str = ",".join(str(item) for item in DEFAULT_BREVITY_WEIGHTS),
     run_label_prefix: str = "long",
-    max_parallel: int = 12,
+    max_parallel: int = 0,
     dry_run: bool = False,
     subset: str = "sanitized",
     train_size: int = 327,
@@ -253,15 +254,23 @@ def main(
 
     settings_payload = asdict(settings)
     results = []
-    max_parallel = max(1, max_parallel)
-    for wave_index, wave in enumerate(chunked(combos, max_parallel), 1):
+    chunk_size = max_parallel if max_parallel > 0 else None
+    for wave_index, wave in enumerate(chunked(combos, chunk_size), 1):
         print(f"launching wave {wave_index}: {len(wave)} combo(s)")
-        wave_payloads = [asdict(combo) for combo in wave]
-        for result in run_combo.map(
-            wave_payloads,
-            kwargs={"settings_payload": settings_payload},
-            order_outputs=False,
-        ):
+        calls = [
+            (
+                combo,
+                run_combo.spawn(asdict(combo), settings_payload),
+            )
+            for combo in wave
+        ]
+        for combo, call in calls:
+            print(
+                f"spawned {combo.model} {combo.run_label}: "
+                f"function_call_id={call.object_id}"
+            )
+        for combo, call in calls:
+            result = call.get()
             print(json.dumps(result, sort_keys=True))
             results.append(result)
 
