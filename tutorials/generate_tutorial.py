@@ -61,12 +61,14 @@ _NB = "notebook"
 
 # Buckets the tutorial catalog is grouped into. Display order in the README
 # sections and ordering within each bucket fall back to meta["order"].
-_BUCKETS = ("intro", "rl", "sft", "agent", "multinode", "misc")
+_BUCKETS = ("intro", "rl", "sft", "singlenode", "agent", "multinode", "misc")
 _BUCKET_DISPLAY = {
     "intro": "Intro",
     "rl": "RL",
     "sft": "SFT",
+    "singlenode": "Single Node",
     "agent": "Agents",
+    "multinode": "Multinode",
     "misc": "Misc",
 }
 # Injected before every tutorial's first code cell so missing secrets fail
