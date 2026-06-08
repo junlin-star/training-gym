@@ -68,7 +68,6 @@ def test_inline_modal_function_survives_cloudpickle() -> None:
     assert "inline_fn" in _modal_repr(restored_fn)
 
 
-
 def test_captured_modal_volume_and_secret_from_name_survive_cloudpickle() -> None:
     register_modal_cloudpickle_reducers()
     volume = modal.Volume.from_name("training-data", create_if_missing=True)
