@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import time
 from dataclasses import dataclass
 from typing import Any
 from uuid import uuid4
@@ -194,6 +195,7 @@ def run_mbpp_asserts_in_sandbox(
     runner = r"""
 import json
 import sys
+import time
 import traceback
 
 payload = json.loads(sys.argv[1])
@@ -202,31 +204,48 @@ results = []
 stdout = ""
 stderr = ""
 error = ""
+profile = {}
+total_start = time.perf_counter()
 
 try:
     setup_code = payload["test_setup_code"]
     solution_code = payload["code"]
+    setup_start = time.perf_counter()
     if setup_code:
         exec(compile(setup_code, "<mbpp-test-setup>", "exec"), namespace)
+    profile["setup_exec_sec"] = time.perf_counter() - setup_start
+    solution_start = time.perf_counter()
     exec(compile(solution_code, "<mbpp-solution>", "exec"), namespace)
+    profile["solution_exec_sec"] = time.perf_counter() - solution_start
+    assertions_start = time.perf_counter()
     for assertion in payload["test_list"]:
+        assertion_start = time.perf_counter()
         try:
             exec(compile(assertion, "<mbpp-assert>", "exec"), namespace)
-            results.append({"assertion": assertion, "passed": True, "error": ""})
+            results.append({
+                "assertion": assertion,
+                "passed": True,
+                "error": "",
+                "duration_sec": time.perf_counter() - assertion_start,
+            })
         except BaseException:
             results.append({
                 "assertion": assertion,
                 "passed": False,
                 "error": traceback.format_exc(limit=2),
+                "duration_sec": time.perf_counter() - assertion_start,
             })
+    profile["assertions_exec_sec"] = time.perf_counter() - assertions_start
 except BaseException:
     error = traceback.format_exc(limit=5)
+profile["sandbox_python_total_sec"] = time.perf_counter() - total_start
 
 print(json.dumps({
     "results": results,
     "stdout": stdout,
     "stderr": stderr,
     "error": error,
+    "profile": profile,
 }))
 """
     payload = json.dumps(
@@ -237,9 +256,16 @@ print(json.dumps({
         }
     )
 
+    timing_profile: dict[str, float] = {}
+    total_start = time.perf_counter()
+    phase_start = time.perf_counter()
     app = modal.App.lookup(app_name, create_if_missing=True)
+    timing_profile["app_lookup_sec"] = time.perf_counter() - phase_start
+    phase_start = time.perf_counter()
     image = modal.Image.debian_slim(python_version=python_version)
+    timing_profile["image_build_sec"] = time.perf_counter() - phase_start
     try:
+        phase_start = time.perf_counter()
         sandbox = modal.Sandbox.create(
             "python",
             "-c",
@@ -251,10 +277,16 @@ print(json.dumps({
             timeout=timeout_sec,
             app=app,
         )
+        timing_profile["sandbox_create_sec"] = time.perf_counter() - phase_start
+        phase_start = time.perf_counter()
         sandbox.wait()
+        timing_profile["sandbox_wait_sec"] = time.perf_counter() - phase_start
+        phase_start = time.perf_counter()
         raw_stdout = sandbox.stdout.read()
         raw_stderr = sandbox.stderr.read()
+        timing_profile["sandbox_output_read_sec"] = time.perf_counter() - phase_start
     except Exception as exc:
+        timing_profile["total_sec"] = time.perf_counter() - total_start
         return {
             "passed": 0,
             "total": len(task.test_list),
@@ -262,11 +294,15 @@ print(json.dumps({
             "stderr": "",
             "error": f"{type(exc).__name__}: {exc}",
             "per_test": [],
+            "timing_profile": timing_profile,
         }
 
     try:
+        phase_start = time.perf_counter()
         decoded = json.loads(raw_stdout)
+        timing_profile["json_decode_sec"] = time.perf_counter() - phase_start
     except json.JSONDecodeError:
+        timing_profile["total_sec"] = time.perf_counter() - total_start
         return {
             "passed": 0,
             "total": len(task.test_list),
@@ -274,6 +310,7 @@ print(json.dumps({
             "stderr": raw_stderr,
             "error": "sandbox returned non-JSON output",
             "per_test": [],
+            "timing_profile": timing_profile,
         }
 
     result_objects = decoded.get("results")
@@ -286,6 +323,12 @@ print(json.dumps({
     error_value = decoded.get("error")
     stdout_value = decoded.get("stdout")
     stderr_value = decoded.get("stderr")
+    sandbox_profile = decoded.get("profile")
+    if isinstance(sandbox_profile, dict):
+        for key, value in sandbox_profile.items():
+            if isinstance(value, (int, float)):
+                timing_profile[f"sandbox_{key}"] = float(value)
+    timing_profile["total_sec"] = time.perf_counter() - total_start
     return {
         "passed": passed,
         "total": len(task.test_list),
@@ -293,6 +336,7 @@ print(json.dumps({
         "stderr": raw_stderr + (stderr_value if isinstance(stderr_value, str) else ""),
         "error": error_value if isinstance(error_value, str) else "",
         "per_test": per_test,
+        "timing_profile": timing_profile,
     }
 
 
@@ -346,22 +390,34 @@ class MBPPCodingEnv(Environment[MBPPSubmitCode, MBPPCodingObservation, State]):
         timeout_s: float | None = None,
         **kwargs: object,
     ) -> MBPPCodingObservation:
+        timing_profile: dict[str, object] = {}
+        total_start = time.perf_counter()
         self._state.step_count += 1
+        phase_start = time.perf_counter()
         code = extract_mbpp_code(action.completion)
+        timing_profile["code_extract_sec"] = time.perf_counter() - phase_start
+        phase_start = time.perf_counter()
         result = run_mbpp_asserts_in_sandbox(
             code=code,
             task=self._current_task,
             app_name=self._app_name,
             timeout_sec=int(timeout_s or self._sandbox_timeout_sec),
         )
+        timing_profile["sandbox_score_sec"] = time.perf_counter() - phase_start
         passed = int(result["passed"])
         total = int(result["total"])
+        phase_start = time.perf_counter()
         reward, reward_parts = correctness_first_brevity_reward(
             passed=passed,
             total=total,
             completion_chars=len(code.strip()),
             reference_chars=len(self._current_task.reference_code.strip()),
         )
+        timing_profile["reward_sec"] = time.perf_counter() - phase_start
+        sandbox_timing = result.get("timing_profile")
+        if isinstance(sandbox_timing, dict):
+            timing_profile["sandbox"] = sandbox_timing
+        timing_profile["step_total_sec"] = time.perf_counter() - total_start
         return MBPPCodingObservation(
             task_id=self._current_task.task_id,
             prompt=self._current_task.prompt,
@@ -376,7 +432,11 @@ class MBPPCodingEnv(Environment[MBPPSubmitCode, MBPPCodingObservation, State]):
             error=_str(result["error"]),
             done=True,
             reward=reward,
-            metadata={"reward_parts": reward_parts, "per_test": result["per_test"]},
+            metadata={
+                "reward_parts": reward_parts,
+                "per_test": result["per_test"],
+                "timing_profile": timing_profile,
+            },
         )
 
     @property
@@ -402,23 +462,36 @@ def score_mbpp_completion(
     app_name: str = DEFAULT_APP_NAME,
     timeout_sec: int = 10,
 ) -> tuple[float, dict[str, object]]:
+    timing_profile: dict[str, object] = {}
+    total_start = time.perf_counter()
+    phase_start = time.perf_counter()
     code = extract_mbpp_code(completion)
+    timing_profile["code_extract_sec"] = time.perf_counter() - phase_start
+    phase_start = time.perf_counter()
     result = run_mbpp_asserts_in_sandbox(
         code=code,
         task=task,
         app_name=app_name,
         timeout_sec=timeout_sec,
     )
+    timing_profile["sandbox_score_sec"] = time.perf_counter() - phase_start
     passed = int(result["passed"])
     total = int(result["total"])
+    phase_start = time.perf_counter()
     reward, reward_parts = correctness_first_brevity_reward(
         passed=passed,
         total=total,
         completion_chars=len(code.strip()),
         reference_chars=len(task.reference_code.strip()),
     )
+    timing_profile["reward_sec"] = time.perf_counter() - phase_start
+    sandbox_timing = result.get("timing_profile")
+    if isinstance(sandbox_timing, dict):
+        timing_profile["sandbox"] = sandbox_timing
+    timing_profile["score_total_sec"] = time.perf_counter() - total_start
     result["reward_parts"] = reward_parts
     result["extracted_code"] = code
+    result["timing_profile"] = timing_profile
     return reward, result
 
 

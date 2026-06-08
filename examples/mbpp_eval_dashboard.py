@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import time
 from concurrent.futures import ThreadPoolExecutor
 
 from modal_training_gym import DeploymentConfig, Qwen3_0_6B, Qwen3_1_7B, Qwen3_4B
@@ -70,32 +71,48 @@ def evaluate_one(
     idx: int,
     total: int,
 ) -> EvalRowResult:
+    timing_profile: dict[str, object] = {}
+    total_start = time.perf_counter()
     prompt = build_prompt(task)
+    phase_start = time.perf_counter()
     response = deployment.generate(
         prompt,
         ensure_ready=False,
         max_tokens=512,
         temperature=0.0,
     )
+    timing_profile["generate_sec"] = time.perf_counter() - phase_start
+    phase_start = time.perf_counter()
     code = extract_mbpp_code(response)
+    timing_profile["code_extract_sec"] = time.perf_counter() - phase_start
+    phase_start = time.perf_counter()
     result = run_mbpp_asserts_in_sandbox(
         code=code,
         task=task,
         app_name=app_name,
         timeout_sec=10,
     )
+    timing_profile["sandbox_score_sec"] = time.perf_counter() - phase_start
     passed = int(result["passed"])
     total_tests = int(result["total"])
+    phase_start = time.perf_counter()
     reward, reward_parts = correctness_first_brevity_reward(
         passed=passed,
         total=total_tests,
         completion_chars=len(code.strip()),
         reference_chars=len(task.reference_code.strip()),
     )
+    timing_profile["reward_sec"] = time.perf_counter() - phase_start
+    sandbox_timing = result.get("timing_profile")
+    if isinstance(sandbox_timing, dict):
+        timing_profile["sandbox"] = sandbox_timing
+    timing_profile["evaluate_total_sec"] = time.perf_counter() - total_start
     print(
         f"  [{idx}/{total}] task={task.task_id} "
         f"passed={passed}/{total_tests} reward={reward:.4f} "
-        f"chars={len(code.strip())}"
+        f"chars={len(code.strip())} "
+        f"gen={float(timing_profile['generate_sec']):.2f}s "
+        f"sandbox={float(timing_profile['sandbox_score_sec']):.2f}s"
     )
     return EvalRowResult(
         score=reward,
@@ -109,6 +126,7 @@ def evaluate_one(
             "completion_chars": len(code.strip()),
             "extracted_code": code,
             "reward_parts": reward_parts,
+            "timing_profile": timing_profile,
         },
     )
 

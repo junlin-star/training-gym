@@ -24,6 +24,7 @@ import datetime
 import json
 import os
 import random
+import time
 from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -212,6 +213,7 @@ def run_mbpp_asserts_in_sandbox(
     runner = r"""
 import json
 import sys
+import time
 import traceback
 
 payload = json.loads(sys.argv[1])
@@ -220,31 +222,48 @@ results = []
 stdout = ""
 stderr = ""
 error = ""
+profile = {}
+total_start = time.perf_counter()
 
 try:
     setup_code = payload["test_setup_code"]
     solution_code = payload["code"]
+    setup_start = time.perf_counter()
     if setup_code:
         exec(compile(setup_code, "<mbpp-test-setup>", "exec"), namespace)
+    profile["setup_exec_sec"] = time.perf_counter() - setup_start
+    solution_start = time.perf_counter()
     exec(compile(solution_code, "<mbpp-solution>", "exec"), namespace)
+    profile["solution_exec_sec"] = time.perf_counter() - solution_start
+    assertions_start = time.perf_counter()
     for assertion in payload["test_list"]:
+        assertion_start = time.perf_counter()
         try:
             exec(compile(assertion, "<mbpp-assert>", "exec"), namespace)
-            results.append({"assertion": assertion, "passed": True, "error": ""})
+            results.append({
+                "assertion": assertion,
+                "passed": True,
+                "error": "",
+                "duration_sec": time.perf_counter() - assertion_start,
+            })
         except BaseException:
             results.append({
                 "assertion": assertion,
                 "passed": False,
                 "error": traceback.format_exc(limit=2),
+                "duration_sec": time.perf_counter() - assertion_start,
             })
+    profile["assertions_exec_sec"] = time.perf_counter() - assertions_start
 except BaseException:
     error = traceback.format_exc(limit=5)
+profile["sandbox_python_total_sec"] = time.perf_counter() - total_start
 
 print(json.dumps({
     "results": results,
     "stdout": stdout,
     "stderr": stderr,
     "error": error,
+    "profile": profile,
 }))
 """
     payload = json.dumps(
@@ -255,9 +274,16 @@ print(json.dumps({
         }
     )
 
+    timing_profile: dict[str, float] = {}
+    total_start = time.perf_counter()
+    phase_start = time.perf_counter()
     app = modal.App.lookup(app_name, create_if_missing=True)
+    timing_profile["app_lookup_sec"] = time.perf_counter() - phase_start
+    phase_start = time.perf_counter()
     image = modal.Image.debian_slim(python_version=python_version)
+    timing_profile["image_build_sec"] = time.perf_counter() - phase_start
     try:
+        phase_start = time.perf_counter()
         sandbox = modal.Sandbox.create(
             "python",
             "-c",
@@ -269,10 +295,16 @@ print(json.dumps({
             timeout=timeout_sec,
             app=app,
         )
+        timing_profile["sandbox_create_sec"] = time.perf_counter() - phase_start
+        phase_start = time.perf_counter()
         sandbox.wait()
+        timing_profile["sandbox_wait_sec"] = time.perf_counter() - phase_start
+        phase_start = time.perf_counter()
         raw_stdout = sandbox.stdout.read()
         raw_stderr = sandbox.stderr.read()
+        timing_profile["sandbox_output_read_sec"] = time.perf_counter() - phase_start
     except Exception as exc:
+        timing_profile["total_sec"] = time.perf_counter() - total_start
         return {
             "passed": 0,
             "total": len(task.test_list),
@@ -280,11 +312,15 @@ print(json.dumps({
             "stderr": "",
             "error": f"{type(exc).__name__}: {exc}",
             "per_test": [],
+            "timing_profile": timing_profile,
         }
 
     try:
+        phase_start = time.perf_counter()
         decoded = json.loads(raw_stdout)
+        timing_profile["json_decode_sec"] = time.perf_counter() - phase_start
     except json.JSONDecodeError:
+        timing_profile["total_sec"] = time.perf_counter() - total_start
         return {
             "passed": 0,
             "total": len(task.test_list),
@@ -292,6 +328,7 @@ print(json.dumps({
             "stderr": raw_stderr,
             "error": "sandbox returned non-JSON output",
             "per_test": [],
+            "timing_profile": timing_profile,
         }
 
     result_objects = decoded.get("results")
@@ -302,6 +339,12 @@ print(json.dumps({
     error_value = decoded.get("error")
     stdout_value = decoded.get("stdout")
     stderr_value = decoded.get("stderr")
+    sandbox_profile = decoded.get("profile")
+    if isinstance(sandbox_profile, dict):
+        for key, value in sandbox_profile.items():
+            if isinstance(value, (int, float)):
+                timing_profile[f"sandbox_{key}"] = float(value)
+    timing_profile["total_sec"] = time.perf_counter() - total_start
     return {
         "passed": passed,
         "total": len(task.test_list),
@@ -309,6 +352,7 @@ print(json.dumps({
         "stderr": raw_stderr + (stderr_value if isinstance(stderr_value, str) else ""),
         "error": error_value if isinstance(error_value, str) else "",
         "per_test": per_test,
+        "timing_profile": timing_profile,
     }
 
 
@@ -320,32 +364,48 @@ def evaluate_one(
     idx: int,
     total: int,
 ) -> EvalRowResult:
+    timing_profile: dict[str, object] = {}
+    total_start = time.perf_counter()
     prompt = build_prompt(task)
+    phase_start = time.perf_counter()
     response = deployment.generate(
         prompt,
         ensure_ready=False,
         max_tokens=512,
         temperature=0.0,
     )
+    timing_profile["generate_sec"] = time.perf_counter() - phase_start
+    phase_start = time.perf_counter()
     code = extract_mbpp_code(response)
+    timing_profile["code_extract_sec"] = time.perf_counter() - phase_start
+    phase_start = time.perf_counter()
     result = run_mbpp_asserts_in_sandbox(
         code=code,
         task=task,
         app_name=app_name,
         timeout_sec=10,
     )
+    timing_profile["sandbox_score_sec"] = time.perf_counter() - phase_start
     passed = int(result["passed"])
     total_tests = int(result["total"])
+    phase_start = time.perf_counter()
     reward, reward_parts = correctness_first_brevity_reward(
         passed=passed,
         total=total_tests,
         completion_chars=len(code.strip()),
         reference_chars=len(task.reference_code.strip()),
     )
+    timing_profile["reward_sec"] = time.perf_counter() - phase_start
+    sandbox_timing = result.get("timing_profile")
+    if isinstance(sandbox_timing, dict):
+        timing_profile["sandbox"] = sandbox_timing
+    timing_profile["evaluate_total_sec"] = time.perf_counter() - total_start
     print(
         f"  [{idx}/{total}] task={task.task_id} "
         f"passed={passed}/{total_tests} reward={reward:.4f} "
-        f"chars={len(code.strip())}"
+        f"chars={len(code.strip())} "
+        f"gen={float(timing_profile['generate_sec']):.2f}s "
+        f"sandbox={float(timing_profile['sandbox_score_sec']):.2f}s"
     )
     return EvalRowResult(
         score=reward,
@@ -359,6 +419,7 @@ def evaluate_one(
             "completion_chars": len(code.strip()),
             "extracted_code": code,
             "reward_parts": reward_parts,
+            "timing_profile": timing_profile,
         },
     )
 
@@ -474,8 +535,13 @@ class MBPPSplitDataset(DatasetConfig):
 
 
 async def mbpp_rm(args, sample, **kwargs) -> float:
+    timing_profile: dict[str, object] = {}
+    total_start = time.perf_counter()
     task = task_from_label(sample.label)
+    phase_start = time.perf_counter()
     code = extract_mbpp_code(sample.response)
+    timing_profile["code_extract_sec"] = time.perf_counter() - phase_start
+    phase_start = time.perf_counter()
     result = await asyncio.to_thread(
         run_mbpp_asserts_in_sandbox,
         code=code,
@@ -483,8 +549,10 @@ async def mbpp_rm(args, sample, **kwargs) -> float:
         app_name="mbpp-train-sandbox",
         timeout_sec=10,
     )
+    timing_profile["sandbox_score_sec"] = time.perf_counter() - phase_start
     passed = int(result["passed"])
     total = int(result["total"])
+    phase_start = time.perf_counter()
     reward, reward_parts = correctness_first_brevity_reward(
         passed=passed,
         total=total,
@@ -492,6 +560,11 @@ async def mbpp_rm(args, sample, **kwargs) -> float:
         reference_chars=len(task.reference_code.strip()),
         brevity_weight=reward_brevity_weight(),
     )
+    timing_profile["reward_sec"] = time.perf_counter() - phase_start
+    sandbox_timing = result.get("timing_profile")
+    if isinstance(sandbox_timing, dict):
+        timing_profile["sandbox"] = sandbox_timing
+    timing_profile["rm_total_sec"] = time.perf_counter() - total_start
     sample.metadata = {
         **(getattr(sample, "metadata", None) or {}),
         "mbpp": {
@@ -501,6 +574,7 @@ async def mbpp_rm(args, sample, **kwargs) -> float:
             "all_tests_passed": passed == total and total > 0,
             "completion_chars": len(code.strip()),
             "reward_parts": reward_parts,
+            "timing_profile": timing_profile,
         },
     }
     return float(reward)
