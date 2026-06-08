@@ -318,7 +318,8 @@ def _eval_fn():
         ).decode()
 
         # Score is word accuracy (1 − WER) in [0, 1] — higher is better, matching
-        # the dashboard's score model; raw WER stays in metadata.
+        # the dashboard's score model; raw WER stays in metadata. The hypothesis is
+        # already carried on EvalRowResult.response, so it's not duplicated here.
         return EvalRowResult(
             score=max(0.0, 1.0 - wer),
             response=hypothesis,
@@ -327,7 +328,6 @@ def _eval_fn():
                 "audio": audio_uri,
                 "reference": reference,
                 "wer": wer,
-                "hyp": hypothesis,
             },
         )
 
