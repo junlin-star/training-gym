@@ -25,9 +25,7 @@ from __future__ import annotations
 import argparse
 import ast
 import json
-import os
 import pathlib
-import subprocess
 import symtable
 import textwrap
 import urllib.parse
@@ -49,6 +47,7 @@ _README_BEGIN = "<!-- BEGIN TUTORIAL TABLE -->"
 _README_END = "<!-- END TUTORIAL TABLE -->"
 _REPO_SLUG = "modal-projects/training-gym"
 _BADGE_IMG = "https://modal-cdn.com/open-in-modal.svg"
+_BRANCH = "main"
 
 _MARKDOWN = "markdown"
 _CODE = "code"
@@ -70,44 +69,6 @@ _BUCKET_DISPLAY = {
     "agent": "Agents",
     "misc": "Misc",
 }
-
-
-def _branch_exists_on_origin(branch: str) -> bool:
-    if not branch:
-        return False
-    result = subprocess.run(
-        ["git", "ls-remote", "--exit-code", "--heads", "origin", branch],
-        cwd=REPO_ROOT,
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    return result.returncode == 0
-
-
-def _resolve_branch() -> str:
-    for env_var in ("GITHUB_REF_NAME", "VERCEL_GIT_COMMIT_REF"):
-        value = os.getenv(env_var)
-        if value and _branch_exists_on_origin(value):
-            return value
-
-    result = subprocess.run(
-        ["git", "branch", "--show-current"],
-        cwd=REPO_ROOT,
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    branch = result.stdout.strip()
-    if _branch_exists_on_origin(branch):
-        return branch
-
-    return "main"
-
-
-_BRANCH = _resolve_branch()
-
-
 # Injected before every tutorial's first code cell so missing secrets fail
 # fast locally instead of mid-launch on a Modal worker.
 _HF_SECRET_CHECK_MARKDOWN = (
@@ -121,6 +82,11 @@ _NOTEBOOK_GPU_NOTE_MARKDOWN = (
     "> **Note:** you do **not** need to attach a GPU to this notebook. All training and\n"
     "> serving happens on Modal-managed GPU workers spun up by the SDK — the notebook\n"
     "> itself only needs to issue API calls."
+)
+_MULTINODE_DISCLAIMER_MARKDOWN = (
+    "> **Multi-node workspace required:** This is a multi-node example. To run it,\n"
+    "> your Modal workspace must have multi-node enabled. Contact\n"
+    "> [support@modal.com](mailto:support@modal.com) to enable multi-node."
 )
 _HF_SECRET_CHECK_CODE = (
     "import modal\n"
@@ -182,7 +148,9 @@ def _find_shell_command(node: ast.FunctionDef | ast.AsyncFunctionDef) -> str | N
     return None
 
 
-def _extract_cells(source: str) -> list[Cell]:
+def _extract_cells(
+    source: str, *, include_multinode_disclaimer: bool = False
+) -> list[Cell]:
     tree = ast.parse(source)
     lines = source.splitlines(keepends=True)
     cells: list[Cell] = []
@@ -209,7 +177,22 @@ def _extract_cells(source: str) -> list[Cell]:
             body_src = "".join(lines[start:end])
             body_src = textwrap.dedent(body_src).rstrip("\n")
             cells.append(Cell(kind="code", source=body_src, targets=targets))
-    return _inject_hf_secret_check(cells)
+    cells = _inject_hf_secret_check(cells)
+    if include_multinode_disclaimer:
+        cells = _inject_multinode_disclaimer(cells)
+    return cells
+
+
+def _inject_multinode_disclaimer(cells: list[Cell]) -> list[Cell]:
+    """Prepend the multi-node workspace warning to multi-node tutorials."""
+    return [
+        Cell(
+            kind="markdown",
+            source=_MULTINODE_DISCLAIMER_MARKDOWN,
+            targets=frozenset({_PY, _NB}),
+        ),
+        *cells,
+    ]
 
 
 def _inject_hf_secret_check(cells: list[Cell]) -> list[Cell]:
@@ -511,9 +494,9 @@ def generate_one(
     input_path: pathlib.Path, output_root: pathlib.Path
 ) -> tuple[pathlib.Path, pathlib.Path]:
     source = input_path.read_text()
-    cells = _extract_cells(source)
     name = input_path.stem
     bucket = _bucket_for(input_path)
+    cells = _extract_cells(source, include_multinode_disclaimer=bucket == "multinode")
     out_dir = output_root / bucket / name
     out_dir.mkdir(parents=True, exist_ok=True)
     py_path = out_dir / f"{name}.py"
