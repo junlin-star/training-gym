@@ -34,7 +34,7 @@ DEFAULT_APP_NAME = "training-gym-mbpp-openenv"
 DEFAULT_SYSTEM_PROMPT = (
     "You are an expert Python programmer. Solve the task by writing the "
     "shortest correct Python implementation you can. Return only Python code "
-    "inside one ```python code fence."
+    "in a fenced block that starts with exactly ```python."
 )
 
 
@@ -86,6 +86,16 @@ def _str_tuple(value: object) -> tuple[str, ...]:
     if isinstance(value, (list, tuple)):
         return tuple(_str(item) for item in value)
     return ()
+
+
+def extract_mbpp_code(completion: str) -> str:
+    code = extract_code(completion)
+    lines = code.strip().splitlines()
+    if len(lines) >= 2 and lines[0].startswith("```python") and lines[-1] == "```":
+        return "\n".join(lines[1:-1]).strip()
+    if len(lines) >= 2 and lines[0] == "```" and lines[-1] == "```":
+        return "\n".join(lines[1:-1]).strip()
+    return code
 
 
 def _task_from_sanitized(row: dict[str, Any]) -> MBPPTask:
@@ -336,7 +346,7 @@ class MBPPCodingEnv(Environment[MBPPSubmitCode, MBPPCodingObservation, State]):
         **kwargs: object,
     ) -> MBPPCodingObservation:
         self._state.step_count += 1
-        code = extract_code(action.completion)
+        code = extract_mbpp_code(action.completion)
         result = run_mbpp_asserts_in_sandbox(
             code=code,
             task=self._current_task,
@@ -391,7 +401,7 @@ def score_mbpp_completion(
     app_name: str = DEFAULT_APP_NAME,
     timeout_sec: int = 10,
 ) -> tuple[float, dict[str, object]]:
-    code = extract_code(completion)
+    code = extract_mbpp_code(completion)
     result = run_mbpp_asserts_in_sandbox(
         code=code,
         task=task,
