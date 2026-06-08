@@ -247,56 +247,14 @@ def fastapi_app():
             await run_in_threadpool(vol_put_summary_items, summary_store, items)
         return items
 
-    async def load_list_with_canonical_store(
-        summary_store: MetadataStore,
-        item_store: MetadataStore,
-        *,
-        item_id_key: str,
-        sort_key: Callable[[dict[str, Any]], Any],
-        reverse: bool = True,
-    ) -> list[dict[str, Any]]:
-        items = await run_in_threadpool(
-            vol_compact_summary_items,
-            summary_store,
-            item_store,
-            item_id_key=item_id_key,
-            sort_key=sort_key,
-            reverse=reverse,
-        )
-        items, changed = add_modal_app_urls(items)
-        if changed:
-            await run_in_threadpool(vol_put_summary_items, summary_store, items)
-        return items
-
     async def load_runs() -> list[dict[str, Any]]:
-        return await load_list_with_canonical_store(
-            MetadataStore.TRAINING_RUNS_SUMMARY,
-            MetadataStore.TRAINING_RUNS,
-            item_id_key="training_run_id",
-            sort_key=lambda item: (
-                int(item.get("created_at", 0) or 0),
-                str(item.get("training_run_id", "")),
-            ),
-        )
+        return await load_list_summary(MetadataStore.TRAINING_RUNS_SUMMARY)
 
     async def load_train_results() -> list[dict[str, Any]]:
-        return await load_list_with_canonical_store(
-            MetadataStore.TRAIN_RESULTS_SUMMARY,
-            MetadataStore.TRAIN_RESULTS,
-            item_id_key="training_run_id",
-            sort_key=lambda item: str(item.get("training_run_id", "")),
-        )
+        return await load_list_summary(MetadataStore.TRAIN_RESULTS_SUMMARY)
 
     async def load_deployments() -> list[dict[str, Any]]:
-        return await load_list_with_canonical_store(
-            MetadataStore.DEPLOYMENTS_SUMMARY,
-            MetadataStore.DEPLOYMENTS,
-            item_id_key="deployment_id",
-            sort_key=lambda item: (
-                str(item.get("deployment_config", {}).get("app_name", "")),
-                str(item.get("deployment_id", "")),
-            ),
-        )
+        return await load_list_summary(MetadataStore.DEPLOYMENTS_SUMMARY)
 
     # ── Training runs ────────────────────────────────────────────────────
 
@@ -361,6 +319,56 @@ def fastapi_app():
         except Exception:
             data = []
         return JSONResponse(data)
+
+    # ── Compaction (on-demand repair) ─────────────────────────────────────
+
+    @web.post("/api/compact")
+    async def compact():
+        """Rebuild summary caches from canonical per-item metadata files.
+
+        Call after parallel launches to recover items lost to concurrent
+        summary read-modify-write races. This is intentionally not on the
+        read path to avoid a vol_list penalty on every dashboard load.
+        """
+        runs = await run_in_threadpool(
+            vol_compact_summary_items,
+            MetadataStore.TRAINING_RUNS_SUMMARY,
+            MetadataStore.TRAINING_RUNS,
+            item_id_key="training_run_id",
+            sort_key=lambda item: (
+                int(item.get("created_at", 0) or 0),
+                str(item.get("training_run_id", "")),
+            ),
+            reverse=True,
+        )
+        results = await run_in_threadpool(
+            vol_compact_summary_items,
+            MetadataStore.TRAIN_RESULTS_SUMMARY,
+            MetadataStore.TRAIN_RESULTS,
+            item_id_key="training_run_id",
+            sort_key=lambda item: str(item.get("training_run_id", "")),
+            reverse=True,
+        )
+        deps = await run_in_threadpool(
+            vol_compact_summary_items,
+            MetadataStore.DEPLOYMENTS_SUMMARY,
+            MetadataStore.DEPLOYMENTS,
+            item_id_key="deployment_id",
+            sort_key=lambda item: (
+                str(item.get("deployment_config", {}).get("app_name", "")),
+                str(item.get("deployment_id", "")),
+            ),
+            reverse=True,
+        )
+        for key in cache_entries:
+            cache_entries[key] = (0.0, [])
+        return JSONResponse(
+            {
+                "runs": len(runs),
+                "train_results": len(results),
+                "deployments": len(deps),
+            }
+        )
 
     # ── SPA fallback ─────────────────────────────────────────────────────
 
