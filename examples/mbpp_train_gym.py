@@ -654,7 +654,29 @@ def run_dashboard_eval(
     return result
 
 
-def train_and_eval_model(model_key: str, args: argparse.Namespace) -> None:
+def eval_summary(result: EvalResult) -> dict[str, float | int | str]:
+    all_pass = sum(1 for row in result.rows if row.metadata.get("all_tests_passed"))
+    avg_chars = sum(
+        int(row.metadata.get("completion_chars", 0)) for row in result.rows
+    ) / len(result.rows)
+    passing_rows = [row for row in result.rows if row.metadata.get("all_tests_passed")]
+    passing_avg_chars = (
+        sum(int(row.metadata.get("completion_chars", 0)) for row in passing_rows)
+        / len(passing_rows)
+        if passing_rows
+        else 0.0
+    )
+    return {
+        "eval_id": result.eval_id,
+        "mean": result.mean,
+        "all_pass": all_pass,
+        "total": len(result.rows),
+        "avg_chars": avg_chars,
+        "passing_avg_chars": passing_avg_chars,
+    }
+
+
+def train_and_eval_model(model_key: str, args: argparse.Namespace) -> dict[str, object]:
     model_cls = MODEL_REGISTRY[model_key]
     model = model_cls()
     slug = model_slug(model_key)
@@ -672,6 +694,7 @@ def train_and_eval_model(model_key: str, args: argparse.Namespace) -> None:
         f"split_seed={args.split_seed}"
     )
 
+    base_eval_summary: dict[str, float | int | str] | None = None
     if not args.skip_base_eval:
         print(f"{model_key}: serving base model for held-out eval")
         base_deployment = DeploymentConfig(
@@ -680,7 +703,7 @@ def train_and_eval_model(model_key: str, args: argparse.Namespace) -> None:
             served_model_name=f"{run_slug}-mbpp-base",
         ).serve()
         base_deployment.wait_until_ready()
-        run_dashboard_eval(
+        base_eval = run_dashboard_eval(
             model_key=model_key,
             deployment=base_deployment,
             tasks=test_tasks,
@@ -692,6 +715,7 @@ def train_and_eval_model(model_key: str, args: argparse.Namespace) -> None:
             run_label=args.run_label,
             max_concurrency=args.max_concurrency,
         )
+        base_eval_summary = eval_summary(base_eval)
 
     dataset = MBPPSplitDataset(
         subset=args.subset,
@@ -721,7 +745,7 @@ def train_and_eval_model(model_key: str, args: argparse.Namespace) -> None:
         served_model_name=f"{run_slug}-mbpp-trained",
     ).serve()
     trained_deployment.wait_until_ready()
-    run_dashboard_eval(
+    trained_eval = run_dashboard_eval(
         model_key=model_key,
         deployment=trained_deployment,
         tasks=test_tasks,
@@ -734,6 +758,15 @@ def train_and_eval_model(model_key: str, args: argparse.Namespace) -> None:
         run_label=args.run_label,
         max_concurrency=args.max_concurrency,
     )
+    return {
+        "model": model_key,
+        "run_label": args.run_label,
+        "num_rollout": args.num_rollout,
+        "brevity_weight": args.brevity_weight,
+        "training_run_id": train_result.training_run_id,
+        "base_eval": base_eval_summary,
+        "trained_eval": eval_summary(trained_eval),
+    }
 
 
 def main() -> None:
