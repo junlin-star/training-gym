@@ -6,7 +6,7 @@ from modal_training_gym.train_recipes.slime_recipe.recipe import SlimeRecipe
 
 @dataclass(config=ConfigDict(extra="forbid", arbitrary_types_allowed=True))
 class Qwen3_6_27b_Recipe(SlimeRecipe):
-    """Qwen3.6-27B dense hybrid model on 1×8×H100 with TP4, colocated GRPO."""
+    """Qwen3.6-27B dense hybrid model on 1×8×H100 with TP4×PP2, colocated GRPO."""
 
     gpu_type: str = "H100"
     colocate: bool = True
@@ -17,7 +17,7 @@ class Qwen3_6_27b_Recipe(SlimeRecipe):
     # ── Parallelism ───────────────────────────────────────────────────────
     tensor_model_parallel_size: int = 4
     sequence_parallel: bool = True
-    pipeline_model_parallel_size: int = 1
+    pipeline_model_parallel_size: int = 2
     context_parallel_size: int = 1
     expert_model_parallel_size: int = 1
     expert_tensor_parallel_size: int = 1
@@ -38,6 +38,8 @@ class Qwen3_6_27b_Recipe(SlimeRecipe):
     max_tokens_per_gpu: int = 8192
     calculate_per_token_loss: bool = True
     balance_data: bool = True
+    accumulate_allreduce_grads_in_fp32: bool = False
+    use_distributed_optimizer: bool = True
 
     # ── Optimizer ─────────────────────────────────────────────────────────
     optimizer_cpu_offload: bool = True
@@ -50,5 +52,5 @@ class Qwen3_6_27b_Recipe(SlimeRecipe):
     # ── Checkpointing / eval ──────────────────────────────────────────────
     save_interval: int = 20
     eval_interval: int | None = 20
-    n_samples_per_eval_prompt: int = 16
-    eval_max_response_len: int = 16384
+    n_samples_per_eval_prompt: int = 4
+    eval_max_response_len: int = 4096

@@ -152,6 +152,7 @@ class SlimeRecipe(BaseTrainRecipe):
     hidden_dropout: float = 0.0
     attention_softmax_in_fp32: bool = True
     accumulate_allreduce_grads_in_fp32: bool = True
+    use_distributed_optimizer: bool = False
     recompute_granularity: str = "full"
     recompute_method: str = "uniform"
     recompute_num_layers: int = 1

@@ -75,8 +75,8 @@ def _main_impl() -> None:
 
     # ## Train with SLIME
     #
-    # This dense model runs on a single 8×H100 node with TP4 (PP1, CP1),
-    # leaving DP2 to shard the optimizer, plus optimizer CPU offload. This
+    # This dense model runs on a single 8×H100 node with TP4 and PP2,
+    # plus optimizer CPU offload. This
     # is a single-node adaptation of the validated Miles Qwen3.5-27B config.
     #
     # Key points:
@@ -89,7 +89,15 @@ def _main_impl() -> None:
     training_run = TrainConfig(
         model=Qwen3_6_27B(),
         dataset=dataset,
-        recipe=Qwen3_6_27b_Recipe(rm_type="deepscaler"),
+        recipe=Qwen3_6_27b_Recipe(
+            rm_type="deepscaler",
+            n_samples_per_prompt=4,
+            global_batch_size=128,
+            sglang_mem_fraction_static=0.75,
+            sglang_max_running_requests=512,
+            eval_max_response_len=4096,
+            n_samples_per_eval_prompt=4,
+        ),
     )
     print("Starting training...")
     train_result = training_run.train()
