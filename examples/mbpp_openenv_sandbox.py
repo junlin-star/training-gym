@@ -33,7 +33,8 @@ MBPP_REPO = "Muennighoff/mbpp"
 DEFAULT_APP_NAME = "training-gym-mbpp-openenv"
 DEFAULT_SYSTEM_PROMPT = (
     "You are an expert Python programmer. Solve the task by writing the "
-    "shortest correct Python implementation you can. Return only Python code "
+    "shortest correct Python implementation you can. Correctness is required; "
+    "brevity only matters after all public tests pass. Return only Python code "
     "in a fenced block that starts with exactly ```python."
 )
 

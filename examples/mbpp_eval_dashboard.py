@@ -41,10 +41,12 @@ MODEL_REGISTRY: dict[str, type] = {
     "Qwen3_4B": Qwen3_4B,
 }
 
+PROMPT_STYLE = "correctness-first-brevity-v1"
 SYSTEM_PROMPT = (
     "You are an expert Python programmer. Solve the task by writing the "
-    "shortest correct Python implementation you can. Return only Python code "
-    "inside one ```python code fence."
+    "shortest correct Python implementation you can. Correctness is required; "
+    "brevity only matters after all public tests pass. Return only executable "
+    "Python code."
 )
 
 
@@ -52,9 +54,9 @@ def build_prompt(task: MBPPTask) -> str:
     visible_tests = "\n".join(f"- `{t}`" for t in task.test_list)
     return (
         "/no_think\n"
-        "Return only executable Python code. Start with a line containing "
+        f"{SYSTEM_PROMPT} Start with a line containing "
         "exactly ```python and end with a line containing exactly ```. "
-        "Do not explain your solution.\n\n"
+        "Do not explain your solution or include comments unless required.\n\n"
         f"Task {task.task_id}:\n{task.text}\n\n"
         f"Public tests that your code must pass:\n{visible_tests}"
     )
@@ -130,7 +132,11 @@ def run_eval(
 
     dataset_name = f"mbpp-{subset}-first-{limit}"
     eval_config_id = create_hash(
-        "eval-config", "MBPPEval", model_name, "mbpp_sandbox", dataset_name
+        "eval-config",
+        "MBPPEval",
+        model_name,
+        "mbpp_sandbox",
+        f"{dataset_name}:{PROMPT_STYLE}",
     )
     eval_config = EvalConfigDurable(
         eval_config_id=eval_config_id,
@@ -140,6 +146,7 @@ def run_eval(
             "model": model_name,
             "subset": subset,
             "limit": limit,
+            "prompt_style": PROMPT_STYLE,
             "max_tokens": 512,
             "temperature": 0.0,
         },
