@@ -71,6 +71,7 @@ def fastapi_app():
         MetadataStore,
         vol_get,
         vol_get_summary_items,
+        vol_list,
         vol_put_summary_items,
     )
 
@@ -246,14 +247,61 @@ def fastapi_app():
             await run_in_threadpool(vol_put_summary_items, summary_store, items)
         return items
 
+    async def load_list_with_canonical_store(
+        summary_store: MetadataStore,
+        item_store: MetadataStore,
+        *,
+        item_id_key: str,
+        sort_key: Callable[[dict[str, Any]], Any],
+        reverse: bool = True,
+    ) -> list[dict[str, Any]]:
+        summary_items = await load_list_summary(summary_store)
+        canonical_items = await run_in_threadpool(vol_list, item_store)
+        items_by_id = {
+            item[item_id_key]: item
+            for item in summary_items
+            if item.get(item_id_key) is not None
+        }
+        for item in canonical_items:
+            item_id = item.get(item_id_key)
+            if item_id is None:
+                continue
+            items_by_id[item_id] = {**items_by_id.get(item_id, {}), **item}
+        items = sorted(items_by_id.values(), key=sort_key, reverse=reverse)
+        items, changed = add_modal_app_urls(items)
+        if changed or len(items) != len(summary_items):
+            await run_in_threadpool(vol_put_summary_items, summary_store, items)
+        return items
+
     async def load_runs() -> list[dict[str, Any]]:
-        return await load_list_summary(MetadataStore.TRAINING_RUNS_SUMMARY)
+        return await load_list_with_canonical_store(
+            MetadataStore.TRAINING_RUNS_SUMMARY,
+            MetadataStore.TRAINING_RUNS,
+            item_id_key="training_run_id",
+            sort_key=lambda item: (
+                int(item.get("created_at", 0) or 0),
+                str(item.get("training_run_id", "")),
+            ),
+        )
 
     async def load_train_results() -> list[dict[str, Any]]:
-        return await load_list_summary(MetadataStore.TRAIN_RESULTS_SUMMARY)
+        return await load_list_with_canonical_store(
+            MetadataStore.TRAIN_RESULTS_SUMMARY,
+            MetadataStore.TRAIN_RESULTS,
+            item_id_key="training_run_id",
+            sort_key=lambda item: str(item.get("training_run_id", "")),
+        )
 
     async def load_deployments() -> list[dict[str, Any]]:
-        return await load_list_summary(MetadataStore.DEPLOYMENTS_SUMMARY)
+        return await load_list_with_canonical_store(
+            MetadataStore.DEPLOYMENTS_SUMMARY,
+            MetadataStore.DEPLOYMENTS,
+            item_id_key="deployment_id",
+            sort_key=lambda item: (
+                str(item.get("deployment_config", {}).get("app_name", "")),
+                str(item.get("deployment_id", "")),
+            ),
+        )
 
     # ── Training runs ────────────────────────────────────────────────────
 
