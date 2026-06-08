@@ -90,6 +90,18 @@
     return rawStatus ? rawStatus[0].toUpperCase() + rawStatus.slice(1) : "Pending";
   }
 
+  function getTrainingRunStatus(run) {
+    return safeText(run.status).toLowerCase();
+  }
+
+  function getFrameworkStatus(run) {
+    return safeText(run.framework_status);
+  }
+
+  function showFrameworkStatus(run) {
+    return getTrainingRunStatus(run) === "running";
+  }
+
   function modelName(run) {
     return run.train_result?.model_name || run.config_summary?.model_name || "—";
   }
@@ -299,6 +311,7 @@
             !includesText(run.train_result?.checkpoint_dir, q) &&
             !includesText(run.train_result?.model_name, q) &&
             !includesText(run.train_result?.model_path, q) &&
+            !includesText(run.framework_status, q) &&
             !includesText(run.deployment_id, q)
           ) {
             return false;
@@ -658,6 +671,8 @@
         {error}
         {modelName}
         {getStatus}
+        {getFrameworkStatus}
+        {showFrameworkStatus}
         {fmtDuration}
         bind:search
         onToggleRecipe={toggleRecipe}

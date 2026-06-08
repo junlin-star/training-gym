@@ -1,5 +1,5 @@
 <script>
-  import { ExternalLink, PanelRightClose } from "lucide-svelte";
+  import { ExternalLink, Loader2, PanelRightClose } from "lucide-svelte";
   import Drawer from "../components/Drawer.svelte";
   import FilterBar from "../components/FilterBar.svelte";
   import MinimalTable from "../components/MinimalTable.svelte";
@@ -24,6 +24,8 @@
     error,
     modelName,
     getStatus,
+    getFrameworkStatus,
+    showFrameworkStatus,
     fmtDuration,
     search = $bindable(),
     onToggleRecipe,
@@ -87,6 +89,27 @@
     return "—";
   }
 
+  function formatFrameworkStatus(status) {
+    const raw = String(status || "").trim();
+    if (!raw) return "";
+    const normalized = raw.toLowerCase();
+    const labels = {
+      initializing: "Initializing",
+      download_model: "Downloading model",
+      convert_model: "Converting model",
+      prepare_dataset: "Preparing dataset",
+      training: "Training",
+    };
+    return (
+      labels[normalized] ||
+      normalized.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase())
+    );
+  }
+
+  function frameworkStatusLabel(run) {
+    return formatFrameworkStatus(getFrameworkStatus(run));
+  }
+
   $effect(() => {
     if (selectedRunId && !allRuns.some((run) => run.run_id === selectedRunId)) {
       selectedRunId = null;
@@ -140,7 +163,7 @@
       <div class="table-wrap">
         <MinimalTableSkeleton
           class="runs-table"
-          columns={["Name", "Status", "Model", "Dataset", "Recipe", "Created", ""]}
+          columns={["Name", "Status", "Stage", "Model", "Dataset", "Recipe", "Created", ""]}
           rows={8}
         />
       </div>
@@ -157,6 +180,7 @@
             <tr>
               <th>Name</th>
               <th>Status</th>
+              <th>Stage</th>
               <th>Model</th>
               <th>Dataset</th>
               <th>Recipe</th>
@@ -168,6 +192,7 @@
             {#each filteredRuns as run, runIndex (`${run.run_id || "run"}-${run.created_at || 0}-${runIndex}`)}
               {@const runName = run.run_id || "—"}
               {@const status = getStatus(run)}
+              {@const stageLabel = frameworkStatusLabel(run)}
               <tr class:row-selected={selectedRunId === run.run_id}>
                 <td class="run-cell">
                   <button
@@ -181,6 +206,20 @@
                 <td>
                   <button class="cell-open-button" onclick={() => selectRun(run.run_id)}>
                     <StatusPill status={status} />
+                  </button>
+                </td>
+                <td class="stage-cell">
+                  <button class="cell-open-button" onclick={() => selectRun(run.run_id)}>
+                    {#if showFrameworkStatus(run) && stageLabel}
+                      <span class="stage-pill" aria-label={stageLabel}>
+                        <span class="stage-spinner">
+                          <Loader2 size={14} />
+                        </span>
+                        <span>{stageLabel}</span>
+                      </span>
+                    {:else}
+                      <span class="stage-empty">—</span>
+                    {/if}
                   </button>
                 </td>
                 <td class="model-cell" title={modelName(run)}>
@@ -262,6 +301,17 @@
           <span class="drawer-key">Status</span>
           <StatusPill status={getStatus(selectedRun)} />
         </div>
+        {#if showFrameworkStatus(selectedRun) && frameworkStatusLabel(selectedRun)}
+          <div class="drawer-kv">
+            <span class="drawer-key">Stage</span>
+            <span class="stage-pill" aria-label={frameworkStatusLabel(selectedRun)}>
+              <span class="stage-spinner">
+                <Loader2 size={14} />
+              </span>
+              <span>{frameworkStatusLabel(selectedRun)}</span>
+            </span>
+          </div>
+        {/if}
         <div class="drawer-kv">
           <span class="drawer-key">Model</span>
           <span class="drawer-value">{modelName(selectedRun)}</span>
@@ -370,7 +420,7 @@
 
   :global(table.runs-table) {
     width: 100%;
-    min-width: 860px;
+    min-width: 960px;
   }
 
   :global(table.training-runs-table) {
@@ -423,6 +473,42 @@
 
   .dataset-cell {
     width: 18%;
+  }
+
+  .stage-cell {
+    width: 14%;
+  }
+
+  .stage-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    max-width: 100%;
+    border: 1px solid #3b2a37;
+    border-radius: 9999px;
+    background: #2f2436;
+    color: #d176bd;
+    padding: 3px 10px;
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 12px;
+    white-space: nowrap;
+  }
+
+  .stage-pill span:last-child {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .stage-spinner {
+    display: inline-flex;
+    flex: 0 0 auto;
+    animation: stage-pill-spin 1s linear infinite;
+  }
+
+  .stage-empty {
+    color: var(--muted);
   }
 
   .modal-link-cell {
@@ -615,6 +701,15 @@
     color: var(--muted);
     text-align: center;
     font-size: 0.84rem;
+  }
+
+  @keyframes stage-pill-spin {
+    from {
+      transform: rotate(0deg);
+    }
+    to {
+      transform: rotate(360deg);
+    }
   }
 
   @media (max-width: 900px) {

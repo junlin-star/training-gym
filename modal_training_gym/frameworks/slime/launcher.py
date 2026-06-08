@@ -47,6 +47,7 @@ from modal_training_gym.common.models import ModelConfig
 from modal_training_gym.common.modal_urls import modal_app_dashboard_url
 from modal_training_gym.common.ray_cluster import ModalRayCluster
 from modal_training_gym.common.run import TrainingRun, TrainingRunStatus
+from modal_training_gym.common.status import SlimeStatus
 from modal_training_gym.common.train_result import TrainResult
 
 from modal_training_gym.train_recipes.slime_recipe.recipe import (
@@ -750,14 +751,20 @@ def build_slime_app(
             modal_app_url=modal_app_url or modal_app_dashboard_url(modal_app_id),
             framework=Framework.SLIME,
             config=config_summary,
+            framework_status=SlimeStatus.INITIALIZING,
             created_at=created_at,
             started_at=created_at,
         )
         await run_record.save_async()
         print(f"TrainingRun recorded: {training_run_id}")
 
+        async def _set_framework_status(status: SlimeStatus) -> None:
+            run_record.framework_status = status
+            await run_record.save_async()
+
         try:
             if model:
+                await _set_framework_status(SlimeStatus.DOWNLOAD_MODEL)
                 cache_dir = (
                     HF_CACHE_PATH
                     / "hub"
@@ -771,6 +778,7 @@ def build_slime_app(
                 await hf_cache_volume.commit.aio()
 
             if dataset:
+                await _set_framework_status(SlimeStatus.PREPARE_DATASET)
                 prompt_data, eval_paths = SlimeRecipe._resolve_data_paths(dataset)
                 needs_prepare = not os.path.exists(prompt_data)
                 if dataset.always_prepare and os.path.exists(prompt_data):
@@ -789,6 +797,7 @@ def build_slime_app(
                     if os.path.exists(ep):
                         dataset.validate_prepared(ep)
 
+            await _set_framework_status(SlimeStatus.CONVERT_MODEL)
             prepare_slime_config(slime, model, tempfile.mkdtemp())
 
             if wandb_key := os.environ.get("WANDB_API_KEY", ""):
@@ -840,6 +849,7 @@ def build_slime_app(
             )
             print(f"Command: {cmd}, runtime_env: {runtime_env}")
 
+            await _set_framework_status(SlimeStatus.TRAINING)
             async with cluster.forward_dashboard() as tunnel:
                 print(f"Ray dashboard: {tunnel.url}")
                 await cluster.submit_and_tail(cmd, runtime_env=runtime_env)
