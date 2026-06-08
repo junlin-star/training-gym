@@ -17,10 +17,12 @@ from __future__ import annotations
 import argparse
 import asyncio
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from modal_training_gym import (
     DeploymentConfig,
+    EvalRowResult,
     SlimeRecipe,
     TrainConfig,
     list_checkpoints,
@@ -40,10 +42,11 @@ from mbpp_train_gym import (
     PROMPT_STYLE,
     MBPPTask,
     MBPPSplitDataset,
+    build_prompt,
     eval_summary,
     model_slug,
     reward_brevity_weight,
-    run_dashboard_eval,
+    save_eval_result,
     split_mbpp_tasks,
     task_from_label,
 )
@@ -63,12 +66,20 @@ def to_openenv_task(task: MBPPTask) -> OpenEnvMBPPTask:
     )
 
 
-def score_with_openenv(task: MBPPTask, completion: str) -> object:
+def score_with_openenv(
+    task: MBPPTask,
+    completion: str,
+    *,
+    app_name: str = "mbpp-train-openenv-sandbox",
+    brevity_weight: float | None = None,
+) -> object:
     env = MBPPCodingEnv(
         [to_openenv_task(task)],
-        app_name="mbpp-train-openenv-sandbox",
+        app_name=app_name,
         sandbox_timeout_sec=10,
-        brevity_weight=reward_brevity_weight(),
+        brevity_weight=(
+            reward_brevity_weight() if brevity_weight is None else brevity_weight
+        ),
     )
     env.reset(task_id=task.task_id)
     return env.step(MBPPSubmitCode(completion=completion))
@@ -104,6 +115,124 @@ async def mbpp_openenv_rm(args, sample, **kwargs) -> float:
         },
     }
     return float(observation.reward if observation.reward is not None else 0.0)
+
+
+def evaluate_one_openenv(
+    task: MBPPTask,
+    deployment,
+    *,
+    app_name: str,
+    idx: int,
+    total: int,
+    brevity_weight: float,
+) -> EvalRowResult:
+    timing_profile: dict[str, object] = {}
+    total_start = time.perf_counter()
+    prompt = build_prompt(task)
+    phase_start = time.perf_counter()
+    response = deployment.generate(
+        prompt,
+        ensure_ready=False,
+        max_tokens=512,
+        temperature=0.0,
+    )
+    timing_profile["generate_sec"] = time.perf_counter() - phase_start
+    phase_start = time.perf_counter()
+    observation = score_with_openenv(
+        task,
+        response,
+        app_name=app_name,
+        brevity_weight=brevity_weight,
+    )
+    timing_profile["openenv_score_sec"] = time.perf_counter() - phase_start
+
+    observation_metadata = observation.metadata if observation.metadata else {}
+    reward_parts = observation_metadata.get("reward_parts", {})
+    timing = observation_metadata.get("timing_profile", {})
+    if isinstance(timing, dict):
+        timing_profile["openenv"] = timing
+    timing_profile["evaluate_total_sec"] = time.perf_counter() - total_start
+
+    score = float(observation.reward if observation.reward is not None else 0.0)
+    print(
+        f"  [{idx}/{total}] task={task.task_id} "
+        f"passed={observation.passed}/{observation.total} reward={score:.4f} "
+        f"chars={observation.completion_chars} "
+        f"gen={float(timing_profile['generate_sec']):.2f}s "
+        f"openenv={float(timing_profile['openenv_score_sec']):.2f}s"
+    )
+    return EvalRowResult(
+        score=score,
+        response=response,
+        prompt=prompt,
+        metadata={
+            "task_id": task.task_id,
+            "passed": observation.passed,
+            "total": observation.total,
+            "all_tests_passed": observation.all_tests_passed,
+            "completion_chars": observation.completion_chars,
+            "extracted_code": observation.extracted_code,
+            "reward_parts": reward_parts,
+            "timing_profile": timing_profile,
+            "reward_substrate": "openenv",
+        },
+    )
+
+
+def run_openenv_dashboard_eval(
+    *,
+    model_key: str,
+    deployment,
+    tasks: list[MBPPTask],
+    split_seed: int,
+    train_size: int,
+    test_size: int,
+    eval_kind: str,
+    max_concurrency: int,
+    training_run_id: str = "",
+    brevity_weight: float = DEFAULT_BREVITY_WEIGHT,
+    run_label: str = "",
+):
+    rows: list[EvalRowResult] = []
+    total = len(tasks)
+
+    def _eval_indexed(item: tuple[int, MBPPTask]) -> EvalRowResult:
+        idx, task = item
+        return evaluate_one_openenv(
+            task,
+            deployment,
+            app_name=f"mbpp-openenv-{eval_kind}-{model_slug(model_key)}",
+            idx=idx,
+            total=total,
+            brevity_weight=brevity_weight,
+        )
+
+    with ThreadPoolExecutor(max_workers=max_concurrency) as executor:
+        for row in executor.map(_eval_indexed, enumerate(tasks, 1)):
+            rows.append(row)
+
+    result = save_eval_result(
+        model_key=model_key,
+        deployment=deployment,
+        rows=rows,
+        split_seed=split_seed,
+        train_size=train_size,
+        test_size=test_size,
+        eval_kind=eval_kind,
+        training_run_id=training_run_id,
+        brevity_weight=brevity_weight,
+        run_label=run_label,
+    )
+    all_pass = sum(1 for row in rows if row.metadata.get("all_tests_passed"))
+    avg_chars = sum(int(row.metadata.get("completion_chars", 0)) for row in rows) / len(
+        rows
+    )
+    print(
+        f"{model_key} {eval_kind}: mean={result.mean:.4f} "
+        f"all_pass={all_pass}/{len(rows)} avg_chars={avg_chars:.1f} "
+        f"eval_id={result.eval_id}"
+    )
+    return result
 
 
 def add_openenv_sources(image):
@@ -178,7 +307,7 @@ def train_and_eval_model(model_key: str, args: argparse.Namespace) -> dict[str, 
             served_model_name=f"{run_slug}-mbpp-base",
         ).serve()
         base_deployment.wait_until_ready()
-        base_eval = run_dashboard_eval(
+        base_eval = run_openenv_dashboard_eval(
             model_key=model_key,
             deployment=base_deployment,
             tasks=test_tasks,
@@ -222,7 +351,7 @@ def train_and_eval_model(model_key: str, args: argparse.Namespace) -> dict[str, 
         served_model_name=f"{run_slug}-mbpp-trained",
     ).serve()
     trained_deployment.wait_until_ready()
-    trained_eval = run_dashboard_eval(
+    trained_eval = run_openenv_dashboard_eval(
         model_key=model_key,
         deployment=trained_deployment,
         tasks=test_tasks,
