@@ -101,8 +101,6 @@ def _train_intro():
 
 @code
 def _build_and_run():
-    tutorial_cli_app = modal.App()
-
     def build_training_config() -> TrainConfig:
         return TrainConfig(
             model=Kimi_K2_6(),
@@ -113,13 +111,11 @@ def _build_and_run():
     training_run = build_training_config()
     app = training_run._build_app()
 
-    @tutorial_cli_app.local_entrypoint()
-    def main() -> None:
-        with modal.enable_output():
-            with app.run():
-                modal_app_id = app.app_id or ""
-                function_call = app.train.spawn(
-                    modal_app_id=modal_app_id,
-                    modal_app_url=modal_app_dashboard_url(modal_app_id),
-                )
-                print(f"Spawned train function call: {function_call.object_id}")
+    with modal.enable_output():
+        with app.run():
+            modal_app_id = app.app_id or ""
+            function_call = app.train.spawn(
+                modal_app_id=modal_app_id,
+                modal_app_url=modal_app_dashboard_url(modal_app_id),
+            )
+            print(f"Spawned train function call: {function_call.object_id}")

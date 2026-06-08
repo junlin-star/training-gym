@@ -51,25 +51,17 @@ class MathDataset(HuggingFaceDataset):
     apply_chat_template = True
     always_prepare = True
 
+# ## Build and launch training
+#
+# Build the training config, construct the Modal app, and spawn
+# the training function as a detached call.
+
 def build_training_config() -> TrainConfig:
     return TrainConfig(
         model=Kimi_K2_5(),
         dataset=MathDataset(n_rows=10),
         recipe=Kimi_K2_5_LoRA_Recipe(),
     )
-
-app = training_run._build_app()
-
-@tutorial_cli_app.local_entrypoint()
-def main() -> None:
-    with modal.enable_output():
-        with app.run():
-            modal_app_id = app.app_id or ""
-            function_call = app.train.spawn(
-                modal_app_id=modal_app_id,
-                modal_app_url=modal_app_dashboard_url(modal_app_id),
-            )
-            print(f"Spawned train function call: {function_call.object_id}")
 
 import modal
 
@@ -84,14 +76,17 @@ def _main_impl() -> None:
             "https://modal.com/secrets with an HF_TOKEN entry, then re-run."
         ) from e
 
-    # ## Build and launch training
-    #
-    # Build the training config, construct the Modal app, and spawn
-    # the training function as a detached call.
-
-    tutorial_cli_app = modal.App()
-
     training_run = build_training_config()
+    app = training_run._build_app()
+
+    with modal.enable_output():
+        with app.run():
+            modal_app_id = app.app_id or ""
+            function_call = app.train.spawn(
+                modal_app_id=modal_app_id,
+                modal_app_url=modal_app_dashboard_url(modal_app_id),
+            )
+            print(f"Spawned train function call: {function_call.object_id}")
 
 @tutorial_cli_app.local_entrypoint()
 def main() -> None:
