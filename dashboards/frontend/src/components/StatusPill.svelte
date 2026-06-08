@@ -1,7 +1,7 @@
 <script>
   import { CheckCircle2, CircleX, Loader2, OctagonX, MinusCircle } from "lucide-svelte";
 
-  let { status, iconOnly = false } = $props();
+  let { status, iconOnly = false, label = null } = $props();
 
   const STATUS_MAP = {
     completed: "Completed",
@@ -19,7 +19,7 @@
     return s in STATUS_MAP ? s : "pending";
   });
 
-  let label = $derived(STATUS_MAP[normalizedStatus] ?? "Pending");
+  let statusLabel = $derived(label ?? (STATUS_MAP[normalizedStatus] ?? "Pending"));
 </script>
 
 <div
@@ -32,7 +32,7 @@
   class:status-stopped={normalizedStatus === "stopped"}
   class:status-failed={normalizedStatus === "failed"}
   class:status-inactive={normalizedStatus === "inactive"}
-  aria-label={label}
+  aria-label={statusLabel}
 >
   {#if normalizedStatus === "completed" || normalizedStatus === "ready"}
     <CheckCircle2 size={14} />
@@ -46,7 +46,7 @@
     </span>
   {/if}
   {#if !iconOnly}
-    <span class="status-text">{label}</span>
+    <span class="status-text">{statusLabel}</span>
   {/if}
 </div>
 

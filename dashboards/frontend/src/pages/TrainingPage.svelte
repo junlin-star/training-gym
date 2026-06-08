@@ -1,5 +1,5 @@
 <script>
-  import { ExternalLink, Loader2, PanelRightClose } from "lucide-svelte";
+  import { ExternalLink, PanelRightClose } from "lucide-svelte";
   import Drawer from "../components/Drawer.svelte";
   import FilterBar from "../components/FilterBar.svelte";
   import MinimalTable from "../components/MinimalTable.svelte";
@@ -98,6 +98,14 @@
       download_model: "Downloading model",
       convert_model: "Converting model",
       prepare_dataset: "Preparing dataset",
+      rollout_logging: "Rollout logging",
+      eval_rollout_logging: "Eval logging",
+      before_log_prob: "Before log prob",
+      before_train_step: "Before train step",
+      weight_sync: "Weight sync",
+      offload_rollout: "Offload rollout",
+      offload_train: "Offload train",
+      checkpoint_save: "Checkpoint save",
       training: "Training",
     };
     return (
@@ -211,12 +219,7 @@
                 <td class="stage-cell">
                   <button class="cell-open-button" onclick={() => selectRun(run.run_id)}>
                     {#if showFrameworkStatus(run) && stageLabel}
-                      <span class="stage-pill" aria-label={stageLabel}>
-                        <span class="stage-spinner">
-                          <Loader2 size={16} />
-                        </span>
-                        <span>{stageLabel}</span>
-                      </span>
+                      <StatusPill status="pending" label={stageLabel} />
                     {:else}
                       <span class="stage-empty">—</span>
                     {/if}
@@ -304,12 +307,7 @@
         {#if showFrameworkStatus(selectedRun) && frameworkStatusLabel(selectedRun)}
           <div class="drawer-kv">
             <span class="drawer-key">Stage</span>
-            <span class="stage-pill" aria-label={frameworkStatusLabel(selectedRun)}>
-              <span class="stage-spinner">
-                <Loader2 size={16} />
-              </span>
-              <span>{frameworkStatusLabel(selectedRun)}</span>
-            </span>
+            <StatusPill status="pending" label={frameworkStatusLabel(selectedRun)} />
           </div>
         {/if}
         <div class="drawer-kv">
@@ -477,34 +475,6 @@
 
   .stage-cell {
     width: 14%;
-  }
-
-  .stage-pill {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    min-width: 0;
-    max-width: 100%;
-    border: 1px solid #3b2a37;
-    border-radius: 9999px;
-    background: #2f2436;
-    color: #d176bd;
-    padding: 3px 10px;
-    font-size: 12px;
-    font-weight: 500;
-    line-height: 12px;
-    white-space: nowrap;
-  }
-
-  .stage-pill span:last-child {
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .stage-spinner {
-    display: inline-flex;
-    flex: 0 0 auto;
-    animation: stage-pill-spin 1s linear infinite;
   }
 
   .stage-empty {
@@ -701,15 +671,6 @@
     color: var(--muted);
     text-align: center;
     font-size: 0.84rem;
-  }
-
-  @keyframes stage-pill-spin {
-    from {
-      transform: rotate(0deg);
-    }
-    to {
-      transform: rotate(360deg);
-    }
   }
 
   @media (max-width: 900px) {
