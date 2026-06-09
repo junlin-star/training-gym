@@ -110,6 +110,32 @@ def _build_slime_base_image() -> "Image":
     )
 
 
+def _build_conversion_config(slime_cfg: Any, model: Any = None) -> dict[str, Any]:
+    """Build a dict of parameters that affect the torch_dist checkpoint layout.
+
+    Written to ``.conversion_config.json`` inside the checkpoint directory after
+    conversion so that later runs can detect stale checkpoints whose parallelism
+    no longer matches the current recipe.
+    """
+    from modal_training_gym.frameworks.slime.modal_helpers.utils import (
+        get_checkpoint_conversion_policy,
+    )
+
+    num_nodes, nproc_per_node, extra_args = get_checkpoint_conversion_policy(
+        slime_cfg, model=model
+    )
+    return {
+        "num_nodes": num_nodes,
+        "nproc_per_node": nproc_per_node,
+        "extra_args": extra_args,
+        "model_name": model.model_name if model else None,
+        "slime_model_script": getattr(slime_cfg, "slime_model_script", ""),
+    }
+
+
+_CONVERSION_CONFIG_FILE = ".conversion_config.json"
+
+
 def _has_torch_dist_checkpoint(save_path: str) -> bool:
     if not os.path.isdir(save_path):
         return False
@@ -573,20 +599,73 @@ def build_slime_app(
         )
         node_rank, master_addr, _, nnodes = get_modal_cluster_context(num_nodes)
 
+        import json
+        import shutil
+
+        current_config = _build_conversion_config(slime, model=model)
+
         if os.path.exists(save_path):
             if _has_torch_dist_checkpoint(save_path):
-                if node_rank == 0:
-                    print(f"Using existing torch_dist checkpoint at {save_path}.")
-                return
-            if node_rank == 0:
-                import shutil
+                config_path = os.path.join(save_path, _CONVERSION_CONFIG_FILE)
+                stale = False
+                if os.path.isfile(config_path):
+                    try:
+                        with open(config_path) as f:
+                            stored_config = json.load(f)
+                        if stored_config != current_config:
+                            stale = True
+                            if node_rank == 0:
+                                print(
+                                    f"Checkpoint at {save_path} was built with "
+                                    f"different config:\n  stored: {stored_config}"
+                                    f"\n  current: {current_config}"
+                                )
+                    except (OSError, json.JSONDecodeError):
+                        stale = True
+                        if node_rank == 0:
+                            print(
+                                f"Checkpoint at {save_path} has unreadable "
+                                f"conversion config — reconverting."
+                            )
+                else:
+                    # Legacy checkpoint without config metadata — cannot
+                    # verify compatibility.  Force re-conversion so the
+                    # checkpoint is rebuilt with the correct layout and
+                    # metadata for future validation.
+                    stale = True
+                    if node_rank == 0:
+                        print(
+                            f"Checkpoint at {save_path} has no conversion "
+                            f"config metadata — reconverting to ensure "
+                            f"compatibility."
+                        )
 
-                print(f"Removing incomplete torch_dist checkpoint at {save_path}.")
-                shutil.rmtree(save_path, ignore_errors=True)
-                checkpoints_volume.commit()
+                if stale:
+                    if node_rank == 0:
+                        print(
+                            f"Removing stale torch_dist checkpoint at "
+                            f"{save_path} (parallelism config changed)."
+                        )
+                        shutil.rmtree(save_path, ignore_errors=True)
+                        checkpoints_volume.commit()
+                    else:
+                        time.sleep(5)
+                        checkpoints_volume.reload()
+                else:
+                    if node_rank == 0:
+                        print(
+                            f"Using existing torch_dist checkpoint at "
+                            f"{save_path} (config matches)."
+                        )
+                    return
             else:
-                time.sleep(5)
-                checkpoints_volume.reload()
+                if node_rank == 0:
+                    print(f"Removing incomplete torch_dist checkpoint at {save_path}.")
+                    shutil.rmtree(save_path, ignore_errors=True)
+                    checkpoints_volume.commit()
+                else:
+                    time.sleep(5)
+                    checkpoints_volume.reload()
 
         torchrun_args = [f"--nproc-per-node={nproc_per_node}"]
         if nnodes > 1:
@@ -643,6 +722,14 @@ def build_slime_app(
         )
         print(f"Running: bash -c {cmd!r}")
         subprocess.run(["bash", "-c", cmd], check=True, env=env)
+
+        if node_rank == 0:
+            config_path = os.path.join(save_path, _CONVERSION_CONFIG_FILE)
+            try:
+                with open(config_path, "w") as f:
+                    json.dump(current_config, f)
+            except OSError as exc:
+                print(f"WARNING: could not write conversion config: {exc}")
         checkpoints_volume.commit()
 
         if node_rank == 0:
