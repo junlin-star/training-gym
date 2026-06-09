@@ -27,9 +27,11 @@
 # ```
 # ## Prerequisites
 #
-# This tutorial requires a Modal Secret named `huggingface-secret` containing your
-# `HF_TOKEN`. Create one at [modal.com/secrets](https://modal.com/secrets) if you
-# haven't already — the cell below fails fast with instructions otherwise.
+# This tutorial requires these Modal Secrets:
+# - `huggingface-secret` containing `HF_TOKEN`
+# - `wandb-secret` containing `WANDB_API_KEY`
+#
+# Create them at [modal.com/secrets](https://modal.com/secrets) if you haven't already — the cell below fails fast with instructions otherwise.
 
 import modal
 
@@ -222,13 +224,19 @@ import modal
 tutorial_cli_app = modal.App()
 
 def _main_impl() -> None:
-    try:
-        modal.Secret.from_name("huggingface-secret").hydrate()
-    except modal.exception.NotFoundError as e:
-        raise RuntimeError(
-            "Missing Modal Secret 'huggingface-secret'. Create one at "
-            "https://modal.com/secrets with an HF_TOKEN entry, then re-run."
-        ) from e
+    for secret_name, required_key in [
+        ("huggingface-secret", "HF_TOKEN"),
+        ("wandb-secret", "WANDB_API_KEY"),
+    ]:
+        try:
+            modal.Secret.from_name(
+                secret_name, required_keys=[required_key]
+            ).hydrate()
+        except modal.exception.NotFoundError as e:
+            raise RuntimeError(
+                f"Missing Modal Secret '{secret_name}'. Create one at "
+                f"https://modal.com/secrets with a {required_key} entry, then re-run."
+            ) from e
 
     dataset = LibriSpeechASRDataset(n_rows=8)
 

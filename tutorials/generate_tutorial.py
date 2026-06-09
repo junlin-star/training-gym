@@ -71,12 +71,11 @@ _BUCKET_DISPLAY = {
 }
 # Injected before every tutorial's first code cell so missing secrets fail
 # fast locally instead of mid-launch on a Modal worker.
-_HF_SECRET_CHECK_MARKDOWN = (
-    "## Prerequisites\n"
-    "\n"
-    "This tutorial requires a Modal Secret named `huggingface-secret` containing your\n"
-    "`HF_TOKEN`. Create one at [modal.com/secrets](https://modal.com/secrets) if you\n"
-    "haven't already — the cell below fails fast with instructions otherwise."
+_DEFAULT_REQUIRED_MODAL_SECRETS = (
+    {
+        "name": "huggingface-secret",
+        "key": "HF_TOKEN",
+    },
 )
 _NOTEBOOK_GPU_NOTE_MARKDOWN = (
     "> **Note:** you do **not** need to attach a GPU to this notebook. All training and\n"
@@ -88,18 +87,6 @@ _MULTINODE_DISCLAIMER_MARKDOWN = (
     "> your Modal workspace must have multi-node enabled. Contact\n"
     "> [support@modal.com](mailto:support@modal.com) to enable multi-node."
 )
-_HF_SECRET_CHECK_CODE = (
-    "import modal\n"
-    "\n"
-    "try:\n"
-    '    modal.Secret.from_name("huggingface-secret").hydrate()\n'
-    "except modal.exception.NotFoundError as e:\n"
-    "    raise RuntimeError(\n"
-    "        \"Missing Modal Secret 'huggingface-secret'. Create one at \"\n"
-    '        "https://modal.com/secrets with an HF_TOKEN entry, then re-run."\n'
-    "    ) from e"
-)
-
 
 @dataclass
 class Cell:
@@ -149,7 +136,10 @@ def _find_shell_command(node: ast.FunctionDef | ast.AsyncFunctionDef) -> str | N
 
 
 def _extract_cells(
-    source: str, *, include_multinode_disclaimer: bool = False
+    source: str,
+    *,
+    required_modal_secrets: tuple[dict[str, str], ...],
+    include_multinode_disclaimer: bool = False,
 ) -> list[Cell]:
     tree = ast.parse(source)
     lines = source.splitlines(keepends=True)
@@ -177,7 +167,7 @@ def _extract_cells(
             body_src = "".join(lines[start:end])
             body_src = textwrap.dedent(body_src).rstrip("\n")
             cells.append(Cell(kind="code", source=body_src, targets=targets))
-    cells = _inject_hf_secret_check(cells)
+    cells = _inject_secret_check(cells, required_modal_secrets)
     if include_multinode_disclaimer:
         cells = _inject_multinode_disclaimer(cells)
     return cells
@@ -195,14 +185,95 @@ def _inject_multinode_disclaimer(cells: list[Cell]) -> list[Cell]:
     ]
 
 
-def _inject_hf_secret_check(cells: list[Cell]) -> list[Cell]:
-    """Insert the HF secret precheck right before the first code cell."""
+def _secret_check_markdown(required_modal_secrets: tuple[dict[str, str], ...]) -> str:
+    if len(required_modal_secrets) == 1:
+        secret = required_modal_secrets[0]
+        return (
+            "## Prerequisites\n"
+            "\n"
+            f"This tutorial requires a Modal Secret named `{secret['name']}` containing your\n"
+            f"`{secret['key']}`. Create one at [modal.com/secrets](https://modal.com/secrets) if you\n"
+            "haven't already — the cell below fails fast with instructions otherwise."
+        )
+
+    secret_lines = "\n".join(
+        f"- `{secret['name']}` containing `{secret['key']}`"
+        for secret in required_modal_secrets
+    )
+    return (
+        "## Prerequisites\n"
+        "\n"
+        "This tutorial requires these Modal Secrets:\n"
+        f"{secret_lines}\n"
+        "\n"
+        "Create them at [modal.com/secrets](https://modal.com/secrets) if you "
+        "haven't already — the cell below fails fast with instructions otherwise."
+    )
+
+
+def _secret_check_code(required_modal_secrets: tuple[dict[str, str], ...]) -> str:
+    if len(required_modal_secrets) == 1:
+        secret = required_modal_secrets[0]
+        if secret == _DEFAULT_REQUIRED_MODAL_SECRETS[0]:
+            return (
+                "import modal\n"
+                "\n"
+                "try:\n"
+                '    modal.Secret.from_name("huggingface-secret").hydrate()\n'
+                "except modal.exception.NotFoundError as e:\n"
+                "    raise RuntimeError(\n"
+                "        \"Missing Modal Secret 'huggingface-secret'. Create one at \"\n"
+                '        "https://modal.com/secrets with an HF_TOKEN entry, then re-run."\n'
+                "    ) from e"
+            )
+        return (
+            "import modal\n"
+            "\n"
+            "try:\n"
+            f'    modal.Secret.from_name("{secret["name"]}", required_keys=["{secret["key"]}"]).hydrate()\n'
+            "except modal.exception.NotFoundError as e:\n"
+            "    raise RuntimeError(\n"
+            f'        "Missing Modal Secret \'{secret["name"]}\'. Create one at "\n'
+            f'        "https://modal.com/secrets with a {secret["key"]} entry, then re-run."\n'
+            "    ) from e"
+        )
+
+    secret_list = ",\n".join(
+        f'    ("{secret["name"]}", "{secret["key"]}")'
+        for secret in required_modal_secrets
+    )
+    return (
+        "import modal\n"
+        "\n"
+        "for secret_name, required_key in [\n"
+        f"{secret_list},\n"
+        "]:\n"
+        "    try:\n"
+        "        modal.Secret.from_name(\n"
+        "            secret_name, required_keys=[required_key]\n"
+        "        ).hydrate()\n"
+        "    except modal.exception.NotFoundError as e:\n"
+        "        raise RuntimeError(\n"
+        "            f\"Missing Modal Secret '{secret_name}'. Create one at \"\n"
+        "            f\"https://modal.com/secrets with a {required_key} entry, then re-run.\"\n"
+        "        ) from e"
+    )
+
+
+def _inject_secret_check(
+    cells: list[Cell], required_modal_secrets: tuple[dict[str, str], ...]
+) -> list[Cell]:
+    """Insert the Modal secret precheck right before the first code cell."""
     both = frozenset({_PY, _NB})
     nb_only = frozenset({_NB})
     prereq = [
-        Cell(kind="markdown", source=_HF_SECRET_CHECK_MARKDOWN, targets=both),
+        Cell(
+            kind="markdown",
+            source=_secret_check_markdown(required_modal_secrets),
+            targets=both,
+        ),
         Cell(kind="markdown", source=_NOTEBOOK_GPU_NOTE_MARKDOWN, targets=nb_only),
-        Cell(kind="code", source=_HF_SECRET_CHECK_CODE, targets=both),
+        Cell(kind="code", source=_secret_check_code(required_modal_secrets), targets=both),
     ]
     for i, cell in enumerate(cells):
         if cell.kind == "code":
@@ -496,7 +567,12 @@ def generate_one(
     source = input_path.read_text()
     name = input_path.stem
     bucket = _bucket_for(input_path)
-    cells = _extract_cells(source, include_multinode_disclaimer=bucket == "multinode")
+    metadata = _extract_metadata(source) or {}
+    cells = _extract_cells(
+        source,
+        required_modal_secrets=_required_modal_secrets(metadata),
+        include_multinode_disclaimer=bucket == "multinode",
+    )
     out_dir = output_root / bucket / name
     out_dir.mkdir(parents=True, exist_ok=True)
     py_path = out_dir / f"{name}.py"
@@ -524,6 +600,24 @@ def _extract_metadata(source: str) -> dict | None:
                 if isinstance(value, dict):
                     return value
     return None
+
+
+def _required_modal_secrets(metadata: dict) -> tuple[dict[str, str], ...]:
+    extra_secrets = metadata.get("required_modal_secrets", ())
+    if not isinstance(extra_secrets, (list, tuple)):
+        raise ValueError("required_modal_secrets must be a list of {name, key} dicts")
+
+    secrets = list(_DEFAULT_REQUIRED_MODAL_SECRETS)
+    for secret in extra_secrets:
+        if not isinstance(secret, dict):
+            raise ValueError("required_modal_secrets must contain {name, key} dicts")
+        name = secret.get("name")
+        key = secret.get("key")
+        if not isinstance(name, str) or not isinstance(key, str):
+            raise ValueError("required_modal_secrets entries need string name and key")
+        secrets.append({"name": name, "key": key})
+
+    return tuple(secrets)
 
 
 def _render_launch_cell(bucket: str, name: str) -> str:

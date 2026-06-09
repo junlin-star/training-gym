@@ -16,6 +16,9 @@ TUTORIAL_METADATA = {
         "DeploymentConfig",
         "EvalConfig",
     ],
+    "required_modal_secrets": [
+        {"name": "wandb-secret", "key": "WANDB_API_KEY"},
+    ],
 }
 
 
