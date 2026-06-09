@@ -546,7 +546,7 @@ def build_slime_app(
         serialized=True,
         name="convert_checkpoint",
     )
-    @clustered_if(convert_nnodes > 1, convert_nnodes, rdma=convert_nnodes > 1)
+    @clustered_if(convert_nnodes > 1, convert_nnodes, gpu_type=slime.gpu_type)
     def convert_checkpoint():
         from huggingface_hub import snapshot_download
 
@@ -732,7 +732,7 @@ def build_slime_app(
         serialized=True,
         name="train",
     )
-    @clustered_if(_use_clustered, slime.total_nodes, rdma=_multi_node)
+    @clustered_if(_use_clustered, slime.total_nodes, gpu_type=slime.gpu_type)
     async def train(
         modal_app_id: str = "",
         modal_app_url: str = "",

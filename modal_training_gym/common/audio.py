@@ -9,11 +9,13 @@ safe outside the training image.
 from __future__ import annotations
 
 import base64
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    import numpy as np
 
 
 def data_uri_to_bytes(data_uri: str) -> bytes:
-    """Decode a ``data:audio/<fmt>;base64,...`` URI (or a bare base64 string)."""
     if data_uri.startswith("data:"):
         _, _, b64 = data_uri.partition(",")
     else:
@@ -21,7 +23,7 @@ def data_uri_to_bytes(data_uri: str) -> bytes:
     return base64.b64decode(b64)
 
 
-def coerce_audio_bytes(value: Any) -> bytes | None:
+def coerce_audio_to_bytes(value: Any) -> bytes | None:
     """Coerce one audio reference to raw bytes.
 
     Accepts ``bytes``, a base64 / data-URI ``str``, or a 1-element list/tuple of
@@ -36,7 +38,7 @@ def coerce_audio_bytes(value: Any) -> bytes | None:
     return None
 
 
-def decode_to_mono(audio_bytes: bytes, target_sr: int) -> Any:
+def decode_to_mono(audio_bytes: bytes, target_sr: int) -> np.ndarray:
     """Decode encoded audio to a mono float32 waveform at *target_sr* Hz."""
     import io
 

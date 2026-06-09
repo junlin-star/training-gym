@@ -26,7 +26,7 @@ import asyncio
 import io
 from typing import Any  # slime's runtime arg/Sample objects have no public type
 
-from modal_training_gym.common.audio import coerce_audio_bytes
+from modal_training_gym.common.audio import coerce_audio_to_bytes
 from modal_training_gym.common.models.qwen3_asr_1_7b import encode_training_inputs
 
 
@@ -50,7 +50,7 @@ def _audio_ref(sample: Any) -> Any:
     loudly if it's missing — a silent miss would train on audio-free prompts.
 
     This is the slime ``Sample -> data`` seam; decoding ``data -> bytes`` is the
-    framework-agnostic :func:`modal_training_gym.common.audio.coerce_audio_bytes`.
+    framework-agnostic :func:`modal_training_gym.common.audio.coerce_audio_to_bytes`.
     """
     for item in _iter_content_items(getattr(sample, "prompt", None)):
         if isinstance(item, dict) and (item.get("type") == "audio" or "audio" in item):
@@ -161,12 +161,11 @@ def _populate_training_fields(args: Any, sample: Any, audio_bytes: bytes) -> Non
     encoded = encode_training_inputs(
         checkpoint, getattr(sample, "prompt", ""), sample.response or "", audio_bytes
     )
-    response_ids = encoded["response_ids"]
-    sample.tokens = encoded["prompt_ids"] + response_ids
-    sample.response_length = len(response_ids)
-    sample.loss_mask = [1] * len(response_ids)
-    if encoded["multimodal_inputs"]:
-        sample.multimodal_train_inputs = encoded["multimodal_inputs"]
+    sample.tokens = encoded.prompt_ids + encoded.response_ids
+    sample.response_length = len(encoded.response_ids)
+    sample.loss_mask = [1] * len(encoded.response_ids)
+    if encoded.multimodal_inputs:
+        sample.multimodal_train_inputs = encoded.multimodal_inputs
 
 
 async def transcription_rollout(args: Any, sample: Any, sampling_params: dict) -> Any:
@@ -179,7 +178,7 @@ async def transcription_rollout(args: Any, sample: Any, sampling_params: dict) -
     """
     import aiohttp
 
-    audio_bytes = coerce_audio_bytes(_audio_ref(sample))  # Sample -> data -> bytes
+    audio_bytes = coerce_audio_to_bytes(_audio_ref(sample))  # Sample -> data -> bytes
     if audio_bytes is None:
         raise RuntimeError(
             "transcription_rollout: the Sample's audio reference did not decode to "

@@ -17,11 +17,15 @@ since it's meaningless for other backends.
 from __future__ import annotations
 
 import functools
-from typing import Any
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any
 
 from modal_training_gym.common.audio import decode_to_mono
 
 from .base import HFModelConfiguration, ModelArchitecture
+
+if TYPE_CHECKING:
+    import torch
 
 
 class Qwen3_ASR_1_7B(HFModelConfiguration):
@@ -33,10 +37,10 @@ class Qwen3_ASR_1_7B(HFModelConfiguration):
     requires_bshd = True
 
     # The processor expands this single <|audio_pad|> to N tokens (N = the audio
-    # encoder's output length for the clip) so audio embeddings align with token
-    # positions. It must appear in the prompt TEXT, and the raw audio data-URI must
-    # NOT — inlined base64 tokenizes into ~10^5-10^6 text tokens (length scales with
-    # clip duration) and the actor OOMs.
+    # encoder's output length for the clip), aligning audio embeddings with token
+    # positions. It must appear in the prompt text; the raw audio data-URI must not,
+    # or it tokenizes into ~100k-1M text tokens (scales with clip duration) and OOMs
+    # the actor.
     audio_placeholder = "<|audio_start|><|audio_pad|><|audio_end|>"
 
     # thinker_config.text_config (Qwen3 dense backbone), verbatim from config.json.
@@ -71,9 +75,13 @@ def _processor(checkpoint: str) -> Any:
     return Qwen3ASRProcessor.from_pretrained(checkpoint)
 
 
-def _prompt_user_text(prompt: Any) -> str:
-    """The user instruction text, with audio payloads and the ``<audio>`` marker
-    stripped (a raw data-URI in the text would tokenize into ~10^5-10^6 tokens)."""
+def _prompt_user_text(prompt: str | list) -> str:
+    """User instruction text from slime's ``Sample.prompt`` (a chat-message list in
+    our case, or a plain string), with audio payloads and the ``<audio>`` marker
+    stripped. Empty/missing is fine for ASR — the audio placeholder alone drives
+    transcription, so the instruction text is optional."""
+    if not prompt:  # None / "" / [] → no instruction text
+        return ""
     if not isinstance(prompt, list):
         return str(prompt).replace("<audio>", "").strip()
 
@@ -95,7 +103,7 @@ def _prompt_user_text(prompt: Any) -> str:
     return " ".join(p for p in parts if p).replace("<audio>", "").strip()
 
 
-def render_prompt(prompt: Any) -> str:
+def render_prompt(prompt: str | list) -> str:
     """Render the Qwen3-ASR prompt text: one audio placeholder, no audio payload.
 
     Qwen3-ASR's tokenizer carries no chat template, so we assemble the Qwen
@@ -109,17 +117,22 @@ def render_prompt(prompt: Any) -> str:
     return f"<|im_start|>user\n{user}<|im_end|>\n<|im_start|>assistant\n"
 
 
-def encode_training_inputs(
-    checkpoint: str, prompt: Any, response: str, audio_bytes: bytes
-) -> dict[str, Any]:
-    """Tokenize a transcription sample for audio-conditioned GRPO training.
+@dataclass(frozen=True)
+class EncodedSample:
+    """Tokenized transcription sample for audio-conditioned GRPO training.
 
-    Returns ``{"prompt_ids", "response_ids", "multimodal_inputs"}`` — the prompt
-    with its ``<audio_pad>`` expanded to N tokens, the response tokens, and the mel
-    ``input_features`` / ``feature_attention_mask`` the frozen audio tower consumes
-    so the actor's log-probs are audio-conditioned. The caller maps these onto its
-    trainer-specific sample fields.
+    The caller maps these onto its trainer-specific sample fields.
     """
+
+    prompt_ids: list[int]  # prompt with <audio_pad> expanded to N tokens
+    response_ids: list[int]  # response tokens
+    multimodal_inputs: dict[str, torch.Tensor]  # mel features for the audio tower
+
+
+def encode_training_inputs(
+    checkpoint: str, prompt: str | list, response: str, audio_bytes: bytes
+) -> EncodedSample:
+    """Tokenize a transcription sample for audio-conditioned GRPO training."""
     proc = _processor(checkpoint)
     tokenizer = proc.tokenizer
 
@@ -132,7 +145,9 @@ def encode_training_inputs(
     response_ids = [
         int(t) for t in tokenizer.encode(response, add_special_tokens=False)
     ]
-    if not response_ids:  # never zero-length: prompt_length-1 must stay non-negative
+    # An empty transcript is a valid (if poor) rollout, not an error — pad with EOS
+    # so the response is never zero-length (prompt_length-1 must stay non-negative).
+    if not response_ids:
         response_ids = [int(getattr(tokenizer, "eos_token_id", None) or 0)]
 
     multimodal_inputs = {
@@ -140,8 +155,4 @@ def encode_training_inputs(
         for key in ("input_features", "feature_attention_mask")
         if out.get(key) is not None
     }
-    return {
-        "prompt_ids": prompt_ids,
-        "response_ids": response_ids,
-        "multimodal_inputs": multimodal_inputs,
-    }
+    return EncodedSample(prompt_ids, response_ids, multimodal_inputs)

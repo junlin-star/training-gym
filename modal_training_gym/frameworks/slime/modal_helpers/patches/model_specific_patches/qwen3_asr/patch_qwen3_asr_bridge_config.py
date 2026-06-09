@@ -7,6 +7,10 @@ so loading ANY Qwen3-ASR config raises AttributeError. (Same bug class sglang
 fixed in its config via PR #24187.) Guard the access; report upstream so this can
 be dropped.
 
+TODO(joy): remove this patch once the image's megatron-bridge fixes
+``get_text_config()`` to not read ``thinker_config`` before ``__init__`` sets it
+(the analogous fix to sglang PR #24187).
+
 Idempotent. Run at image build:  python patch_qwen3asr_bridge_config.py
 """
 
