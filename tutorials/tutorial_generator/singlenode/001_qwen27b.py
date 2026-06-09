@@ -154,6 +154,7 @@ def _train():
             sglang_max_running_requests=512,
             eval_max_response_len=4096,
             n_samples_per_eval_prompt=4,
+            train_function_kwargs={"ephemeral_disk": 2_097_152},
         ),
     )
     print("Starting training...")
