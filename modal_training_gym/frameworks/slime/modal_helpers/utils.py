@@ -185,7 +185,7 @@ def prepare_slime_config(slime_cfg, model, tmpdir: str) -> None:
     ):
         model.model_path = resolve_checkpoint_ref(model.model_name)
 
-    for attr in ("load", "ref_load", "critic_load"):
+    for attr in ("hf_checkpoint", "load", "ref_load", "critic_load"):
         if (val := getattr(slime_cfg, attr, None)) and not str(val).startswith("/"):
             object.__setattr__(slime_cfg, attr, resolve_checkpoint_ref(val))
 
