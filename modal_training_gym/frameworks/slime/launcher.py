@@ -236,7 +236,6 @@ def build_slime_app(
                 f"use_dynamic_batch_size={slime.use_dynamic_batch_size}."
             )
 
-
     if (
         model
         and getattr(slime, "megatron_to_hf_mode", "") != "bridge"
