@@ -68,7 +68,8 @@ class Qwen3_6_35b_Recipe(SlimeRecipe):
     attention_backend: str = "flash"
 
     # ── Checkpointing / eval ──────────────────────────────────────────────
-    megatron_to_hf_mode: str = "raw"
+    megatron_to_hf_mode: str = ""
     ref_load: str = "/checkpoints/Qwen3.6-35B-A3B_torch_dist_tp2pp2"
     save_interval: int = 20
     eval_interval: int | None = None
+    use_fault_tolerance: bool = False
