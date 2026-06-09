@@ -589,15 +589,7 @@ def build_slime_app(
     def convert_checkpoint():
         from huggingface_hub import snapshot_download
 
-        _needs_preconv = bool(
-            model
-            and getattr(model, "architecture", None)
-            and getattr(model.architecture, "megatron_model_type", "")
-        )
-        if (
-            getattr(slime, "megatron_to_hf_mode", None) == "bridge"
-            and not _needs_preconv
-        ):
+        if getattr(slime, "megatron_to_hf_mode", None) == "bridge":
             print("Bridge mode — no conversion needed.")
             return
 
