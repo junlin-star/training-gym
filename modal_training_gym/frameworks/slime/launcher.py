@@ -100,6 +100,9 @@ _PATCH_QWEN3_ASR_EXPORT_B64 = encode_patch(
     "patch_qwen3_asr_export",
     _SLIME_PATCHES / "model_specific_patches" / "qwen3_asr",
 )
+_PATCH_ROLLOUT_STATUS_B64 = encode_patch(
+    "patch_rollout_status_reporting", _SLIME_PATCHES
+)
 
 
 def _build_slime_base_image() -> "Image":
@@ -113,6 +116,7 @@ def _build_slime_base_image() -> "Image":
             f"echo {_PATCH_BRIDGE_NONE_TASK_B64} | base64 -d | python3",
             f"echo {_PATCH_STOP_TOKEN_DIAG_B64} | base64 -d | python3",
             f"echo {_PATCH_QWEN3_ASR_EXPORT_B64} | base64 -d | python3",
+            f"echo {_PATCH_ROLLOUT_STATUS_B64} | base64 -d | python3",
         )
     )
 
@@ -1002,6 +1006,10 @@ def build_slime_app(
                 "env_vars": {
                     "no_proxy": f"127.0.0.1,{cluster.head_addr}",
                     "MASTER_ADDR": cluster.head_addr,
+                    "SLIME_PHASE_REPORT_URL": os.environ.get(
+                        "SLIME_PHASE_REPORT_URL",
+                        "https://gym.modal.dev/api/framework-status",
+                    ),
                     **slime.environment,
                 }
             }
@@ -1012,7 +1020,7 @@ def build_slime_app(
             )
             print(f"Command: {cmd}, runtime_env: {runtime_env}")
 
-            await _set_framework_status(SlimeStatus.TRAINING)
+            await _set_framework_status(SlimeStatus.ROLLOUT_INITIALIZING)
             async with cluster.forward_dashboard() as tunnel:
                 print(f"Ray dashboard: {tunnel.url}")
                 await cluster.submit_and_tail(cmd, runtime_env=runtime_env)

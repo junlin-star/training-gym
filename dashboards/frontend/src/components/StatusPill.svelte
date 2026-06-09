@@ -55,11 +55,13 @@
     display: inline-flex;
     align-items: center;
     gap: 6px;
+    min-width: 0;
+    max-width: 100%;
     white-space: nowrap;
     border-radius: 9999px;
     padding: 3px 10px;
     font-size: 12px;
-    line-height: 12px;
+    line-height: 16px;
     border: 1px solid transparent;
     box-sizing: border-box;
     width: fit-content;
@@ -108,10 +110,23 @@
   .status-text {
     font-weight: 500;
     font-variant-numeric: tabular-nums;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .live-spinner {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    flex: 0 0 16px;
     animation: status-pill-spin 1s linear infinite;
+  }
+
+  .live-spinner :global(svg) {
+    display: block;
   }
 
   @keyframes status-pill-spin {

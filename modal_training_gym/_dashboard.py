@@ -67,6 +67,8 @@ def fastapi_app():
     from fastapi.staticfiles import StaticFiles
 
     from modal_training_gym.common.modal_urls import modal_app_dashboard_url
+    from modal_training_gym.common.run import TrainingRun
+    from modal_training_gym.common.status import MilesStatus, SlimeStatus
     from modal_training_gym.utils.metadata import (
         MetadataStore,
         vol_get,
@@ -314,6 +316,22 @@ def fastapi_app():
     async def load_deployments() -> list[dict[str, Any]]:
         return await load_list_summary(MetadataStore.DEPLOYMENTS_SUMMARY)
 
+    def _resolve_framework_status(phase: str, framework: str) -> Any | None:
+        phase = phase.strip()
+        framework = framework.strip().lower()
+        if framework == "miles":
+            try:
+                return MilesStatus(phase)
+            except ValueError:
+                return None
+        try:
+            return SlimeStatus(phase)
+        except ValueError:
+            try:
+                return MilesStatus(phase)
+            except ValueError:
+                return None
+
     # ── Training runs ────────────────────────────────────────────────────
 
     @web.get("/api/runs")
@@ -323,6 +341,36 @@ def fastapi_app():
         except Exception:
             data = []
         return JSONResponse(data, background=_make_compact_task())
+
+    @web.post("/api/framework-status")
+    async def framework_status(payload: dict[str, Any]):
+        training_run_id = str(payload.get("training_run_id", "") or "").strip()
+        phase = str(payload.get("phase", "") or "").strip()
+        if not training_run_id or not phase:
+            raise HTTPException(
+                status_code=400,
+                detail="training_run_id and phase are required",
+            )
+
+        try:
+            run = await run_in_threadpool(TrainingRun.from_id, training_run_id)
+        except KeyError:
+            raise HTTPException(
+                status_code=404,
+                detail=f"TrainingRun {training_run_id!r} not found",
+            )
+
+        status = _resolve_framework_status(phase, str(run.framework.value))
+        if status is None:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unsupported framework status {phase!r} for {run.framework.value}",
+            )
+
+        run.framework_status = status
+        await run.save_async()
+        cache_entries["runs"] = (0.0, [])
+        return JSONResponse({"status": "ok", "framework_status": status.value})
 
     # ── Train results ────────────────────────────────────────────────────
 
