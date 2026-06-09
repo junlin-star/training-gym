@@ -1,12 +1,20 @@
-"""Patch Megatron bridge to skip None tasks in stream_weights_megatron_to_hf.
+"""Patch Megatron bridge to skip None conversion tasks (both directions).
 
 When using bridge mode for text-only MoE models (e.g. Qwen3.6-35B-A3B),
 the Qwen35VLMoEBridge generates conversion tasks for vision-model parameters
-that don't exist in the text-only variant.  These tasks are None, which
-crashes at ``task.param_weight`` with an ``AttributeError``.
+that don't exist in the text-only variant.  These tasks are ``None``, which
+crashes whichever task field is dereferenced first:
 
-This patch adds a None check to skip such tasks gracefully, handling ALL
-occurrences in the file via re.sub.
+  * Megatron→HF save (``stream_weights_megatron_to_hf``): ``task.param_weight``
+  * HF→Megatron load (``load_weights_hf_to_megatron``):   ``task.megatron_module``
+
+The save path is exercised during training (rollout weight sync); the load
+path is exercised at startup when bridge mode loads the HF weights directly
+via AutoBridge (no torch_dist).  Guard BOTH so a fresh bridge-mode run can
+load the reference weights and then sync them back.
+
+This patch inserts ``if task is None: continue`` before each dereference,
+handling ALL occurrences in the file via re.sub.
 
 Executed at image-build time via ``python3 <this file>``.
 """
@@ -35,8 +43,12 @@ else:
                 f"{original}"
             )
 
+        # Guard the first dereference of `task` in BOTH conversion directions:
+        #   save: `if isinstance(task.param_weight, DTensor):`
+        #   load: `if task.megatron_module is None:`
         new_src, count = re.subn(
-            r"^( +)(if isinstance\(task\.param_weight, DTensor\):)",
+            r"^( +)(if isinstance\(task\.param_weight, DTensor\):"
+            r"|if task\.megatron_module is None:)",
             _add_none_guard,
             src,
             flags=re.MULTILINE,
