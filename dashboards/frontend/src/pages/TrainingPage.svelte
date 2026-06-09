@@ -2,6 +2,7 @@
   import { ExternalLink, PanelRightClose } from "lucide-svelte";
   import Drawer from "../components/Drawer.svelte";
   import FilterBar from "../components/FilterBar.svelte";
+  import FrameworkStageProgress from "../components/FrameworkStageProgress.svelte";
   import MinimalTable from "../components/MinimalTable.svelte";
   import MinimalTableSkeleton from "../components/MinimalTableSkeleton.svelte";
   import StatusPill from "../components/StatusPill.svelte";
@@ -119,6 +120,28 @@
     return formatFrameworkStatus(getFrameworkStatus(run));
   }
 
+  function frameworkProgress(run) {
+    const progress = run?.framework_progress;
+    if (!progress || typeof progress !== "object") return null;
+    const current = Number(progress.current);
+    const total = Number(progress.total);
+    if (!Number.isFinite(current) || !Number.isFinite(total) || total <= 0) {
+      return null;
+    }
+    return {
+      current: Math.max(0, Math.min(current, total)),
+      total,
+      unit: progress.unit || "step",
+    };
+  }
+
+  function progressLabel(progress) {
+    if (!progress) return "";
+    const unit = String(progress.unit || "step");
+    const label = unit.charAt(0).toUpperCase() + unit.slice(1);
+    return `${label} ${progress.current} / ${progress.total}`;
+  }
+
   $effect(() => {
     if (selectedRunId && !allRuns.some((run) => run.run_id === selectedRunId)) {
       selectedRunId = null;
@@ -172,7 +195,7 @@
       <div class="table-wrap">
         <MinimalTableSkeleton
           class="runs-table"
-          columns={["Name", "Status", "Stage", "Model", "Dataset", "Recipe", "Created", ""]}
+          columns={["Name", "Status", "Stage", "Model", "Dataset", "Recipe", "Created", "Last updated", ""]}
           rows={8}
         />
       </div>
@@ -194,6 +217,7 @@
               <th>Dataset</th>
               <th>Recipe</th>
               <th>Created</th>
+              <th>Last updated</th>
               <th></th>
             </tr>
           </thead>
@@ -202,6 +226,7 @@
               {@const runName = run.run_id || "—"}
               {@const status = getStatus(run)}
               {@const stageLabel = frameworkStatusLabel(run)}
+              {@const progress = frameworkProgress(run)}
               <tr class:row-selected={selectedRunId === run.run_id}>
                 <td class="run-cell">
                   <button
@@ -218,9 +243,17 @@
                   </button>
                 </td>
                 <td class="stage-cell">
-                  <button class="cell-open-button" onclick={() => selectRun(run.run_id)}>
+                  <button
+                    class="cell-open-button stage-open-button"
+                    onclick={() => selectRun(run.run_id)}
+                  >
                     {#if showFrameworkStatus(run) && stageLabel}
-                      <StatusPill status="pending" label={stageLabel} />
+                      <FrameworkStageProgress
+                        progress={progress}
+                        progressLabel={progressLabel(progress)}
+                        stageLabel={stageLabel}
+                        compact
+                      />
                     {:else}
                       <span class="stage-empty">—</span>
                     {/if}
@@ -243,6 +276,9 @@
                 </td>
                 <td class="created-cell">
                   <TimeAgo timestamp={run.started_at || run.created_at} showJustNow falsyRepresentation="—" />
+                </td>
+                <td class="updated-cell">
+                  <TimeAgo timestamp={run.updated_at} showJustNow falsyRepresentation="—" />
                 </td>
                 <td class="modal-link-cell">
                   <div class="modal-link-wrap">
@@ -306,9 +342,14 @@
           <StatusPill status={getStatus(selectedRun)} />
         </div>
         {#if showFrameworkStatus(selectedRun) && frameworkStatusLabel(selectedRun)}
+          {@const selectedProgress = frameworkProgress(selectedRun)}
           <div class="drawer-kv">
             <span class="drawer-key">Stage</span>
-            <StatusPill status="pending" label={frameworkStatusLabel(selectedRun)} />
+            <FrameworkStageProgress
+              progress={selectedProgress}
+              progressLabel={progressLabel(selectedProgress)}
+              stageLabel={frameworkStatusLabel(selectedRun)}
+            />
           </div>
         {/if}
         <div class="drawer-kv">
@@ -331,6 +372,12 @@
           <span class="drawer-key">Started</span>
           <span class="drawer-value">
             <TimeAgo timestamp={selectedRun.started_at || selectedRun.created_at} showJustNow />
+          </span>
+        </div>
+        <div class="drawer-kv">
+          <span class="drawer-key">Last updated</span>
+          <span class="drawer-value">
+            <TimeAgo timestamp={selectedRun.updated_at} showJustNow falsyRepresentation="—" />
           </span>
         </div>
       </section>
@@ -450,6 +497,11 @@
     color: var(--accent);
   }
 
+  .stage-open-button {
+    white-space: normal;
+    line-height: 16px;
+  }
+
   .run-name {
     display: block;
     color: var(--text-bright);
@@ -475,7 +527,12 @@
   }
 
   .stage-cell {
-    width: 14%;
+    width: 16%;
+  }
+
+  .created-cell,
+  .updated-cell {
+    white-space: nowrap;
   }
 
   .stage-empty {

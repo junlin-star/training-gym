@@ -5,6 +5,7 @@ It is used to track the training run and its results.
 
 from __future__ import annotations
 
+import time
 from enum import Enum
 from typing import Any
 
@@ -46,6 +47,7 @@ class TrainingRun(BaseModel):
     started_at: int = 0
     ended_at: int | None = None
     completed_at: int | None = None
+    updated_at: int = 0
     duration_seconds: int | None = None
     metadata: dict[str, Any] | None = None
 
@@ -55,7 +57,11 @@ class TrainingRun(BaseModel):
             str(item.get("training_run_id", "")),
         )
 
+    def _touch(self) -> None:
+        self.updated_at = int(time.time())
+
     def save(self) -> None:
+        self._touch()
         payload = self.model_dump(mode="json")
         vol_put(MetadataStore.TRAINING_RUNS, self.training_run_id, payload)
         vol_upsert_summary_item(
@@ -67,6 +73,7 @@ class TrainingRun(BaseModel):
         )
 
     async def save_async(self) -> None:
+        self._touch()
         payload = self.model_dump(mode="json")
         await vol_put_async(MetadataStore.TRAINING_RUNS, self.training_run_id, payload)
         await vol_upsert_summary_item_async(

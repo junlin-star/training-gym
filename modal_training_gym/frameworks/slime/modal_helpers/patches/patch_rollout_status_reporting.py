@@ -6,34 +6,92 @@ import re
 from pathlib import Path
 
 
+PREAMBLE_MARKER = "PATCHED_TRAINING_GYM_PREAMBLE"
+ROLLOUT_MARKER = "PATCHED_TRAINING_GYM_ROLLOUT_STATUS"
+WEIGHT_SYNC_MARKER = "PATCHED_TRAINING_GYM_WEIGHT_SYNC_STATUS"
+
+PREAMBLE = (
+    f"# {PREAMBLE_MARKER}: bootstrap phase reporter (runs once per process)\n"
+    "import sys as _tg_sys\n"
+    "if '/root' not in _tg_sys.path:\n"
+    "    _tg_sys.path.insert(0, '/root')\n"
+    "try:\n"
+    "    from modal_training_gym.frameworks.slime.phase_reporting import (\n"
+    "        report_rollout_initializing as _tg_report_rollout_initializing,\n"
+    "        report_weight_sync as _tg_report_weight_sync,\n"
+    "    )\n"
+    "except ImportError:\n"
+    "    def _tg_report_rollout_initializing(args): pass\n"
+    "    def _tg_report_weight_sync(args): pass\n"
+    "\n"
+)
+
+
 def _patch_file(path: Path) -> None:
     if not path.exists():
         print(f"WARNING: {path} not found, skipping rollout-status patch")
         return
 
     src = path.read_text()
-    marker = "PATCHED_TRAINING_GYM_ROLLOUT_STATUS"
-    if marker in src:
+    needs_preamble = PREAMBLE_MARKER not in src
+    needs_rollout = ROLLOUT_MARKER not in src
+    needs_weight_sync = WEIGHT_SYNC_MARKER not in src
+
+    if not (needs_preamble or needs_rollout or needs_weight_sync):
         print(f"{path.name} already patched for rollout status reporting")
         return
 
-    pattern = re.compile(
-        r"^(?P<indent>[ \t]*)rollout_manager, num_rollout_per_epoch = create_rollout_manager\(args, pgs\[\"rollout\"\]\)",
-        re.M,
-    )
-    def _replacement(match: re.Match[str]) -> str:
-        indent = match.group("indent")
-        return (
-            f"{indent}# {marker}: rollout engine startup state\n"
-            f"{indent}__import__('sys').path.insert(0, '/root')\n"
-            f"{indent}__import__('modal_training_gym.frameworks.slime.phase_reporting', fromlist=['report_rollout_initializing']).report_rollout_initializing(args)\n"
-            f"{indent}rollout_manager, num_rollout_per_epoch = create_rollout_manager(args, pgs[\"rollout\"])"
+    if needs_preamble:
+        src = PREAMBLE + src
+
+    rollout_count = 0
+    if needs_rollout:
+        rollout_pattern = re.compile(
+            r"^(?P<indent>[ \t]*)rollout_manager, num_rollout_per_epoch = create_rollout_manager\(args, pgs\[\"rollout\"\]\)",
+            re.M,
         )
 
-    src, count = pattern.subn(_replacement, src, count=1)
-    if count != 1:
-        print(f"WARNING: Could not patch {path.name} for rollout status reporting")
-        return
+        def _rollout_replacement(match: re.Match[str]) -> str:
+            indent = match.group("indent")
+            return (
+                f"{indent}# {ROLLOUT_MARKER}: rollout engine startup state\n"
+                f"{indent}_tg_report_rollout_initializing(args)\n"
+                f'{indent}rollout_manager, num_rollout_per_epoch = create_rollout_manager(args, pgs["rollout"])'
+            )
+
+        src, rollout_count = rollout_pattern.subn(
+            _rollout_replacement, src, count=1
+        )
+
+    weight_sync_count = 0
+    if needs_weight_sync:
+        weight_sync_pattern = re.compile(
+            r"^(?P<indent>[ \t]*)(?P<call>(?:await[ \t]+)?(?:[A-Za-z_][A-Za-z0-9_]*\.)?update_weights\(\))",
+            re.M,
+        )
+
+        def _weight_sync_replacement(match: re.Match[str]) -> str:
+            indent = match.group("indent")
+            call = match.group("call")
+            return (
+                f"{indent}# {WEIGHT_SYNC_MARKER}: weight sync state\n"
+                f"{indent}_tg_report_weight_sync(args)\n"
+                f"{indent}{call}"
+            )
+
+        src, weight_sync_count = weight_sync_pattern.subn(
+            _weight_sync_replacement, src, count=1
+        )
+
+    failed = []
+    if needs_rollout and rollout_count != 1:
+        failed.append("rollout init")
+    if needs_weight_sync and weight_sync_count != 1:
+        failed.append("weight sync")
+    if failed:
+        print(
+            f"WARNING: Could not patch {path.name} for: {', '.join(failed)}"
+        )
 
     path.write_text(src)
     print(f"Patched {path.name} with rollout status reporting")

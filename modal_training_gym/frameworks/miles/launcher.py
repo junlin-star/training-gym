@@ -464,7 +464,6 @@ def build_miles_app(
         run_record: TrainingRun | None = None
 
         if cluster.is_head:
-            created_at = int(time.time())
             print(f"Training run id: {training_run_id}")
             config_summary = {
                 "model": {"model_name": model.model_name} if model else {},
@@ -485,16 +484,28 @@ def build_miles_app(
                 "lr": miles.lr,
                 "global_batch_size": miles.global_batch_size,
             }
-            run_record = TrainingRun(
-                training_run_id=training_run_id,
-                modal_app_id=modal_app_id,
-                modal_app_url=modal_app_url,
-                framework=Framework.MILES,
-                config=config_summary,
-                framework_status=MilesStatus.INITIALIZING,
-                created_at=created_at,
-                started_at=created_at,
-            )
+            # The local TrainConfig.train() driver creates the initial
+            # TrainingRun record before invoking download/convert_checkpoint
+            # so those phases are visible in the dashboard. Reuse it; fall
+            # back to a fresh record if someone invokes train() directly.
+            try:
+                run_record = TrainingRun.from_id(training_run_id)
+                run_record.modal_app_id = modal_app_id
+                run_record.modal_app_url = modal_app_url
+                run_record.config = config_summary
+                run_record.framework_status = MilesStatus.INITIALIZING
+            except KeyError:
+                created_at = int(time.time())
+                run_record = TrainingRun(
+                    training_run_id=training_run_id,
+                    modal_app_id=modal_app_id,
+                    modal_app_url=modal_app_url,
+                    framework=Framework.MILES,
+                    config=config_summary,
+                    framework_status=MilesStatus.INITIALIZING,
+                    created_at=created_at,
+                    started_at=created_at,
+                )
             await run_record.save_async()
             print(f"TrainingRun recorded: {training_run_id}")
 

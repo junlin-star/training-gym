@@ -8,8 +8,8 @@ it uses the local ``dashboards/frontend`` directory instead.
 from __future__ import annotations
 
 import asyncio
+import time
 from pathlib import Path
-from time import monotonic
 from typing import Any, Awaitable, Callable
 
 import modal
@@ -158,13 +158,13 @@ def fastapi_app():
     async def get_cached_list(
         key: str, loader: Callable[[], Awaitable[list[dict[str, Any]]]]
     ) -> list[dict[str, Any]]:
-        now = monotonic()
+        now = time.monotonic()
         expires_at, values = cache_entries[key]
         if now < expires_at:
             return values
 
         async with cache_locks[key]:
-            now = monotonic()
+            now = time.monotonic()
             expires_at, values = cache_entries[key]
             if now < expires_at:
                 return values
@@ -332,6 +332,13 @@ def fastapi_app():
             except ValueError:
                 return None
 
+    def _optional_int(value: Any) -> int | None:
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            return None
+        return parsed if parsed >= 0 else None
+
     # ── Training runs ────────────────────────────────────────────────────
 
     @web.get("/api/runs")
@@ -368,6 +375,31 @@ def fastapi_app():
             )
 
         run.framework_status = status
+        metadata = dict(run.metadata or {})
+        progress = {
+            "phase": status.value,
+            "updated_at": int(time.time()),
+        }
+        for src, dst in (
+            ("progress_current", "current"),
+            ("progress_total", "total"),
+            ("progress_unit", "unit"),
+            ("rollout_id", "rollout_id"),
+            ("step_id", "step_id"),
+        ):
+            if src not in payload:
+                continue
+            value = payload.get(src)
+            if dst in ("current", "total", "rollout_id", "step_id"):
+                value = _optional_int(value)
+                if value is None:
+                    continue
+            progress[dst] = value
+        existing_progress = metadata.get("framework_progress")
+        if isinstance(existing_progress, dict):
+            progress = {**existing_progress, **progress}
+        metadata["framework_progress"] = progress
+        run.metadata = metadata
         await run.save_async()
         cache_entries["runs"] = (0.0, [])
         return JSONResponse({"status": "ok", "framework_status": status.value})

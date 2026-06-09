@@ -27,11 +27,62 @@ _REPORTER_STARTED = False
 _REPORTER_LOCK = threading.Lock()
 
 
+def _arg_value(args: Any, key: str) -> Any:
+    value = getattr(args, key, None)
+    if value not in (None, ""):
+        return value
+
+    for container_name in ("extra_config", "custom_config"):
+        container = getattr(args, container_name, None)
+        if isinstance(container, dict):
+            value = container.get(key)
+            if value not in (None, ""):
+                return value
+    return None
+
+
 def _run_context(args: Any) -> dict[str, Any]:
     return {
-        "training_run_id": getattr(args, "training_run_id", "") or "",
-        "app_name": getattr(args, "app_name", "") or "",
+        "training_run_id": _arg_value(args, "training_run_id")
+        or _arg_value(args, "training_gym_training_run_id")
+        or os.environ.get("TRAINING_GYM_TRAINING_RUN_ID", "")
+        or "",
+        "app_name": _arg_value(args, "app_name")
+        or _arg_value(args, "training_gym_app_name")
+        or os.environ.get("TRAINING_GYM_APP_NAME", "")
+        or "",
         "modal_app_id": os.environ.get("MODAL_APP_ID", ""),
+    }
+
+
+def _positive_int(value: Any) -> int | None:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _total_steps(args: Any) -> int | None:
+    for key in ("num_rollout", "training_gym_total_steps"):
+        total = _positive_int(_arg_value(args, key))
+        if total is not None:
+            return total
+    return _positive_int(os.environ.get("TRAINING_GYM_TOTAL_STEPS"))
+
+
+def _step_progress(args: Any, rollout_id: int | None = None) -> dict[str, Any]:
+    total = _total_steps(args)
+    if rollout_id is None:
+        current = 0
+    else:
+        current = max(0, int(rollout_id) + 1)
+    if total is not None:
+        current = min(current, total)
+    return {
+        "progress_current": current,
+        "progress_total": total,
+        "progress_unit": "step",
     }
 
 
@@ -138,6 +189,7 @@ def log_rollout_data(
     report_phase(
         SlimeStatus.ROLLOUT_LOGGING,
         args,
+        **_step_progress(args, rollout_id),
         rollout_id=rollout_id,
         sample_count=len(samples) if hasattr(samples, "__len__") else None,
         metrics=rollout_extra_metrics,
@@ -166,6 +218,7 @@ def log_eval_rollout_data(
     report_phase(
         SlimeStatus.EVAL_ROLLOUT_LOGGING,
         args,
+        **_step_progress(args, rollout_id),
         rollout_id=rollout_id,
         sample_count=len(data) if hasattr(data, "__len__") else None,
         metrics=extra_metrics,
@@ -209,6 +262,7 @@ def before_train_step_hook(
     report_phase(
         SlimeStatus.OPTIMIZER_STEP,
         args,
+        **_step_progress(args, rollout_id),
         rollout_id=rollout_id,
         step_id=step_id,
     )
@@ -225,7 +279,18 @@ def before_train_step_hook(
 
 
 def report_rollout_initializing(args: Any) -> None:
-    report_phase(SlimeStatus.ROLLOUT_INITIALIZING, args)
+    report_phase(
+        SlimeStatus.ROLLOUT_INITIALIZING,
+        args,
+        **_step_progress(args),
+    )
+
+
+def report_weight_sync(args: Any) -> None:
+    report_phase(
+        SlimeStatus.WEIGHT_SYNC,
+        args,
+    )
 
 
 __all__ = [
@@ -233,6 +298,7 @@ __all__ = [
     "before_train_step_hook",
     "report_phase",
     "report_rollout_initializing",
+    "report_weight_sync",
     "log_eval_rollout_data",
     "log_rollout_data",
 ]

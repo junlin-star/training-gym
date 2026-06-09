@@ -6,20 +6,27 @@ Usage (Python):
 
 Usage (CLI):
     training-gym setup
+
+After deploying, the FastAPI endpoint URL is persisted to
+``~/.training-gym.toml`` so other clients (e.g. the slime launcher) can find
+the dashboard without a hardcoded fallback.
 """
 
 from __future__ import annotations
 
 
 def setup() -> str:
-    """Deploy the training-gym dashboard and return its URL."""
+    """Deploy the training-gym dashboard, persist its URL, and return it."""
     import modal
 
-    from modal_training_gym._dashboard import app
+    from modal_training_gym._dashboard import app, fastapi_app
+    from modal_training_gym.common.config import CONFIG_PATH, save_dashboard_url
 
     with modal.enable_output():
-        deployed = app.deploy()
+        app.deploy()
 
-    url = deployed.get_dashboard_url()
-    print(f"\nDashboard deployed: {url}")
-    return url
+    web_url = fastapi_app.get_web_url()
+    save_dashboard_url(web_url)
+    print(f"\nDashboard deployed: {web_url}")
+    print(f"Saved dashboard URL to {CONFIG_PATH}")
+    return web_url

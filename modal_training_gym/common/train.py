@@ -1,4 +1,5 @@
 import dataclasses as _dc
+import time
 from collections.abc import Mapping, Sequence
 from enum import Enum
 from pathlib import Path
@@ -6,9 +7,16 @@ from typing import Any
 from typing import cast
 
 from modal_training_gym.common.dataset import DatasetConfig
+from modal_training_gym.common.framework import Framework
 from modal_training_gym.common.ids import create_hash
 from modal_training_gym.common.models import ModelConfig
 from modal_training_gym.common.checkpoint import Checkpoint
+from modal_training_gym.common.run import TrainingRun, TrainingRunStatus
+from modal_training_gym.common.status import (
+    FrameworkStatus,
+    MilesStatus,
+    SlimeStatus,
+)
 from modal_training_gym.common.train_result import TrainResult
 from modal_training_gym.common.modal_urls import modal_app_dashboard_url
 from modal_training_gym.frameworks.miles import build_miles_app
@@ -168,6 +176,65 @@ class TrainConfig:
             cast(SlimeRecipe, self.recipe), combined, base_recipe
         )
 
+    # ── Run-record helpers ─────────────────────────────────────────────────
+
+    def _framework(self) -> Framework:
+        if isinstance(self.recipe, SlimeRecipe):
+            return Framework.SLIME
+        if isinstance(self.recipe, MilesConfig):
+            return Framework.MILES
+        raise ValueError(f"Unknown recipe type: {type(self.recipe).__name__}")
+
+    def _initializing_status(self) -> FrameworkStatus:
+        if isinstance(self.recipe, SlimeRecipe):
+            return SlimeStatus.INITIALIZING
+        if isinstance(self.recipe, MilesConfig):
+            return MilesStatus.INITIALIZING
+        raise ValueError(f"Unknown recipe type: {type(self.recipe).__name__}")
+
+    def _build_config_summary(self) -> dict[str, Any]:
+        """Framework-specific TrainingRun.config summary."""
+        model = self.model
+        dataset = self.dataset
+        recipe = self.recipe
+
+        wandb = getattr(recipe, "wandb", None)
+        summary: dict[str, Any] = {
+            "model": {"model_name": model.model_name} if model else {},
+            "wandb": (
+                {"project": wandb.project, "group": wandb.group} if wandb else {}
+            ),
+            "dataset": {
+                "hf_repo": getattr(dataset, "hf_repo", ""),
+                "name": type(dataset).__name__,
+            },
+            "lr": getattr(recipe, "lr", None),
+            "global_batch_size": getattr(recipe, "global_batch_size", None),
+        }
+
+        if isinstance(recipe, SlimeRecipe):
+            from modal_training_gym.frameworks.slime.launcher import (
+                _serialize_slime_params,
+            )
+
+            base_recipe = SlimeRecipe.get_base_recipe(model)
+            combined = (
+                _merge_recipe(base_recipe, cast(SlimeRecipe, recipe))
+                if base_recipe is not None
+                else cast(SlimeRecipe, recipe)
+            )
+            summary["recipe"] = _serialize_slime_params(
+                combined, dataset=dataset, model=model
+            )
+        elif isinstance(recipe, MilesConfig):
+            summary["recipe"] = {
+                "gpu_type": recipe.gpu_type,
+                "actor_num_nodes": recipe.actor_num_nodes,
+                "actor_num_gpus_per_node": recipe.actor_num_gpus_per_node,
+            }
+
+        return summary
+
     def train(self) -> TrainResult:
         """Build the app, run training, and return the TrainResult."""
         import modal
@@ -180,21 +247,58 @@ class TrainConfig:
         with modal.enable_output():
             with app.run():
                 modal_app_id = app.app_id or ""
+                modal_app_url = modal_app_dashboard_url(modal_app_id)
+
+                created_at = int(time.time())
+                run_record = TrainingRun(
+                    training_run_id=training_run_id,
+                    modal_app_id=modal_app_id,
+                    modal_app_url=modal_app_url,
+                    framework=self._framework(),
+                    config=self._build_config_summary(),
+                    framework_status=self._initializing_status(),
+                    created_at=created_at,
+                    started_at=created_at,
+                )
+                run_record.save()
+                print(f"TrainingRun recorded: {training_run_id}")
+
+                def _set_status(status: FrameworkStatus) -> None:
+                    run_record.framework_status = status
+                    run_record.save()
+
                 needs_miles_raw_conversion = (
                     isinstance(self.recipe, MilesConfig)
                     and getattr(self.recipe, "megatron_to_hf_mode", "bridge")
                     != "bridge"
                 )
-                if isinstance(self.recipe, SlimeRecipe):
-                    app.download.remote()
-                    app.convert_checkpoint.remote()
-                elif needs_miles_raw_conversion:
-                    app.download.remote()
-                    app.convert_checkpoint.remote()
-                result_dict = app.train.remote(
-                    modal_app_id=modal_app_id,
-                    modal_app_url=modal_app_dashboard_url(modal_app_id),
-                )
+                try:
+                    if isinstance(self.recipe, SlimeRecipe):
+                        _set_status(SlimeStatus.DOWNLOAD_MODEL)
+                        app.download.remote()
+                        _set_status(SlimeStatus.CONVERT_MODEL)
+                        app.convert_checkpoint.remote()
+                    elif needs_miles_raw_conversion:
+                        _set_status(MilesStatus.DOWNLOAD_MODEL)
+                        app.download.remote()
+                        _set_status(MilesStatus.CONVERT_MODEL)
+                        app.convert_checkpoint.remote()
+                    result_dict = app.train.remote(
+                        modal_app_id=modal_app_id,
+                        modal_app_url=modal_app_url,
+                    )
+                except BaseException:
+                    if result_dict is None:
+                        run_record.status = TrainingRunStatus.FAILED
+                        finished_at = int(time.time())
+                        run_record.ended_at = finished_at
+                        if run_record.completed_at is None:
+                            run_record.completed_at = finished_at
+                        run_record.duration_seconds = max(
+                            0, finished_at - run_record.started_at
+                        )
+                        run_record.save()
+                    raise
         if result_dict is None:
             raise RuntimeError(
                 "Training app exited before returning a result. "

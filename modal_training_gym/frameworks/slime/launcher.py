@@ -872,7 +872,6 @@ def build_slime_app(
             await cluster.wait_forever()
             return
 
-        created_at = int(time.time())
         print(f"Training run id: {training_run_id}")
         config_summary: dict = {
             "model": {"model_name": model.model_name} if model else {},
@@ -889,16 +888,30 @@ def build_slime_app(
             "lr": slime.lr,
             "global_batch_size": slime.global_batch_size,
         }
-        run_record = TrainingRun(
-            training_run_id=training_run_id,
-            modal_app_id=modal_app_id,
-            modal_app_url=modal_app_url or modal_app_dashboard_url(modal_app_id),
-            framework=Framework.SLIME,
-            config=config_summary,
-            framework_status=SlimeStatus.INITIALIZING,
-            created_at=created_at,
-            started_at=created_at,
-        )
+        # The local TrainConfig.train() driver creates the initial TrainingRun
+        # record before invoking download/convert_checkpoint so those phases
+        # are visible in the dashboard. Reuse it; fall back to a fresh record
+        # if someone invokes train() directly (e.g. older callers).
+        try:
+            run_record = TrainingRun.from_id(training_run_id)
+            run_record.modal_app_id = modal_app_id
+            run_record.modal_app_url = modal_app_url or modal_app_dashboard_url(
+                modal_app_id
+            )
+            run_record.config = config_summary
+            run_record.framework_status = SlimeStatus.INITIALIZING
+        except KeyError:
+            created_at = int(time.time())
+            run_record = TrainingRun(
+                training_run_id=training_run_id,
+                modal_app_id=modal_app_id,
+                modal_app_url=modal_app_url or modal_app_dashboard_url(modal_app_id),
+                framework=Framework.SLIME,
+                config=config_summary,
+                framework_status=SlimeStatus.INITIALIZING,
+                created_at=created_at,
+                started_at=created_at,
+            )
         await run_record.save_async()
         print(f"TrainingRun recorded: {training_run_id}")
 
@@ -1002,14 +1015,35 @@ def build_slime_app(
                 object.__setattr__(slime, "save", original_save)
                 object.__setattr__(slime, "load", original_load)
                 object.__setattr__(slime, "ref_load", original_ref_load)
+                
+            phase_report_url = (
+                os.environ.get("SLIME_PHASE_REPORT_URL")
+                or os.environ.get("TRAINING_GYM_FRAMEWORK_STATUS_URL")
+                or ""
+            )
+            if not phase_report_url:
+                from modal_training_gym.common.config import (
+                    CONFIG_PATH,
+                    get_framework_status_url,
+                )
+
+                phase_report_url = get_framework_status_url() or ""
+                if not phase_report_url:
+                    print(
+                        f"WARNING: no dashboard URL configured. Run "
+                        f"`training-gym setup` to deploy the dashboard and "
+                        f"populate {CONFIG_PATH}, or set "
+                        "SLIME_PHASE_REPORT_URL. Phase reporting is disabled."
+                    )
+
             runtime_env = {
                 "env_vars": {
                     "no_proxy": f"127.0.0.1,{cluster.head_addr}",
                     "MASTER_ADDR": cluster.head_addr,
-                    "SLIME_PHASE_REPORT_URL": os.environ.get(
-                        "SLIME_PHASE_REPORT_URL",
-                        "https://gym.modal.dev/api/framework-status",
-                    ),
+                    "TRAINING_GYM_TRAINING_RUN_ID": training_run_id,
+                    "TRAINING_GYM_APP_NAME": app_name,
+                    "TRAINING_GYM_TOTAL_STEPS": str(slime.num_rollout),
+                    "SLIME_PHASE_REPORT_URL": phase_report_url,
                     **slime.environment,
                 }
             }
