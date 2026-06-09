@@ -71,9 +71,9 @@ def _install():
 @code
 def _imports():
     from modal_training_gym import (
+        AudioEvalRowResult,
         DeploymentConfig,
         EvalConfig,
-        EvalRowResult,
         ModelDeployment,
         MultimodalDataset,
         Qwen3_ASR_1_7B,
@@ -269,9 +269,9 @@ def _eval_intro():
 
     The eval_fn is the read-side twin of the reward: it POSTs each clip to the
     deployment's `/v1/audio/transcriptions` endpoint, scores word accuracy
-    (`1 − WER`), and attaches a downsampled audio clip + reference + WER as
-    `metadata`. The gym dashboard's **Evals** panel renders that metadata, so each
-    clip shows up with an audio player next to its reference and score (run
+    (`1 − WER`), and returns an `AudioEvalRowResult` carrying a downsampled audio
+    clip + reference + WER. The dashboard's **Evals** panel auto-detects the audio
+    result and renders a player next to the reference and score (run
     `training-gym setup` to get the dashboard URL).
     """
 
@@ -280,7 +280,7 @@ def _eval_intro():
 def _eval_fn():
     def transcribe_and_score(
         deployment: ModelDeployment, example: dict
-    ) -> EvalRowResult:
+    ) -> AudioEvalRowResult:
         import base64
         import io
 
@@ -320,17 +320,17 @@ def _eval_fn():
         ).decode()
 
         # Score is word accuracy (1 − WER) in [0, 1] — higher is better, matching
-        # the dashboard's score model; raw WER stays in metadata. The hypothesis is
-        # already carried on EvalRowResult.response, so it's not duplicated here.
-        return EvalRowResult(
+        # the dashboard's score model. AudioEvalRowResult folds audio/reference/metrics
+        # into metadata (tagged _metadata_type="audio") so the dashboard renders an
+        # audio cell; the hypothesis stays on `response`, not duplicated. `metrics`
+        # is yours — swap WER for CER/BLEU/MOS/etc. as the task needs.
+        return AudioEvalRowResult(
             score=max(0.0, 1.0 - wer),
             response=hypothesis,
             prompt=example["prompt"],
-            metadata={
-                "audio": audio_uri,
-                "reference": reference,
-                "wer": wer,
-            },
+            audio=audio_uri,
+            reference=reference,
+            metrics={"wer": wer},
         )
 
 
@@ -345,7 +345,9 @@ def _eval():
 
     eval_config = EvalConfig(dataset=dataset, eval_fn=transcribe_and_score)
     eval_result = eval_config.evaluate(deployment, debug=True)
-    mean_wer = sum(r.metadata["wer"] for r in eval_result.rows) / len(eval_result.rows)
+    mean_wer = sum(r.metadata["metrics"]["wer"] for r in eval_result.rows) / len(
+        eval_result.rows
+    )
     print(
         f"Eval: mean WER {mean_wer:.3f} "
         f"(accuracy {eval_result.mean:.3f}) over {eval_result.total} clips"

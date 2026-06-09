@@ -848,7 +848,7 @@
                         <pre class="example-section-text">{row.metadata.reference}</pre>
                       </div>
                     {/if}
-                    {#if row.metadata?.audio}
+                    {#if row.metadata?._metadata_type === "audio" || row.metadata?.audio}
                       <div class="example-section">
                         <span class="example-section-label">Audio</span>
                         <!-- TODO(ben/joy): metadata.audio is passed straight to the
@@ -868,14 +868,14 @@
                         ></audio>
                       </div>
                     {/if}
-                    {#if row.metadata?.wer != null}
+                    {#each Object.entries(row.metadata?.metrics ?? {}) as [name, value]}
                       <div class="example-section">
-                        <span class="example-section-label">WER</span>
+                        <span class="example-section-label">{name.toUpperCase()}</span>
                         <span class="example-section-score">
-                          {Number(row.metadata.wer).toFixed(3)}
+                          {typeof value === "number" ? value.toFixed(3) : value}
                         </span>
                       </div>
-                    {/if}
+                    {/each}
                     <div class="example-section">
                       <span class="example-section-label">Score</span>
                       <span class="example-section-score" style:color={scoreColor(row.score)}>
@@ -885,7 +885,10 @@
                     {#if row.metadata && Object.keys(row.metadata).length}
                       {@const extraMeta = Object.fromEntries(
                         Object.entries(row.metadata).filter(
-                          ([k]) => !["audio", "reference", "wer", "hyp"].includes(k),
+                          ([k]) =>
+                            !["_metadata_type", "audio", "reference", "metrics", "hyp"].includes(
+                              k,
+                            ),
                         ),
                       )}
                       {#if Object.keys(extraMeta).length}

@@ -8,6 +8,7 @@ import types
 
 import pytest
 
+from modal_training_gym.common.eval import AudioEvalRowResult, EvalRowResult
 from modal_training_gym.common.models.qwen3_asr_1_7b import (
     Qwen3_ASR_1_7B,
     _prompt_user_text,
@@ -78,3 +79,36 @@ def test_audio_ref_raises_when_no_audio():
     text_only = [{"role": "user", "content": [{"type": "text", "text": "no audio"}]}]
     with pytest.raises(RuntimeError, match="no audio"):
         _audio_ref(types.SimpleNamespace(prompt=text_only))
+
+
+# ── AudioEvalRowResult ───────────────────────────────────────────────────────
+
+
+def test_audio_eval_row_folds_fields_into_metadata():
+    row = AudioEvalRowResult(
+        score=0.9,
+        response="h",
+        prompt="p",
+        audio="uri",
+        reference="r",
+        metrics={"wer": 0.1},
+    )
+    assert isinstance(row, EvalRowResult)
+    assert (row.score, row.response, row.prompt) == (0.9, "h", "p")
+    assert row.metadata == {
+        "_metadata_type": "audio",
+        "audio": "uri",
+        "reference": "r",
+        "metrics": {"wer": 0.1},
+    }
+    assert "hyp" not in row.metadata and "hypothesis" not in row.metadata
+
+
+def test_audio_eval_row_metrics_are_user_defined():
+    row = AudioEvalRowResult(score=4.2, audio="uri", metrics={"mos": 4.2, "cer": 0.03})
+    assert row.metadata["metrics"] == {"mos": 4.2, "cer": 0.03}
+
+
+def test_audio_eval_row_omits_unset_optionals_keeps_extra_metadata():
+    row = AudioEvalRowResult(score=1.0, audio="uri", metadata={"foo": "bar"})
+    assert row.metadata == {"_metadata_type": "audio", "audio": "uri", "foo": "bar"}
