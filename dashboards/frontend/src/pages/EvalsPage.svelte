@@ -393,7 +393,12 @@
       count: 0,
     }));
     for (const row of rows) {
-      const idx = Math.min(Math.floor(row.score * HISTOGRAM_BINS), HISTOGRAM_BINS - 1);
+      // Clamp into [0, BINS-1]: scores can fall outside [0,1] (e.g. a reward-style
+      // metric), and a negative score would index bins[-n] → undefined → crash.
+      const idx = Math.max(
+        0,
+        Math.min(Math.floor(row.score * HISTOGRAM_BINS), HISTOGRAM_BINS - 1),
+      );
       bins[idx].count++;
     }
     const maxCount = Math.max(...bins.map((b) => b.count));
@@ -837,6 +842,40 @@
                         <pre class="example-section-text">{row.response}</pre>
                       </div>
                     {/if}
+                    {#if row.metadata?.reference}
+                      <div class="example-section">
+                        <span class="example-section-label">Reference</span>
+                        <pre class="example-section-text">{row.metadata.reference}</pre>
+                      </div>
+                    {/if}
+                    {#if row.metadata?._metadata_type === "audio" || row.metadata?.audio}
+                      <div class="example-section">
+                        <span class="example-section-label">Audio</span>
+                        <!-- TODO(ben/joy): metadata.audio is passed straight to the
+                          browser <audio> element, so it only renders what the browser
+                          natively decodes from a data-URI (wav/mp3/ogg/flac/aac/webm);
+                          anything else shows a silent/broken player. Gate-check media
+                          here: validate the data-URI MIME against a renderable set and
+                          fall back to a download link when unsupported (and pick the
+                          element by modality once we also show image/video). Upstream
+                          fix is to normalize to a canonical container at the dataset
+                          boundary (see MultimodalDataset.modality). -->
+                        <audio
+                          class="example-audio"
+                          controls
+                          preload="none"
+                          src={row.metadata.audio}
+                        ></audio>
+                      </div>
+                    {/if}
+                    {#each Object.entries(row.metadata?.metrics ?? {}) as [name, value]}
+                      <div class="example-section">
+                        <span class="example-section-label">{name.toUpperCase()}</span>
+                        <span class="example-section-score">
+                          {typeof value === "number" ? value.toFixed(3) : value}
+                        </span>
+                      </div>
+                    {/each}
                     <div class="example-section">
                       <span class="example-section-label">Score</span>
                       <span class="example-section-score" style:color={scoreColor(row.score)}>
@@ -844,10 +883,20 @@
                       </span>
                     </div>
                     {#if row.metadata && Object.keys(row.metadata).length}
-                      <div class="example-section">
-                        <span class="example-section-label">Metadata</span>
-                        <pre class="example-section-text">{JSON.stringify(row.metadata, null, 2)}</pre>
-                      </div>
+                      {@const extraMeta = Object.fromEntries(
+                        Object.entries(row.metadata).filter(
+                          ([k]) =>
+                            !["_metadata_type", "audio", "reference", "metrics", "hyp"].includes(
+                              k,
+                            ),
+                        ),
+                      )}
+                      {#if Object.keys(extraMeta).length}
+                        <div class="example-section">
+                          <span class="example-section-label">Metadata</span>
+                          <pre class="example-section-text">{JSON.stringify(extraMeta, null, 2)}</pre>
+                        </div>
+                      {/if}
                     {/if}
                   </div>
                 {/if}
@@ -1573,6 +1622,13 @@
     font-size: 14px;
     font-weight: 600;
     font-variant-numeric: tabular-nums;
+  }
+
+  .example-audio {
+    width: 100%;
+    height: 36px;
+    border-radius: 6px;
+    filter: saturate(0.9);
   }
 
   .examples-loading,

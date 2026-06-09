@@ -544,3 +544,80 @@ class HarborDataset(DatasetConfig):
         if eval_paths:
             for eval_path in eval_paths.values():
                 self._write_split(eval_rows, eval_path)
+
+
+class MultimodalDataset(DatasetConfig):
+    """Modality-agnostic dataset for image / audio / video RL.
+
+    Each row pairs a text ``prompt`` with one or more ``media`` items and a
+    ``label``. ``prepare()`` writes the media verbatim into a column named by
+    ``media_column`` (default ``"<modality>s"``), and the column is surfaced to
+    the trainer/rollout via ``multimodal_keys`` (``{modality: media_column}``,
+    e.g. slime's ``--multimodal-keys``). Media items may be URLs, local paths,
+    or base64 data — whatever the serving engine accepts; the gym never
+    inspects them.
+
+    Pass ``rows=[{"prompt": str, "media": list, "label": Any}, ...]`` or
+    subclass and override the ``rows`` property.
+    """
+
+    input_key: str = "prompt"
+    label_key: str = "label"
+    modality: Literal["image", "audio", "video"] = "audio"
+    # TODO(ben/joy): gate-check media at this boundary so the evals dashboard can
+    # reliably visualize it. Two parts: (1) normalize each emitted media item to a
+    # canonical, browser-renderable container per modality (audio->wav, image->png/
+    # jpeg) instead of trusting whatever format the user brings — the audio tutorial's
+    # dataset already re-encodes to wav, make it the convention here; (2) validate the
+    # data-URI
+    # MIME matches `modality`. Pairs with the dashboard fallback in EvalsPage.svelte.
+    media_column: str = ""
+    output_format: str = "jsonl"
+
+    def __init__(self, rows: list[dict[str, Any]] | None = None, **kwargs: Any) -> None:
+        for k, v in kwargs.items():
+            setattr(self, k, v)
+        if self.modality not in ("image", "audio", "video"):
+            raise ValueError(
+                f"modality must be one of image/audio/video, got {self.modality!r}"
+            )
+        if not self.media_column:
+            self.media_column = f"{self.modality}s"
+        if self.input_key == self.media_column or self.label_key == self.media_column:
+            raise ValueError("media_column must differ from input_key and label_key")
+        # The whole feature in one line: name the media column for the framework.
+        self.multimodal_keys = {self.modality: self.media_column}
+        self._rows = list(rows or [])
+        if not self.dataset_id:
+            self.dataset_id = f"mm-{self.modality}-{uuid.uuid4()}"
+        self._validate()
+
+    @property
+    def rows(self) -> list[DatasetRow]:
+        return self._rows
+
+    def _to_row(self, r: dict[str, Any]) -> DatasetRow:
+        media = r["media"]
+        return {
+            self.input_key: r["prompt"],
+            self.media_column: list(media)
+            if isinstance(media, (list, tuple))
+            else [media],
+            self.label_key: r["label"],
+        }
+
+    def load(self) -> list[DatasetRow]:
+        return [self._to_row(r) for r in self.rows]
+
+    def _write_jsonl(self, rows: list[dict[str, Any]], path: str) -> None:
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w") as f:
+            for row in rows:
+                f.write(json.dumps(row) + "\n")
+
+    def prepare(self, path: str, eval_paths: dict[str, str] | None = None) -> None:
+        rows = self.load()
+        self._write_jsonl(rows, path)
+        if eval_paths:
+            for eval_path in eval_paths.values():
+                self._write_jsonl(rows, eval_path)

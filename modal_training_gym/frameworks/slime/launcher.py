@@ -32,7 +32,6 @@ from enum import Enum
 from modal import App, Image, Secret, Volume
 
 from modal_training_gym.common import hf_secrets
-from modal.experimental import clustered
 
 import cloudpickle
 
@@ -45,7 +44,7 @@ from modal_training_gym.common.framework import (
 from modal_training_gym.common.modal_refs import register_modal_cloudpickle_reducers
 from modal_training_gym.common.models import ModelConfig
 from modal_training_gym.common.modal_urls import modal_app_dashboard_url
-from modal_training_gym.common.ray_cluster import ModalRayCluster
+from modal_training_gym.common.ray_cluster import ModalRayCluster, clustered_if
 from modal_training_gym.common.run import TrainingRun, TrainingRunStatus
 from modal_training_gym.common.status import SlimeStatus
 from modal_training_gym.common.train_result import TrainResult
@@ -85,6 +84,15 @@ _PATCH_BRIDGE_PER_TOKEN_LOSS_B64 = encode_patch(
     "patch_bridge_provider_per_token_loss", _SLIME_PATCHES
 )
 _PATCH_STOP_TOKEN_DIAG_B64 = encode_patch("patch_stop_token_diagnostic", _SLIME_PATCHES)
+# The Qwen3-ASR Megatron->HF converter (registers the qwen3_asr mapping incl. the
+# audio tower). It lives in the base image — not the ASR recipe — because torch_dist
+# -> HF conversion runs in the shared convert_checkpoint_to_hf path (deploy/eval),
+# which has no recipe; baking it here makes both train-time export and deploy-time
+# conversion ASR-capable. Additive + idempotent, so non-ASR runs are untouched.
+_PATCH_QWEN3_ASR_EXPORT_B64 = encode_patch(
+    "patch_qwen3_asr_export",
+    _SLIME_PATCHES / "model_specific_patches" / "qwen3_asr",
+)
 
 
 def _build_slime_base_image() -> "Image":
@@ -97,6 +105,7 @@ def _build_slime_base_image() -> "Image":
             f"echo {_PATCH_ADVANTAGES_B64} | base64 -d | python3",
             f"echo {_PATCH_BRIDGE_NONE_TASK_B64} | base64 -d | python3",
             f"echo {_PATCH_STOP_TOKEN_DIAG_B64} | base64 -d | python3",
+            f"echo {_PATCH_QWEN3_ASR_EXPORT_B64} | base64 -d | python3",
         )
     )
 
@@ -212,6 +221,21 @@ def build_slime_app(
 
     SlimeRecipe._validate_custom_model_architecture(model)
     SlimeRecipe._validate_dataset(dataset)
+
+    # Models that can't do THD packing (model.requires_bshd, e.g. Qwen3-ASR) must
+    # train on padded (bshd) batches; fail fast with the fix if the recipe didn't.
+    if model and getattr(model, "requires_bshd", False):
+        cfg = slime.extra_config or {}
+        if cfg.get("qkv_format") != "bshd" or slime.use_dynamic_batch_size:
+            raise ValueError(
+                f"{model.model_name} requires padded (bshd) batches: its "
+                "megatron-bridge forward doesn't implement THD sequence packing. "
+                'Set extra_config={"qkv_format": "bshd", "micro_batch_size": N} and '
+                "use_dynamic_batch_size=False — or use Qwen3_ASR_1_7b_Recipe, which sets "
+                f"these. Got qkv_format={cfg.get('qkv_format')!r}, "
+                f"use_dynamic_batch_size={slime.use_dynamic_batch_size}."
+            )
+
 
     if (
         model
@@ -347,6 +371,10 @@ def build_slime_app(
                 remote_path=f"/root/{fn_module_name}.py",
                 copy=True,
             )
+            # Point the slime arg at the shipped module's symbol. Without this the
+            # file is shipped but the path stays unset, so a custom_rm_function
+            # defined outside the entrypoint silently falls back to rule-based RM.
+            set_path(f"{fn_module_name}.{getattr(fn, '__name__', fallback_name)}")
             return
         fn_name = getattr(fn, "__name__", fallback_name)
         try:
@@ -528,7 +556,7 @@ def build_slime_app(
         serialized=True,
         name="convert_checkpoint",
     )
-    @clustered(convert_nnodes, rdma=True)  # pyright: ignore[reportCallIssue, reportOptionalCall]
+    @clustered_if(convert_nnodes > 1, convert_nnodes, gpu_type=slime.gpu_type)
     def convert_checkpoint():
         from huggingface_hub import snapshot_download
 
@@ -679,6 +707,13 @@ def build_slime_app(
         checkpoints_volume.commit()
         print(f"Saved HF checkpoint to {output_dir}")
 
+    # Cluster only for multi-node runs: a single node runs as one plain
+    # @app.function (clustering one container is pure reservation overhead), and a
+    # multi-node Ray cluster needs Modal's clustered scheduler to co-schedule the
+    # containers and wire up rank-0/RDMA.
+    _multi_node = slime.total_nodes > 1
+    _use_clustered = _multi_node
+
     train_secrets: list[Secret] = []
     if slime.wandb is not None:
         train_secrets.append(Secret.from_name(slime.wandb.modal_wandb_secret_name))
@@ -712,7 +747,7 @@ def build_slime_app(
         serialized=True,
         name="train",
     )
-    @clustered(slime.total_nodes, rdma=True)  # pyright: ignore[reportCallIssue, reportOptionalCall]
+    @clustered_if(_use_clustered, slime.total_nodes, gpu_type=slime.gpu_type)
     async def train(
         modal_app_id: str = "",
         modal_app_url: str = "",
