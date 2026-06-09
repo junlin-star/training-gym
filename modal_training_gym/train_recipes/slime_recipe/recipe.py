@@ -191,6 +191,18 @@ class SlimeRecipe(BaseTrainRecipe):
     megatron_to_hf_mode: str = ""
     use_fault_tolerance: bool = True
 
+    # ── Weight sync (megatron trainer → sglang rollout engines) ──────────
+    # Default matches slime's own default. ``delta`` mode pin-snapshots the
+    # last broadcast on CPU and ships only byte-level changes, which is
+    # ~5-10× faster than ``full`` for large models where weights barely
+    # move per rollout (e.g. 35B-class MoE). Pair with
+    # ``update_weight_transport="disk"`` if the trainer and rollout engines
+    # share a filesystem.
+    update_weight_mode: str = "full"
+    update_weight_transport: str = "nccl"
+    update_weight_encoding: str = "indices"
+    update_weight_disk_dir: str = ""
+
     # ── Reward model ─────────────────────────────────────────────────────────
     rm_type: str | None = None
 

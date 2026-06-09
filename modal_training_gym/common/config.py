@@ -6,12 +6,16 @@ caller) to look up where to POST phase reports and other client-side defaults.
 
 from __future__ import annotations
 
+import os
 import tomllib
 from pathlib import Path
 from typing import Any
 
 
 CONFIG_PATH = Path.home() / ".training-gym.toml"
+MODAL_CONFIG_PATH = Path(
+    os.environ.get("MODAL_CONFIG_PATH") or os.path.expanduser("~/.modal.toml")
+)
 
 
 def load_config() -> dict[str, Any]:
@@ -74,3 +78,72 @@ def _format_value(value: Any) -> str:
         return repr(value)
     text = str(value).replace("\\", "\\\\").replace('"', '\\"')
     return f'"{text}"'
+
+
+# ── Modal credential resolution ──────────────────────────────────────────
+
+
+def read_modal_toml_creds() -> tuple[str, str, str]:
+    """Resolve ``(token_id, token_secret, profile_name)`` from ``~/.modal.toml``.
+
+    Follows Modal's own profile-selection rules: the ``MODAL_PROFILE`` env
+    var wins if set; otherwise the profile flagged ``active = true``;
+    otherwise the ``[default]`` profile; otherwise the first profile in the
+    file. Returns empty strings if no credentials can be found.
+    """
+    if not MODAL_CONFIG_PATH.is_file():
+        return "", "", ""
+
+    try:
+        with MODAL_CONFIG_PATH.open("rb") as f:
+            data = tomllib.load(f)
+    except (OSError, tomllib.TOMLDecodeError):
+        return "", "", ""
+
+    profiles = {
+        name: section
+        for name, section in data.items()
+        if isinstance(section, dict)
+    }
+    if not profiles:
+        return "", "", ""
+
+    candidate_names: list[str] = []
+    env_profile = os.environ.get("MODAL_PROFILE", "").strip()
+    if env_profile:
+        candidate_names.append(env_profile)
+    candidate_names.extend(
+        name for name, sec in profiles.items() if sec.get("active") is True
+    )
+    if "default" in profiles:
+        candidate_names.append("default")
+    candidate_names.extend(profiles.keys())
+
+    seen: set[str] = set()
+    for name in candidate_names:
+        if name in seen or name not in profiles:
+            continue
+        seen.add(name)
+        section = profiles[name]
+        token_id = str(section.get("token_id") or "").strip()
+        token_secret = str(section.get("token_secret") or "").strip()
+        if token_id and token_secret:
+            return token_id, token_secret, name
+    return "", "", ""
+
+
+def resolve_modal_creds() -> tuple[str, str, str]:
+    """Resolve Modal credentials with a source label for logging.
+
+    Order: ``MODAL_TOKEN_ID``/``MODAL_TOKEN_SECRET`` env vars → active
+    profile in ``~/.modal.toml``.
+    """
+    env_id = (os.environ.get("MODAL_TOKEN_ID") or "").strip()
+    env_secret = (os.environ.get("MODAL_TOKEN_SECRET") or "").strip()
+    if env_id and env_secret:
+        return env_id, env_secret, "environment"
+
+    toml_id, toml_secret, profile_name = read_modal_toml_creds()
+    if toml_id and toml_secret:
+        return toml_id, toml_secret, f"~/.modal.toml profile [{profile_name}]"
+    return "", "", ""

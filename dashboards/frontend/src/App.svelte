@@ -5,6 +5,7 @@
   import Sidebar from "./components/Sidebar.svelte";
   import DashboardHeader from "./components/DashboardHeader.svelte";
   import TrainingPage from "./pages/TrainingPage.svelte";
+  import TrainingRunDetailPage from "./pages/TrainingRunDetailPage.svelte";
   import DeploymentsPage from "./pages/DeploymentsPage.svelte";
   import EvalsPage from "./pages/EvalsPage.svelte";
   import { fetchRuns, fetchEvals, fetchDeployments, fetchEvalDetail } from "./lib/api.js";
@@ -24,6 +25,7 @@
   let activeRecipes = $state(new Set());
   let activeStatuses = $state(new Set());
   let activePage = $state("training");
+  let activeTrainingRunId = $state(null);
   let runsRequestId = 0;
   let evalsRequestId = 0;
   let deploymentsRequestId = 0;
@@ -50,6 +52,12 @@
     return "training";
   }
 
+  function runIdFromPath(pathname) {
+    if (!pathname.startsWith("/training/")) return null;
+    const tail = pathname.slice("/training/".length).split("/")[0];
+    return tail ? decodeURIComponent(tail) : null;
+  }
+
   const navItems = [
     { key: "training", label: "Training runs", Icon: Zap, path: pagePaths.training },
     { key: "deployments", label: "Deployments", Icon: Rocket, path: pagePaths.deployments },
@@ -58,11 +66,13 @@
 
   if (typeof window !== "undefined") {
     activePage = pageFromPath(window.location.pathname);
+    activeTrainingRunId = runIdFromPath(window.location.pathname);
   }
 
   onMount(() => {
     const syncPageWithPath = () => {
       activePage = pageFromPath(window.location.pathname);
+      activeTrainingRunId = runIdFromPath(window.location.pathname);
     };
 
     if (window.location.pathname === "/") {
@@ -602,10 +612,19 @@
 
   function setActivePage(page) {
     activePage = page;
+    activeTrainingRunId = null;
     if (typeof window === "undefined") return;
     const targetPath = pagePaths[page] || pagePaths.training;
     if (window.location.pathname !== targetPath) {
       window.history.pushState({}, "", targetPath);
+    }
+  }
+
+  function backToTrainingList() {
+    activeTrainingRunId = null;
+    if (typeof window === "undefined") return;
+    if (window.location.pathname !== pagePaths.training) {
+      window.history.pushState({}, "", pagePaths.training);
     }
   }
 
@@ -653,7 +672,18 @@
     <main class="workspace">
       <DashboardHeader title={pageMeta[activePage].title} {statusText} onRefresh={load} />
 
-    {#if activePage === "training"}
+    {#if activePage === "training" && activeTrainingRunId}
+      <TrainingRunDetailPage
+        runId={activeTrainingRunId}
+        {allRuns}
+        {modelName}
+        {getStatus}
+        {getFrameworkStatus}
+        {showFrameworkStatus}
+        {fmtDuration}
+        onBack={backToTrainingList}
+      />
+    {:else if activePage === "training"}
       <TrainingPage
         {allRuns}
         {completedTotal}

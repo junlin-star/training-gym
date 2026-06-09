@@ -1,5 +1,5 @@
 <script>
-  import { ExternalLink, PanelRightClose } from "lucide-svelte";
+  import { ExternalLink, Maximize2, Minimize2, PanelRightClose } from "lucide-svelte";
   import Drawer from "../components/Drawer.svelte";
   import FilterBar from "../components/FilterBar.svelte";
   import FrameworkStageProgress from "../components/FrameworkStageProgress.svelte";
@@ -7,6 +7,8 @@
   import MinimalTableSkeleton from "../components/MinimalTableSkeleton.svelte";
   import StatusPill from "../components/StatusPill.svelte";
   import TimeAgo from "../components/TimeAgo.svelte";
+  import TrainingRunDetailPage from "./TrainingRunDetailPage.svelte";
+  import { smoothedStageLabel } from "../lib/format.js";
 
   let {
     allRuns,
@@ -35,9 +37,18 @@
   } = $props();
 
   let selectedRunId = $state(null);
+  let drawerExpanded = $state(false);
 
   let selectedRun = $derived.by(
     () => allRuns.find((run) => run.run_id === selectedRunId) || null,
+  );
+
+  // Width of the run drawer: a narrow summary by default, a very wide panel
+  // when expanded so it can hold the full rollouts + live-logs detail view.
+  let drawerWidth = $derived(
+    drawerExpanded
+      ? "min(1600px, calc(100vw - 48px))"
+      : "min(420px, calc(100vw - 24px))",
   );
 
   let selectedRecipe = $derived.by(() => {
@@ -58,10 +69,21 @@
 
   function selectRun(runId) {
     selectedRunId = runId;
+    drawerExpanded = false;
+  }
+
+  function expandRun(runId) {
+    selectedRunId = runId;
+    drawerExpanded = true;
   }
 
   function closeDrawer() {
     selectedRunId = null;
+    drawerExpanded = false;
+  }
+
+  function toggleDrawerExpanded() {
+    drawerExpanded = !drawerExpanded;
   }
 
   function formatFieldLabel(field) {
@@ -90,36 +112,6 @@
     return "—";
   }
 
-  function formatFrameworkStatus(status) {
-    const raw = String(status || "").trim();
-    if (!raw) return "";
-    const normalized = raw.toLowerCase();
-    const labels = {
-      initializing: "Initializing",
-      download_model: "Downloading model",
-      convert_model: "Converting model",
-      prepare_dataset: "Preparing dataset",
-      initialize_rollouts: "Rollout initializing",
-      generate_rollouts: "Rollout logging",
-      evaluate_rollouts: "Eval logging",
-      compute_log_probs: "Before log prob",
-      optimizer_step: "Before train step",
-      weight_sync: "Weight sync",
-      offload_rollout: "Offload rollout",
-      offload_train: "Offload train",
-      checkpoint_save: "Checkpoint save",
-      training: "Training",
-    };
-    return (
-      labels[normalized] ||
-      normalized.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase())
-    );
-  }
-
-  function frameworkStatusLabel(run) {
-    return formatFrameworkStatus(getFrameworkStatus(run));
-  }
-
   function frameworkProgress(run) {
     const progress = run?.framework_progress;
     if (!progress || typeof progress !== "object") return null;
@@ -133,6 +125,12 @@
       total,
       unit: progress.unit || "step",
     };
+  }
+
+  function frameworkStatusLabel(run) {
+    // Pass the raw `framework_progress` so smoothedStageLabel sees is_active
+    // even for stages that don't have step counters yet (download/convert).
+    return smoothedStageLabel(getFrameworkStatus(run), run?.framework_progress);
   }
 
   function progressLabel(progress) {
@@ -230,7 +228,7 @@
               <tr class:row-selected={selectedRunId === run.run_id}>
                 <td class="run-cell">
                   <button
-                    class="cell-open-button"
+                    class="cell-open-button run-name-button"
                     title={runName}
                     onclick={() => selectRun(run.run_id)}
                   >
@@ -282,6 +280,18 @@
                 </td>
                 <td class="modal-link-cell">
                   <div class="modal-link-wrap">
+                    <button
+                      class="expand-button"
+                      title="Open expanded view"
+                      aria-label={`Open expanded view for training run ${run.run_id}`}
+                      onclick={(event) => {
+                        event.stopPropagation();
+                        expandRun(run.run_id);
+                      }}
+                    >
+                      <Maximize2 size={12} strokeWidth={2.1} />
+                      <span class="expand-button-label">Expand</span>
+                    </button>
                     {#if run.modal_app_url}
                       <a
                         class="open-modal-link"
@@ -311,14 +321,31 @@
 </section>
 
 {#if selectedRun}
-  <Drawer open={!!selectedRun} onclose={closeDrawer}>
-    <div class="run-drawer" aria-label={`Training run ${selectedRun.run_id}`}>
+  <Drawer open={!!selectedRun} onclose={closeDrawer} width={drawerWidth}>
+    <div
+      class="run-drawer"
+      class:expanded={drawerExpanded}
+      aria-label={`Training run ${selectedRun.run_id}`}
+    >
       <div class="drawer-header">
         <div class="drawer-header-left">
           <div class="drawer-eyebrow">Training run</div>
           <h2 class="drawer-run-id" title={selectedRun.run_id}>{selectedRun.run_id}</h2>
         </div>
         <div class="drawer-actions">
+          <button
+            class="drawer-expand-button"
+            onclick={toggleDrawerExpanded}
+            title={drawerExpanded ? "Collapse" : "Expand to full view"}
+          >
+            {#if drawerExpanded}
+              <Minimize2 size={12} />
+              <span>Collapse</span>
+            {:else}
+              <Maximize2 size={12} />
+              <span>Expand</span>
+            {/if}
+          </button>
           {#if selectedRun.modal_app_url}
             <a
               class="view-app-link"
@@ -336,6 +363,7 @@
         </div>
       </div>
 
+      <div class="drawer-summary">
       <section class="drawer-section">
         <div class="drawer-kv">
           <span class="drawer-key">Status</span>
@@ -402,6 +430,23 @@
           <div class="drawer-empty">No recipe values found for this run.</div>
         {/if}
       </section>
+      </div>
+
+      {#if drawerExpanded}
+        <section class="drawer-section drawer-detail-section">
+          <TrainingRunDetailPage
+            runId={selectedRun.run_id}
+            {allRuns}
+            {modelName}
+            {getStatus}
+            {getFrameworkStatus}
+            {showFrameworkStatus}
+            {fmtDuration}
+            onBack={closeDrawer}
+            embedded
+          />
+        </section>
+      {/if}
     </div>
   </Drawer>
 {/if}
@@ -546,6 +591,30 @@
 
   .modal-link-wrap {
     display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .expand-button {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    white-space: nowrap;
+    border: 1px solid var(--color-c-gray-10, #2f2f2f);
+    border-radius: 6px;
+    padding: 4px 8px;
+    font: inherit;
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 16px;
+    color: var(--muted);
+    background: transparent;
+    cursor: pointer;
+  }
+
+  .expand-button:hover {
+    color: var(--text-bright);
+    border-color: var(--border-strong);
   }
 
   .open-modal-link {
@@ -584,8 +653,37 @@
   }
 
   .run-drawer {
-    width: min(420px, calc(100vw - 24px));
+    width: 100%;
     height: 100%;
+  }
+
+  .drawer-detail-section {
+    padding: 16px 20px 24px;
+  }
+
+  /* Expanded: header spans the top, then a wide left column for the full
+     rollouts + live-logs detail view and a narrow right summary column. */
+  .run-drawer.expanded {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(320px, 400px);
+    align-items: start;
+  }
+
+  .run-drawer.expanded .drawer-header {
+    grid-column: 1 / -1;
+  }
+
+  .run-drawer.expanded .drawer-detail-section {
+    grid-column: 1;
+    grid-row: 2;
+    border-top: 0;
+  }
+
+  .run-drawer.expanded .drawer-summary {
+    grid-column: 2;
+    grid-row: 2;
+    border-left: 1px solid var(--color-c-gray-10, #2f2f2f);
+    align-self: stretch;
   }
 
   .drawer-header {
@@ -642,6 +740,27 @@
   }
 
   .view-app-link:hover {
+    color: var(--text-bright);
+    border-color: var(--border-strong);
+  }
+
+  .drawer-expand-button {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border: 1px solid var(--color-c-gray-10, #2f2f2f);
+    border-radius: 6px;
+    padding: 4px 8px;
+    font: inherit;
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 16px;
+    color: var(--muted);
+    background: transparent;
+    cursor: pointer;
+  }
+
+  .drawer-expand-button:hover {
     color: var(--text-bright);
     border-color: var(--border-strong);
   }

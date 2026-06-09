@@ -8,11 +8,21 @@ it uses the local ``dashboards/frontend`` directory instead.
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 import modal
+
+# Imported at module scope so FastAPI can resolve the ``request: Request``
+# annotation in stream_run_logs(). Under ``from __future__ import
+# annotations`` all type hints are strings, and FastAPI evaluates them
+# against the *defining function's* ``__globals__`` (i.e. this module).
+# Importing ``Request`` only inside ``fastapi_app()`` makes the name
+# invisible to FastAPI's introspection, which then mistakes the parameter
+# for a query string and 422s with ``{"loc": ["query", "request"]}``.
+from starlette.requests import Request
 
 REPO_URL = "https://github.com/modal-projects/training-gym.git"
 REPO_BRANCH = "main"
@@ -58,17 +68,100 @@ app = modal.App("training-gym-dashboard", image=image)
 STATIC_DIR = "/app/frontend/dist"
 
 
-@app.function(min_containers=1)
+# Underscore-prefixed so it shows up as an auto-managed secret in the Modal
+# Secrets UI and is auto-created on first deploy from ~/.modal.toml.
+MODAL_CREDS_SECRET_NAME = "_training-gym-modal-creds"
+
+
+def _is_local() -> bool:
+    """True when we're not running inside a Modal container."""
+    return not os.environ.get("MODAL_IS_REMOTE")
+
+
+def ensure_creds_secret(interactive: bool = False) -> bool:
+    """Make sure the ``_training-gym-modal-creds`` Modal Secret exists.
+
+    Idempotent: returns True if the secret was already present or if we
+    successfully created it from ``~/.modal.toml``. Returns False if we
+    can't find creds and ``interactive`` is False (or the user skipped).
+
+    Called both from ``training-gym setup`` and at module-load of this file
+    so that ``modal deploy dashboards/app.py`` works without any prior
+    setup step — as long as the user has a valid ``~/.modal.toml``.
+    """
+    if not _is_local():
+        # Inside a Modal container we have no credentials and no need to
+        # create anything; the secret was already provisioned at deploy.
+        return True
+
+    from modal_training_gym.common.config import resolve_modal_creds
+
+    token_id, token_secret, source = resolve_modal_creds()
+
+    if not token_id or not token_secret:
+        if not interactive:
+            return False
+        from getpass import getpass
+
+        print(
+            "\nThe dashboard needs Modal workspace credentials to stream "
+            "training-run logs into the UI.\n"
+            "Couldn't find creds in MODAL_TOKEN_* env vars or "
+            "~/.modal.toml — provide them now (or Ctrl-C to skip).\n"
+            "Find your tokens at https://modal.com/settings/tokens.\n"
+        )
+        try:
+            token_id = input("MODAL_TOKEN_ID: ").strip()
+            token_secret = getpass("MODAL_TOKEN_SECRET (hidden): ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\nSkipping Modal Secret setup.")
+            return False
+        source = "user input"
+
+    if not token_id or not token_secret:
+        return False
+
+    try:
+        modal.Secret.objects.create(
+            MODAL_CREDS_SECRET_NAME,
+            {"MODAL_TOKEN_ID": token_id, "MODAL_TOKEN_SECRET": token_secret},
+            allow_existing=True,
+        )
+        print(
+            f"Provisioned Modal Secret {MODAL_CREDS_SECRET_NAME!r} "
+            f"(from {source})."
+        )
+        return True
+    except Exception as exc:
+        print(
+            f"WARNING: failed to create Modal Secret "
+            f"{MODAL_CREDS_SECRET_NAME!r}: {exc}"
+        )
+        return False
+
+
+# Auto-create the secret at module-load so `modal deploy dashboards/app.py`
+# works out of the box. Side effect is gated to local context so it never
+# fires inside the deployed container.
+if _is_local():
+    ensure_creds_secret(interactive=False)
+
+
+@app.function(
+    min_containers=1,
+    secrets=[modal.Secret.from_name(MODAL_CREDS_SECRET_NAME)],
+)
 @modal.asgi_app()
 def fastapi_app():
-    from fastapi import FastAPI, HTTPException
+    from fastapi import FastAPI, HTTPException  # Request imported at module scope
     from fastapi.concurrency import run_in_threadpool
-    from fastapi.responses import FileResponse, JSONResponse
+    from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
     from fastapi.staticfiles import StaticFiles
 
     from modal_training_gym.common.modal_urls import modal_app_dashboard_url
     from modal_training_gym.common.run import TrainingRun
     from modal_training_gym.common.status import MilesStatus, SlimeStatus
+    from modal_training_gym.common.training_rollout import TrainingRolloutResult
     from modal_training_gym.utils.metadata import (
         MetadataStore,
         vol_get,
@@ -380,6 +473,12 @@ def fastapi_app():
             "phase": status.value,
             "updated_at": int(time.time()),
         }
+        # is_active: True = stage is actually running on hardware; False =
+        # we've marked the stage but it's queuing for a GPU. Sent by the
+        # orchestration code in common/train.py (queue=False) and by the
+        # Modal function itself when its body starts executing (active=True).
+        if "is_active" in payload:
+            progress["is_active"] = bool(payload.get("is_active"))
         for src, dst in (
             ("progress_current", "current"),
             ("progress_total", "total"),
@@ -397,12 +496,260 @@ def fastapi_app():
             progress[dst] = value
         existing_progress = metadata.get("framework_progress")
         if isinstance(existing_progress, dict):
+            # Drop the existing is_active when we get a fresh transition into
+            # a different phase — it shouldn't bleed across stage changes.
+            if existing_progress.get("phase") != progress.get("phase"):
+                existing_progress = {
+                    k: v for k, v in existing_progress.items() if k != "is_active"
+                }
             progress = {**existing_progress, **progress}
         metadata["framework_progress"] = progress
         run.metadata = metadata
         await run.save_async()
         cache_entries["runs"] = (0.0, [])
         return JSONResponse({"status": "ok", "framework_status": status.value})
+
+    # ── Training rollouts ────────────────────────────────────────────────
+
+    @web.post("/api/training-rollouts")
+    async def training_rollout(payload: dict[str, Any]):
+        training_run_id = str(payload.get("training_run_id", "") or "").strip()
+        rollout_id_raw = payload.get("rollout_id")
+        if not training_run_id or rollout_id_raw is None:
+            raise HTTPException(
+                status_code=400,
+                detail="training_run_id and rollout_id are required",
+            )
+        try:
+            rollout_id = int(rollout_id_raw)
+        except (TypeError, ValueError):
+            raise HTTPException(
+                status_code=400, detail="rollout_id must be an integer"
+            )
+
+        samples_raw = payload.get("samples") or []
+        if not isinstance(samples_raw, list):
+            raise HTTPException(
+                status_code=400, detail="samples must be a list"
+            )
+
+        result = TrainingRolloutResult(
+            training_run_id=training_run_id,
+            rollout_id=rollout_id,
+            created_at=_optional_int(payload.get("created_at")) or int(time.time()),
+            samples=samples_raw,
+            metrics=payload.get("metrics") or {},
+            rollout_time=(
+                float(payload["rollout_time"])
+                if isinstance(payload.get("rollout_time"), (int, float))
+                else None
+            ),
+        )
+        await result.save_async()
+
+        # Mirror the latest mean onto the TrainingRun for quick rendering on
+        # the runs list — best-effort, don't fail the POST if the run record
+        # has gone missing.
+        try:
+            run = await run_in_threadpool(TrainingRun.from_id, training_run_id)
+        except KeyError:
+            run = None
+        if run is not None:
+            metadata = dict(run.metadata or {})
+            metadata["latest_rollout"] = {
+                "rollout_id": result.rollout_id,
+                "mean": result.mean,
+                "total": result.total,
+                "created_at": result.created_at,
+            }
+            run.metadata = metadata
+            await run.save_async()
+            cache_entries["runs"] = (0.0, [])
+
+        return JSONResponse(
+            {"status": "ok", "rollout_id": result.rollout_id, "mean": result.mean}
+        )
+
+    @web.get("/api/runs/{training_run_id}/rollouts")
+    async def list_run_rollouts(training_run_id: str):
+        summaries = await run_in_threadpool(
+            TrainingRolloutResult.list_summaries_for_run, training_run_id
+        )
+        return JSONResponse(summaries)
+
+    @web.get("/api/runs/{training_run_id}/rollouts/{rollout_id}")
+    async def get_run_rollout(training_run_id: str, rollout_id: int):
+        key = f"{training_run_id}__{int(rollout_id):08d}"
+        try:
+            data = await run_in_threadpool(
+                vol_get, MetadataStore.TRAINING_ROLLOUTS, key
+            )
+            return JSONResponse(data)
+        except KeyError:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Rollout {rollout_id} for run {training_run_id!r} not found",
+            )
+
+    # ── Live Modal log stream (SSE, pure pass-through) ───────────────────
+
+    @web.get("/api/runs/{training_run_id}/logs/stream")
+    async def stream_run_logs(
+        training_run_id: str,
+        request: Request,
+        search: str = "",
+        max_lines_per_sec: int = 0,
+    ):
+        """Server-Sent Events stream of the underlying Modal app's logs.
+
+        Pure pass-through: we open a long-poll ``AppGetLogs`` stream against
+        the run's ``modal_app_id`` and forward each batch as an SSE ``data``
+        event. Nothing is persisted on the dashboard side.
+
+        Query params:
+          - ``search``: case-insensitive substring filter; lines that don't
+            match are silently dropped.
+          - ``max_lines_per_sec``: integer rate cap. Lines exceeding the cap
+            in any 1-second window are dropped; a single ``dropped`` event
+            is emitted per second summarizing the count.
+        """
+        import json
+
+        from modal.client import _Client
+        from modal_proto import api_pb2
+
+        try:
+            run = await TrainingRun.from_id_async(training_run_id)
+        except KeyError:
+            raise HTTPException(
+                status_code=404,
+                detail=f"TrainingRun {training_run_id!r} not found",
+            )
+
+        app_id = (run.modal_app_id or "").strip()
+        if not app_id:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"TrainingRun {training_run_id!r} has no modal_app_id "
+                    "yet — logs not available."
+                ),
+            )
+
+        token_id = os.environ.get("MODAL_TOKEN_ID")
+        token_secret = os.environ.get("MODAL_TOKEN_SECRET")
+        if not token_id or not token_secret:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    f"Dashboard isn't configured with Modal credentials. "
+                    f"Run `training-gym setup` to populate the "
+                    f"'{MODAL_CREDS_SECRET_NAME}' Modal Secret."
+                ),
+            )
+
+        search_lower = search.strip().lower() if search else ""
+        rate_cap = max(0, int(max_lines_per_sec or 0))
+
+        async def event_stream():
+            try:
+                client = await _Client.from_credentials(token_id, token_secret)
+            except Exception as exc:
+                yield (
+                    "event: error\n"
+                    f"data: {json.dumps({'error': f'auth failed: {exc!s}'})}\n\n"
+                )
+                return
+
+            last_entry_id = ""
+            window_start = time.monotonic()
+            window_emitted = 0
+            window_dropped = 0
+
+            def _drain_drop_event() -> str | None:
+                nonlocal window_dropped
+                if not window_dropped:
+                    return None
+                payload = {"dropped": window_dropped}
+                window_dropped = 0
+                return f"event: dropped\ndata: {json.dumps(payload)}\n\n"
+
+            try:
+                while True:
+                    if await request.is_disconnected():
+                        return
+                    req = api_pb2.AppGetLogsRequest(
+                        app_id=app_id,
+                        timeout=55,
+                        last_entry_id=last_entry_id,
+                    )
+                    try:
+                        async for log_batch in client.stub.AppGetLogs.unary_stream(req):
+                            if await request.is_disconnected():
+                                return
+                            if log_batch.entry_id:
+                                last_entry_id = log_batch.entry_id
+                            for log in log_batch.items:
+                                if not log.data:
+                                    continue
+                                if (
+                                    search_lower
+                                    and search_lower not in log.data.lower()
+                                ):
+                                    continue
+
+                                now = time.monotonic()
+                                if now - window_start >= 1.0:
+                                    drop_event = _drain_drop_event()
+                                    if drop_event:
+                                        yield drop_event
+                                    window_start = now
+                                    window_emitted = 0
+
+                                if rate_cap and window_emitted >= rate_cap:
+                                    window_dropped += 1
+                                    continue
+
+                                window_emitted += 1
+                                payload = {
+                                    "task_id": log_batch.task_id,
+                                    "line": log.data,
+                                }
+                                ts = getattr(log, "timestamp", 0) or 0
+                                if ts:
+                                    payload["ts"] = ts
+                                yield f"data: {json.dumps(payload)}\n\n"
+                            if log_batch.app_done:
+                                drop_event = _drain_drop_event()
+                                if drop_event:
+                                    yield drop_event
+                                yield "event: done\ndata: {}\n\n"
+                                return
+                    except asyncio.CancelledError:
+                        return
+                    except Exception as exc:
+                        # Long-poll EOF / transient network blips: notify
+                        # client, brief pause, reconnect.
+                        yield (
+                            "event: reconnect\n"
+                            f"data: {json.dumps({'reason': str(exc)})}\n\n"
+                        )
+                        try:
+                            await asyncio.sleep(1.0)
+                        except asyncio.CancelledError:
+                            return
+            finally:
+                pass
+
+        return StreamingResponse(
+            event_stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
 
     # ── Train results ────────────────────────────────────────────────────
 

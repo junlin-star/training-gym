@@ -4,6 +4,7 @@ import json
 import importlib
 import os
 import threading
+import time
 from queue import Queue
 from typing import Any
 from urllib.error import URLError
@@ -22,9 +23,18 @@ CUSTOM_BEFORE_LOG_PROB_HOOK_PATH_KEY = (
 CUSTOM_BEFORE_TRAIN_STEP_HOOK_PATH_KEY = (
     "training_gym_custom_megatron_before_train_step_hook_path"
 )
+
+# Internal queue entry: each item is {"_url": str, "_timeout": float, **payload}.
+# Status reports use the SLIME_PHASE_REPORT_URL with a short 1s timeout;
+# rollout-data reports derive a /api/training-rollouts URL from the same base
+# with a longer timeout because payloads can be 100KB+.
 _REPORT_QUEUE: Queue[dict[str, Any] | None] = Queue(maxsize=512)
 _REPORTER_STARTED = False
 _REPORTER_LOCK = threading.Lock()
+_PHASE_PATH = "/api/framework-status"
+_ROLLOUT_PATH = "/api/training-rollouts"
+_PHASE_TIMEOUT_SECONDS = 1.0
+_ROLLOUT_TIMEOUT_SECONDS = 10.0
 
 
 def _arg_value(args: Any, key: str) -> Any:
@@ -86,23 +96,57 @@ def _step_progress(args: Any, rollout_id: int | None = None) -> dict[str, Any]:
     }
 
 
-def _enqueue(payload: dict[str, Any]) -> None:
+def _phase_url() -> str:
+    return os.environ.get(PHASE_REPORT_URL_ENV, "").strip()
+
+
+def _rollout_url() -> str:
+    base = _phase_url()
+    if not base:
+        return ""
+    if base.endswith(_PHASE_PATH):
+        return base[: -len(_PHASE_PATH)] + _ROLLOUT_PATH
+    return base.rstrip("/") + _ROLLOUT_PATH
+
+
+def _ensure_worker() -> None:
     global _REPORTER_STARTED
-    if not os.environ.get(PHASE_REPORT_URL_ENV, "").strip():
+    if _REPORTER_STARTED:
         return
-
     with _REPORTER_LOCK:
-        if not _REPORTER_STARTED:
-            thread = threading.Thread(
-                target=_worker,
-                name="slime-phase-reporter",
-                daemon=True,
-            )
-            thread.start()
-            _REPORTER_STARTED = True
+        if _REPORTER_STARTED:
+            return
+        thread = threading.Thread(
+            target=_worker,
+            name="slime-phase-reporter",
+            daemon=True,
+        )
+        thread.start()
+        _REPORTER_STARTED = True
 
+
+def _enqueue(payload: dict[str, Any]) -> None:
+    """Enqueue a framework-status payload (small, 1s timeout)."""
+    url = _phase_url()
+    if not url:
+        return
+    _ensure_worker()
+    item = {"_url": url, "_timeout": _PHASE_TIMEOUT_SECONDS, **payload}
     try:
-        _REPORT_QUEUE.put_nowait(payload)
+        _REPORT_QUEUE.put_nowait(item)
+    except Exception:
+        pass
+
+
+def _enqueue_rollout(payload: dict[str, Any]) -> None:
+    """Enqueue a rollout-data payload (large, longer timeout)."""
+    url = _rollout_url()
+    if not url:
+        return
+    _ensure_worker()
+    item = {"_url": url, "_timeout": _ROLLOUT_TIMEOUT_SECONDS, **payload}
+    try:
+        _REPORT_QUEUE.put_nowait(item)
     except Exception:
         pass
 
@@ -121,12 +165,13 @@ def _worker() -> None:
             _REPORT_QUEUE.task_done()
 
 
-def _post(payload: dict[str, Any]) -> None:
-    url = os.environ.get(PHASE_REPORT_URL_ENV, "").strip()
+def _post(item: dict[str, Any]) -> None:
+    url = item.pop("_url", "")
+    timeout = float(item.pop("_timeout", _PHASE_TIMEOUT_SECONDS) or _PHASE_TIMEOUT_SECONDS)
     if not url:
         return
 
-    body = json.dumps(payload, default=str).encode("utf-8")
+    body = json.dumps(item, default=str).encode("utf-8")
     request = Request(
         url,
         data=body,
@@ -134,7 +179,7 @@ def _post(payload: dict[str, Any]) -> None:
         method="POST",
     )
     try:
-        with urlopen(request, timeout=1) as response:
+        with urlopen(request, timeout=timeout) as response:
             response.read()
     except (OSError, URLError):
         return
@@ -172,6 +217,90 @@ def report_phase(
     _enqueue({**_run_context(args), "phase": status.value, **extra})
 
 
+def _coerce_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, (bytes, bytearray)):
+        try:
+            return value.decode("utf-8", errors="replace")
+        except Exception:
+            return ""
+    if isinstance(value, str):
+        return value
+    return str(value)
+
+
+def _coerce_score(value: Any) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _sample_to_dict(sample: Any) -> dict[str, Any]:
+    """Best-effort extraction of (prompt, response, reward, metadata) from a
+    slime Sample-like object. Duck-typed so we don't import slime here."""
+    if isinstance(sample, dict):
+        attrs = sample
+        get = sample.get
+    else:
+        attrs = None
+        def get(key: str, default: Any = None) -> Any:
+            return getattr(sample, key, default)
+
+    prompt = get("prompt") if attrs is not None else get("prompt", "")
+    response = get("response") if attrs is not None else get("response", "")
+    reward = get("reward") if attrs is not None else get("reward", 0.0)
+
+    metadata: dict[str, Any] = {}
+    for key in ("response_length", "prompt_length", "rollout_id", "rollout_idx"):
+        value = get(key) if attrs is not None else get(key, None)
+        if value is not None:
+            metadata[key] = value
+
+    return {
+        "score": _coerce_score(reward),
+        "prompt": _coerce_text(prompt),
+        "response": _coerce_text(response),
+        "metadata": metadata,
+    }
+
+
+def _metrics_to_dict(metrics: Any) -> dict[str, Any]:
+    if isinstance(metrics, dict):
+        return {str(k): v for k, v in metrics.items()}
+    return {}
+
+
+def report_rollout_samples(
+    rollout_id: int,
+    args: Any,
+    samples: Any,
+    rollout_extra_metrics: Any,
+    rollout_time: Any,
+) -> None:
+    """Post one TrainingRolloutResult-shaped payload to the dashboard."""
+    if samples is None:
+        return
+    try:
+        sample_dicts = [_sample_to_dict(s) for s in samples]
+    except TypeError:
+        return
+    payload = {
+        **_run_context(args),
+        "rollout_id": int(rollout_id),
+        "created_at": int(time.time()),
+        "samples": sample_dicts,
+        "metrics": _metrics_to_dict(rollout_extra_metrics),
+    }
+    if rollout_time is not None:
+        try:
+            payload["rollout_time"] = float(rollout_time)
+        except (TypeError, ValueError):
+            pass
+    _enqueue_rollout(payload)
+
+
 def _call_hook(path_key: str, args: Any, *hook_args: Any, **hook_kwargs: Any) -> Any:
     hook = _resolve_hook(_hook_path_from_args(args, path_key))
     if hook is None:
@@ -194,6 +323,9 @@ def log_rollout_data(
         sample_count=len(samples) if hasattr(samples, "__len__") else None,
         metrics=rollout_extra_metrics,
         rollout_time=rollout_time,
+    )
+    report_rollout_samples(
+        rollout_id, args, samples, rollout_extra_metrics, rollout_time
     )
     result = _call_hook(
         CUSTOM_ROLLOUT_LOG_FUNCTION_PATH_KEY,
@@ -298,6 +430,7 @@ __all__ = [
     "before_train_step_hook",
     "report_phase",
     "report_rollout_initializing",
+    "report_rollout_samples",
     "report_weight_sync",
     "log_eval_rollout_data",
     "log_rollout_data",

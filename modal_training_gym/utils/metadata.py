@@ -15,6 +15,8 @@ class MetadataStore(Enum):
     TRAINING_RUNS_SUMMARY = "training-runs-summary"
     TRAIN_RESULTS = "train-results"
     TRAIN_RESULTS_SUMMARY = "train-results-summary"
+    TRAINING_ROLLOUTS = "training-rollouts"
+    TRAINING_ROLLOUTS_SUMMARY = "training-rollouts-summary"
     EVAL_RESULTS = "eval-results"
     EVALS = "evals"
     EVAL_SUMMARIES = "eval-summaries"

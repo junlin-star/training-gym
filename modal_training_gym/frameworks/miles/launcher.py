@@ -284,7 +284,19 @@ def build_miles_app(
         serialized=True,
         name="download",
     )
-    def download():
+    def download(training_run_id: str = "", framework_status_url: str = ""):
+        from modal_training_gym.common.status_reporter import (
+            enqueue_framework_status,
+            flush as flush_status_reporter,
+        )
+
+        if training_run_id:
+            enqueue_framework_status(
+                training_run_id,
+                MilesStatus.DOWNLOAD_MODEL.value,
+                url=framework_status_url or None,
+                is_active=True,
+            )
         hf_cache_volume.reload()
         checkpoints_volume.reload()
         model.download()
@@ -292,6 +304,8 @@ def build_miles_app(
         miles.post_process_model()
         hf_cache_volume.commit()
         checkpoints_volume.commit()
+        if training_run_id:
+            flush_status_reporter(timeout_seconds=2.0)
 
     @app.function(
         image=image,
@@ -329,9 +343,26 @@ def build_miles_app(
         name="convert_checkpoint",
     )
     @clustered(convert_nnodes, rdma=convert_multi_node)
-    def convert_checkpoint():
+    def convert_checkpoint(
+        training_run_id: str = "", framework_status_url: str = ""
+    ):
+        from modal_training_gym.common.status_reporter import (
+            enqueue_framework_status,
+            flush as flush_status_reporter,
+        )
+
+        if training_run_id:
+            enqueue_framework_status(
+                training_run_id,
+                MilesStatus.CONVERT_MODEL.value,
+                url=framework_status_url or None,
+                is_active=True,
+            )
+
         if getattr(miles, "megatron_to_hf_mode", None) == "bridge":
             print("Bridge mode - no conversion needed.")
+            if training_run_id:
+                flush_status_reporter(timeout_seconds=2.0)
             return
 
         hf_cache_volume.reload()
@@ -416,6 +447,9 @@ def build_miles_app(
         if node_rank == 0:
             print(f"Saved Megatron torch_dist checkpoint to {save_path}")
 
+        if training_run_id:
+            flush_status_reporter(timeout_seconds=2.0)
+
     _multi_node = miles.total_nodes > 1
 
     @app.function(
@@ -438,9 +472,15 @@ def build_miles_app(
         name="train",
     )
     @clustered(miles.total_nodes, rdma=_multi_node)
-    async def train(modal_app_id: str = "", modal_app_url: str = ""):
+    async def train(
+        modal_app_id: str = "",
+        modal_app_url: str = "",
+        framework_status_url: str = "",
+    ):
         modal_app_id = modal_app_id or os.environ.get("MODAL_APP_ID", "")
         modal_app_url = modal_app_url or modal_app_dashboard_url(modal_app_id)
+        if framework_status_url:
+            os.environ["TRAINING_GYM_FRAMEWORK_STATUS_URL"] = framework_status_url
 
         await asyncio.gather(
             hf_cache_volume.reload.aio(),
@@ -489,7 +529,7 @@ def build_miles_app(
             # so those phases are visible in the dashboard. Reuse it; fall
             # back to a fresh record if someone invokes train() directly.
             try:
-                run_record = TrainingRun.from_id(training_run_id)
+                run_record = await TrainingRun.from_id_async(training_run_id)
                 run_record.modal_app_id = modal_app_id
                 run_record.modal_app_url = modal_app_url
                 run_record.config = config_summary
@@ -509,11 +549,18 @@ def build_miles_app(
             await run_record.save_async()
             print(f"TrainingRun recorded: {training_run_id}")
 
+        # In-flight status updates are fire-and-forget HTTP POSTs to the
+        # dashboard so they don't block on Modal Volume writes. Terminal
+        # state is committed synchronously below.
+        from modal_training_gym.common.status_reporter import (
+            enqueue_framework_status,
+        )
+
         async def _set_framework_status(status: MilesStatus) -> None:
             if run_record is None:
                 return
             run_record.framework_status = status
-            await run_record.save_async()
+            enqueue_framework_status(training_run_id, status.value)
 
         async def _prepare_shared_inputs() -> None:
             await _set_framework_status(MilesStatus.DOWNLOAD_MODEL)

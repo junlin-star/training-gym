@@ -278,10 +278,19 @@ class HFModelConfiguration(ModelConfig):
     def download(self) -> None:
         from huggingface_hub import snapshot_download
 
-        kwargs: dict = {"repo_id": self.model_name}
-        if self.model_path:
-            kwargs["local_dir"] = str(self.model_path)
-        snapshot_download(**kwargs)
+        # Always download into the shared HF cache (no ``local_dir``): with
+        # huggingface_hub >= 1.0 passing ``local_dir`` writes straight to that
+        # dir and skips the cache, which leaves the weights unresolvable via
+        # ``snapshot_download(..., local_files_only=True)`` on later runs and
+        # forces a re-download. Populating the cache keeps base models
+        # reusable across runs.
+        snapshot_dir = snapshot_download(repo_id=self.model_name)
+        if self.model_path and str(self.model_path) != snapshot_dir:
+            # An explicit model_path was requested: mirror the cached snapshot
+            # into it from the local cache (no second network download).
+            import shutil
+
+            shutil.copytree(snapshot_dir, str(self.model_path), dirs_exist_ok=True)
 
 
 def _split_thinking(text: str) -> tuple[str | None, str]:

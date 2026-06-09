@@ -106,11 +106,20 @@ function summarizeProgress(metadata) {
   if (!progress || typeof progress !== "object") return null;
   const current = Number(progress.current);
   const total = Number(progress.total);
+  // is_active: undefined → unknown (treat as active by default); false →
+  // marked-but-queuing-for-hardware; true → actually running.
+  const isActive =
+    progress.is_active === false
+      ? false
+      : progress.is_active === true
+        ? true
+        : null;
   return {
     current: Number.isFinite(current) ? current : null,
     total: Number.isFinite(total) && total > 0 ? total : null,
     unit: safeStr(progress.unit || "step") || "step",
     phase: safeStr(progress.phase || ""),
+    is_active: isActive,
     rollout_id: Number.isFinite(Number(progress.rollout_id))
       ? Number(progress.rollout_id)
       : null,
@@ -158,6 +167,15 @@ export async function fetchRuns({ signal } = {}) {
       startedAt ||
       run.created_at ||
       0;
+    const latestRollout =
+      metadata && typeof metadata === "object" && metadata.latest_rollout
+        ? {
+            rollout_id: Number(metadata.latest_rollout.rollout_id) || 0,
+            mean: Number(metadata.latest_rollout.mean) || 0,
+            total: Number(metadata.latest_rollout.total) || 0,
+            created_at: Number(metadata.latest_rollout.created_at) || 0,
+          }
+        : null;
     return {
       training_run_id: runId,
       run_id: runId,
@@ -167,6 +185,7 @@ export async function fetchRuns({ signal } = {}) {
       status: run.status || "running",
       framework_status: safeStr(run.framework_status || ""),
       framework_progress: summarizeProgress(metadata),
+      latest_rollout: latestRollout,
       dataset_id: safeStr(run.dataset_id || ""),
       deployment_id: safeStr(run.deployment_id || ""),
       config: run.config || {},
@@ -233,6 +252,33 @@ export async function fetchTrainResult(trainingRunId) {
 export async function fetchEvalDetail(evalId) {
   const res = await fetch(
     `${SERVER}/evals/${encodeURIComponent(evalId)}`
+  );
+  if (!res.ok) return null;
+  return await res.json();
+}
+
+export async function fetchRunRollouts(trainingRunId, { signal } = {}) {
+  const res = await fetch(
+    `${SERVER}/runs/${encodeURIComponent(trainingRunId)}/rollouts`,
+    { signal },
+  );
+  if (!res.ok) return [];
+  const data = await res.json();
+  if (!Array.isArray(data)) return [];
+  return data
+    .filter((item) => item && typeof item === "object")
+    .map((item) => ({
+      rollout_id: Number(item.rollout_id) || 0,
+      created_at: Number(item.created_at) || 0,
+      total: Number(item.total) || 0,
+      mean: typeof item.mean === "number" ? item.mean : Number(item.mean) || 0,
+    }))
+    .sort((a, b) => a.rollout_id - b.rollout_id);
+}
+
+export async function fetchRollout(trainingRunId, rolloutId) {
+  const res = await fetch(
+    `${SERVER}/runs/${encodeURIComponent(trainingRunId)}/rollouts/${encodeURIComponent(rolloutId)}`,
   );
   if (!res.ok) return null;
   return await res.json();
