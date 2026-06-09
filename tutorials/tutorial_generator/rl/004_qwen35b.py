@@ -40,9 +40,9 @@ def _intro():
     3. Feed that score back as a GRPO reward through SLIME.
     4. Compare base vs. trained accuracy.
 
-    Qwen3.6-35B-A3B uses slime's default mbridge conversion path:
-    `megatron_to_hf_mode=""` pre-converts the HuggingFace checkpoint
-    before training instead of loading the base checkpoint through bridge mode.
+    Qwen3.6-35B-A3B uses slime's raw conversion path:
+    `megatron_to_hf_mode="raw"` pre-converts the HuggingFace checkpoint
+    before training and uses fast raw weight sync during training steps.
     """
 
 
@@ -136,8 +136,8 @@ def _train_intro():
     - **`rm_type="deepscaler"`** — slime's built-in math reward that
       extracts and compares numerical answers. No custom reward function
       or sandbox needed.
-    - `megatron_to_hf_mode=""` uses slime's default mbridge conversion path,
-      so the HF checkpoint is pre-converted before training starts.
+    - `megatron_to_hf_mode="raw"` pre-converts the HF checkpoint and uses
+      slime's fast raw weight sync during training steps.
     - Built-in slime model args come from
       `scripts/models/qwen3.5-35B-A3B.sh`; the tutorial does not patch slime.
     """
@@ -150,7 +150,7 @@ def _train():
         dataset=dataset,
         recipe=Qwen3_6_35b_Recipe(
             rm_type="deepscaler",
-            megatron_to_hf_mode="",
+            megatron_to_hf_mode="raw",
             num_rollout=10,
         ),
     )
