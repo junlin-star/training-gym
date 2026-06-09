@@ -13,6 +13,7 @@ from urllib.request import Request, urlopen
 from modal_training_gym.common.status import SlimeStatus
 
 PHASE_REPORT_URL_ENV = "SLIME_PHASE_REPORT_URL"
+PHASE_REPORT_TOKEN_ENV = "SLIME_PHASE_REPORT_TOKEN"
 CUSTOM_ROLLOUT_LOG_FUNCTION_PATH_KEY = "training_gym_custom_rollout_log_function_path"
 CUSTOM_EVAL_ROLLOUT_LOG_FUNCTION_PATH_KEY = (
     "training_gym_custom_eval_rollout_log_function_path"
@@ -167,15 +168,20 @@ def _worker() -> None:
 
 def _post(item: dict[str, Any]) -> None:
     url = item.pop("_url", "")
-    timeout = float(item.pop("_timeout", _PHASE_TIMEOUT_SECONDS) or _PHASE_TIMEOUT_SECONDS)
+    timeout = float(
+        item.pop("_timeout", _PHASE_TIMEOUT_SECONDS) or _PHASE_TIMEOUT_SECONDS
+    )
     if not url:
         return
 
     body = json.dumps(item, default=str).encode("utf-8")
+    headers = {"Content-Type": "application/json"}
+    if token := os.environ.get(PHASE_REPORT_TOKEN_ENV, "").strip():
+        headers["Authorization"] = f"Bearer {token}"
     request = Request(
         url,
         data=body,
-        headers={"Content-Type": "application/json"},
+        headers=headers,
         method="POST",
     )
     try:
@@ -245,6 +251,7 @@ def _sample_to_dict(sample: Any) -> dict[str, Any]:
         get = sample.get
     else:
         attrs = None
+
         def get(key: str, default: Any = None) -> Any:
             return getattr(sample, key, default)
 

@@ -1,4 +1,5 @@
 import dataclasses as _dc
+import secrets as _secrets
 import threading
 import time
 from collections.abc import Mapping, Sequence
@@ -20,6 +21,7 @@ from modal_training_gym.common.status import (
 )
 from modal_training_gym.common.train_result import TrainResult
 from modal_training_gym.common.modal_urls import modal_app_dashboard_url
+from modal_training_gym.utils.metadata import MetadataStore, vol_put
 from modal_training_gym.frameworks.miles import build_miles_app
 from modal_training_gym.frameworks.slime import build_slime_app
 from modal_training_gym.train_recipes.base import BaseTrainRecipe, RecipeType
@@ -436,8 +438,7 @@ class TrainConfig:
         dataset_name = ""
         if self.dataset:
             dataset_name = (
-                getattr(self.dataset, "hf_repo", "")
-                or type(self.dataset).__name__
+                getattr(self.dataset, "hf_repo", "") or type(self.dataset).__name__
             )
         return _TrainStatusDisplay(
             run_id=training_run_id,
@@ -494,6 +495,12 @@ class TrainConfig:
                 # Initial write is synchronous so the record exists before any
                 # downstream HTTP status updates try to update it.
                 run_record.save()
+                framework_status_token = _secrets.token_urlsafe(32)
+                vol_put(
+                    MetadataStore.FRAMEWORK_STATUS_TOKENS,
+                    training_run_id,
+                    {"token": framework_status_token},
+                )
                 print(f"TrainingRun recorded: {training_run_id}")
 
                 # Mid-flight status bumps are fire-and-forget HTTP posts to
@@ -513,7 +520,10 @@ class TrainConfig:
                     run_record.framework_status = status
                     status_display.emit_stage(status.value)
                     enqueue_framework_status(
-                        training_run_id, status.value, is_active=is_active
+                        training_run_id,
+                        status.value,
+                        token=framework_status_token,
+                        is_active=is_active,
                     )
 
                 # Bridge mode loads HF tensors directly, so the megatron→HF
@@ -522,26 +532,22 @@ class TrainConfig:
                 # empty-string default (mbridge) — we always run the
                 # pre-conversion so training starts from the torch_dist
                 # layout it expects.
-                megatron_to_hf_mode = getattr(
-                    self.recipe, "megatron_to_hf_mode", ""
-                )
+                megatron_to_hf_mode = getattr(self.recipe, "megatron_to_hf_mode", "")
                 needs_conversion = megatron_to_hf_mode != "bridge"
                 try:
                     if isinstance(self.recipe, SlimeRecipe):
-                        _set_status(
-                            SlimeStatus.DOWNLOAD_MODEL, is_active=False
-                        )
+                        _set_status(SlimeStatus.DOWNLOAD_MODEL, is_active=False)
                         app.download.remote(
                             training_run_id=training_run_id,
                             framework_status_url=framework_status_url,
+                            framework_status_token=framework_status_token,
                         )
                         if needs_conversion:
-                            _set_status(
-                                SlimeStatus.CONVERT_MODEL, is_active=False
-                            )
+                            _set_status(SlimeStatus.CONVERT_MODEL, is_active=False)
                             app.convert_checkpoint.remote(
                                 training_run_id=training_run_id,
                                 framework_status_url=framework_status_url,
+                                framework_status_token=framework_status_token,
                             )
                     elif isinstance(self.recipe, MilesConfig):
                         # Miles handles model download internally inside
@@ -549,19 +555,17 @@ class TrainConfig:
                         # spawn the standalone download container when
                         # there's a non-bridge conversion to chain.
                         if needs_conversion:
-                            _set_status(
-                                MilesStatus.DOWNLOAD_MODEL, is_active=False
-                            )
+                            _set_status(MilesStatus.DOWNLOAD_MODEL, is_active=False)
                             app.download.remote(
                                 training_run_id=training_run_id,
                                 framework_status_url=framework_status_url,
+                                framework_status_token=framework_status_token,
                             )
-                            _set_status(
-                                MilesStatus.CONVERT_MODEL, is_active=False
-                            )
+                            _set_status(MilesStatus.CONVERT_MODEL, is_active=False)
                             app.convert_checkpoint.remote(
                                 training_run_id=training_run_id,
                                 framework_status_url=framework_status_url,
+                                framework_status_token=framework_status_token,
                             )
                     # The remote call blocks for the whole run; poll the run
                     # record so the terminal Stage line tracks the container's
@@ -571,6 +575,7 @@ class TrainConfig:
                         modal_app_id=modal_app_id,
                         modal_app_url=modal_app_url,
                         framework_status_url=framework_status_url,
+                        framework_status_token=framework_status_token,
                     )
                 except BaseException:
                     if result_dict is None:

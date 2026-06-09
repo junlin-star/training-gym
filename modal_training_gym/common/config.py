@@ -101,9 +101,7 @@ def read_modal_toml_creds() -> tuple[str, str, str]:
         return "", "", ""
 
     profiles = {
-        name: section
-        for name, section in data.items()
-        if isinstance(section, dict)
+        name: section for name, section in data.items() if isinstance(section, dict)
     }
     if not profiles:
         return "", "", ""

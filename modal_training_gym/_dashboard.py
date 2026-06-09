@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import secrets as _secrets
 import time
 from pathlib import Path
 from typing import Any, Awaitable, Callable
@@ -127,15 +128,11 @@ def ensure_creds_secret(interactive: bool = False) -> bool:
             {"MODAL_TOKEN_ID": token_id, "MODAL_TOKEN_SECRET": token_secret},
             allow_existing=True,
         )
-        print(
-            f"Provisioned Modal Secret {MODAL_CREDS_SECRET_NAME!r} "
-            f"(from {source})."
-        )
+        print(f"Provisioned Modal Secret {MODAL_CREDS_SECRET_NAME!r} (from {source}).")
         return True
     except Exception as exc:
         print(
-            f"WARNING: failed to create Modal Secret "
-            f"{MODAL_CREDS_SECRET_NAME!r}: {exc}"
+            f"WARNING: failed to create Modal Secret {MODAL_CREDS_SECRET_NAME!r}: {exc}"
         )
         return False
 
@@ -153,7 +150,11 @@ if _is_local():
 )
 @modal.asgi_app()
 def fastapi_app():
-    from fastapi import FastAPI, HTTPException  # Request imported at module scope
+    from fastapi import (
+        FastAPI,
+        Header,
+        HTTPException,
+    )  # Request imported at module scope
     from fastapi.concurrency import run_in_threadpool
     from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
     from fastapi.staticfiles import StaticFiles
@@ -432,6 +433,32 @@ def fastapi_app():
             return None
         return parsed if parsed >= 0 else None
 
+    def _bearer_token(authorization: str | None) -> str:
+        scheme, _, token = (authorization or "").partition(" ")
+        if scheme.lower() != "bearer":
+            return ""
+        return token.strip()
+
+    async def _require_framework_status_token(
+        training_run_id: str, authorization: str | None
+    ) -> None:
+        try:
+            expected_token = str(
+                (
+                    await run_in_threadpool(
+                        vol_get,
+                        MetadataStore.FRAMEWORK_STATUS_TOKENS,
+                        training_run_id,
+                    )
+                ).get("token", "")
+            )
+        except KeyError:
+            expected_token = ""
+        if not expected_token or not _secrets.compare_digest(
+            _bearer_token(authorization), expected_token
+        ):
+            raise HTTPException(status_code=403, detail="Invalid status token")
+
     # ── Training runs ────────────────────────────────────────────────────
 
     @web.get("/api/runs")
@@ -443,7 +470,10 @@ def fastapi_app():
         return JSONResponse(data, background=_make_compact_task())
 
     @web.post("/api/framework-status")
-    async def framework_status(payload: dict[str, Any]):
+    async def framework_status(
+        payload: dict[str, Any],
+        authorization: str | None = Header(default=None),
+    ):
         training_run_id = str(payload.get("training_run_id", "") or "").strip()
         phase = str(payload.get("phase", "") or "").strip()
         if not training_run_id or not phase:
@@ -459,6 +489,7 @@ def fastapi_app():
                 status_code=404,
                 detail=f"TrainingRun {training_run_id!r} not found",
             )
+        await _require_framework_status_token(training_run_id, authorization)
 
         status = _resolve_framework_status(phase, str(run.framework.value))
         if status is None:
@@ -512,7 +543,10 @@ def fastapi_app():
     # ── Training rollouts ────────────────────────────────────────────────
 
     @web.post("/api/training-rollouts")
-    async def training_rollout(payload: dict[str, Any]):
+    async def training_rollout(
+        payload: dict[str, Any],
+        authorization: str | None = Header(default=None),
+    ):
         training_run_id = str(payload.get("training_run_id", "") or "").strip()
         rollout_id_raw = payload.get("rollout_id")
         if not training_run_id or rollout_id_raw is None:
@@ -523,15 +557,20 @@ def fastapi_app():
         try:
             rollout_id = int(rollout_id_raw)
         except (TypeError, ValueError):
-            raise HTTPException(
-                status_code=400, detail="rollout_id must be an integer"
-            )
+            raise HTTPException(status_code=400, detail="rollout_id must be an integer")
 
         samples_raw = payload.get("samples") or []
         if not isinstance(samples_raw, list):
+            raise HTTPException(status_code=400, detail="samples must be a list")
+
+        try:
+            run = await run_in_threadpool(TrainingRun.from_id, training_run_id)
+        except KeyError:
             raise HTTPException(
-                status_code=400, detail="samples must be a list"
+                status_code=404,
+                detail=f"TrainingRun {training_run_id!r} not found",
             )
+        await _require_framework_status_token(training_run_id, authorization)
 
         result = TrainingRolloutResult(
             training_run_id=training_run_id,
@@ -547,24 +586,16 @@ def fastapi_app():
         )
         await result.save_async()
 
-        # Mirror the latest mean onto the TrainingRun for quick rendering on
-        # the runs list — best-effort, don't fail the POST if the run record
-        # has gone missing.
-        try:
-            run = await run_in_threadpool(TrainingRun.from_id, training_run_id)
-        except KeyError:
-            run = None
-        if run is not None:
-            metadata = dict(run.metadata or {})
-            metadata["latest_rollout"] = {
-                "rollout_id": result.rollout_id,
-                "mean": result.mean,
-                "total": result.total,
-                "created_at": result.created_at,
-            }
-            run.metadata = metadata
-            await run.save_async()
-            cache_entries["runs"] = (0.0, [])
+        metadata = dict(run.metadata or {})
+        metadata["latest_rollout"] = {
+            "rollout_id": result.rollout_id,
+            "mean": result.mean,
+            "total": result.total,
+            "created_at": result.created_at,
+        }
+        run.metadata = metadata
+        await run.save_async()
+        cache_entries["runs"] = (0.0, [])
 
         return JSONResponse(
             {"status": "ok", "rollout_id": result.rollout_id, "mean": result.mean}

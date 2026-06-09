@@ -20,6 +20,7 @@ import base64
 import dataclasses as _dc
 import inspect
 import os
+import secrets as _secrets
 import shlex
 import subprocess
 import tempfile
@@ -52,6 +53,7 @@ from modal_training_gym.common.ray_cluster import (
 from modal_training_gym.common.run import TrainingRun, TrainingRunStatus
 from modal_training_gym.common.status import SlimeStatus
 from modal_training_gym.common.train_result import TrainResult
+from modal_training_gym.utils.metadata import MetadataStore, vol_put_async
 
 from modal_training_gym.train_recipes.slime_recipe.recipe import (
     CHECKPOINTS_PATH,
@@ -380,9 +382,19 @@ def build_slime_app(
         return raw if isinstance(raw, str) else ""
 
     def _set_custom_generate_path(path: str) -> None:
-        cfg = dict(slime.extra_config or {})
+        cfg = dict(slime.extra_config) if isinstance(slime.extra_config, dict) else {}
         cfg["custom_generate_function_path"] = path
         object.__setattr__(slime, "extra_config", cfg)
+
+    def _set_extra_config_path(key: str) -> Callable[[str], None]:
+        def setter(path: str) -> None:
+            cfg = (
+                dict(slime.extra_config) if isinstance(slime.extra_config, dict) else {}
+            )
+            cfg[key] = path
+            object.__setattr__(slime, "extra_config", cfg)
+
+        return setter
 
     def _ship_callable(
         fn: Any,
@@ -444,7 +456,7 @@ def build_slime_app(
         set_path(f"{mod_name}.{fn_name}")
 
     def _set_custom_rm_path(path: str) -> None:
-        cfg = dict(slime.extra_config or {})
+        cfg = dict(slime.extra_config) if isinstance(slime.extra_config, dict) else {}
         cfg["custom_rm_path"] = path
         object.__setattr__(slime, "extra_config", cfg)
 
@@ -463,6 +475,36 @@ def build_slime_app(
         fallback_name="rollout_function",
         set_path=lambda path: object.__setattr__(slime, "rollout_function", path),
     )
+    for attr, config_key, fallback_name in (
+        (
+            "custom_rollout_log_function",
+            "training_gym_custom_rollout_log_function_path",
+            "custom_rollout_log",
+        ),
+        (
+            "custom_eval_rollout_log_function",
+            "training_gym_custom_eval_rollout_log_function_path",
+            "custom_eval_rollout_log",
+        ),
+        (
+            "custom_megatron_before_log_prob_hook",
+            "training_gym_custom_megatron_before_log_prob_hook_path",
+            "before_log_prob_hook",
+        ),
+        (
+            "custom_megatron_before_train_step_hook",
+            "training_gym_custom_megatron_before_train_step_hook_path",
+            "before_train_step_hook",
+        ),
+    ):
+        value = getattr(slime, attr)
+        _ship_callable(
+            value if callable(value) else None,
+            fallback_name=fallback_name,
+            set_path=_set_extra_config_path(config_key),
+        )
+        if callable(value):
+            object.__setattr__(slime, attr, None)
 
     if slime.custom_rm_function is not None:
         object.__setattr__(slime, "custom_rm_function", None)
@@ -548,7 +590,11 @@ def build_slime_app(
         serialized=True,
         name="download",
     )
-    def download(training_run_id: str = "", framework_status_url: str = ""):
+    def download(
+        training_run_id: str = "",
+        framework_status_url: str = "",
+        framework_status_token: str = "",
+    ):
         from modal_training_gym.common.status_reporter import (
             enqueue_framework_status,
             flush as flush_status_reporter,
@@ -559,6 +605,7 @@ def build_slime_app(
                 training_run_id,
                 SlimeStatus.DOWNLOAD_MODEL.value,
                 url=framework_status_url or None,
+                token=framework_status_token or None,
                 is_active=True,
             )
         hf_cache_volume.reload()
@@ -608,7 +655,9 @@ def build_slime_app(
     )
     @clustered_if(convert_nnodes > 1, convert_nnodes, gpu_type=slime.gpu_type)
     def convert_checkpoint(
-        training_run_id: str = "", framework_status_url: str = ""
+        training_run_id: str = "",
+        framework_status_url: str = "",
+        framework_status_token: str = "",
     ):
         from huggingface_hub import snapshot_download
         from modal_training_gym.common.status_reporter import (
@@ -621,6 +670,7 @@ def build_slime_app(
                 training_run_id,
                 SlimeStatus.CONVERT_MODEL.value,
                 url=framework_status_url or None,
+                token=framework_status_token or None,
                 is_active=True,
             )
 
@@ -891,6 +941,7 @@ def build_slime_app(
         modal_app_id: str = "",
         modal_app_url: str = "",
         framework_status_url: str = "",
+        framework_status_token: str = "",
     ):
         modal_app_id = modal_app_id or os.environ.get("MODAL_APP_ID", "")
         modal_app_url = modal_app_url or modal_app_dashboard_url(modal_app_id)
@@ -901,6 +952,8 @@ def build_slime_app(
         # accessible inside this container, so the URL has to be passed in.
         if framework_status_url:
             os.environ["TRAINING_GYM_FRAMEWORK_STATUS_URL"] = framework_status_url
+        if framework_status_token:
+            os.environ["TRAINING_GYM_FRAMEWORK_STATUS_TOKEN"] = framework_status_token
 
         await asyncio.gather(
             hf_cache_volume.reload.aio(),
@@ -961,7 +1014,14 @@ def build_slime_app(
                 created_at=created_at,
                 started_at=created_at,
             )
+        if not framework_status_token:
+            framework_status_token = _secrets.token_urlsafe(32)
         await run_record.save_async()
+        await vol_put_async(
+            MetadataStore.FRAMEWORK_STATUS_TOKENS,
+            training_run_id,
+            {"token": framework_status_token},
+        )
         print(f"TrainingRun recorded: {training_run_id}")
 
         # In-flight status updates are fire-and-forget via the dashboard's
@@ -975,7 +1035,9 @@ def build_slime_app(
 
         def _set_framework_status(status: SlimeStatus) -> None:
             run_record.framework_status = status
-            enqueue_framework_status(training_run_id, status.value)
+            enqueue_framework_status(
+                training_run_id, status.value, token=framework_status_token
+            )
 
         async def _set_framework_status_async(status: SlimeStatus) -> None:
             _set_framework_status(status)
@@ -1076,7 +1138,7 @@ def build_slime_app(
                 object.__setattr__(slime, "save", original_save)
                 object.__setattr__(slime, "load", original_load)
                 object.__setattr__(slime, "ref_load", original_ref_load)
-                
+
             phase_report_url = (
                 os.environ.get("SLIME_PHASE_REPORT_URL")
                 or os.environ.get("TRAINING_GYM_FRAMEWORK_STATUS_URL")
@@ -1100,6 +1162,7 @@ def build_slime_app(
                     "TRAINING_GYM_TOTAL_STEPS": str(slime.num_rollout),
                     "SLIME_PHASE_REPORT_URL": phase_report_url,
                     **slime.environment,
+                    "SLIME_PHASE_REPORT_TOKEN": framework_status_token,
                 }
             }
 

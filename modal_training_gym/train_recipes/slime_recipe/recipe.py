@@ -262,7 +262,7 @@ class SlimeRecipe(BaseTrainRecipe):
 
     @model_validator(mode="after")
     def _resolve_callable_paths(self) -> "SlimeRecipe":
-        cfg = dict(self.extra_config or {})
+        cfg = dict(self.extra_config) if isinstance(self.extra_config, dict) else {}
         if self.custom_generate_function is not None:
             if not cfg.get("custom_generate_function_path"):
                 cfg["custom_generate_function_path"] = self._callable_path(
@@ -459,8 +459,7 @@ class SlimeRecipe(BaseTrainRecipe):
             "custom_megatron_before_train_step_hook": "custom_megatron_before_train_step_hook_path",
         }.items():
             if src in _HOOK_WRAPPER_PATHS:
-                if fields.get(src) is not None:
-                    out[dst] = _HOOK_WRAPPER_PATHS[src]
+                out[dst] = _HOOK_WRAPPER_PATHS[src]
                 continue
             if path := self._path_or_callable_path(fields.get(src)):
                 out[dst] = path

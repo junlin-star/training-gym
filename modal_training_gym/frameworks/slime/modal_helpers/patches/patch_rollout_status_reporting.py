@@ -59,9 +59,7 @@ def _patch_file(path: Path) -> None:
                 f'{indent}rollout_manager, num_rollout_per_epoch = create_rollout_manager(args, pgs["rollout"])'
             )
 
-        src, rollout_count = rollout_pattern.subn(
-            _rollout_replacement, src, count=1
-        )
+        src, rollout_count = rollout_pattern.subn(_rollout_replacement, src, count=1)
 
     weight_sync_count = 0
     if needs_weight_sync:
@@ -89,9 +87,7 @@ def _patch_file(path: Path) -> None:
     if needs_weight_sync and weight_sync_count != 1:
         failed.append("weight sync")
     if failed:
-        print(
-            f"WARNING: Could not patch {path.name} for: {', '.join(failed)}"
-        )
+        print(f"WARNING: Could not patch {path.name} for: {', '.join(failed)}")
 
     path.write_text(src)
     print(f"Patched {path.name} with rollout status reporting")

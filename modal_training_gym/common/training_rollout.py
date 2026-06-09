@@ -100,9 +100,7 @@ class TrainingRolloutResult(BaseModel):
     async def save_async(self) -> None:
         self._touch_created_at()
         payload = self.model_dump(mode="json")
-        await vol_put_async(
-            MetadataStore.TRAINING_ROLLOUTS, self.storage_key, payload
-        )
+        await vol_put_async(MetadataStore.TRAINING_ROLLOUTS, self.storage_key, payload)
         await vol_upsert_summary_item_async(
             MetadataStore.TRAINING_ROLLOUTS_SUMMARY,
             self._summary_item(),
@@ -133,13 +131,9 @@ class TrainingRolloutResult(BaseModel):
         return out
 
     @classmethod
-    def list_summaries_for_run(
-        cls, training_run_id: str
-    ) -> list[dict[str, Any]]:
+    def list_summaries_for_run(cls, training_run_id: str) -> list[dict[str, Any]]:
         """Lightweight per-rollout summaries for one run, sorted by rollout_id."""
-        items = (
-            vol_get_summary_items(MetadataStore.TRAINING_ROLLOUTS_SUMMARY) or []
-        )
+        items = vol_get_summary_items(MetadataStore.TRAINING_ROLLOUTS_SUMMARY) or []
         return sorted(
             (
                 item

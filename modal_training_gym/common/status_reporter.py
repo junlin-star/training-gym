@@ -30,6 +30,7 @@ _QUEUE: Queue[dict[str, Any] | None] = Queue(maxsize=256)
 _STARTED = False
 _LOCK = threading.Lock()
 _DEFAULT_TIMEOUT_SECONDS = 2.0
+_STATUS_TOKEN_ENV = "TRAINING_GYM_FRAMEWORK_STATUS_TOKEN"
 
 
 def _resolve_url() -> str:
@@ -46,6 +47,10 @@ def _resolve_url() -> str:
         return get_framework_status_url() or ""
     except Exception:
         return ""
+
+
+def _resolve_token() -> str:
+    return os.environ.get(_STATUS_TOKEN_ENV, "").strip()
 
 
 def _ensure_worker() -> None:
@@ -75,14 +80,20 @@ def _worker() -> None:
 
 def _post(item: dict[str, Any]) -> None:
     url = item.pop("_url", "")
-    timeout = float(item.pop("_timeout", _DEFAULT_TIMEOUT_SECONDS) or _DEFAULT_TIMEOUT_SECONDS)
+    timeout = float(
+        item.pop("_timeout", _DEFAULT_TIMEOUT_SECONDS) or _DEFAULT_TIMEOUT_SECONDS
+    )
+    token = str(item.pop("_token", "") or "").strip() or _resolve_token()
     if not url:
         return
     body = json.dumps(item, default=str).encode("utf-8")
+    headers = {"Content-Type": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
     request = Request(
         url,
         data=body,
-        headers={"Content-Type": "application/json"},
+        headers=headers,
         method="POST",
     )
     try:
@@ -97,6 +108,7 @@ def enqueue_framework_status(
     phase: str,
     *,
     url: str | None = None,
+    token: str | None = None,
     timeout_seconds: float = _DEFAULT_TIMEOUT_SECONDS,
     **extra: Any,
 ) -> None:
@@ -112,6 +124,7 @@ def enqueue_framework_status(
     payload: dict[str, Any] = {
         "_url": resolved,
         "_timeout": timeout_seconds,
+        "_token": (token or "").strip() or _resolve_token(),
         "training_run_id": training_run_id,
         "phase": phase,
         **extra,
