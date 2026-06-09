@@ -73,7 +73,7 @@ def _main_impl() -> None:
 
     # ## Train with SLIME
     #
-    # This MoE model runs on 1 × 8×H100 with TP2, PP2, CP2, EP4,
+    # This MoE model runs on 1 × 8×H100 with TP2, PP2, CP1, EP4,
     # and optimizer CPU offload, matching the native Slime parallelism
     # that works for Qwen3.6-35B-A3B.
     #
