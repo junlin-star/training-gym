@@ -254,13 +254,16 @@ class SlimeRecipe(BaseTrainRecipe):
             eval_prompt_data = [
                 v for name, path in eval_paths.items() for v in (name, path)
             ]
-        return {
+        fields: dict[str, Any] = {
             "prompt_data": prompt_data,
             "eval_prompt_data": eval_prompt_data,
             "input_key": ds.input_key,
             "label_key": ds.label_key,
             "apply_chat_template": ds.apply_chat_template,
         }
+        if getattr(ds, "multimodal_keys", None):
+            fields["multimodal_keys"] = ds.multimodal_keys
+        return fields
 
     @staticmethod
     def _validate_custom_model_architecture(
@@ -480,7 +483,12 @@ class SlimeRecipe(BaseTrainRecipe):
         from modal_training_gym.train_recipes.slime_recipe.qwen3_6_35b import (
             Qwen3_6_35b_Recipe,
         )
+        from modal_training_gym.train_recipes.slime_recipe.qwen3_asr_1_7b import (
+            Qwen3_ASR_1_7b_Recipe,
+        )
 
+        if model_config.model_name == "Qwen/Qwen3-ASR-1.7B":
+            return Qwen3_ASR_1_7b_Recipe()
         if model_config.model_name == "zai-org/GLM-4.7":
             return GLM_4_7_Recipe()
         if model_config.model_name == "Qwen/Qwen3-1.7B":

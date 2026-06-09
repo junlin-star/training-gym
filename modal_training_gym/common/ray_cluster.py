@@ -12,9 +12,39 @@ import asyncio
 import inspect
 import subprocess
 import time
+from collections.abc import Callable
+
+from modal.experimental import clustered
 
 RAY_PORT = 6379
 RAY_DASHBOARD_PORT = 8265
+
+# GPU families with an RDMA/EFA fabric; other types don't support it and would fail
+# if it were forced on.
+_RDMA_GPU_TYPES = frozenset({"H100", "H200", "B200", "B300", "GB200"})
+
+
+def _supports_rdma(gpu_type: str) -> bool:
+    """Whether *gpu_type* (e.g. ``"H100"`` or ``"H100:8"``) is RDMA/EFA-capable."""
+    return gpu_type.split(":")[0].strip().upper() in _RDMA_GPU_TYPES
+
+
+def clustered_if(
+    use_clustered: bool, size: int, *, gpu_type: str
+) -> Callable[[Callable], Callable]:
+    """Return ``clustered(size, rdma=…)`` when *use_clustered*, else an identity
+    decorator that registers the function as a plain ``@app.function``.
+
+    RDMA/EFA is enabled only when clustered (i.e. multi-node) *and* the GPU family
+    supports it (H100/H200/B200/B300/GB200).
+    """
+    if use_clustered:
+        return clustered(size, rdma=_supports_rdma(gpu_type))  # pyright: ignore[reportCallIssue, reportOptionalCall]
+
+    def _identity(fn: Callable) -> Callable:
+        return fn
+
+    return _identity
 
 
 def start_ray_head(

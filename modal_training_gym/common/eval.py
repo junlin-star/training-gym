@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 import datetime
 from typing import TYPE_CHECKING, Any, Callable
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from modal_training_gym.common.dataset import DatasetRow
 from modal_training_gym.common.ids import create_hash
@@ -67,6 +67,41 @@ class EvalRowResult(BaseModel):
     metadata: dict[str, Any] = Field(
         default_factory=dict
     )  # metadata that user can inject about the evaluation result
+
+
+class AudioEvalRowResult(EvalRowResult):
+    """``EvalRowResult`` for an audio eval, with the audio fields lifted to
+    constructor arguments.
+
+    ``audio`` (a browser-playable data-URI), ``reference`` (the ground truth), and
+    ``metrics`` (a ``{name: value}`` dict — the eval picks its own metrics, e.g.
+    ``{"wer": 0.1}`` or ``{"mos": 4.2}``) are folded into ``metadata`` under
+    ``_metadata_type="audio"`` so the evals dashboard auto-detects and renders an
+    audio cell. The model output stays on ``response`` (there is no separate
+    ``hypothesis``); ``score`` remains the canonical headline number. Extra
+    ``metadata`` is kept.
+
+    Usage:
+        AudioEvalRowResult(
+            score=1.0 - wer, response=hypothesis, prompt=prompt,
+            audio=audio_uri, reference=reference, metrics={"wer": wer},
+        )
+    """
+
+    @model_validator(mode="before")
+    @classmethod
+    def _fold_audio_into_metadata(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        data = dict(data)
+        metadata = dict(data.pop("metadata", None) or {})
+        metadata["_metadata_type"] = "audio"
+        for key in ("audio", "reference", "metrics"):
+            value = data.pop(key, None)
+            if value is not None:
+                metadata[key] = value
+        data["metadata"] = metadata
+        return data
 
 
 class EvalSummary(BaseModel):
