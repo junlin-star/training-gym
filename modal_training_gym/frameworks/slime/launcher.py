@@ -536,7 +536,9 @@ def build_slime_app(
         # (slime's _load_checkpoint_hf), so there is no offline HF→torch_dist conversion to run.
         # The HF reference path is wired into `ref_load` in `train` below.
         if getattr(slime, "megatron_to_hf_mode", None) == "bridge":
-            print("Bridge mode — HF weights loaded directly via AutoBridge; no conversion needed.")
+            print(
+                "Bridge mode — HF weights loaded directly via AutoBridge; no conversion needed."
+            )
             return
 
         hf_cache_volume.reload()
@@ -852,7 +854,9 @@ def build_slime_app(
                     "will resume training from last saved iteration."
                 )
                 object.__setattr__(slime, "load", save_root)
-            elif slime.megatron_to_hf_mode == "bridge" and not slime.ref_load and _hf_ref:
+            elif (
+                slime.megatron_to_hf_mode == "bridge" and not slime.ref_load and _hf_ref
+            ):
                 # Fresh bridge run: load the HF weights directly via AutoBridge. slime falls back
                 # args.load -> args.ref_load, and _load_checkpoint_hf maps the HF dir into Megatron
                 # (weights only — no optimizer/RNG state, so no torch_dist is required). Pointing
