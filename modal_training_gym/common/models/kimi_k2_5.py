@@ -3,10 +3,12 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
-from .base import HFModelConfiguration
+from .base import HFModelConfiguration, parse_kimi_k2_response
 
 
 class Kimi_K2_5(HFModelConfiguration):
+    response_parser = staticmethod(parse_kimi_k2_response)
+
     model_name = "moonshotai/Kimi-K2.5"
 
     @staticmethod

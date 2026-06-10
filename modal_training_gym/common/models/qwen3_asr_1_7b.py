@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, Any
 
 from modal_training_gym.common.audio import decode_to_mono
 
-from .base import HFModelConfiguration, ModelArchitecture
+from .base import HFModelConfiguration, ModelArchitecture, parse_qwen3_response
 
 if TYPE_CHECKING:
     import torch
@@ -30,6 +30,11 @@ if TYPE_CHECKING:
 
 class Qwen3_ASR_1_7B(HFModelConfiguration):
     model_name = "Qwen/Qwen3-ASR-1.7B"
+
+    # Qwen3 dense backbone, same ``<|im_start|>``/``<|im_end|>`` delimiters as the
+    # rest of the family. ASR output is plain transcription (no tool calls), so
+    # this just strips the chat-template scaffolding off the decoded text.
+    response_parser = staticmethod(parse_qwen3_response)
 
     # The native megatron-bridge Qwen3-ASR forward doesn't implement THD sequence
     # packing, so training must use padded (bshd) batches; the slime launcher

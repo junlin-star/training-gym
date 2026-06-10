@@ -284,6 +284,33 @@ class HFModelConfiguration(ModelConfig):
         snapshot_download(**kwargs)
 
 
+def _split_thinking(text: str) -> tuple[str | None, str]:
+    """Split a leading ``<think>...</think>`` block off ``text``.
+
+    Returns ``(thinking, remainder)``. When no closing ``</think>`` is
+    present, ``thinking`` is ``None`` and ``remainder`` is ``text`` unchanged.
+    A stray opening ``<think>`` in the remainder is stripped.
+    """
+    if "</think>" not in text:
+        return None, text
+    head, tail = text.split("</think>", 1)
+    thinking = head.replace("<think>", "").strip() or None
+    return thinking, tail.replace("<think>", "")
+
+
+def _coerce_arg_value(raw: str) -> Any:
+    """Best-effort decode of a tool-call argument value.
+
+    Returns the JSON-decoded value when ``raw`` parses as JSON (objects,
+    arrays, numbers, booleans, null, quoted strings), otherwise the raw
+    string with surrounding whitespace stripped.
+    """
+    try:
+        return json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        return raw.strip()
+
+
 # ── Qwen3 family ───────────────────────────────────────────────────────
 
 _QWEN3_TOOL_CALL_RE = re.compile(r"<tool_call>\s*(.*?)\s*</tool_call>", re.DOTALL)
@@ -322,6 +349,124 @@ def parse_qwen3_response(text: str) -> ParsedResponse:
         except (json.JSONDecodeError, KeyError, TypeError):
             continue
     content = _QWEN3_TOOL_CALL_RE.sub("", text).strip()
+
+    return ParsedResponse(
+        content=content,
+        tool_calls=tool_calls,
+        thinking=thinking,
+    )
+
+
+# ── GLM family (GLM-4.5 / 4.6 / 4.7) ───────────────────────────────────
+
+# GLM emits tool calls as an XML-ish block whose first line is the function
+# name, followed by alternating ``<arg_key>``/``<arg_value>`` pairs:
+#
+#   <tool_call>get_weather
+#   <arg_key>location</arg_key>
+#   <arg_value>Beijing</arg_value>
+#   </tool_call>
+#
+# This mirrors SGLang's ``glm45`` tool-call parser.
+_GLM_TOOL_CALL_RE = re.compile(r"<tool_call>\s*(.*?)\s*</tool_call>", re.DOTALL)
+_GLM_ARG_RE = re.compile(
+    r"<arg_key>\s*(.*?)\s*</arg_key>\s*<arg_value>\s*(.*?)\s*</arg_value>",
+    re.DOTALL,
+)
+
+
+def parse_glm_response(text: str) -> ParsedResponse:
+    """Parse GLM-4.5/4.6/4.7 output into structured content.
+
+    Handles ``<think>``/``</think>`` reasoning blocks, the GLM chat-template
+    turn delimiters (``<|assistant|>``, ``<|user|>``, ``<|observation|>``,
+    ``<|endoftext|>``), and ``<tool_call>`` blocks with ``<arg_key>``/
+    ``<arg_value>`` argument pairs.
+    """
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+
+    if "<|assistant|>" in text:
+        text = text.rsplit("<|assistant|>", 1)[-1]
+    # Anything past the assistant turn belongs to a following turn, not output.
+    for turn_token in ("<|user|>", "<|observation|>", "<|system|>", "<|endoftext|>"):
+        text = text.split(turn_token, 1)[0]
+
+    thinking, text = _split_thinking(text)
+
+    tool_calls: list[ToolCall] = []
+    for match in _GLM_TOOL_CALL_RE.finditer(text):
+        block = match.group(1)
+        name, _, rest = block.partition("\n")
+        name = name.strip()
+        if not name:
+            continue
+        arguments = {
+            key.strip(): _coerce_arg_value(value)
+            for key, value in _GLM_ARG_RE.findall(rest)
+        }
+        tool_calls.append(ToolCall(name=name, arguments=arguments))
+    content = _GLM_TOOL_CALL_RE.sub("", text).strip()
+
+    return ParsedResponse(
+        content=content,
+        tool_calls=tool_calls,
+        thinking=thinking,
+    )
+
+
+# ── Kimi K2 family (K2.5 / K2.6) ───────────────────────────────────────
+
+# Kimi K2 wraps tool calls in a token-delimited section; each call carries an
+# id of the form ``functions.<name>:<index>`` and a JSON argument blob:
+#
+#   <|tool_calls_section_begin|>
+#   <|tool_call_begin|>functions.get_weather:0<|tool_call_argument_begin|>
+#   {"location": "Beijing"}<|tool_call_end|>
+#   <|tool_calls_section_end|>
+#
+# This mirrors SGLang's ``kimi_k2`` tool-call parser.
+_KIMI_SECTION_RE = re.compile(
+    r"<\|tool_calls_section_begin\|>(.*?)<\|tool_calls_section_end\|>",
+    re.DOTALL,
+)
+_KIMI_CALL_RE = re.compile(
+    r"<\|tool_call_begin\|>\s*(?P<id>[\w\.]+):(?P<idx>\d+)\s*"
+    r"<\|tool_call_argument_begin\|>\s*(?P<args>.*?)\s*<\|tool_call_end\|>",
+    re.DOTALL,
+)
+
+
+def parse_kimi_k2_response(text: str) -> ParsedResponse:
+    """Parse Kimi K2 (K2.5 / K2.6) output into structured content.
+
+    Handles ``<think>``/``</think>`` reasoning blocks, the Kimi chat-template
+    delimiters (``<|im_end|>``, ``<|im_start|>assistant``), and the
+    ``<|tool_calls_section_begin|>`` … ``<|tool_calls_section_end|>`` tool-call
+    section. Each tool-call id (``functions.<name>:<index>``) is reduced to its
+    bare function name.
+    """
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+
+    if "<|im_start|>assistant" in text:
+        text = text.rsplit("<|im_start|>assistant", 1)[-1]
+    text = text.replace("<|im_end|>", "")
+
+    thinking, text = _split_thinking(text)
+
+    tool_calls: list[ToolCall] = []
+    for section in _KIMI_SECTION_RE.finditer(text):
+        for call in _KIMI_CALL_RE.finditer(section.group(1)):
+            name = call.group("id").split(".")[-1].strip()
+            if not name:
+                continue
+            try:
+                arguments = json.loads(call.group("args"))
+            except (json.JSONDecodeError, ValueError):
+                arguments = {}
+            if not isinstance(arguments, dict):
+                arguments = {}
+            tool_calls.append(ToolCall(name=name, arguments=arguments))
+    content = _KIMI_SECTION_RE.sub("", text).strip()
 
     return ParsedResponse(
         content=content,
