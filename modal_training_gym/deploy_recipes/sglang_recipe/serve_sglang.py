@@ -1,8 +1,12 @@
 """SGLang serving helper — builds a Modal app that hosts a model via SGLang.
 
-Uses the ``SGLangEndpoint`` subprocess pattern from autoinference:
-the Modal function starts an SGLang server process, polls its health
-endpoint until ready, runs a warmup request, then proxies traffic.
+The model is served by ``SGLangEndpoint``, a Modal *server* class registered
+with ``@app._experimental_server`` (Modal's low-latency routing service for
+inference workloads). The endpoint is the Modal class itself — its
+``@modal.enter()`` starts the ``sglang.launch_server`` subprocess, waits for
+the health endpoint, and runs a couple of warmup requests; its
+``@modal.exit()`` tears the subprocess down. Modal proxies HTTP traffic
+straight to the SGLang port, so there's no separate wrapper function.
 
 ``model_path`` accepts either:
   - a **HuggingFace repo id** (e.g. ``"Qwen/Qwen3-4B"``) — SGLang
@@ -95,40 +99,45 @@ def build_sglang_serve_app(
     _dp = recipe.dp
     _deployment_id = deployment_id
 
-    @app.cls(
+    @app._experimental_server(
         image=image,
         gpu=gpu_spec,
         scaledown_window=10 * 60,
-        timeout=24 * 60 * 60,
+        startup_timeout=startup_timeout,
         volumes=volumes,
         secrets=hf_secrets(),
         serialized=True,
         include_source=False,
-    )
-    @modal.experimental.http_server(
         port=sglang_port,
         exit_grace_period=25,
-        startup_timeout=startup_timeout,
         proxy_regions=["us-east"],
+        target_concurrency=8,
     )
-    @modal.concurrent(target_inputs=8)
-    class Server:
+    class SGLangEndpoint:
         @modal.enter()
-        def startup(self):
+        def start(self):
             from modal_training_gym.deploy_recipes.sglang_recipe._sglang_endpoint import (
-                SGLangEndpoint,
+                build_server_cmd,
+                rewrite_chat_template_kwargs,
+                start_server,
+                wait_for_server_ready,
                 warmup_chat_completions,
             )
 
-            self.endpoint = SGLangEndpoint(
+            args = rewrite_chat_template_kwargs(server_args, model_path=model_path)
+            cmd = build_server_cmd(
                 model_path=model_path,
-                worker_port=sglang_port,
+                port=sglang_port,
                 tp=_tp,
                 dp=_dp,
-                extra_server_args=server_args,
-                health_timeout=float(startup_timeout),
+                extra_server_args=args,
             )
-            self.endpoint.start()
+            self.proc = start_server(cmd)
+            wait_for_server_ready(
+                self.proc,
+                port=sglang_port,
+                timeout=float(startup_timeout),
+            )
             warmup_chat_completions(
                 port=sglang_port,
                 payload={
@@ -150,17 +159,24 @@ def build_sglang_serve_app(
 
         @modal.exit()
         def stop(self):
+            from modal_training_gym.deploy_recipes.sglang_recipe._sglang_endpoint import (
+                stop_server,
+            )
+
             if _deployment_id:
                 from modal_training_gym.common.deployment import (
                     update_deployment_status,
                 )
 
                 update_deployment_status(_deployment_id, "stopped")
-            if hasattr(self, "endpoint"):
-                self.endpoint.stop()
+            stop_server(getattr(self, "proc", None))
 
     for tag, fn in app.registered_functions.items():
         setattr(app, tag, fn)
     for tag, cls in app.registered_classes.items():
         setattr(app, tag, cls)
+    # The decorator returns the `_Server` handle (carries `get_urls()`); the
+    # entry in `registered_functions` is only its underlying Function. Bind the
+    # server itself so callers (e.g. deployment URL resolution) get `get_urls`.
+    setattr(app, "SGLangEndpoint", SGLangEndpoint)
     return app
