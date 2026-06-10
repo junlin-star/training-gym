@@ -8,7 +8,7 @@ from modal_training_gym.train_recipes.slime_recipe.recipe import SlimeRecipe
 
 @dataclass(config=ConfigDict(extra="forbid", arbitrary_types_allowed=True))
 class Qwen3_6_35b_Recipe(SlimeRecipe):
-    """Qwen3.6-35B-A3B (MoE) on 1×8×H100 with TP2/PP2/CP2/EP4."""
+    """Qwen3.6-35B-A3B (MoE) on 1×8×H100 with TP2/PP2/CP1/EP4."""
 
     gpu_type: str = "H100"
     slime_model_script: str = "scripts/models/qwen3.5-35B-A3B.sh"
@@ -58,6 +58,7 @@ class Qwen3_6_35b_Recipe(SlimeRecipe):
     balance_data: bool = True
     moe_token_dispatcher_type: str = "flex"
     moe_enable_deepep: bool = True
+    use_kl_loss: bool = True
 
     # ── Optimizer ─────────────────────────────────────────────────────────
     optimizer_cpu_offload: bool = True

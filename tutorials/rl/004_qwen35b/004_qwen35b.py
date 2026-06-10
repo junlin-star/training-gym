@@ -15,9 +15,9 @@
 # 3. Feed that score back as a GRPO reward through SLIME.
 # 4. Compare base vs. trained accuracy.
 #
-# Qwen3.6-35B-A3B uses slime's default mbridge conversion path:
-# `megatron_to_hf_mode=""` pre-converts the HuggingFace checkpoint
-# before training instead of loading the base checkpoint through bridge mode.
+# Qwen3.6-35B-A3B uses slime's mbridge conversion path:
+# the HuggingFace checkpoint is pre-converted to torch_dist format
+# before training, enabling fast batched weight sync during training steps.
 # Run with:
 # ```
 # uv run modal run -d tutorials/rl/004_qwen35b/004_qwen35b.py
@@ -73,7 +73,7 @@ def _main_impl() -> None:
 
     # ## Train with SLIME
     #
-    # This MoE model runs on 1 × 8×H100 with TP2, PP2, CP2, EP4,
+    # This MoE model runs on 1 × 8×H100 with TP2, PP2, CP1, EP4,
     # and optimizer CPU offload, matching the native Slime parallelism
     # that works for Qwen3.6-35B-A3B.
     #
@@ -81,8 +81,8 @@ def _main_impl() -> None:
     # - **`rm_type="deepscaler"`** — slime's built-in math reward that
     #   extracts and compares numerical answers. No custom reward function
     #   or sandbox needed.
-    # - `megatron_to_hf_mode=""` uses slime's default mbridge conversion path,
-    #   so the HF checkpoint is pre-converted before training starts.
+    # - The HF checkpoint is pre-converted to torch_dist format; slime's
+    #   implicit mbridge mode handles fast weight sync during training steps.
     # - Built-in slime model args come from
     #   `scripts/models/qwen3.5-35B-A3B.sh`; the tutorial does not patch slime.
 
@@ -91,7 +91,6 @@ def _main_impl() -> None:
         dataset=dataset,
         recipe=Qwen3_6_35b_Recipe(
             rm_type="deepscaler",
-            megatron_to_hf_mode="",
             num_rollout=10,
         ),
     )
