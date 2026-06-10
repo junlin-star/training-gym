@@ -44,7 +44,11 @@ from modal_training_gym.common.framework import (
 from modal_training_gym.common.modal_refs import register_modal_cloudpickle_reducers
 from modal_training_gym.common.models import ModelConfig
 from modal_training_gym.common.modal_urls import modal_app_dashboard_url
-from modal_training_gym.common.ray_cluster import ModalRayCluster, clustered_if
+from modal_training_gym.common.ray_cluster import (
+    ModalRayCluster,
+    _supports_rdma,
+    clustered_if,
+)
 from modal_training_gym.common.run import TrainingRun, TrainingRunStatus
 from modal_training_gym.common.status import SlimeStatus
 from modal_training_gym.common.train_result import TrainResult
@@ -782,12 +786,12 @@ def build_slime_app(
         checkpoints_volume.commit()
         print(f"Saved HF checkpoint to {output_dir}")
 
-    # Cluster only for multi-node runs: a single node runs as one plain
-    # @app.function (clustering one container is pure reservation overhead), and a
-    # multi-node Ray cluster needs Modal's clustered scheduler to co-schedule the
-    # containers and wire up rank-0/RDMA.
+    # Use Modal's clustered scheduler for multi-node runs AND for single-node
+    # runs on RDMA-capable GPUs.  The `rdma=True` flag enables GPU interconnect
+    # optimisations (e.g. NVLink/NVSwitch peer paths) that significantly speed
+    # up NCCL collectives used during weight sync — even within a single node.
     _multi_node = slime.total_nodes > 1
-    _use_clustered = _multi_node
+    _use_clustered = _multi_node or _supports_rdma(slime.gpu_type)
 
     train_secrets: list[Secret] = []
     if slime.wandb is not None:
