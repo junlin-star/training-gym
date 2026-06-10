@@ -589,8 +589,13 @@ def build_slime_app(
     def convert_checkpoint():
         from huggingface_hub import snapshot_download
 
+        # Bridge mode loads the HF weights directly into Megatron via AutoBridge at train time
+        # (slime's _load_checkpoint_hf), so there is no offline HF→torch_dist conversion to run.
+        # The HF reference path is wired into `ref_load` in `train` below.
         if getattr(slime, "megatron_to_hf_mode", None) == "bridge":
-            print("Bridge mode — no conversion needed.")
+            print(
+                "Bridge mode — HF weights loaded directly via AutoBridge; no conversion needed."
+            )
             return
 
         hf_cache_volume.reload()
@@ -785,7 +790,6 @@ def build_slime_app(
             f"--input-dir {shlex.quote(input_dir)} "
             f"--output-dir {shlex.quote(output_dir)} "
             f"--origin-hf-dir {shlex.quote(hf_path)} "
-            f"--add-missing-from-origin-hf "
             f"--force"
         )
         print(f"Converting: {cmd}")
