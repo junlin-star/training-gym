@@ -786,12 +786,13 @@ def build_slime_app(
         checkpoints_volume.commit()
         print(f"Saved HF checkpoint to {output_dir}")
 
-    # Use Modal's clustered scheduler for multi-node runs AND for single-node
-    # runs on RDMA-capable GPUs.  The `rdma=True` flag enables GPU interconnect
-    # optimisations (e.g. NVLink/NVSwitch peer paths) that significantly speed
-    # up NCCL collectives used during weight sync — even within a single node.
+    # Use Modal's clustered scheduler with RDMA when using a full node (8+ GPUs)
+    # on RDMA-capable hardware, or for any multi-node run.  The `rdma=True` flag
+    # provides CAP_IPC_LOCK and NVSwitch device access that slime's colocated
+    # weight sync (UpdateWeightFromTensor) needs for fast CUDA IPC transfers.
     _multi_node = slime.total_nodes > 1
-    _use_clustered = _multi_node or _supports_rdma(slime.gpu_type)
+    _full_node = slime.actor_num_gpus_per_node >= 8
+    _use_clustered = _multi_node or (_full_node and _supports_rdma(slime.gpu_type))
 
     train_secrets: list[Secret] = []
     if slime.wandb is not None:
