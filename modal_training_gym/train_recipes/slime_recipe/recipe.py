@@ -152,6 +152,7 @@ class SlimeRecipe(BaseTrainRecipe):
     hidden_dropout: float = 0.0
     attention_softmax_in_fp32: bool = True
     accumulate_allreduce_grads_in_fp32: bool = True
+    use_distributed_optimizer: bool = False
     recompute_granularity: str = "full"
     recompute_method: str = "uniform"
     recompute_num_layers: int = 1
@@ -480,6 +481,9 @@ class SlimeRecipe(BaseTrainRecipe):
         from modal_training_gym.train_recipes.slime_recipe.qwen3_4b import (
             Qwen3_4b_Recipe,
         )
+        from modal_training_gym.train_recipes.slime_recipe.qwen3_6_27b import (
+            Qwen3_6_27b_Recipe,
+        )
         from modal_training_gym.train_recipes.slime_recipe.qwen3_6_35b import (
             Qwen3_6_35b_Recipe,
         )
@@ -501,6 +505,8 @@ class SlimeRecipe(BaseTrainRecipe):
             return Qwen3_14b_Recipe()
         if model_config.model_name == "Qwen/Qwen3-32B":
             return Qwen3_32b_Recipe()
+        if model_config.model_name == "Qwen/Qwen3.6-27B":
+            return Qwen3_6_27b_Recipe()
         if model_config.model_name == "Qwen/Qwen3.6-35B-A3B":
             return Qwen3_6_35b_Recipe()
         return None
