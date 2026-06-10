@@ -47,7 +47,10 @@ from modal_training_gym.frameworks.miles.modal_helpers.utils import (
 )
 
 MILES_ROOT = "/root/miles"
-HARBOR_PKG_VERSION = "0.6.6"
+# v0.8.0+ makes per-task CPU/memory requests configurable via enforcement
+# policies ("limit"/"ignore"), letting sandboxes burst on Modal and bill by
+# actual CPU-/RAM-second usage instead of over-provisioning a static reservation.
+HARBOR_PKG_VERSION = "0.8.0"
 
 _MILES_PATCHES = Path(__file__).parent / "modal_helpers" / "patches"
 _PATCH_SGLANG_ABORT_B64 = encode_patch("patch_sglang_abort", _MILES_PATCHES)
