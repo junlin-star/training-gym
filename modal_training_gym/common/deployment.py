@@ -171,7 +171,7 @@ class DeploymentConfig:
                 raise RuntimeError(
                     f"Deployed {self.app_name!r} but could not resolve SGLang endpoint server handle."
                 )
-            urls = server.get_urls()
+            urls = asyncio.run(server.get_urls())
             url = next(iter(urls.values()), None) if urls else None
         else:
             url = app.serve.get_web_url()
