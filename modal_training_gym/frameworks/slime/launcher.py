@@ -46,7 +46,6 @@ from modal_training_gym.common.models import ModelConfig
 from modal_training_gym.common.modal_urls import modal_app_dashboard_url
 from modal_training_gym.common.ray_cluster import (
     ModalRayCluster,
-    _supports_rdma,
     clustered_if,
 )
 from modal_training_gym.common.run import TrainingRun, TrainingRunStatus
@@ -88,6 +87,9 @@ _PATCH_BRIDGE_PER_TOKEN_LOSS_B64 = encode_patch(
     "patch_bridge_provider_per_token_loss", _SLIME_PATCHES
 )
 _PATCH_STOP_TOKEN_DIAG_B64 = encode_patch("patch_stop_token_diagnostic", _SLIME_PATCHES)
+_PATCH_WEIGHT_SYNC_NCCL_B64 = encode_patch(
+    "patch_weight_sync_nccl_fallback", _SLIME_PATCHES
+)
 # The Qwen3-ASR Megatron->HF converter (registers the qwen3_asr mapping incl. the
 # audio tower). It lives in the base image — not the ASR recipe — because torch_dist
 # -> HF conversion runs in the shared convert_checkpoint_to_hf path (deploy/eval),
@@ -109,6 +111,7 @@ def _build_slime_base_image() -> "Image":
             f"echo {_PATCH_ADVANTAGES_B64} | base64 -d | python3",
             f"echo {_PATCH_BRIDGE_NONE_TASK_B64} | base64 -d | python3",
             f"echo {_PATCH_STOP_TOKEN_DIAG_B64} | base64 -d | python3",
+            f"echo {_PATCH_WEIGHT_SYNC_NCCL_B64} | base64 -d | python3",
             f"echo {_PATCH_QWEN3_ASR_EXPORT_B64} | base64 -d | python3",
         )
     )
@@ -797,12 +800,12 @@ def build_slime_app(
         checkpoints_volume.commit()
         print(f"Saved HF checkpoint to {output_dir}")
 
-    # Use Modal's clustered scheduler for multi-node runs AND for single-node
-    # runs on RDMA-capable GPUs.  The `rdma=True` flag enables GPU interconnect
-    # optimisations (e.g. NVLink/NVSwitch peer paths) that significantly speed
-    # up NCCL collectives used during weight sync — even within a single node.
+    # Use Modal's clustered scheduler for multi-node runs.  Single-node runs
+    # no longer require `clustered(rdma=True)` because a build-time patch
+    # (patch_weight_sync_nccl_fallback) detects the absence of CAP_IPC_LOCK and
+    # routes weight sync through NCCL broadcast instead of CUDA IPC.
     _multi_node = slime.total_nodes > 1
-    _use_clustered = _multi_node or _supports_rdma(slime.gpu_type)
+    _use_clustered = _multi_node
 
     train_secrets: list[Secret] = []
     if slime.wandb is not None:
