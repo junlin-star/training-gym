@@ -73,7 +73,10 @@ from modal_training_gym.common.framework import Framework
 SLIME_ROOT = "/root/slime"
 # Pin by digest to prevent mutable-tag drift.  Tag: nightly-dev-20260529a
 SLIME_IMAGE = "slimerl/slime@sha256:087a57732cf4fb271729df47530b01a9530144f4339247efc422f03e2b6988e1"
-HARBOR_PKG_VERSION = "0.6.6"
+# v0.8.0+ makes per-task CPU/memory requests configurable via enforcement
+# policies ("limit"/"ignore"), letting sandboxes burst on Modal and bill by
+# actual CPU-/RAM-second usage instead of over-provisioning a static reservation.
+HARBOR_PKG_VERSION = "0.8.0"
 
 _SLIME_PATCHES = Path(__file__).parent / "modal_helpers" / "patches"
 _PATCH_VALIDATION_B64 = encode_patch("patch_validation", _SLIME_PATCHES)
