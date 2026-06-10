@@ -87,9 +87,6 @@ _PATCH_BRIDGE_PER_TOKEN_LOSS_B64 = encode_patch(
     "patch_bridge_provider_per_token_loss", _SLIME_PATCHES
 )
 _PATCH_STOP_TOKEN_DIAG_B64 = encode_patch("patch_stop_token_diagnostic", _SLIME_PATCHES)
-_PATCH_WEIGHT_SYNC_NCCL_B64 = encode_patch(
-    "patch_weight_sync_nccl_fallback", _SLIME_PATCHES
-)
 # The Qwen3-ASR Megatron->HF converter (registers the qwen3_asr mapping incl. the
 # audio tower). It lives in the base image — not the ASR recipe — because torch_dist
 # -> HF conversion runs in the shared convert_checkpoint_to_hf path (deploy/eval),
@@ -111,7 +108,6 @@ def _build_slime_base_image() -> "Image":
             f"echo {_PATCH_ADVANTAGES_B64} | base64 -d | python3",
             f"echo {_PATCH_BRIDGE_NONE_TASK_B64} | base64 -d | python3",
             f"echo {_PATCH_STOP_TOKEN_DIAG_B64} | base64 -d | python3",
-            f"echo {_PATCH_WEIGHT_SYNC_NCCL_B64} | base64 -d | python3",
             f"echo {_PATCH_QWEN3_ASR_EXPORT_B64} | base64 -d | python3",
         )
     )
@@ -801,9 +797,9 @@ def build_slime_app(
         print(f"Saved HF checkpoint to {output_dir}")
 
     # Use Modal's clustered scheduler for multi-node runs.  Single-node runs
-    # no longer require `clustered(rdma=True)` because a build-time patch
-    # (patch_weight_sync_nccl_fallback) detects the absence of CAP_IPC_LOCK and
-    # routes weight sync through NCCL broadcast instead of CUDA IPC.
+    # use --update-weight-transport nccl to route weight sync through NCCL
+    # broadcast (UpdateWeightFromDistributed) instead of CUDA IPC, avoiding
+    # the CAP_IPC_LOCK requirement that only clustered(rdma=True) provides.
     _multi_node = slime.total_nodes > 1
     _use_clustered = _multi_node
 

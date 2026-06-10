@@ -68,6 +68,9 @@ class Qwen3_6_35b_Recipe(SlimeRecipe):
     # ── Attention ─────────────────────────────────────────────────────────
     attention_backend: str = "flash"
 
+    # ── Weight sync ──────────────────────────────────────────────────────
+    update_weight_transport: str = "nccl"
+
     # ── Checkpointing / eval ──────────────────────────────────────────────
     megatron_to_hf_mode: str = ""
     ref_load: str = "/checkpoints/Qwen3.6-35B-A3B_torch_dist_tp2pp2"

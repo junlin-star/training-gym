@@ -167,6 +167,9 @@ class SlimeRecipe(BaseTrainRecipe):
     eval_top_p: float = 1.0
     eval_config: dict | None = None
 
+    # ── Weight sync ────────────────────────────────────────────────────────
+    update_weight_transport: str = ""
+
     # ── Checkpointing (optional) ───────────────────────────────────────────
     save: str = "/checkpoints"
     load: str = ""
