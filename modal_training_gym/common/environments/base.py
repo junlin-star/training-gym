@@ -7,7 +7,7 @@ environment and the lifecycle base classes that concrete environments
 
 Three layers, from generic to specific:
 
-1. **I/O shapes** — :class:`Action`, :class:`Observation`, :class:`StepResult`,
+1. **I/O shapes** — :class:`ToolCall`, :class:`Observation`, :class:`StepResult`,
    :class:`EvalVerdict`. Plain dataclasses describing what an agent sends to an
    environment and what it gets back.
 2. **Environment lifecycle** — :class:`Environment` (one live episode: ``step`` /
@@ -28,101 +28,28 @@ can override only what it needs.
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
 from typing import Any
 
-
-# ── I/O shapes ────────────────────────────────────────────────────────────
-
-
-@dataclass
-class Action:
-    """A single action an agent takes against an environment — a tool call.
-
-    ``name`` is the tool/function name and ``arguments`` its keyword arguments.
-    Mirrors the ``ToolCall`` shape in ``common/models/base.py`` so a parsed
-    model response can be fed straight into :meth:`Environment.step`.
-    """
-
-    name: str
-    arguments: dict[str, Any] = field(default_factory=dict)
-
-    @classmethod
-    def parse(cls, text: str) -> "Action | None":
-        """Parse the first action from raw agent output, or ``None`` if there isn't one.
-
-        Default wire format: a single JSON object ``{"name": ..., "arguments": {...}}`` — the inverse
-        of a system prompt that instructs the agent to emit exactly that. A leading ``</think>``
-        reasoning block is stripped (a no-op for non-reasoning models). Objects are scanned
-        left-to-right with a streaming decoder, so a multi-object dump or trailing prose still yields a
-        usable first action instead of failing to decode the whole blob.
-
-        Subclasses override to capture extra fields or a different format; build with ``cls(...)`` so a
-        subclass parser returns its own type.
-        """
-        for obj in cls._iter_json_objects(text):
-            action = cls._from_obj(obj)
-            if action is not None:
-                return action
-        return None
-
-    @classmethod
-    def parse_all(cls, text: str) -> list["Action"]:
-        """Every action in one reply, in order — for turns that batch multiple tool calls."""
-        return [
-            a
-            for obj in cls._iter_json_objects(text)
-            if (a := cls._from_obj(obj)) is not None
-        ]
-
-    @classmethod
-    def _from_obj(cls, obj: Any) -> "Action | None":
-        """Build an action from one decoded JSON value, or ``None`` if it isn't an action."""
-        if isinstance(obj, dict) and "name" in obj:
-            return cls(name=obj["name"], arguments=obj.get("arguments", {}) or {})
-        return None
-
-    @staticmethod
-    def _iter_json_objects(text: str):
-        """Yield top-level JSON values found in ``text``, left to right."""
-        if "</think>" in text:
-            text = text.split("</think>")[-1]
-        text = text.strip()
-        try:  # fast path: the whole reply is exactly one object
-            yield json.loads(text)
-            return
-        except (json.JSONDecodeError, TypeError):
-            pass
-        decoder = json.JSONDecoder()
-        idx = text.find("{")
-        while idx != -1:
-            try:
-                obj, end = decoder.raw_decode(text, idx)
-                yield obj
-                idx = text.find("{", end)
-                continue
-            except json.JSONDecodeError:
-                pass
-            idx = text.find("{", idx + 1)
+from modal_training_gym.common.models.base import ToolCall
 
 
 @dataclass
 class Observation:
-    """The environment's response to an action.
+    """The environment's response to a tool call.
 
     text : str
-        Human/agent-readable result of the action (tool output, error message).
+        Human/agent-readable result of the tool call (tool output, error message).
     is_error : bool
-        Whether the action failed (e.g. a tool raised). Lets a caller bail out
+        Whether the tool call failed (e.g. a tool raised). Lets a caller bail out
         of a flailing episode without parsing ``text``.
-    meta : dict
+    metadata : dict
         Optional structured extras (raw payload, status codes, …).
     """
 
     text: str = ""
     is_error: bool = False
-    meta: dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -130,9 +57,9 @@ class StepResult:
     """Result of one :meth:`Environment.step`.
 
     observation : Observation
-        What the environment returned for the action.
+        What the environment returned for the tool call.
     done : bool
-        Whether the episode should end (terminal action, fatal error, …).
+        Whether the episode should end (terminal tool call, fatal error, …).
     info : dict
         Optional per-step diagnostics.
     """
@@ -159,6 +86,8 @@ class EvalVerdict:
     passed: bool
     detail: str = ""
     harness_error: bool = False
+    # For additional metadata like test cases
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 # ── Environment lifecycle ───────────────────────────────────────────────────
@@ -167,13 +96,13 @@ class EvalVerdict:
 class Environment:
     """A single live environment episode.
 
-    Subclasses implement :meth:`step` (apply an action) and, when the task is
+    Subclasses implement :meth:`step` (apply a tool call) and, when the task is
     gradable, :meth:`evaluate` (score the final state). :meth:`close` releases
     any resources. Supports the context-manager protocol so callers can write
     ``with pool.acquire(...) as env:``.
     """
 
-    def step(self, action: Action) -> StepResult:
+    def step(self, action: ToolCall) -> StepResult:
         """Apply ``action`` and return the resulting :class:`StepResult`."""
         raise NotImplementedError(f"{type(self).__name__} has no step()")
 
@@ -343,7 +272,7 @@ class DirectorySnapshotLibrary:
            (and start any helper process needed to advance, e.g. a tool server);
         3. for each step, ``snapshot_directory(root)`` then, unless it's the last
            step, ``advance(sandbox, step)`` to mutate the world from ``step`` to
-           ``step + 1`` (e.g. replay one expert action).
+           ``step + 1`` (e.g. replay one expert tool call).
 
         Returns the number of snapshots written (``n_steps + 1``).
         """

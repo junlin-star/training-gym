@@ -34,13 +34,13 @@ from typing import Any, Callable
 
 from modal_training_gym.common.dataset import DatasetConfig
 from modal_training_gym.common.environments.base import (
-    Action,
     DirectorySnapshotLibrary,
     EvalVerdict,
     Observation,
     SandboxEnvironment,
     SandboxEnvironmentPool,
     StepResult,
+    ToolCall,
 )
 
 # MCP servers whose state is confined to the agent workspace (snapshot-safe "Tier A").
@@ -229,7 +229,7 @@ def _absolutize_excel_paths(
 
 
 def dispatch_tool(
-    sandbox: Any, config: ToolathlonEnvConfig, action: Action
+    sandbox: Any, config: ToolathlonEnvConfig, action: ToolCall
 ) -> Observation:
     """Run one tool call inside ``sandbox`` and return an :class:`Observation`.
 
@@ -404,7 +404,7 @@ class ToolathlonEnvironment(SandboxEnvironment):
         self.config = config
         self.task_name = task_name
 
-    def step(self, action: Action) -> StepResult:
+    def step(self, action: ToolCall) -> StepResult:
         """Execute one tool call against the live MCP server; ``done`` on a terminal action."""
         obs = dispatch_tool(self.sandbox, self.config, action)
         return StepResult(observation=obs, done=action.name in DONE_TOOLS)
@@ -512,7 +512,9 @@ def build_task_snapshots(
 
     def _advance(sb: Any, step: int) -> None:
         call = golden_calls[step]
-        obs = dispatch_tool(sb, config, Action(call["name"], call.get("arguments", {})))
+        obs = dispatch_tool(
+            sb, config, ToolCall(call["name"], call.get("arguments", {}))
+        )
         if (
             obs.is_error
         ):  # surface a broken gateway/tool immediately, don't emit identical snapshots

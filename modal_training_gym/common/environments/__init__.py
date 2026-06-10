@@ -5,7 +5,6 @@ classes); concrete benchmarks (e.g. ``toolathlon``) build on them.
 """
 
 from modal_training_gym.common.environments.base import (
-    Action,
     DirectorySnapshotLibrary,
     Environment,
     EvalVerdict,
@@ -13,6 +12,7 @@ from modal_training_gym.common.environments.base import (
     SandboxEnvironment,
     SandboxEnvironmentPool,
     StepResult,
+    ToolCall,
 )
 from modal_training_gym.common.environments.toolathlon import (
     DEFAULT_CONFIG,
@@ -33,7 +33,7 @@ from modal_training_gym.common.environments.toolathlon import (
 
 __all__ = [
     # base — shapes
-    "Action",
+    "ToolCall",
     "Observation",
     "StepResult",
     "EvalVerdict",
