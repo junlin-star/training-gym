@@ -78,7 +78,10 @@ def build_sglang_serve_app(
 
     n_gpu = recipe.tp or 1
     gpu_spec = f"{recipe.gpu}:{n_gpu}" if n_gpu > 1 else str(recipe.gpu)
-    startup_timeout = 20 * 60
+    # Gates both Modal's container startup_timeout and the SGLang health poll.
+    # Large models (GLM-4.7 355B, Kimi-K2.5 ~1T) need more than the 20-min
+    # default to finish loading weights — bump via SglangRecipe.startup_timeout.
+    startup_timeout = recipe.startup_timeout
 
     tags = {
         "_modal_source": "training-gym",
