@@ -1,11 +1,10 @@
 <script>
   import { ArrowLeft, ChevronLeft, ChevronRight, ExternalLink, Minimize2, X } from "lucide-svelte";
   import Tabs from "../components/Tabs.svelte";
-  import FrameworkStageProgress from "../components/FrameworkStageProgress.svelte";
+  import RunSummary from "../components/RunSummary.svelte";
   import StatusPill from "../components/StatusPill.svelte";
   import TimeAgo from "../components/TimeAgo.svelte";
   import { fetchRunRollouts, fetchRollout } from "../lib/api.js";
-  import { smoothedStageLabel } from "../lib/format.js";
 
   let {
     runId,
@@ -31,46 +30,6 @@
   // Active tab: "summary" | "rollouts" | "logs". Each tab loads only its own
   // data — rollout summaries for summary/rollouts, the log stream for logs.
   let activeTab = $state("summary");
-
-  function frameworkProgress() {
-    const p = run?.framework_progress;
-    if (!p || typeof p !== "object") return null;
-    const current = Number(p.current);
-    const total = Number(p.total);
-    if (!Number.isFinite(current) || !Number.isFinite(total) || total <= 0) {
-      return null;
-    }
-    return {
-      current: Math.max(0, Math.min(current, total)),
-      total,
-      unit: p.unit || "step",
-    };
-  }
-
-  function frameworkStatusLabel() {
-    return smoothedStageLabel(
-      getFrameworkStatus?.(run),
-      run?.framework_progress,
-    );
-  }
-
-  function progressLabel(progress) {
-    if (!progress) return "";
-    const unit = String(progress.unit || "step");
-    const label = unit.charAt(0).toUpperCase() + unit.slice(1);
-    return `${label} ${progress.current} / ${progress.total}`;
-  }
-
-  function runDuration() {
-    if (!run) return "—";
-    if (typeof run.duration_seconds === "number" && run.duration_seconds >= 0) {
-      return fmtDuration(0, run.duration_seconds);
-    }
-    if (run.started_at) {
-      return fmtDuration(run.started_at, run.ended_at);
-    }
-    return "—";
-  }
 
   function formatMean(value) {
     if (typeof value !== "number" || !Number.isFinite(value)) return "—";
@@ -234,6 +193,10 @@
       const detail = await fetchRollout(runId, rolloutId);
       if (expandedRolloutId === rolloutId) {
         expandedRollout = detail;
+        // Preselect the first populated bucket so a sample is shown right away.
+        const d = sampleDist;
+        const first = d ? d.buckets.findIndex((b) => b.length > 0) : -1;
+        if (first >= 0) openBucket(first);
       }
     } finally {
       if (expandedRolloutId === rolloutId) {
@@ -488,48 +451,14 @@
           {/if}
         </div>
         <aside class="summary-tab-side">
-          <dl class="detail-meta detail-meta-stacked">
-            <div>
-              <dt>Model</dt>
-              <dd>{modelName(run)}</dd>
-            </div>
-            <div>
-              <dt>Dataset</dt>
-              <dd>{run.config_summary?.dataset_name || "—"}</dd>
-            </div>
-            <div>
-              <dt>Framework</dt>
-              <dd>{run.framework || "—"}</dd>
-            </div>
-            <div>
-              <dt>Started</dt>
-              <dd>
-                <TimeAgo timestamp={run.started_at || run.created_at} showJustNow />
-              </dd>
-            </div>
-            <div>
-              <dt>Last updated</dt>
-              <dd>
-                <TimeAgo timestamp={run.updated_at} showJustNow falsyRepresentation="—" />
-              </dd>
-            </div>
-            <div>
-              <dt>Duration</dt>
-              <dd>{runDuration()}</dd>
-            </div>
-            {#if showFrameworkStatus(run) && frameworkStatusLabel()}
-              <div class="detail-stage">
-                <dt>Stage</dt>
-                <dd>
-                  <FrameworkStageProgress
-                    progress={frameworkProgress()}
-                    progressLabel={progressLabel(frameworkProgress())}
-                    stageLabel={frameworkStatusLabel()}
-                  />
-                </dd>
-              </div>
-            {/if}
-          </dl>
+          <RunSummary
+            {run}
+            {getStatus}
+            {showFrameworkStatus}
+            {getFrameworkStatus}
+            {modelName}
+            {fmtDuration}
+          />
         </aside>
       </div>
     {:else if activeTab === "rollouts"}
@@ -756,9 +685,7 @@
 
 <style>
   .detail {
-    padding: 24px 32px 64px;
-    max-width: 980px;
-    margin: 0 auto;
+    padding: 0 0 24px;
     color: var(--text);
   }
 
@@ -851,49 +778,15 @@
     white-space: nowrap;
   }
 
-  .detail-meta {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 16px 24px;
-    margin: 0 0 32px;
-    padding: 0;
-  }
-
-  .detail-meta > div {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    min-width: 0;
-  }
-
-  .detail-meta dt {
-    font-size: 11px;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-    color: var(--muted);
-  }
-
-  .detail-meta dd {
-    margin: 0;
-    font-size: 13px;
-    color: var(--text-bright);
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .detail-stage {
-    grid-column: 1 / -1;
-  }
-
   /* ── Tab panels ───────────────────────────────────────────────────────── */
   .tab-panel {
     padding-top: 20px;
   }
 
-  /* Summary tab: chart on the left, run metadata stacked on the right. */
+  /* Summary tab: chart on the left, run summary metadata on the right. */
   .summary-tab {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(260px, 320px);
+    grid-template-columns: minmax(0, 1fr) minmax(280px, 340px);
     gap: 32px;
     align-items: start;
     padding-top: 20px;
@@ -902,12 +795,6 @@
   .summary-tab-side {
     border-left: 1px solid var(--border, #2f2f2f);
     padding-left: 24px;
-  }
-
-  .detail-meta-stacked {
-    grid-template-columns: 1fr;
-    gap: 14px;
-    margin: 0;
   }
 
   .logs-statusbar {

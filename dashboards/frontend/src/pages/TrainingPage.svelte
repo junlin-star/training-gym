@@ -5,6 +5,7 @@
   import FrameworkStageProgress from "../components/FrameworkStageProgress.svelte";
   import MinimalTable from "../components/MinimalTable.svelte";
   import MinimalTableSkeleton from "../components/MinimalTableSkeleton.svelte";
+  import RunSummary from "../components/RunSummary.svelte";
   import StatusPill from "../components/StatusPill.svelte";
   import TimeAgo from "../components/TimeAgo.svelte";
   import { smoothedStageLabel } from "../lib/format.js";
@@ -48,54 +49,12 @@
 
   const drawerWidth = "min(420px, calc(100vw - 24px))";
 
-  let selectedRecipe = $derived.by(() => {
-    if (!selectedRun) return {};
-    return selectedRun.config?.recipe || selectedRun.config?.preset || {};
-  });
-
-  let selectedRecipeEntries = $derived.by(() => {
-    return Object.entries(selectedRecipe).filter(
-      ([, value]) => value !== undefined && value !== null && String(value) !== "",
-    );
-  });
-
-  let selectedRecipeJson = $derived.by(() => {
-    if (!Object.keys(selectedRecipe).length) return "";
-    return JSON.stringify(selectedRecipe, null, 2);
-  });
-
   function selectRun(runId) {
     onOpenDetail(runId);
   }
 
   function closeDrawer() {
     onCloseDrawer();
-  }
-
-  function formatFieldLabel(field) {
-    return field.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
-  }
-
-  function formatFieldValue(value) {
-    if (typeof value === "number") {
-      return Number.isInteger(value) ? String(value) : value.toExponential(1);
-    }
-    if (typeof value === "object") return JSON.stringify(value);
-    return String(value);
-  }
-
-  function isSlimeRun(run) {
-    return String(run?.framework || "").toLowerCase() === "slime";
-  }
-
-  function runDuration(run) {
-    if (typeof run.duration_seconds === "number" && run.duration_seconds >= 0) {
-      return fmtDuration(0, run.duration_seconds);
-    }
-    if (run.started_at) {
-      return fmtDuration(run.started_at, run.ended_at);
-    }
-    return "—";
   }
 
   function frameworkProgress(run) {
@@ -344,72 +303,14 @@
       </div>
 
       <div class="drawer-summary">
-      <section class="drawer-section">
-        <div class="drawer-kv">
-          <span class="drawer-key">Status</span>
-          <StatusPill status={getStatus(selectedRun)} />
-        </div>
-        {#if showFrameworkStatus(selectedRun) && frameworkStatusLabel(selectedRun)}
-          {@const selectedProgress = frameworkProgress(selectedRun)}
-          <div class="drawer-kv">
-            <span class="drawer-key">Stage</span>
-            <FrameworkStageProgress
-              progress={selectedProgress}
-              progressLabel={progressLabel(selectedProgress)}
-              stageLabel={frameworkStatusLabel(selectedRun)}
-            />
-          </div>
-        {/if}
-        <div class="drawer-kv">
-          <span class="drawer-key">Model</span>
-          <span class="drawer-value">{modelName(selectedRun)}</span>
-        </div>
-        <div class="drawer-kv">
-          <span class="drawer-key">Dataset</span>
-          <span class="drawer-value">{selectedRun.config_summary?.dataset_name || "—"}</span>
-        </div>
-        <div class="drawer-kv">
-          <span class="drawer-key">Recipe</span>
-          <span class="drawer-value">{selectedRun.framework || "—"}</span>
-        </div>
-        <div class="drawer-kv">
-          <span class="drawer-key">Duration</span>
-          <span class="drawer-value">{runDuration(selectedRun)}</span>
-        </div>
-        <div class="drawer-kv">
-          <span class="drawer-key">Started</span>
-          <span class="drawer-value">
-            <TimeAgo timestamp={selectedRun.started_at || selectedRun.created_at} showJustNow />
-          </span>
-        </div>
-        <div class="drawer-kv">
-          <span class="drawer-key">Last updated</span>
-          <span class="drawer-value">
-            <TimeAgo timestamp={selectedRun.updated_at} showJustNow falsyRepresentation="—" />
-          </span>
-        </div>
-      </section>
-
-      {#if isSlimeRun(selectedRun) && selectedRecipeJson}
-        <section class="drawer-section">
-          <h3 class="drawer-section-title">Full Slime parameters</h3>
-          <pre class="drawer-json">{selectedRecipeJson}</pre>
-        </section>
-      {/if}
-
-      <section class="drawer-section">
-        <h3 class="drawer-section-title">Training recipe</h3>
-        {#if selectedRecipeEntries.length}
-          {#each selectedRecipeEntries as [field, value] (field)}
-            <div class="drawer-kv">
-              <span class="drawer-key">{formatFieldLabel(field)}</span>
-              <span class="drawer-value drawer-value-mono">{formatFieldValue(value)}</span>
-            </div>
-          {/each}
-        {:else}
-          <div class="drawer-empty">No recipe values found for this run.</div>
-        {/if}
-      </section>
+        <RunSummary
+          run={selectedRun}
+          {getStatus}
+          {showFrameworkStatus}
+          {getFrameworkStatus}
+          {modelName}
+          {fmtDuration}
+        />
       </div>
     </div>
   </Drawer>
@@ -622,6 +523,10 @@
     max-height: 100vh;
   }
 
+  .drawer-summary {
+    padding: 4px 20px 16px;
+  }
+
   .drawer-header {
     border-bottom: 1px solid var(--color-c-gray-10, #2f2f2f);
     padding: 16px 20px;
@@ -716,67 +621,6 @@
   .drawer-close:hover {
     color: var(--text-bright);
     border-color: var(--border-strong);
-  }
-
-  .drawer-section {
-    border-bottom: 1px solid var(--color-c-gray-10, #2f2f2f);
-    padding: 16px 20px;
-  }
-
-  .drawer-section-title {
-    color: var(--text-bright);
-    font-size: 14px;
-    font-weight: 500;
-    line-height: 20px;
-    margin-bottom: 8px;
-  }
-
-  .drawer-kv {
-    display: grid;
-    grid-template-columns: 100px minmax(0, 1fr);
-    align-items: baseline;
-    gap: 8px;
-    padding: 4px 0;
-  }
-
-  .drawer-key {
-    color: var(--muted);
-    font-size: 12px;
-    line-height: 16px;
-  }
-
-  .drawer-value {
-    color: var(--text);
-    font-size: 14px;
-    line-height: 20px;
-    overflow-wrap: anywhere;
-  }
-
-  .drawer-value-mono {
-    font-family: var(--font-mono);
-    font-size: 12px;
-    line-height: 16px;
-  }
-
-  .drawer-empty {
-    color: var(--muted);
-    font-size: 12px;
-    line-height: 16px;
-  }
-
-  .drawer-json {
-    border: 1px solid var(--color-c-gray-10, #2f2f2f);
-    border-radius: 8px;
-    background: color-mix(in srgb, var(--panel-alt) 74%, black);
-    color: var(--text);
-    font-family: var(--font-mono);
-    font-size: 11px;
-    line-height: 16px;
-    margin: 0;
-    max-height: 360px;
-    overflow: auto;
-    padding: 10px;
-    white-space: pre;
   }
 
   .empty {
