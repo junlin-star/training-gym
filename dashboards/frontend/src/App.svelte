@@ -616,6 +616,7 @@
   function setActivePage(page) {
     activePage = page;
     activeTrainingRunId = null;
+    drawerRunId = null;
     if (typeof window === "undefined") return;
     const targetPath = pagePaths[page] || pagePaths.training;
     if (window.location.pathname !== targetPath) {

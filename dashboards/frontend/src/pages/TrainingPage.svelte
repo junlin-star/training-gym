@@ -211,7 +211,7 @@
               {@const status = getStatus(run)}
               {@const stageLabel = frameworkStatusLabel(run)}
               {@const progress = frameworkProgress(run)}
-              <tr class:row-selected={selectedRunId === run.run_id}>
+              <tr class:row-selected={drawerRunId === run.run_id}>
                 <td class="run-cell">
                   <button
                     class="cell-open-button run-name-button"
@@ -272,7 +272,7 @@
                       aria-label={`Open expanded view for training run ${run.run_id}`}
                       onclick={(event) => {
                         event.stopPropagation();
-                        expandRun(run.run_id);
+                        onOpenDetail(run.run_id);
                       }}
                     >
                       <Maximize2 size={12} strokeWidth={2.1} />

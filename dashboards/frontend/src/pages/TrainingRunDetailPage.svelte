@@ -1,6 +1,6 @@
 <script>
   import { ArrowLeft, ChevronLeft, ChevronRight, ExternalLink, Minimize2, X } from "lucide-svelte";
-  import CollapsibleSection from "../components/CollapsibleSection.svelte";
+  import Tabs from "../components/Tabs.svelte";
   import FrameworkStageProgress from "../components/FrameworkStageProgress.svelte";
   import StatusPill from "../components/StatusPill.svelte";
   import TimeAgo from "../components/TimeAgo.svelte";
@@ -27,6 +27,10 @@
   let run = $derived.by(() =>
     (allRuns || []).find((r) => r.run_id === runId) || null
   );
+
+  // Active tab: "summary" | "rollouts" | "logs". Each tab loads only its own
+  // data — rollout summaries for summary/rollouts, the log stream for logs.
+  let activeTab = $state("summary");
 
   function frameworkProgress() {
     const p = run?.framework_progress;
@@ -179,14 +183,23 @@
     }
   }
 
+  // Reset rollout state when the run changes (separate from the fetch effect
+  // so flipping between the summary/rollouts tabs doesn't clear what's loaded).
   $effect(() => {
-    const id = runId;
+    runId;
     rolloutSummaries = [];
     rolloutsError = "";
     expandedRolloutId = null;
     expandedRollout = null;
     closeBucket();
-    if (!id) return;
+  });
+
+  // Lazy load: only fetch rollout summaries while a tab that needs them is
+  // active (the chart on Summary, the table on Rollouts).
+  $effect(() => {
+    const id = runId;
+    const tab = activeTab;
+    if (!id || (tab !== "summary" && tab !== "rollouts")) return;
 
     const controller = new AbortController();
     rolloutsLoading = true;
@@ -255,6 +268,7 @@
 
   $effect(() => {
     const id = runId;
+    const tab = activeTab;
     const status = String(run?.status || "").toLowerCase();
     // Re-create the EventSource whenever any of the connection params change.
     const search = logSearch;
@@ -265,8 +279,9 @@
     logState = "idle";
     logError = "";
     logDropped = 0;
-    if (!id || status !== "running" || paused) {
-      if (paused) logState = "paused";
+    // Lazy load: only open the log stream while the Logs tab is active.
+    if (tab !== "logs" || !id || status !== "running" || paused) {
+      if (tab === "logs" && paused) logState = "paused";
       return;
     }
 
@@ -435,61 +450,90 @@
       <h1 class="detail-title" title={run.run_id}>{run.run_id}</h1>
       <StatusPill status={getStatus(run)} />
     </div>
-
-    <dl class="detail-meta">
-      <div>
-        <dt>Model</dt>
-        <dd>{modelName(run)}</dd>
-      </div>
-      <div>
-        <dt>Dataset</dt>
-        <dd>{run.config_summary?.dataset_name || "—"}</dd>
-      </div>
-      <div>
-        <dt>Framework</dt>
-        <dd>{run.framework || "—"}</dd>
-      </div>
-      <div>
-        <dt>Started</dt>
-        <dd>
-          <TimeAgo timestamp={run.started_at || run.created_at} showJustNow />
-        </dd>
-      </div>
-      <div>
-        <dt>Last updated</dt>
-        <dd>
-          <TimeAgo timestamp={run.updated_at} showJustNow falsyRepresentation="—" />
-        </dd>
-      </div>
-      <div>
-        <dt>Duration</dt>
-        <dd>{runDuration()}</dd>
-      </div>
-      {#if showFrameworkStatus(run) && frameworkStatusLabel()}
-        <div class="detail-stage">
-          <dt>Stage</dt>
-          <dd>
-            <FrameworkStageProgress
-              progress={frameworkProgress()}
-              progressLabel={progressLabel(frameworkProgress())}
-              stageLabel={frameworkStatusLabel()}
-            />
-          </dd>
-        </div>
-      {/if}
-    </dl>
     {/if}
 
-    <CollapsibleSection>
-      {#snippet title()}
-        <div class="section-title-row">
-          <h2>Rollouts</h2>
-          <span class="rollouts-count">
-            {rolloutSummaries.length} step{rolloutSummaries.length === 1 ? "" : "s"}
-          </span>
+    <Tabs
+      bind:active={activeTab}
+      tabs={[
+        { value: "summary", label: "Summary" },
+        { value: "rollouts", label: "Rollouts", count: rolloutSummaries.length || undefined },
+        { value: "logs", label: "Logs" },
+      ]}
+    />
+
+    {#if activeTab === "summary"}
+      <div class="summary-tab">
+        <div class="summary-tab-main">
+          {#if rolloutsLoading && !rolloutSummaries.length}
+            <div class="empty">Loading rollouts…</div>
+          {:else if rolloutsError}
+            <div class="empty">Failed to load rollouts: {rolloutsError}</div>
+          {:else if !rolloutSummaries.length}
+            <div class="empty">No rollouts recorded yet.</div>
+          {:else}
+            <div class="rollout-chart">
+              {#if rolloutSummaries.length >= 2}
+                <svg viewBox="0 0 640 140" preserveAspectRatio="none" aria-hidden="true">
+                  <path d={chartPath} fill="none" stroke="var(--accent)" stroke-width="1.5" />
+                </svg>
+              {/if}
+              {#if chartStats}
+                <div class="rollout-chart-meta">
+                  <span>min {formatMean(chartStats.min)}</span>
+                  <span>latest {formatMean(chartStats.latest)}</span>
+                  <span>max {formatMean(chartStats.max)}</span>
+                </div>
+              {/if}
+            </div>
+          {/if}
         </div>
-      {/snippet}
-      {#snippet body()}
+        <aside class="summary-tab-side">
+          <dl class="detail-meta detail-meta-stacked">
+            <div>
+              <dt>Model</dt>
+              <dd>{modelName(run)}</dd>
+            </div>
+            <div>
+              <dt>Dataset</dt>
+              <dd>{run.config_summary?.dataset_name || "—"}</dd>
+            </div>
+            <div>
+              <dt>Framework</dt>
+              <dd>{run.framework || "—"}</dd>
+            </div>
+            <div>
+              <dt>Started</dt>
+              <dd>
+                <TimeAgo timestamp={run.started_at || run.created_at} showJustNow />
+              </dd>
+            </div>
+            <div>
+              <dt>Last updated</dt>
+              <dd>
+                <TimeAgo timestamp={run.updated_at} showJustNow falsyRepresentation="—" />
+              </dd>
+            </div>
+            <div>
+              <dt>Duration</dt>
+              <dd>{runDuration()}</dd>
+            </div>
+            {#if showFrameworkStatus(run) && frameworkStatusLabel()}
+              <div class="detail-stage">
+                <dt>Stage</dt>
+                <dd>
+                  <FrameworkStageProgress
+                    progress={frameworkProgress()}
+                    progressLabel={progressLabel(frameworkProgress())}
+                    stageLabel={frameworkStatusLabel()}
+                  />
+                </dd>
+              </div>
+            {/if}
+          </dl>
+        </aside>
+      </div>
+    {:else if activeTab === "rollouts"}
+      <div class="tab-panel">
       {#if rolloutsLoading && !rolloutSummaries.length}
         <div class="empty">Loading rollouts…</div>
       {:else if rolloutsError}
@@ -497,21 +541,6 @@
       {:else if !rolloutSummaries.length}
         <div class="empty">No rollouts recorded yet.</div>
       {:else}
-        <div class="rollout-chart">
-          {#if rolloutSummaries.length >= 2}
-            <svg viewBox="0 0 640 140" preserveAspectRatio="none" aria-hidden="true">
-              <path d={chartPath} fill="none" stroke="var(--accent)" stroke-width="1.5" />
-            </svg>
-          {/if}
-          {#if chartStats}
-            <div class="rollout-chart-meta">
-              <span>min {formatMean(chartStats.min)}</span>
-              <span>latest {formatMean(chartStats.latest)}</span>
-              <span>max {formatMean(chartStats.max)}</span>
-            </div>
-          {/if}
-        </div>
-
         <table class="rollout-table">
           <thead>
             <tr>
@@ -627,33 +656,29 @@
           </tbody>
         </table>
       {/if}
-      {/snippet}
-    </CollapsibleSection>
+      </div>
+    {:else if activeTab === "logs"}
+      <div class="tab-panel">
+      <div class="logs-statusbar">
+        <span class="logs-status">
+          {#if logState === "streaming"}
+            <span class="dot dot-live"></span> live
+          {:else if logState === "paused"}
+            <span class="dot dot-dim"></span> paused
+          {:else if logState === "reconnecting"}
+            <span class="dot dot-warn"></span> reconnecting…
+          {:else if logState === "done"}
+            <span class="dot dot-dim"></span> finished
+          {:else if logState === "error"}
+            <span class="dot dot-err"></span> error
+          {:else if String(run?.status || "").toLowerCase() !== "running"}
+            <span class="dot dot-dim"></span> run not active
+          {:else}
+            <span class="dot dot-dim"></span> idle
+          {/if}
+        </span>
+      </div>
 
-    <CollapsibleSection>
-      {#snippet title()}
-        <div class="section-title-row">
-          <h2>Modal logs</h2>
-          <span class="logs-status">
-            {#if logState === "streaming"}
-              <span class="dot dot-live"></span> live
-            {:else if logState === "paused"}
-              <span class="dot dot-dim"></span> paused
-            {:else if logState === "reconnecting"}
-              <span class="dot dot-warn"></span> reconnecting…
-            {:else if logState === "done"}
-              <span class="dot dot-dim"></span> finished
-            {:else if logState === "error"}
-              <span class="dot dot-err"></span> error
-            {:else if String(run?.status || "").toLowerCase() !== "running"}
-              <span class="dot dot-dim"></span> run not active
-            {:else}
-              <span class="dot dot-dim"></span> idle
-            {/if}
-          </span>
-        </div>
-      {/snippet}
-      {#snippet body()}
       <div class="logs-controls">
         <button
           class="log-button"
@@ -724,8 +749,8 @@
           {/if}
         </div>
       {/if}
-      {/snippet}
-    </CollapsibleSection>
+      </div>
+    {/if}
   {/if}
 </section>
 
@@ -813,7 +838,7 @@
     display: flex;
     align-items: center;
     gap: 16px;
-    margin-bottom: 24px;
+    margin-bottom: 16px;
   }
 
   .detail-title {
@@ -860,27 +885,49 @@
     grid-column: 1 / -1;
   }
 
-  /* Full-width header row inside a CollapsibleSection title snippet: section
-     name on the left, count/status on the right, chevron sits after it. */
-  .section-title-row {
-    display: flex;
-    flex: 1;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    min-width: 0;
+  /* ── Tab panels ───────────────────────────────────────────────────────── */
+  .tab-panel {
+    padding-top: 20px;
   }
 
-  .section-title-row h2 {
-    font-size: 16px;
-    font-weight: 600;
-    color: var(--text-bright);
+  /* Summary tab: chart on the left, run metadata stacked on the right. */
+  .summary-tab {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(260px, 320px);
+    gap: 32px;
+    align-items: start;
+    padding-top: 20px;
+  }
+
+  .summary-tab-side {
+    border-left: 1px solid var(--border, #2f2f2f);
+    padding-left: 24px;
+  }
+
+  .detail-meta-stacked {
+    grid-template-columns: 1fr;
+    gap: 14px;
     margin: 0;
   }
 
-  .rollouts-count {
-    font-size: 12px;
-    color: var(--muted);
+  .logs-statusbar {
+    display: flex;
+    justify-content: flex-end;
+    margin-bottom: 8px;
+  }
+
+  @media (max-width: 900px) {
+    .summary-tab {
+      grid-template-columns: 1fr;
+      gap: 20px;
+    }
+
+    .summary-tab-side {
+      border-left: 0;
+      padding-left: 0;
+      border-top: 1px solid var(--border, #2f2f2f);
+      padding-top: 16px;
+    }
   }
 
   .rollout-chart {
