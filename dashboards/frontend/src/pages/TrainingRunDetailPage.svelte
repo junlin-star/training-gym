@@ -1,5 +1,5 @@
 <script>
-  import { ArrowLeft, ExternalLink } from "lucide-svelte";
+  import { ArrowLeft, ChevronLeft, ChevronRight, ExternalLink, X } from "lucide-svelte";
   import FrameworkStageProgress from "../components/FrameworkStageProgress.svelte";
   import StatusPill from "../components/StatusPill.svelte";
   import TimeAgo from "../components/TimeAgo.svelte";
@@ -78,6 +78,89 @@
   let expandedRollout = $state(null);
   let expandedRolloutLoading = $state(false);
 
+  // Per-step sample view: a histogram of sample scores. Clicking a bar opens
+  // a single-sample viewer scoped to that bucket; ←/→ step through it.
+  const BUCKET_COUNT = 12;
+  let activeBucket = $state(null); // histogram bucket index, or null
+  let activeSamplePos = $state(0); // position within the active bucket's list
+
+  // Bucket the expanded rollout's samples by score.
+  let sampleDist = $derived.by(() => {
+    const samples = expandedRollout?.samples || [];
+    if (!samples.length) return null;
+    const scores = samples.map((s) => Number(s.score) || 0);
+    const lo = Math.min(...scores);
+    const hi = Math.max(...scores);
+    // When every sample scored the same, a single bucket reads clearer than a
+    // lone bar pinned to one edge.
+    const count = lo === hi ? 1 : BUCKET_COUNT;
+    const span = hi - lo || 1;
+    const buckets = Array.from({ length: count }, () => []);
+    samples.forEach((s, i) => {
+      const score = Number(s.score) || 0;
+      let b = count === 1 ? 0 : Math.floor(((score - lo) / span) * count);
+      b = Math.max(0, Math.min(count - 1, b));
+      buckets[b].push(i);
+    });
+    const maxCount = Math.max(...buckets.map((b) => b.length), 1);
+    return { lo, hi, count, span, buckets, maxCount, total: samples.length };
+  });
+
+  function bucketRange(b) {
+    const d = sampleDist;
+    if (!d) return "";
+    if (d.count === 1) return formatMean(d.lo);
+    const step = d.span / d.count;
+    return `${formatMean(d.lo + b * step)}–${formatMean(d.lo + (b + 1) * step)}`;
+  }
+
+  function openBucket(b) {
+    const d = sampleDist;
+    if (!d || !d.buckets[b]?.length) return;
+    activeBucket = b;
+    activeSamplePos = 0;
+  }
+
+  function closeBucket() {
+    activeBucket = null;
+    activeSamplePos = 0;
+  }
+
+  function stepSample(delta) {
+    const d = sampleDist;
+    if (!d || activeBucket == null) return;
+    const list = d.buckets[activeBucket] || [];
+    if (!list.length) return;
+    activeSamplePos = Math.max(0, Math.min(list.length - 1, activeSamplePos + delta));
+  }
+
+  // The sample currently shown in the viewer (or null when no bucket is open).
+  let activeSample = $derived.by(() => {
+    const d = sampleDist;
+    if (!d || activeBucket == null) return null;
+    const list = d.buckets[activeBucket] || [];
+    const idx = list[activeSamplePos];
+    if (idx == null) return null;
+    return {
+      sample: expandedRollout.samples[idx],
+      pos: activeSamplePos,
+      count: list.length,
+    };
+  });
+
+  function onSampleKeydown(e) {
+    if (activeBucket == null) return;
+    const tag = (e.target?.tagName || "").toLowerCase();
+    if (tag === "input" || tag === "textarea") return;
+    if (e.key === "ArrowLeft") {
+      e.preventDefault();
+      stepSample(-1);
+    } else if (e.key === "ArrowRight") {
+      e.preventDefault();
+      stepSample(1);
+    }
+  }
+
   async function loadRollouts(signal) {
     if (!runId) return;
     try {
@@ -99,6 +182,7 @@
     rolloutsError = "";
     expandedRolloutId = null;
     expandedRollout = null;
+    closeBucket();
     if (!id) return;
 
     const controller = new AbortController();
@@ -123,10 +207,12 @@
     if (expandedRolloutId === rolloutId) {
       expandedRolloutId = null;
       expandedRollout = null;
+      closeBucket();
       return;
     }
     expandedRolloutId = rolloutId;
     expandedRollout = null;
+    closeBucket();
     expandedRolloutLoading = true;
     try {
       const detail = await fetchRollout(runId, rolloutId);
@@ -307,6 +393,8 @@
   });
 </script>
 
+<svelte:window onkeydown={onSampleKeydown} />
+
 <section class="detail" class:embedded>
   {#if !embedded}
     <header class="detail-header">
@@ -397,9 +485,11 @@
         <div class="empty">No rollouts recorded yet.</div>
       {:else}
         <div class="rollout-chart">
-          <svg viewBox="0 0 640 140" preserveAspectRatio="none" aria-hidden="true">
-            <path d={chartPath} fill="none" stroke="var(--accent)" stroke-width="1.5" />
-          </svg>
+          {#if rolloutSummaries.length >= 2}
+            <svg viewBox="0 0 640 140" preserveAspectRatio="none" aria-hidden="true">
+              <path d={chartPath} fill="none" stroke="var(--accent)" stroke-width="1.5" />
+            </svg>
+          {/if}
           {#if chartStats}
             <div class="rollout-chart-meta">
               <span>min {formatMean(chartStats.min)}</span>
@@ -436,27 +526,86 @@
                   <td colspan="4">
                     {#if expandedRolloutLoading}
                       <div class="empty">Loading samples…</div>
-                    {:else if !expandedRollout}
+                    {:else if !expandedRollout || !sampleDist}
                       <div class="empty">No samples recorded.</div>
                     {:else}
-                      {#each expandedRollout.samples || [] as sample, i (i)}
-                        <div class="rollout-sample">
-                          <div class="rollout-sample-header">
-                            <span>Sample {i + 1}</span>
-                            <span class="rollout-sample-score">
-                              reward {formatMean(sample.score)}
-                            </span>
+                      <div class="dist">
+                        <div
+                          class="dist-bars"
+                          role="group"
+                          aria-label="Sample score distribution"
+                        >
+                          {#each sampleDist.buckets as bucket, b (b)}
+                            <button
+                              class="dist-bar"
+                              class:active={activeBucket === b}
+                              class:is-empty={!bucket.length}
+                              style:height={`${(bucket.length / sampleDist.maxCount) * 100}%`}
+                              disabled={!bucket.length}
+                              title={`${bucket.length} sample${bucket.length === 1 ? "" : "s"} · reward ${bucketRange(b)}`}
+                              onclick={() => openBucket(b)}
+                            >
+                              <span class="dist-bar-count">{bucket.length || ""}</span>
+                            </button>
+                          {/each}
+                        </div>
+                        <div class="dist-axis">
+                          <span>{formatMean(sampleDist.lo)}</span>
+                          <span class="dist-axis-label">reward · {sampleDist.total} samples</span>
+                          <span>{formatMean(sampleDist.hi)}</span>
+                        </div>
+                      </div>
+
+                      {#if activeSample}
+                        <div class="rollout-sample sample-viewer">
+                          <div class="sample-viewer-header">
+                            <div class="sample-viewer-nav">
+                              <button
+                                class="sample-nav-btn"
+                                onclick={() => stepSample(-1)}
+                                disabled={activeSample.pos === 0}
+                                aria-label="Previous sample"
+                              >
+                                <ChevronLeft size={14} />
+                              </button>
+                              <span class="sample-viewer-pos">
+                                Sample {activeSample.pos + 1} / {activeSample.count}
+                              </span>
+                              <button
+                                class="sample-nav-btn"
+                                onclick={() => stepSample(1)}
+                                disabled={activeSample.pos === activeSample.count - 1}
+                                aria-label="Next sample"
+                              >
+                                <ChevronRight size={14} />
+                              </button>
+                              <span class="sample-viewer-hint">← / → to navigate</span>
+                            </div>
+                            <div class="sample-viewer-meta">
+                              <span class="rollout-sample-score">
+                                reward {formatMean(activeSample.sample.score)}
+                              </span>
+                              <button
+                                class="sample-nav-btn"
+                                onclick={closeBucket}
+                                aria-label="Close sample viewer"
+                              >
+                                <X size={14} />
+                              </button>
+                            </div>
                           </div>
-                          {#if sample.prompt}
+                          {#if activeSample.sample.prompt}
                             <div class="rollout-sample-label">prompt</div>
-                            <pre class="rollout-sample-text">{sample.prompt}</pre>
+                            <pre class="rollout-sample-text">{activeSample.sample.prompt}</pre>
                           {/if}
-                          {#if sample.response}
+                          {#if activeSample.sample.response}
                             <div class="rollout-sample-label">response</div>
-                            <pre class="rollout-sample-text">{sample.response}</pre>
+                            <pre class="rollout-sample-text">{activeSample.sample.response}</pre>
                           {/if}
                         </div>
-                      {/each}
+                      {:else}
+                        <div class="dist-hint">Click a bar to inspect its samples.</div>
+                      {/if}
                     {/if}
                   </td>
                 </tr>
@@ -765,12 +914,126 @@
     border-radius: 0 4px 4px 0;
   }
 
-  .rollout-sample-header {
+  /* ── Per-step sample score distribution ──────────────────────────────── */
+  .dist {
+    margin-bottom: 16px;
+  }
+
+  .dist-bars {
+    display: flex;
+    align-items: flex-end;
+    gap: 2px;
+    height: 120px;
+    padding-top: 14px;
+    border-bottom: 1px solid var(--border, #2f2f2f);
+  }
+
+  .dist-bar {
+    position: relative;
+    flex: 1;
+    min-height: 2px;
+    padding: 0;
+    border: 0;
+    border-radius: 2px 2px 0 0;
+    background: var(--color-c-gray-30, #4a4a4a);
+    cursor: pointer;
+    transition:
+      background 0.12s ease,
+      opacity 0.12s ease;
+  }
+
+  .dist-bar:hover:not(:disabled) {
+    background: var(--color-c-gray-40, #5e5e5e);
+  }
+
+  .dist-bar.active {
+    background: var(--accent);
+  }
+
+  .dist-bar.is-empty {
+    background: var(--color-c-gray-10, #2f2f2f);
+    cursor: default;
+    opacity: 0.5;
+  }
+
+  .dist-bar-count {
+    position: absolute;
+    top: -14px;
+    left: 0;
+    right: 0;
+    text-align: center;
+    font-size: 10px;
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .dist-axis {
     display: flex;
     justify-content: space-between;
+    margin-top: 6px;
+    font-size: 11px;
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .dist-axis-label {
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  .dist-hint {
     font-size: 12px;
     color: var(--muted);
+    padding: 4px 0;
+  }
+
+  /* ── Single-sample viewer (bucket drill-in) ──────────────────────────── */
+  .sample-viewer-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
     margin-bottom: 6px;
+  }
+
+  .sample-viewer-nav,
+  .sample-viewer-meta {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .sample-viewer-pos {
+    font-size: 12px;
+    color: var(--text-bright);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .sample-viewer-hint {
+    font-size: 11px;
+    color: var(--muted);
+  }
+
+  .sample-nav-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 2px;
+    border: 1px solid var(--border, #2f2f2f);
+    border-radius: 4px;
+    background: none;
+    color: var(--muted);
+    cursor: pointer;
+  }
+
+  .sample-nav-btn:hover:not(:disabled) {
+    color: var(--text-bright);
+    border-color: var(--border-strong, #4a4a4a);
+  }
+
+  .sample-nav-btn:disabled {
+    opacity: 0.4;
+    cursor: default;
   }
 
   .rollout-sample-score {

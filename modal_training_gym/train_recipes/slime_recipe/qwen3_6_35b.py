@@ -73,11 +73,3 @@ class Qwen3_6_35b_Recipe(SlimeRecipe):
     ref_load: str = "/checkpoints/Qwen3.6-35B-A3B_torch_dist_tp2pp2"
     save_interval: int = 20
     eval_interval: int | None = None
-
-    # ── Weight sync ───────────────────────────────────────────────────────
-    # 35B-class MoE: full broadcasts saturate the megatron→sglang link
-    # (~25 s/it observed). Delta sync ships only changed bytes so per-step
-    # weight sync drops to a few seconds. Pin-snapshot RAM cost is
-    # ~weights-size, so this is only safe on hosts with enough host memory
-    # to hold a CPU copy of the model.
-    update_weight_mode: str = "delta"

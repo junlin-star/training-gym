@@ -655,6 +655,7 @@
   .run-drawer {
     width: 100%;
     height: 100%;
+    max-height: 100vh;
   }
 
   .drawer-detail-section {
@@ -662,28 +663,38 @@
   }
 
   /* Expanded: header spans the top, then a wide left column for the full
-     rollouts + live-logs detail view and a narrow right summary column. */
+     rollouts + live-logs detail view and a narrow right summary column.
+     The drawer is pinned to the viewport (100vh) with a fixed header row,
+     and the two columns each scroll on their own. */
   .run-drawer.expanded {
     display: grid;
     grid-template-columns: minmax(0, 1fr) minmax(320px, 400px);
     align-items: start;
+    height: auto;
+    max-height: 100vh;
   }
 
   .run-drawer.expanded .drawer-header {
     grid-column: 1 / -1;
   }
 
+  /* Each column caps at the viewport (minus the header row) and scrolls on
+     its own. When content is short the column shrinks to fit, so there's no
+     empty stretched gap below it. */
   .run-drawer.expanded .drawer-detail-section {
     grid-column: 1;
     grid-row: 2;
     border-top: 0;
+    max-height: calc(100vh - 78px);
+    overflow-y: auto;
   }
 
   .run-drawer.expanded .drawer-summary {
     grid-column: 2;
     grid-row: 2;
     border-left: 1px solid var(--color-c-gray-10, #2f2f2f);
-    align-self: stretch;
+    max-height: calc(100vh - 78px);
+    overflow-y: auto;
   }
 
   .drawer-header {
