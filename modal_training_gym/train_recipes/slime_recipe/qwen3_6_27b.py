@@ -35,10 +35,11 @@ class Qwen3_6_27b_Recipe(SlimeRecipe):
     rollout_temperature: float = 1.0
     sglang_mem_fraction_static: float = 0.75
     sglang_disable_custom_all_reduce: bool = True
+    sglang_max_running_requests: int | None = 512
 
     # ── Training ──────────────────────────────────────────────────────────
-    n_samples_per_prompt: int = 8
-    global_batch_size: int = 256
+    n_samples_per_prompt: int = 4
+    global_batch_size: int = 128
     lr: float = 1e-6
     max_tokens_per_gpu: int = 8192
     calculate_per_token_loss: bool = True
