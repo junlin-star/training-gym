@@ -746,7 +746,7 @@ def build_slime_app(
                 if training_run_id:
                     flush_status_reporter(timeout_seconds=2.0)
                 return
-                
+
             if node_rank == 0:
                 import shutil
 
