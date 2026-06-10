@@ -25,7 +25,7 @@ class Qwen3_6_35b_Recipe(SlimeRecipe):
     tensor_model_parallel_size: int = 2
     sequence_parallel: bool = True
     pipeline_model_parallel_size: int = 2
-    context_parallel_size: int = 1
+    context_parallel_size: int = 2
     expert_model_parallel_size: int = 4
     expert_tensor_parallel_size: int = 1
 
@@ -58,6 +58,7 @@ class Qwen3_6_35b_Recipe(SlimeRecipe):
     balance_data: bool = True
     moe_token_dispatcher_type: str = "flex"
     moe_enable_deepep: bool = True
+    use_kl_loss: bool = True
 
     # ── Optimizer ─────────────────────────────────────────────────────────
     optimizer_cpu_offload: bool = True
