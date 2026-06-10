@@ -359,15 +359,15 @@ def parse_qwen3_response(text: str) -> ParsedResponse:
 
 # ── GLM family (GLM-4.5 / 4.6 / 4.7) ───────────────────────────────────
 
-# GLM emits tool calls as an XML-ish block whose first line is the function
-# name, followed by alternating ``<arg_key>``/``<arg_value>`` pairs:
+# GLM emits tool calls as an XML-ish block: the function name, then alternating
+# ``<arg_key>``/``<arg_value>`` pairs. The name may sit on its own line OR run
+# straight into the first ``<arg_key>`` with no separator — the live GLM-4.7
+# server emits the inline form:
 #
-#   <tool_call>get_weather
-#   <arg_key>location</arg_key>
-#   <arg_value>Beijing</arg_value>
-#   </tool_call>
+#   <tool_call>get_weather<arg_key>city</arg_key><arg_value>Paris</arg_value></tool_call>
 #
-# This mirrors SGLang's ``glm45`` tool-call parser.
+# so the name is everything before the first ``<arg_key>`` (not just the first
+# line). This mirrors SGLang's ``glm45`` tool-call parser.
 _GLM_TOOL_CALL_RE = re.compile(r"<tool_call>\s*(.*?)\s*</tool_call>", re.DOTALL)
 _GLM_ARG_RE = re.compile(
     r"<arg_key>\s*(.*?)\s*</arg_key>\s*<arg_value>\s*(.*?)\s*</arg_value>",
@@ -396,13 +396,15 @@ def parse_glm_response(text: str) -> ParsedResponse:
     tool_calls: list[ToolCall] = []
     for match in _GLM_TOOL_CALL_RE.finditer(text):
         block = match.group(1)
-        name, _, rest = block.partition("\n")
-        name = name.strip()
+        # The function name is everything up to the first <arg_key> (GLM may or
+        # may not put it on its own line); the rest holds the arg pairs.
+        name_part, sep, rest = block.partition("<arg_key>")
+        name = name_part.strip()
         if not name:
             continue
         arguments = {
             key.strip(): _coerce_arg_value(value)
-            for key, value in _GLM_ARG_RE.findall(rest)
+            for key, value in _GLM_ARG_RE.findall(sep + rest)
         }
         tool_calls.append(ToolCall(name=name, arguments=arguments))
     content = _GLM_TOOL_CALL_RE.sub("", text).strip()
