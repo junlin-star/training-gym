@@ -26,6 +26,9 @@
   let activeStatuses = $state(new Set());
   let activePage = $state("training");
   let activeTrainingRunId = $state(null);
+  // When set (and no full detail page is open), the training list shows a
+  // summary drawer for this run — set by "Collapse" on the detail page.
+  let drawerRunId = $state(null);
   let runsRequestId = 0;
   let evalsRequestId = 0;
   let deploymentsRequestId = 0;
@@ -622,10 +625,37 @@
 
   function backToTrainingList() {
     activeTrainingRunId = null;
+    drawerRunId = null;
     if (typeof window === "undefined") return;
     if (window.location.pathname !== pagePaths.training) {
       window.history.pushState({}, "", pagePaths.training);
     }
+  }
+
+  // Opening a run shows the full detail page (a real route, not a drawer).
+  function openTrainingRunDetail(runId) {
+    drawerRunId = null;
+    activeTrainingRunId = runId;
+    if (typeof window === "undefined") return;
+    const target = `${pagePaths.training}/${encodeURIComponent(runId)}`;
+    if (window.location.pathname !== target) {
+      window.history.pushState({}, "", target);
+    }
+  }
+
+  // "Collapse" on the detail page drops back to the list and reopens the run
+  // as a summary drawer.
+  function collapseTrainingRunToDrawer() {
+    drawerRunId = activeTrainingRunId;
+    activeTrainingRunId = null;
+    if (typeof window === "undefined") return;
+    if (window.location.pathname !== pagePaths.training) {
+      window.history.pushState({}, "", pagePaths.training);
+    }
+  }
+
+  function closeTrainingDrawer() {
+    drawerRunId = null;
   }
 
   function openTrainingRun(runId) {
@@ -682,6 +712,7 @@
         {showFrameworkStatus}
         {fmtDuration}
         onBack={backToTrainingList}
+        onCollapse={collapseTrainingRunToDrawer}
       />
     {:else if activePage === "training"}
       <TrainingPage
@@ -705,6 +736,9 @@
         {showFrameworkStatus}
         {fmtDuration}
         bind:search
+        {drawerRunId}
+        onOpenDetail={openTrainingRunDetail}
+        onCloseDrawer={closeTrainingDrawer}
         onToggleRecipe={toggleRecipe}
         onToggleAllRecipes={toggleAllRecipes}
         onToggleStatus={toggleStatus}

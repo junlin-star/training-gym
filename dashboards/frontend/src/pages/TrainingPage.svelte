@@ -1,5 +1,5 @@
 <script>
-  import { ExternalLink, Maximize2, Minimize2, PanelRightClose } from "lucide-svelte";
+  import { ExternalLink, Maximize2, PanelRightClose } from "lucide-svelte";
   import Drawer from "../components/Drawer.svelte";
   import FilterBar from "../components/FilterBar.svelte";
   import FrameworkStageProgress from "../components/FrameworkStageProgress.svelte";
@@ -7,7 +7,6 @@
   import MinimalTableSkeleton from "../components/MinimalTableSkeleton.svelte";
   import StatusPill from "../components/StatusPill.svelte";
   import TimeAgo from "../components/TimeAgo.svelte";
-  import TrainingRunDetailPage from "./TrainingRunDetailPage.svelte";
   import { smoothedStageLabel } from "../lib/format.js";
 
   let {
@@ -31,25 +30,23 @@
     showFrameworkStatus,
     fmtDuration,
     search = $bindable(),
+    drawerRunId = null,
+    onOpenDetail = () => {},
+    onCloseDrawer = () => {},
     onToggleRecipe,
     onToggleAllRecipes,
     onToggleStatus,
   } = $props();
 
-  let selectedRunId = $state(null);
-  let drawerExpanded = $state(false);
-
+  // The drawer is now driven by the parent: it holds the run-summary while the
+  // full rollouts/logs detail lives on its own page. Clicking a run (or the
+  // drawer's Expand button) navigates to that page; the page's Collapse button
+  // brings the summary back as this drawer.
   let selectedRun = $derived.by(
-    () => allRuns.find((run) => run.run_id === selectedRunId) || null,
+    () => allRuns.find((run) => run.run_id === drawerRunId) || null,
   );
 
-  // Width of the run drawer: a narrow summary by default, a very wide panel
-  // when expanded so it can hold the full rollouts + live-logs detail view.
-  let drawerWidth = $derived(
-    drawerExpanded
-      ? "min(1600px, calc(100vw - 48px))"
-      : "min(420px, calc(100vw - 24px))",
-  );
+  const drawerWidth = "min(420px, calc(100vw - 24px))";
 
   let selectedRecipe = $derived.by(() => {
     if (!selectedRun) return {};
@@ -68,22 +65,11 @@
   });
 
   function selectRun(runId) {
-    selectedRunId = runId;
-    drawerExpanded = false;
-  }
-
-  function expandRun(runId) {
-    selectedRunId = runId;
-    drawerExpanded = true;
+    onOpenDetail(runId);
   }
 
   function closeDrawer() {
-    selectedRunId = null;
-    drawerExpanded = false;
-  }
-
-  function toggleDrawerExpanded() {
-    drawerExpanded = !drawerExpanded;
+    onCloseDrawer();
   }
 
   function formatFieldLabel(field) {
@@ -141,8 +127,8 @@
   }
 
   $effect(() => {
-    if (selectedRunId && !allRuns.some((run) => run.run_id === selectedRunId)) {
-      selectedRunId = null;
+    if (drawerRunId && !allRuns.some((run) => run.run_id === drawerRunId)) {
+      onCloseDrawer();
     }
   });
 </script>
@@ -324,7 +310,6 @@
   <Drawer open={!!selectedRun} onclose={closeDrawer} width={drawerWidth}>
     <div
       class="run-drawer"
-      class:expanded={drawerExpanded}
       aria-label={`Training run ${selectedRun.run_id}`}
     >
       <div class="drawer-header">
@@ -335,16 +320,11 @@
         <div class="drawer-actions">
           <button
             class="drawer-expand-button"
-            onclick={toggleDrawerExpanded}
-            title={drawerExpanded ? "Collapse" : "Expand to full view"}
+            onclick={() => onOpenDetail(selectedRun.run_id)}
+            title="Expand to full view"
           >
-            {#if drawerExpanded}
-              <Minimize2 size={12} />
-              <span>Collapse</span>
-            {:else}
-              <Maximize2 size={12} />
-              <span>Expand</span>
-            {/if}
+            <Maximize2 size={12} />
+            <span>Expand</span>
           </button>
           {#if selectedRun.modal_app_url}
             <a
@@ -431,22 +411,6 @@
         {/if}
       </section>
       </div>
-
-      {#if drawerExpanded}
-        <section class="drawer-section drawer-detail-section">
-          <TrainingRunDetailPage
-            runId={selectedRun.run_id}
-            {allRuns}
-            {modelName}
-            {getStatus}
-            {getFrameworkStatus}
-            {showFrameworkStatus}
-            {fmtDuration}
-            onBack={closeDrawer}
-            embedded
-          />
-        </section>
-      {/if}
     </div>
   </Drawer>
 {/if}
@@ -656,45 +620,6 @@
     width: 100%;
     height: 100%;
     max-height: 100vh;
-  }
-
-  .drawer-detail-section {
-    padding: 16px 20px 24px;
-  }
-
-  /* Expanded: header spans the top, then a wide left column for the full
-     rollouts + live-logs detail view and a narrow right summary column.
-     The drawer is pinned to the viewport (100vh) with a fixed header row,
-     and the two columns each scroll on their own. */
-  .run-drawer.expanded {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(320px, 400px);
-    align-items: start;
-    height: auto;
-    max-height: 100vh;
-  }
-
-  .run-drawer.expanded .drawer-header {
-    grid-column: 1 / -1;
-  }
-
-  /* Each column caps at the viewport (minus the header row) and scrolls on
-     its own. When content is short the column shrinks to fit, so there's no
-     empty stretched gap below it. */
-  .run-drawer.expanded .drawer-detail-section {
-    grid-column: 1;
-    grid-row: 2;
-    border-top: 0;
-    max-height: calc(100vh - 78px);
-    overflow-y: auto;
-  }
-
-  .run-drawer.expanded .drawer-summary {
-    grid-column: 2;
-    grid-row: 2;
-    border-left: 1px solid var(--color-c-gray-10, #2f2f2f);
-    max-height: calc(100vh - 78px);
-    overflow-y: auto;
   }
 
   .drawer-header {

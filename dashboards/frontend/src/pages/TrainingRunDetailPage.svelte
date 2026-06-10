@@ -1,5 +1,6 @@
 <script>
-  import { ArrowLeft, ChevronLeft, ChevronRight, ExternalLink, X } from "lucide-svelte";
+  import { ArrowLeft, ChevronLeft, ChevronRight, ExternalLink, Minimize2, X } from "lucide-svelte";
+  import CollapsibleSection from "../components/CollapsibleSection.svelte";
   import FrameworkStageProgress from "../components/FrameworkStageProgress.svelte";
   import StatusPill from "../components/StatusPill.svelte";
   import TimeAgo from "../components/TimeAgo.svelte";
@@ -15,6 +16,8 @@
     showFrameworkStatus,
     fmtDuration,
     onBack,
+    // "Collapse" drops the full detail page back to the list as a summary drawer.
+    onCollapse,
     // When rendered inside the expanded run drawer the surrounding UI already
     // shows the header/title/summary, so we hide them and render only the
     // unique rollouts + logs content.
@@ -402,17 +405,25 @@
         <ArrowLeft size={14} strokeWidth={2.1} />
         <span>Back to runs</span>
       </button>
-      {#if run?.modal_app_url}
-        <a
-          class="modal-link"
-          href={run.modal_app_url}
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <span>Open in Modal</span>
-          <ExternalLink size={12} strokeWidth={2.1} />
-        </a>
-      {/if}
+      <div class="detail-header-actions">
+        {#if onCollapse}
+          <button class="detail-collapse-button" onclick={onCollapse} title="Collapse to drawer">
+            <Minimize2 size={12} strokeWidth={2.1} />
+            <span>Collapse</span>
+          </button>
+        {/if}
+        {#if run?.modal_app_url}
+          <a
+            class="modal-link"
+            href={run.modal_app_url}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            <span>Open in Modal</span>
+            <ExternalLink size={12} strokeWidth={2.1} />
+          </a>
+        {/if}
+      </div>
     </header>
   {/if}
 
@@ -469,14 +480,16 @@
     </dl>
     {/if}
 
-    <section class="rollouts">
-      <div class="rollouts-header">
-        <h2>Rollouts</h2>
-        <span class="rollouts-count">
-          {rolloutSummaries.length} step{rolloutSummaries.length === 1 ? "" : "s"}
-        </span>
-      </div>
-
+    <CollapsibleSection>
+      {#snippet title()}
+        <div class="section-title-row">
+          <h2>Rollouts</h2>
+          <span class="rollouts-count">
+            {rolloutSummaries.length} step{rolloutSummaries.length === 1 ? "" : "s"}
+          </span>
+        </div>
+      {/snippet}
+      {#snippet body()}
       {#if rolloutsLoading && !rolloutSummaries.length}
         <div class="empty">Loading rollouts…</div>
       {:else if rolloutsError}
@@ -614,30 +627,33 @@
           </tbody>
         </table>
       {/if}
-    </section>
+      {/snippet}
+    </CollapsibleSection>
 
-    <section class="logs">
-      <div class="logs-header">
-        <h2>Modal logs</h2>
-        <span class="logs-status">
-          {#if logState === "streaming"}
-            <span class="dot dot-live"></span> live
-          {:else if logState === "paused"}
-            <span class="dot dot-dim"></span> paused
-          {:else if logState === "reconnecting"}
-            <span class="dot dot-warn"></span> reconnecting…
-          {:else if logState === "done"}
-            <span class="dot dot-dim"></span> finished
-          {:else if logState === "error"}
-            <span class="dot dot-err"></span> error
-          {:else if String(run?.status || "").toLowerCase() !== "running"}
-            <span class="dot dot-dim"></span> run not active
-          {:else}
-            <span class="dot dot-dim"></span> idle
-          {/if}
-        </span>
-      </div>
-
+    <CollapsibleSection>
+      {#snippet title()}
+        <div class="section-title-row">
+          <h2>Modal logs</h2>
+          <span class="logs-status">
+            {#if logState === "streaming"}
+              <span class="dot dot-live"></span> live
+            {:else if logState === "paused"}
+              <span class="dot dot-dim"></span> paused
+            {:else if logState === "reconnecting"}
+              <span class="dot dot-warn"></span> reconnecting…
+            {:else if logState === "done"}
+              <span class="dot dot-dim"></span> finished
+            {:else if logState === "error"}
+              <span class="dot dot-err"></span> error
+            {:else if String(run?.status || "").toLowerCase() !== "running"}
+              <span class="dot dot-dim"></span> run not active
+            {:else}
+              <span class="dot dot-dim"></span> idle
+            {/if}
+          </span>
+        </div>
+      {/snippet}
+      {#snippet body()}
       <div class="logs-controls">
         <button
           class="log-button"
@@ -708,7 +724,8 @@
           {/if}
         </div>
       {/if}
-    </section>
+      {/snippet}
+    </CollapsibleSection>
   {/if}
 </section>
 
@@ -751,6 +768,32 @@
   .back-button:hover {
     color: var(--text);
     background: var(--color-c-gray-10, #2f2f2f);
+  }
+
+  .detail-header-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .detail-collapse-button {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border: 1px solid var(--border, #2f2f2f);
+    border-radius: 6px;
+    background: none;
+    color: var(--muted);
+    cursor: pointer;
+    font: inherit;
+    font-size: 12px;
+    font-weight: 500;
+    padding: 4px 8px;
+  }
+
+  .detail-collapse-button:hover {
+    color: var(--text-bright);
+    border-color: var(--border-strong, #4a4a4a);
   }
 
   .modal-link {
@@ -817,19 +860,18 @@
     grid-column: 1 / -1;
   }
 
-  .rollouts {
-    border-top: 1px solid var(--border, #2f2f2f);
-    padding-top: 24px;
-  }
-
-  .rollouts-header {
+  /* Full-width header row inside a CollapsibleSection title snippet: section
+     name on the left, count/status on the right, chevron sits after it. */
+  .section-title-row {
     display: flex;
-    align-items: baseline;
+    flex: 1;
+    align-items: center;
     justify-content: space-between;
-    margin-bottom: 16px;
+    gap: 12px;
+    min-width: 0;
   }
 
-  .rollouts-header h2 {
+  .section-title-row h2 {
     font-size: 16px;
     font-weight: 600;
     color: var(--text-bright);
@@ -1067,26 +1109,6 @@
     color: var(--muted);
     font-size: 13px;
     padding: 16px 0;
-  }
-
-  .logs {
-    border-top: 1px solid var(--border, #2f2f2f);
-    padding-top: 24px;
-    margin-top: 24px;
-  }
-
-  .logs-header {
-    display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    margin-bottom: 12px;
-  }
-
-  .logs-header h2 {
-    font-size: 16px;
-    font-weight: 600;
-    color: var(--text-bright);
-    margin: 0;
   }
 
   .logs-status {
