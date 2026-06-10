@@ -433,6 +433,28 @@ def fastapi_app():
             return None
         return parsed if parsed >= 0 else None
 
+    # ── Response display ──────────────────────────────────────────────────
+    # Responses are parsed at write time (slime recorder for rollouts, the eval
+    # harness for evals) and stored as ``parsed_response``. Here we just surface
+    # that cleaned content for display, keeping the raw under ``raw_response``.
+    def _apply_parsed(rows: Any) -> None:
+        if not isinstance(rows, list):
+            return
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            parsed = row.get("parsed_response")
+            if not isinstance(parsed, dict) or not isinstance(parsed.get("content"), str):
+                continue
+            raw = row.get("response")
+            if isinstance(raw, str):
+                row["raw_response"] = raw
+            row["response"] = parsed.get("content") or ""
+            if parsed.get("thinking"):
+                row["thinking"] = parsed["thinking"]
+            if parsed.get("tool_calls"):
+                row["tool_calls"] = parsed["tool_calls"]
+
     def _bearer_token(authorization: str | None) -> str:
         scheme, _, token = (authorization or "").partition(" ")
         if scheme.lower() != "bearer":
@@ -615,12 +637,14 @@ def fastapi_app():
             data = await run_in_threadpool(
                 vol_get, MetadataStore.TRAINING_ROLLOUTS, key
             )
-            return JSONResponse(data)
         except KeyError:
             raise HTTPException(
                 status_code=404,
                 detail=f"Rollout {rollout_id} for run {training_run_id!r} not found",
             )
+        if isinstance(data, dict):
+            _apply_parsed(data.get("samples"))
+        return JSONResponse(data)
 
     # ── Live Modal log stream (SSE, pure pass-through) ───────────────────
 
@@ -819,12 +843,14 @@ def fastapi_app():
     async def eval_detail(eval_id: str):
         try:
             data = await run_in_threadpool(vol_get, MetadataStore.EVAL_RESULTS, eval_id)
-            return JSONResponse(data)
         except KeyError:
             raise HTTPException(
                 status_code=404,
                 detail=f"EvalResult {eval_id!r} not found",
             )
+        if isinstance(data, dict):
+            _apply_parsed(data.get("rows"))
+        return JSONResponse(data)
 
     # ── Deployments ──────────────────────────────────────────────────────
 

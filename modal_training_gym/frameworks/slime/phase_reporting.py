@@ -14,6 +14,9 @@ from modal_training_gym.common.status import SlimeStatus
 
 PHASE_REPORT_URL_ENV = "SLIME_PHASE_REPORT_URL"
 PHASE_REPORT_TOKEN_ENV = "SLIME_PHASE_REPORT_TOKEN"
+# Import path of the run model's response parser (a (str) -> ParsedResponse
+# callable). The launcher exports it; the recorder resolves and applies it.
+RESPONSE_PARSER_PATH_ENV = "TRAINING_GYM_RESPONSE_PARSER_PATH"
 CUSTOM_ROLLOUT_LOG_FUNCTION_PATH_KEY = "training_gym_custom_rollout_log_function_path"
 CUSTOM_EVAL_ROLLOUT_LOG_FUNCTION_PATH_KEY = (
     "training_gym_custom_eval_rollout_log_function_path"
@@ -243,7 +246,43 @@ def _coerce_score(value: Any) -> float:
         return 0.0
 
 
-def _sample_to_dict(sample: Any) -> dict[str, Any]:
+_RESPONSE_PARSER: Any = None
+_RESPONSE_PARSER_LOADED = False
+
+
+def _response_parser() -> Any:
+    """Resolve the run model's response parser — a ``(str) -> ParsedResponse``
+    callable — from the import path the launcher exports in
+    ``RESPONSE_PARSER_PATH_ENV``. Cached per process; ``None`` if unset."""
+    global _RESPONSE_PARSER, _RESPONSE_PARSER_LOADED
+    if not _RESPONSE_PARSER_LOADED:
+        _RESPONSE_PARSER_LOADED = True
+        _RESPONSE_PARSER = _resolve_hook(
+            os.environ.get(RESPONSE_PARSER_PATH_ENV, "").strip()
+        )
+    return _RESPONSE_PARSER
+
+
+def _parsed_response_dict(text: str, parser: Any) -> dict[str, Any] | None:
+    """Run ``text`` through ``parser`` and return a JSON-able dict, or ``None``
+    when there's no text or no parser."""
+    if parser is None or not text:
+        return None
+    try:
+        parsed = parser(text)
+    except Exception:
+        return None
+    return {
+        "content": getattr(parsed, "content", "") or "",
+        "thinking": getattr(parsed, "thinking", None),
+        "tool_calls": [
+            {"name": tc.name, "arguments": tc.arguments}
+            for tc in (getattr(parsed, "tool_calls", None) or [])
+        ],
+    }
+
+
+def _sample_to_dict(sample: Any, parser: Any = None) -> dict[str, Any]:
     """Best-effort extraction of (prompt, response, reward, metadata) from a
     slime Sample-like object. Duck-typed so we don't import slime here."""
     if isinstance(sample, dict):
@@ -265,12 +304,19 @@ def _sample_to_dict(sample: Any) -> dict[str, Any]:
         if value is not None:
             metadata[key] = value
 
-    return {
+    response_text = _coerce_text(response)
+    out: dict[str, Any] = {
         "score": _coerce_score(reward),
         "prompt": _coerce_text(prompt),
-        "response": _coerce_text(response),
+        "response": response_text,
         "metadata": metadata,
     }
+    # Store raw + parsed (mirrors eval's EvalRowResult) so the dashboard can show
+    # cleaned content without re-parsing. Parsing happens here, in the recorder.
+    parsed = _parsed_response_dict(response_text, parser)
+    if parsed is not None:
+        out["parsed_response"] = parsed
+    return out
 
 
 def _metrics_to_dict(metrics: Any) -> dict[str, Any]:
@@ -289,8 +335,9 @@ def report_rollout_samples(
     """Post one TrainingRolloutResult-shaped payload to the dashboard."""
     if samples is None:
         return
+    parser = _response_parser()
     try:
-        sample_dicts = [_sample_to_dict(s) for s in samples]
+        sample_dicts = [_sample_to_dict(s, parser) for s in samples]
     except TypeError:
         return
     payload = {

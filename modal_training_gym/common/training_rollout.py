@@ -32,6 +32,9 @@ class TrainingRolloutSample(BaseModel):
     score: float = 0.0
     prompt: str = ""
     response: str = ""
+    # Parsed by the slime recorder (content/thinking/tool_calls), mirroring
+    # eval's EvalRowResult so the dashboard can show cleaned content as-is.
+    parsed_response: dict[str, Any] | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 

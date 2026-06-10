@@ -149,6 +149,17 @@ def _build_conversion_config(slime_cfg: Any, model: Any = None) -> dict[str, Any
 _CONVERSION_CONFIG_FILE = ".conversion_config.json"
 
 
+def _response_parser_path(model: Any) -> str:
+    """Import path of the model's response parser so the rollout recorder can
+    resolve and apply it remotely. Empty when the model sets no parser."""
+    fn = getattr(model, "response_parser", None) if model is not None else None
+    if fn is None:
+        return ""
+    module = getattr(fn, "__module__", "")
+    qualname = getattr(fn, "__qualname__", "") or getattr(fn, "__name__", "")
+    return f"{module}.{qualname}" if module and qualname else ""
+
+
 def _has_torch_dist_checkpoint(save_path: str) -> bool:
     if not os.path.isdir(save_path):
         return False
@@ -1160,6 +1171,7 @@ def build_slime_app(
                     "TRAINING_GYM_TRAINING_RUN_ID": training_run_id,
                     "TRAINING_GYM_APP_NAME": app_name,
                     "TRAINING_GYM_TOTAL_STEPS": str(slime.num_rollout),
+                    "TRAINING_GYM_RESPONSE_PARSER_PATH": _response_parser_path(model),
                     "SLIME_PHASE_REPORT_URL": phase_report_url,
                     **slime.environment,
                     "SLIME_PHASE_REPORT_TOKEN": framework_status_token,
