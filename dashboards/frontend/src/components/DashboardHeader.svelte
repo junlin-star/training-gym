@@ -1,7 +1,20 @@
 <script>
   import { RefreshCw } from "lucide-svelte";
 
-  let { title, statusText, onRefresh } = $props();
+  let { title, statusText, refreshing = false, onRefresh } = $props();
+
+  // Spin while a fetch is in flight, with a short tail after it finishes so a
+  // fast refresh still completes a smooth rotation instead of jerking to a stop.
+  let spinning = $state(false);
+  $effect(() => {
+    if (refreshing) {
+      spinning = true;
+      return;
+    }
+    if (!spinning) return;
+    const t = setTimeout(() => (spinning = false), 500);
+    return () => clearTimeout(t);
+  });
 </script>
 
 <header class="workspace-header">
@@ -11,7 +24,9 @@
       <span class="status-text">{statusText}</span>
     {/if}
     <button class="btn" onclick={onRefresh}>
-      <RefreshCw size={16} strokeWidth={2.1} />
+      <span class="refresh-icon" class:spinning>
+        <RefreshCw size={16} strokeWidth={2.1} />
+      </span>
       <span>Refresh</span>
     </button>
   </div>
@@ -62,5 +77,19 @@
   .btn:hover {
     border-color: var(--color-c-gray-50, #8b8b8b);
     color: var(--text-bright);
+  }
+
+  .refresh-icon {
+    display: inline-flex;
+  }
+
+  .refresh-icon.spinning {
+    animation: spin 0.6s linear infinite;
+  }
+
+  @keyframes spin {
+    to {
+      transform: rotate(360deg);
+    }
   }
 </style>

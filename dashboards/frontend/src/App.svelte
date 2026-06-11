@@ -29,6 +29,10 @@
   // When set (and no full detail page is open), the training list shows a
   // summary drawer for this run — set by "Collapse" on the detail page.
   let drawerRunId = $state(null);
+  // True while any data fetch is in flight (manual or the 5s auto-refresh) —
+  // drives the spinning refresh button. Distinct from `loading`, which only
+  // gates the cold-start skeleton.
+  let refreshing = $state(false);
   let runsRequestId = 0;
   let evalsRequestId = 0;
   let deploymentsRequestId = 0;
@@ -88,9 +92,9 @@
     void loadRuns();
 
     // Auto-refresh the active page's data every 5s so running training runs,
-    // their status/stage and rollouts stay live without a manual refresh.
-    // Quiet so the table doesn't flash its loading skeleton each poll.
-    const refresh = window.setInterval(() => load(true), 5000);
+    // their status/stage and rollouts stay live. Current data stays on screen
+    // (no skeleton) and only the refresh button spins while fetching.
+    const refresh = window.setInterval(load, 5000);
 
     return () => {
       window.removeEventListener("popstate", syncPageWithPath);
@@ -216,13 +220,14 @@
     );
   }
 
-  async function loadRuns(quiet = false) {
+  async function loadRuns() {
     const requestId = ++runsRequestId;
     const isStale = () => requestId !== runsRequestId;
 
-    // `quiet` (background auto-refresh) skips the loading flag so the table
-    // doesn't flash its skeleton on every poll.
-    if (!quiet) loading = true;
+    // Skeleton only on a cold load (no data yet). Refreshes keep the current
+    // rows on screen and swap them out when the new data arrives — the spinning
+    // refresh button is the only "loading" affordance.
+    if (!allRuns.length) loading = true;
     error = null;
 
     try {
@@ -238,14 +243,14 @@
       activeRecipes = new Set();
       activeStatuses = new Set();
     }
-    if (!isStale() && !quiet) loading = false;
+    if (!isStale()) loading = false;
   }
 
-  async function loadEvals(quiet = false) {
+  async function loadEvals() {
     const requestId = ++evalsRequestId;
     const isStale = () => requestId !== evalsRequestId;
 
-    if (!quiet) loadingEvals = true;
+    if (!allEvals.length) loadingEvals = true;
     try {
       const evals = await fetchWithTimeout(fetchEvals, 15000, "evals");
       if (isStale()) return;
@@ -256,14 +261,14 @@
       allEvals = [];
       console.warn(getErrorMessage(reason));
     }
-    if (!isStale() && !quiet) loadingEvals = false;
+    if (!isStale()) loadingEvals = false;
   }
 
-  async function loadDeployments(quiet = false) {
+  async function loadDeployments() {
     const requestId = ++deploymentsRequestId;
     const isStale = () => requestId !== deploymentsRequestId;
 
-    if (!quiet) loadingDeployments = true;
+    if (!allDeployments.length) loadingDeployments = true;
     try {
       const deployments = await fetchWithTimeout(fetchDeployments, 15000, "deployments");
       if (isStale()) return;
@@ -274,16 +279,22 @@
       allDeployments = [];
       console.warn(getErrorMessage(reason));
     }
-    if (!isStale() && !quiet) loadingDeployments = false;
+    if (!isStale()) loadingDeployments = false;
   }
 
-  function load(quiet = false) {
-    void loadRuns(quiet);
-    if (activePage === "evals") {
-      void loadEvals(quiet);
-      void loadDeployments(quiet);
+  async function load() {
+    refreshing = true;
+    try {
+      const tasks = [loadRuns()];
+      if (activePage === "evals") {
+        tasks.push(loadEvals(), loadDeployments());
+      } else if (activePage === "deployments") {
+        tasks.push(loadDeployments());
+      }
+      await Promise.all(tasks);
+    } finally {
+      refreshing = false;
     }
-    if (activePage === "deployments") void loadDeployments(quiet);
   }
 
   $effect(() => {
@@ -712,7 +723,12 @@
     <Sidebar {navItems} {activePage} onNavigate={setActivePage} />
 
     <main class="workspace">
-      <DashboardHeader title={pageMeta[activePage].title} {statusText} onRefresh={load} />
+      <DashboardHeader
+        title={pageMeta[activePage].title}
+        {statusText}
+        {refreshing}
+        onRefresh={load}
+      />
 
     {#if activePage === "training" && activeTrainingRunId}
       <TrainingRunDetailPage
