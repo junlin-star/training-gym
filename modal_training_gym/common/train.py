@@ -307,6 +307,12 @@ class TrainConfig:
     model: ModelConfig
     recipe: BaseTrainRecipe
     checkpoint: Checkpoint | None = None
+    # Run the training app detached so it keeps running on Modal even if the
+    # local client disconnects (terminal closed, laptop asleep). The CLI's
+    # ``modal run --detach`` only detaches the entrypoint, not the nested
+    # ``app.run()`` the driver opens — so we detach it here. Set False for an
+    # attached run that Ctrl-C stops.
+    detach: bool = True
     _stable_id: str | None = _dc.field(default=None, init=False, repr=False)
 
     # ── Public API ────────────────────────────────────────────────────────────
@@ -476,7 +482,7 @@ class TrainConfig:
         app = self._build_app()
         result_dict = None
         with modal.enable_output():
-            with app.run():
+            with app.run(detach=self.detach):
                 modal_app_id = app.app_id or ""
                 modal_app_url = modal_app_dashboard_url(modal_app_id)
                 status_display.set_modal_app_url(modal_app_url)
@@ -600,7 +606,9 @@ class TrainConfig:
         if result_dict is None:
             raise RuntimeError(
                 "Training app exited before returning a result. "
-                "If you interrupted the run, restart with `modal run --detach`."
+                "The run is detached, so it keeps running on Modal even if this "
+                "client disconnects — reattach with `modal app logs <app-id>` or "
+                "stop it with `modal app stop <app-id>`."
             )
         result = TrainResult(**TrainResult._parse_model_config(result_dict))
         print(f"Training complete: {result.training_run_id}")

@@ -89,7 +89,8 @@
 
     // Auto-refresh the active page's data every 5s so running training runs,
     // their status/stage and rollouts stay live without a manual refresh.
-    const refresh = window.setInterval(load, 5000);
+    // Quiet so the table doesn't flash its loading skeleton each poll.
+    const refresh = window.setInterval(() => load(true), 5000);
 
     return () => {
       window.removeEventListener("popstate", syncPageWithPath);
@@ -215,11 +216,13 @@
     );
   }
 
-  async function loadRuns() {
+  async function loadRuns(quiet = false) {
     const requestId = ++runsRequestId;
     const isStale = () => requestId !== runsRequestId;
 
-    loading = true;
+    // `quiet` (background auto-refresh) skips the loading flag so the table
+    // doesn't flash its skeleton on every poll.
+    if (!quiet) loading = true;
     error = null;
 
     try {
@@ -235,14 +238,14 @@
       activeRecipes = new Set();
       activeStatuses = new Set();
     }
-    if (!isStale()) loading = false;
+    if (!isStale() && !quiet) loading = false;
   }
 
-  async function loadEvals() {
+  async function loadEvals(quiet = false) {
     const requestId = ++evalsRequestId;
     const isStale = () => requestId !== evalsRequestId;
 
-    loadingEvals = true;
+    if (!quiet) loadingEvals = true;
     try {
       const evals = await fetchWithTimeout(fetchEvals, 15000, "evals");
       if (isStale()) return;
@@ -253,14 +256,14 @@
       allEvals = [];
       console.warn(getErrorMessage(reason));
     }
-    if (!isStale()) loadingEvals = false;
+    if (!isStale() && !quiet) loadingEvals = false;
   }
 
-  async function loadDeployments() {
+  async function loadDeployments(quiet = false) {
     const requestId = ++deploymentsRequestId;
     const isStale = () => requestId !== deploymentsRequestId;
 
-    loadingDeployments = true;
+    if (!quiet) loadingDeployments = true;
     try {
       const deployments = await fetchWithTimeout(fetchDeployments, 15000, "deployments");
       if (isStale()) return;
@@ -271,16 +274,16 @@
       allDeployments = [];
       console.warn(getErrorMessage(reason));
     }
-    if (!isStale()) loadingDeployments = false;
+    if (!isStale() && !quiet) loadingDeployments = false;
   }
 
-  function load() {
-    void loadRuns();
+  function load(quiet = false) {
+    void loadRuns(quiet);
     if (activePage === "evals") {
-      void loadEvals();
-      void loadDeployments();
+      void loadEvals(quiet);
+      void loadDeployments(quiet);
     }
-    if (activePage === "deployments") void loadDeployments();
+    if (activePage === "deployments") void loadDeployments(quiet);
   }
 
   $effect(() => {
