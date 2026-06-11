@@ -114,7 +114,8 @@ def _dataset_preview():
 @code
 def _dataset_preview_code():
     rows = dataset.load()
-    for row in rows[:2]:
+    for i in range(min(2, len(rows))):
+        row = rows[i]
         prompt = row["prompt"]
         if isinstance(prompt, list):
             prompt = prompt[0]["content"] if prompt else ""
