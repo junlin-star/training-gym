@@ -72,4 +72,5 @@ class Qwen3_6_35b_Recipe(SlimeRecipe):
     megatron_to_hf_mode: str = ""
     ref_load: str = "/checkpoints/Qwen3.6-35B-A3B_torch_dist_tp2pp2"
     save_interval: int = 20
+    no_save_optim: bool = True
     eval_interval: int | None = None

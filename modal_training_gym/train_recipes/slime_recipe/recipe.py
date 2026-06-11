@@ -188,6 +188,7 @@ class SlimeRecipe(BaseTrainRecipe):
     # ── Checkpointing (optional) ───────────────────────────────────────────
     save: str = "/checkpoints"
     load: str = ""
+    no_save_optim: bool = False
     megatron_to_hf_mode: str = ""
     use_fault_tolerance: bool = True
 
