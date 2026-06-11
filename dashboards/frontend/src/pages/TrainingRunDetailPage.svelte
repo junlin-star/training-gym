@@ -169,7 +169,7 @@
       const status = String(run?.status || "").toLowerCase();
       if (status && status !== "running") return;
       void loadRollouts(controller.signal);
-    }, 8000);
+    }, 5000);
 
     return () => {
       controller.abort();

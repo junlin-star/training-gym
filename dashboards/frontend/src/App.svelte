@@ -86,7 +86,15 @@
 
     window.addEventListener("popstate", syncPageWithPath);
     void loadRuns();
-    return () => window.removeEventListener("popstate", syncPageWithPath);
+
+    // Auto-refresh the active page's data every 5s so running training runs,
+    // their status/stage and rollouts stay live without a manual refresh.
+    const refresh = window.setInterval(load, 5000);
+
+    return () => {
+      window.removeEventListener("popstate", syncPageWithPath);
+      window.clearInterval(refresh);
+    };
   });
 
   function getRecipe(run) {
