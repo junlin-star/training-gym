@@ -10,14 +10,3 @@ When updating common code, think about what other tutorials or configurations th
 
 ### Validation should be cheap
 When possible, limit the total number of steps. Tutorials should be cheap and easy to run.
-
-## Adding a new model
-
-When adding a new model to the training-gym, you should first try adding the model as a `SlimeRecipe`. You can find examples in [slime model scripts](https://github.com/THUDM/slime/tree/main/scripts/models) or [slime examples](https://github.com/THUDM/slime/tree/main/examples).
-
-
-`SlimeRecipe` by default use mbridge (`megatron_to_hf_mode=""`) instead of bridge (`megatron_to_hf_mode="bridge"`), which requires it to preconvert the weights. To determine if we should use bridge mode or mbridge, look upstream at the slime codebase at what was used for similar models.
-
-### Model Naming Convention
-
-Naming convention: For the model configuration, it should be `_` separated by model family identifiers and replacing `.` for versioning (e.g. `Qwen3_4B`, `Qwen3_6_35b`, `Kimi_K2_6`).

@@ -246,3 +246,86 @@ def test_param_summary_values_are_json_serializable():
 
     serialized = json.dumps(params)
     assert len(serialized) > 0
+
+
+def test_slime_recipe_wires_status_hooks_by_default():
+    """SlimeRecipe._fields() always wires the four status hook wrappers."""
+    recipe = Qwen3_4b_Recipe()
+
+    fields = recipe._fields()
+
+    assert (
+        fields["custom_rollout_log_function_path"]
+        == "modal_training_gym.frameworks.slime.phase_reporting.log_rollout_data"
+    )
+    assert (
+        fields["custom_eval_rollout_log_function_path"]
+        == "modal_training_gym.frameworks.slime.phase_reporting.log_eval_rollout_data"
+    )
+    assert (
+        fields["custom_megatron_before_log_prob_hook_path"]
+        == "modal_training_gym.frameworks.slime.phase_reporting.before_log_prob_hook"
+    )
+    assert (
+        fields["custom_megatron_before_train_step_hook_path"]
+        == "modal_training_gym.frameworks.slime.phase_reporting.before_train_step_hook"
+    )
+
+
+def test_slime_recipe_preserves_user_hook_paths_behind_wrappers():
+    """User-provided hook paths are preserved in extra_config behind the wrappers."""
+
+    def user_hook(*args):
+        return True
+
+    recipe = Qwen3_4b_Recipe(custom_rollout_log_function=user_hook)
+
+    fields = recipe._fields()
+
+    assert (
+        fields["custom_rollout_log_function_path"]
+        == "modal_training_gym.frameworks.slime.phase_reporting.log_rollout_data"
+    )
+    assert (
+        "training_gym_custom_rollout_log_function_path" in fields["custom_config_path"]
+    )
+    assert fields["custom_config_path"]["training_gym_custom_rollout_log_function_path"]
+
+
+def test_status_reporter_sends_bearer_token(monkeypatch):
+    """Framework status HTTP posts include the per-run bearer token."""
+    from modal_training_gym.common import status_reporter
+
+    captured: dict[str, str | float | None] = {}
+
+    class _Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def read(self):
+            return b"{}"
+
+    def fake_urlopen(request, timeout):
+        captured["authorization"] = request.get_header("Authorization")
+        captured["content_type"] = request.get_header("Content-type")
+        captured["timeout"] = timeout
+        return _Response()
+
+    monkeypatch.setattr(status_reporter, "urlopen", fake_urlopen)
+
+    status_reporter._post(
+        {
+            "_url": "https://gym.example.test/api/framework-status",
+            "_timeout": 1.5,
+            "_token": "secret-token",
+            "training_run_id": "run-123",
+            "phase": "training",
+        }
+    )
+
+    assert captured["authorization"] == "Bearer secret-token"
+    assert captured["content_type"] == "application/json"
+    assert captured["timeout"] == 1.5

@@ -5,6 +5,7 @@
   import Sidebar from "./components/Sidebar.svelte";
   import DashboardHeader from "./components/DashboardHeader.svelte";
   import TrainingPage from "./pages/TrainingPage.svelte";
+  import TrainingRunDetailPage from "./pages/TrainingRunDetailPage.svelte";
   import DeploymentsPage from "./pages/DeploymentsPage.svelte";
   import EvalsPage from "./pages/EvalsPage.svelte";
   import { fetchRuns, fetchEvals, fetchDeployments, fetchEvalDetail } from "./lib/api.js";
@@ -23,7 +24,19 @@
   let search = $state("");
   let activeRecipes = $state(new Set());
   let activeStatuses = $state(new Set());
+  // Recipe/status values we've seen across loads. New ones are auto-enabled in
+  // the filters once; the user's selections are never reset by a refresh.
+  let seenRecipes = new Set();
+  let seenStatuses = new Set();
   let activePage = $state("training");
+  let activeTrainingRunId = $state(null);
+  // When set (and no full detail page is open), the training list shows a
+  // summary drawer for this run — set by "Collapse" on the detail page.
+  let drawerRunId = $state(null);
+  // True while any data fetch is in flight (manual or the 5s auto-refresh) —
+  // drives the spinning refresh button. Distinct from `loading`, which only
+  // gates the cold-start skeleton.
+  let refreshing = $state(false);
   let runsRequestId = 0;
   let evalsRequestId = 0;
   let deploymentsRequestId = 0;
@@ -50,6 +63,12 @@
     return "training";
   }
 
+  function runIdFromPath(pathname) {
+    if (!pathname.startsWith("/training/")) return null;
+    const tail = pathname.slice("/training/".length).split("/")[0];
+    return tail ? decodeURIComponent(tail) : null;
+  }
+
   const navItems = [
     { key: "training", label: "Training runs", Icon: Zap, path: pagePaths.training },
     { key: "deployments", label: "Deployments", Icon: Rocket, path: pagePaths.deployments },
@@ -58,11 +77,13 @@
 
   if (typeof window !== "undefined") {
     activePage = pageFromPath(window.location.pathname);
+    activeTrainingRunId = runIdFromPath(window.location.pathname);
   }
 
   onMount(() => {
     const syncPageWithPath = () => {
       activePage = pageFromPath(window.location.pathname);
+      activeTrainingRunId = runIdFromPath(window.location.pathname);
     };
 
     if (window.location.pathname === "/") {
@@ -73,7 +94,16 @@
 
     window.addEventListener("popstate", syncPageWithPath);
     void loadRuns();
-    return () => window.removeEventListener("popstate", syncPageWithPath);
+
+    // Auto-refresh the active page's data every 5s so running training runs,
+    // their status/stage and rollouts stay live. Current data stays on screen
+    // (no skeleton) and only the refresh button spins while fetching.
+    const refresh = window.setInterval(load, 5000);
+
+    return () => {
+      window.removeEventListener("popstate", syncPageWithPath);
+      window.clearInterval(refresh);
+    };
   });
 
   function getRecipe(run) {
@@ -198,21 +228,48 @@
     const requestId = ++runsRequestId;
     const isStale = () => requestId !== runsRequestId;
 
-    loading = true;
+    // Skeleton only on a cold load (no data yet). Refreshes keep the current
+    // rows on screen and swap them out when the new data arrives — the spinning
+    // refresh button is the only "loading" affordance.
+    if (!allRuns.length) loading = true;
     error = null;
 
     try {
       const runs = await fetchWithTimeout(fetchRuns, 30000, "runs");
       if (isStale()) return;
       allRuns = runs;
-      activeRecipes = new Set(allRuns.map(getRecipe));
-      activeStatuses = new Set(allRuns.map(getStatus));
+      // Auto-enable newly-seen recipes/statuses without resetting the user's
+      // current filter selection on every refresh.
+      const nextRecipes = new Set(activeRecipes);
+      const nextStatuses = new Set(activeStatuses);
+      let recipesChanged = false;
+      let statusesChanged = false;
+      for (const run of allRuns) {
+        const recipe = getRecipe(run);
+        if (!seenRecipes.has(recipe)) {
+          seenRecipes.add(recipe);
+          nextRecipes.add(recipe);
+          recipesChanged = true;
+        }
+        const status = getStatus(run);
+        if (!seenStatuses.has(status)) {
+          seenStatuses.add(status);
+          nextStatuses.add(status);
+          statusesChanged = true;
+        }
+      }
+      if (recipesChanged) activeRecipes = nextRecipes;
+      if (statusesChanged) activeStatuses = nextStatuses;
     } catch (e) {
       if (isStale()) return;
-      error = getErrorMessage(e);
-      allRuns = [];
-      activeRecipes = new Set();
-      activeStatuses = new Set();
+      // Keep the data we already have on a transient refresh failure — only
+      // surface the error (and clear) when there's nothing to show yet.
+      // Otherwise the page flickers to "Loading…"/empty on every flaky poll.
+      if (!allRuns.length) {
+        error = getErrorMessage(e);
+        activeRecipes = new Set();
+        activeStatuses = new Set();
+      }
     }
     if (!isStale()) loading = false;
   }
@@ -221,7 +278,7 @@
     const requestId = ++evalsRequestId;
     const isStale = () => requestId !== evalsRequestId;
 
-    loadingEvals = true;
+    if (!allEvals.length) loadingEvals = true;
     try {
       const evals = await fetchWithTimeout(fetchEvals, 15000, "evals");
       if (isStale()) return;
@@ -229,7 +286,7 @@
       hasLoadedEvals = true;
     } catch (reason) {
       if (isStale()) return;
-      allEvals = [];
+      if (!allEvals.length) allEvals = [];
       console.warn(getErrorMessage(reason));
     }
     if (!isStale()) loadingEvals = false;
@@ -239,7 +296,7 @@
     const requestId = ++deploymentsRequestId;
     const isStale = () => requestId !== deploymentsRequestId;
 
-    loadingDeployments = true;
+    if (!allDeployments.length) loadingDeployments = true;
     try {
       const deployments = await fetchWithTimeout(fetchDeployments, 15000, "deployments");
       if (isStale()) return;
@@ -247,19 +304,25 @@
       hasLoadedDeployments = true;
     } catch (reason) {
       if (isStale()) return;
-      allDeployments = [];
+      if (!allDeployments.length) allDeployments = [];
       console.warn(getErrorMessage(reason));
     }
     if (!isStale()) loadingDeployments = false;
   }
 
-  function load() {
-    void loadRuns();
-    if (activePage === "evals") {
-      void loadEvals();
-      void loadDeployments();
+  async function load() {
+    refreshing = true;
+    try {
+      const tasks = [loadRuns()];
+      if (activePage === "evals") {
+        tasks.push(loadEvals(), loadDeployments());
+      } else if (activePage === "deployments") {
+        tasks.push(loadDeployments());
+      }
+      await Promise.all(tasks);
+    } finally {
+      refreshing = false;
     }
-    if (activePage === "deployments") void loadDeployments();
   }
 
   $effect(() => {
@@ -602,11 +665,48 @@
 
   function setActivePage(page) {
     activePage = page;
+    activeTrainingRunId = null;
+    drawerRunId = null;
     if (typeof window === "undefined") return;
     const targetPath = pagePaths[page] || pagePaths.training;
     if (window.location.pathname !== targetPath) {
       window.history.pushState({}, "", targetPath);
     }
+  }
+
+  function backToTrainingList() {
+    activeTrainingRunId = null;
+    drawerRunId = null;
+    if (typeof window === "undefined") return;
+    if (window.location.pathname !== pagePaths.training) {
+      window.history.pushState({}, "", pagePaths.training);
+    }
+  }
+
+  // Opening a run shows the full detail page (a real route, not a drawer).
+  function openTrainingRunDetail(runId) {
+    drawerRunId = null;
+    activeTrainingRunId = runId;
+    if (typeof window === "undefined") return;
+    const target = `${pagePaths.training}/${encodeURIComponent(runId)}`;
+    if (window.location.pathname !== target) {
+      window.history.pushState({}, "", target);
+    }
+  }
+
+  // "Collapse" on the detail page drops back to the list and reopens the run
+  // as a summary drawer.
+  function collapseTrainingRunToDrawer() {
+    drawerRunId = activeTrainingRunId;
+    activeTrainingRunId = null;
+    if (typeof window === "undefined") return;
+    if (window.location.pathname !== pagePaths.training) {
+      window.history.pushState({}, "", pagePaths.training);
+    }
+  }
+
+  function closeTrainingDrawer() {
+    drawerRunId = null;
   }
 
   function openTrainingRun(runId) {
@@ -651,9 +751,26 @@
     <Sidebar {navItems} {activePage} onNavigate={setActivePage} />
 
     <main class="workspace">
-      <DashboardHeader title={pageMeta[activePage].title} {statusText} onRefresh={load} />
+      <DashboardHeader
+        title={pageMeta[activePage].title}
+        {statusText}
+        {refreshing}
+        onRefresh={load}
+      />
 
-    {#if activePage === "training"}
+    {#if activePage === "training" && activeTrainingRunId}
+      <TrainingRunDetailPage
+        runId={activeTrainingRunId}
+        {allRuns}
+        {modelName}
+        {getStatus}
+        {getFrameworkStatus}
+        {showFrameworkStatus}
+        {fmtDuration}
+        onBack={backToTrainingList}
+        onCollapse={collapseTrainingRunToDrawer}
+      />
+    {:else if activePage === "training"}
       <TrainingPage
         {allRuns}
         {completedTotal}
@@ -675,6 +792,9 @@
         {showFrameworkStatus}
         {fmtDuration}
         bind:search
+        {drawerRunId}
+        onOpenDetail={openTrainingRunDetail}
+        onCloseDrawer={closeTrainingDrawer}
         onToggleRecipe={toggleRecipe}
         onToggleAllRecipes={toggleAllRecipes}
         onToggleStatus={toggleStatus}

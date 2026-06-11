@@ -1,7 +1,7 @@
 <script>
   import { CheckCircle2, CircleX, Loader2, OctagonX, MinusCircle } from "lucide-svelte";
 
-  let { status, iconOnly = false } = $props();
+  let { status, iconOnly = false, label = null } = $props();
 
   const STATUS_MAP = {
     completed: "Completed",
@@ -19,7 +19,7 @@
     return s in STATUS_MAP ? s : "pending";
   });
 
-  let label = $derived(STATUS_MAP[normalizedStatus] ?? "Pending");
+  let statusLabel = $derived(label ?? (STATUS_MAP[normalizedStatus] ?? "Pending"));
 </script>
 
 <div
@@ -32,7 +32,7 @@
   class:status-stopped={normalizedStatus === "stopped"}
   class:status-failed={normalizedStatus === "failed"}
   class:status-inactive={normalizedStatus === "inactive"}
-  aria-label={label}
+  aria-label={statusLabel}
 >
   {#if normalizedStatus === "completed" || normalizedStatus === "ready"}
     <CheckCircle2 size={14} />
@@ -46,7 +46,7 @@
     </span>
   {/if}
   {#if !iconOnly}
-    <span class="status-text">{label}</span>
+    <span class="status-text">{statusLabel}</span>
   {/if}
 </div>
 
@@ -55,11 +55,13 @@
     display: inline-flex;
     align-items: center;
     gap: 6px;
+    min-width: 0;
+    max-width: 100%;
     white-space: nowrap;
     border-radius: 9999px;
     padding: 3px 10px;
     font-size: 12px;
-    line-height: 12px;
+    line-height: 16px;
     border: 1px solid transparent;
     box-sizing: border-box;
     width: fit-content;
@@ -108,10 +110,23 @@
   .status-text {
     font-weight: 500;
     font-variant-numeric: tabular-nums;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .live-spinner {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    flex: 0 0 16px;
     animation: status-pill-spin 1s linear infinite;
+  }
+
+  .live-spinner :global(svg) {
+    display: block;
   }
 
   @keyframes status-pill-spin {

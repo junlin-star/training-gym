@@ -42,7 +42,10 @@ _SLIME_SKIP = {
     "checkpoint",
     "custom_rm_function",
     "custom_generate_function",
+    "custom_rollout_log_function",
+    "custom_eval_rollout_log_function",
     "rollout_function",
+    "custom_megatron_before_log_prob_hook",
     "custom_megatron_before_train_step_hook",
     "sglang_request_params",
     "slime_model_script",
@@ -56,6 +59,20 @@ _SLIME_SKIP = {
 
 YAML_CONFIG_FIELDS = ("eval_config", "extra_config", "sglang_config")
 JSON_CONFIG_FIELDS = ("train_env_vars", "apply_chat_template_kwargs", "multimodal_keys")
+
+_HOOK_PATH_CONFIG_KEYS = {
+    "custom_rollout_log_function": "training_gym_custom_rollout_log_function_path",
+    "custom_eval_rollout_log_function": "training_gym_custom_eval_rollout_log_function_path",
+    "custom_megatron_before_log_prob_hook": "training_gym_custom_megatron_before_log_prob_hook_path",
+    "custom_megatron_before_train_step_hook": "training_gym_custom_megatron_before_train_step_hook_path",
+}
+
+_HOOK_WRAPPER_PATHS = {
+    "custom_rollout_log_function": "modal_training_gym.frameworks.slime.phase_reporting.log_rollout_data",
+    "custom_eval_rollout_log_function": "modal_training_gym.frameworks.slime.phase_reporting.log_eval_rollout_data",
+    "custom_megatron_before_log_prob_hook": "modal_training_gym.frameworks.slime.phase_reporting.before_log_prob_hook",
+    "custom_megatron_before_train_step_hook": "modal_training_gym.frameworks.slime.phase_reporting.before_train_step_hook",
+}
 
 
 @dataclass(config=ConfigDict(extra="forbid", arbitrary_types_allowed=True))
@@ -174,6 +191,18 @@ class SlimeRecipe(BaseTrainRecipe):
     megatron_to_hf_mode: str = ""
     use_fault_tolerance: bool = True
 
+    # ── Weight sync (megatron trainer → sglang rollout engines) ──────────
+    # Default matches slime's own default. ``delta`` mode pin-snapshots the
+    # last broadcast on CPU and ships only byte-level changes, which is
+    # ~5-10× faster than ``full`` for large models where weights barely
+    # move per rollout (e.g. 35B-class MoE). Pair with
+    # ``update_weight_transport="disk"`` if the trainer and rollout engines
+    # share a filesystem.
+    update_weight_mode: str = "full"
+    update_weight_transport: str = "nccl"
+    update_weight_encoding: str = "indices"
+    update_weight_disk_dir: str = ""
+
     # ── Reward model ─────────────────────────────────────────────────────────
     rm_type: str | None = None
 
@@ -181,7 +210,10 @@ class SlimeRecipe(BaseTrainRecipe):
     # See https://github.com/THUDM/slime/blob/0988f0f4a0ab55d1bb3ce6285a597d912144fa80/docs/en/get_started/customization.md#1-rollout-function---rollout-function-path
     custom_rm_function: Callable | None = None
     custom_generate_function: Callable | None = None
+    custom_rollout_log_function: Callable | str | None = None
+    custom_eval_rollout_log_function: Callable | str | None = None
     rollout_function: Callable | str | None = None
+    custom_megatron_before_log_prob_hook: Callable | str | None = None
     custom_megatron_before_train_step_hook: Callable | str | None = None
 
     # ── SGLang rollout engine ──────────────────────────────────────────────
@@ -220,15 +252,32 @@ class SlimeRecipe(BaseTrainRecipe):
                 mod = "__pending__"
         return f"{mod}.{name}"
 
+    @staticmethod
+    def _path_or_callable_path(value: Callable | str | None) -> str | None:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            return value
+        return SlimeRecipe._callable_path(value)
+
     @model_validator(mode="after")
     def _resolve_callable_paths(self) -> "SlimeRecipe":
+        cfg = dict(self.extra_config) if isinstance(self.extra_config, dict) else {}
         if self.custom_generate_function is not None:
-            cfg = dict(self.extra_config or {})
             if not cfg.get("custom_generate_function_path"):
                 cfg["custom_generate_function_path"] = self._callable_path(
                     self.custom_generate_function
                 )
-                object.__setattr__(self, "extra_config", cfg)
+        for field_name, config_key in _HOOK_PATH_CONFIG_KEYS.items():
+            value = getattr(self, field_name)
+            if value is None or cfg.get(config_key):
+                continue
+            if isinstance(value, str):
+                cfg[config_key] = value
+            else:
+                cfg[config_key] = self._callable_path(value)
+        if cfg != (self.extra_config or {}):
+            object.__setattr__(self, "extra_config", cfg)
         return self
 
     # ── Container → slime flag converters ────────────────────────────────────
@@ -402,12 +451,18 @@ class SlimeRecipe(BaseTrainRecipe):
         out = {k: v for k, v in fields.items() if k not in _SLIME_SKIP}
         if "extra_config" in out:
             out["custom_config_path"] = out.pop("extra_config")
-        rf = fields.get("rollout_function")
-        if isinstance(rf, str) and rf:
-            out["rollout_function_path"] = rf
-        hook = fields.get("custom_megatron_before_train_step_hook")
-        if isinstance(hook, str) and hook:
-            out["custom_megatron_before_train_step_hook_path"] = hook
+        for src, dst in {
+            "rollout_function": "rollout_function_path",
+            "custom_rollout_log_function": "custom_rollout_log_function_path",
+            "custom_eval_rollout_log_function": "custom_eval_rollout_log_function_path",
+            "custom_megatron_before_log_prob_hook": "custom_megatron_before_log_prob_hook_path",
+            "custom_megatron_before_train_step_hook": "custom_megatron_before_train_step_hook_path",
+        }.items():
+            if src in _HOOK_WRAPPER_PATHS:
+                out[dst] = _HOOK_WRAPPER_PATHS[src]
+                continue
+            if path := self._path_or_callable_path(fields.get(src)):
+                out[dst] = path
         return out
 
     # ── Public API ────────────────────────────────────────────────────────────

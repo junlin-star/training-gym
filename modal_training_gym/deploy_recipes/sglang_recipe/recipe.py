@@ -61,7 +61,7 @@ class SglangRecipe(BaseDeployRecipe):
     startup_timeout: int = 20 * 60
 
     def server_args(self, *, served_model_name: str) -> dict[str, str]:
-        """Build the ``--flag value`` dict for ``SGLangEndpoint``."""
+        """Build the ``--flag value`` dict for the SGLang launch command."""
         args: dict[str, str] = {"--served-model-name": served_model_name}
         if self.context_length is not None:
             args["--context-length"] = str(self.context_length)
