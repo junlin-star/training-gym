@@ -732,6 +732,7 @@ def build_slime_app(
             )
 
         env = {**os.environ, **slime.environment}
+        env.pop("NCCL_NVLS_ENABLE", None)
         if num_nodes > 1:
             env["SKIP_RELEASE_RENAME"] = "1"
         print(
