@@ -5,7 +5,7 @@ from modal_training_gym.deploy_recipes.sglang_recipe.recipe import SglangRecipe
 _QWEN3_6_27B_DEFAULTS = {
     "gpu": "H100",
     "tp": 4,
-    "context_length": 32768,
+    "context_length": 262144,
     "mem_fraction_static": 0.80,
     "chunked_prefill_size": 8192,
     "max_running_requests": 16,
