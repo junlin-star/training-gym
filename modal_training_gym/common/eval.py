@@ -232,7 +232,7 @@ class EvalConfig:
                 class_name,
                 dataset_name,
                 eval_fn_name,
-                "",
+                self.prompt_column or "",
             )
         if self.eval_fn is None:
             assert self.eval_response_fn is not None, (
@@ -338,8 +338,8 @@ class EvalConfig:
             "eval",
             self.eval_config_id,
             deployment.deployment_id,
-            "",
-            "",
+            type(self.dataset).__name__,
+            _callable_name(self.eval_fn or self.eval_response_fn),
         )
         result = EvalResult(
             eval_id=eval_id,

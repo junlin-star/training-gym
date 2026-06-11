@@ -450,8 +450,9 @@
   }
 
   .modal-link-cell {
-    min-width: 9.75rem;
-    width: 12.5rem;
+    min-width: 14rem;
+    width: auto;
+    overflow: visible;
   }
 
   .modal-link-wrap {
@@ -488,6 +489,7 @@
     justify-content: flex-start;
     gap: 6px;
     white-space: nowrap;
+    flex-shrink: 0;
     border: 1px solid var(--color-c-gray-10, #2f2f2f);
     border-radius: 6px;
     padding: 4px 8px;

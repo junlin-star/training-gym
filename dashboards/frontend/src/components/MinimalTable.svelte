@@ -11,7 +11,6 @@
     width: 100%;
     border-collapse: separate;
     border-spacing: 0;
-    overflow: hidden;
     border: 0;
     border-radius: 0;
     background: transparent;
