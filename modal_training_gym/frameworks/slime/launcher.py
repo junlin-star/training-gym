@@ -363,6 +363,8 @@ def build_slime_app(
     if _has_hybrid_spec:
         image = image.run_commands(
             f"echo {_PATCH_VALIDATION_B64} | base64 -d | python3",
+            f"echo {_PATCH_GLOBAL_PLAN_B64} | base64 -d | python3",
+            f"echo {_PATCH_CHECKPOINT_SAVE_B64} | base64 -d | python3",
         )
 
     def _get_custom_generate_path() -> str:
@@ -481,8 +483,6 @@ def build_slime_app(
     if _has_hybrid_spec:
         train_image = image.run_commands(
             f"echo {_PATCH_TORCH_LOAD_B64} | base64 -d | python3",
-            f"echo {_PATCH_GLOBAL_PLAN_B64} | base64 -d | python3",
-            f"echo {_PATCH_CHECKPOINT_SAVE_B64} | base64 -d | python3",
         )
     if _has_gdn:
         train_image = train_image.run_commands(
