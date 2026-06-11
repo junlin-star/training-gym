@@ -51,6 +51,7 @@ from modal_training_gym.common.ray_cluster import (
     clustered_if,
 )
 from modal_training_gym.common.run import TrainingRun, TrainingRunStatus
+from modal_training_gym.common.wandb import WandbConfig
 from modal_training_gym.common.status import SlimeStatus
 from modal_training_gym.common.train_result import TrainResult
 from modal_training_gym.utils.metadata import MetadataStore, vol_put_async
@@ -255,6 +256,50 @@ def _serialize_recipe_fields(recipe: SlimeRecipe) -> dict[str, Any]:
         field.name: _serialize_recipe_value(getattr(recipe, field.name))
         for field in _dc.fields(recipe)
     }
+
+
+def _preflight_wandb(wandb_cfg: WandbConfig) -> None:
+    """Fail fast, with an actionable message, when W&B logging won't work.
+
+    A missing key or a write-permission problem otherwise only surfaces as a
+    *recurring* wandb ``CommError`` deep in training (wandb logs such errors
+    asynchronously rather than raising). Runs on rank 0 before any GPU work: verify
+    the key authenticates (server round-trip) and confirm write access to the target
+    project with a tiny throwaway run that's deleted on success.
+    """
+    key = os.environ.get("WANDB_API_KEY", "") or (wandb_cfg.key or "")
+    if not key:
+        raise RuntimeError(
+            "W&B logging is enabled (recipe.wandb=...) but no WANDB_API_KEY is "
+            f"available — add it to the Modal secret "
+            f"'{wandb_cfg.modal_wandb_secret_name}' (or set wandb.key=), or drop "
+            "wandb= from the recipe to disable logging."
+        )
+
+    import wandb
+
+    project = wandb_cfg.project or "uncategorized"
+    try:
+        wandb.login(key=key, verify=True, relogin=True)
+        probe = wandb.init(
+            project=project,
+            name="_preflight",
+            settings=wandb.Settings(silent=True, init_timeout=60),
+        )
+        probe_path = f"{probe.entity}/{probe.project}/{probe.id}"
+        wandb.finish()
+        try:
+            wandb.Api(api_key=key).run(probe_path).delete()
+        except Exception:
+            pass  # a leftover empty "_preflight" run is harmless
+    except Exception as exc:
+        raise RuntimeError(
+            f"W&B pre-flight failed for project '{project}': {exc}\n"
+            f"The W&B key in Modal secret '{wandb_cfg.modal_wandb_secret_name}' can't "
+            "log there (bad/expired key, or no write access to its entity). Point "
+            "recipe.wandb at a project/entity you can write to, fix the secret, or "
+            "drop wandb= to disable logging."
+        ) from exc
 
 
 def build_slime_app(
@@ -985,6 +1030,11 @@ def build_slime_app(
         if not cluster.is_head:
             await cluster.wait_forever()
             return
+
+        # Fail fast on W&B access before any GPU work, not as a recurring CommError
+        # mid-training.
+        if slime.wandb is not None:
+            _preflight_wandb(slime.wandb)
 
         print(f"Training run id: {training_run_id}")
         config_summary: dict = {
