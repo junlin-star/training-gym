@@ -7,8 +7,10 @@ it uses the local ``dashboards/frontend`` directory instead.
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import os
+import re
 import secrets as _secrets
 import time
 from pathlib import Path
@@ -437,6 +439,35 @@ def fastapi_app():
     # Responses are parsed at write time (slime recorder for rollouts, the eval
     # harness for evals) and stored as ``parsed_response``. Here we just surface
     # that cleaned content for display, keeping the raw under ``raw_response``.
+    def _clean_prompt(text: str) -> str:
+        """Make a chat-templated prompt readable for display.
+
+        Dataset prompts often arrive as a chat template wrapping a Python repr
+        of the messages list (e.g. ``<|im_start|>user\\n[{'content': '...',
+        'role': 'user'}]<|im_end|>...``) plus a leaked reference/assistant turn.
+        Pull the message content out and drop the template scaffolding; fall
+        back to stripping special tokens when there's no messages repr.
+        """
+        start, end = text.find("[{"), text.rfind("}]")
+        if start != -1 and end > start:
+            try:
+                data = ast.literal_eval(text[start : end + 2])
+                if isinstance(data, list):
+                    parts = [
+                        str(m["content"])
+                        for m in data
+                        if isinstance(m, dict) and m.get("content")
+                    ]
+                    if parts:
+                        return "\n\n".join(parts).strip()
+            except (ValueError, SyntaxError):
+                pass
+        cleaned = re.sub(r"<\|[^|]*\|>", "", text)
+        cleaned = re.sub(r"</?think>", "", cleaned)
+        # Drop standalone role-header lines left behind by the template.
+        cleaned = re.sub(r"(?m)^(system|user|assistant)\s*$\n?", "", cleaned)
+        return re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+
     def _apply_parsed(rows: Any) -> None:
         if not isinstance(rows, list):
             return
@@ -444,16 +475,22 @@ def fastapi_app():
             if not isinstance(row, dict):
                 continue
             parsed = row.get("parsed_response")
-            if not isinstance(parsed, dict) or not isinstance(parsed.get("content"), str):
-                continue
-            raw = row.get("response")
-            if isinstance(raw, str):
-                row["raw_response"] = raw
-            row["response"] = parsed.get("content") or ""
-            if parsed.get("thinking"):
-                row["thinking"] = parsed["thinking"]
-            if parsed.get("tool_calls"):
-                row["tool_calls"] = parsed["tool_calls"]
+            if isinstance(parsed, dict) and isinstance(parsed.get("content"), str):
+                raw = row.get("response")
+                if isinstance(raw, str):
+                    row["raw_response"] = raw
+                row["response"] = parsed.get("content") or ""
+                if parsed.get("thinking"):
+                    row["thinking"] = parsed["thinking"]
+                if parsed.get("tool_calls"):
+                    row["tool_calls"] = parsed["tool_calls"]
+            # Clean the (chat-templated) prompt for display, keeping the raw.
+            raw_prompt = row.get("prompt")
+            if isinstance(raw_prompt, str) and raw_prompt:
+                cleaned_prompt = _clean_prompt(raw_prompt)
+                if cleaned_prompt and cleaned_prompt != raw_prompt:
+                    row["raw_prompt"] = raw_prompt
+                    row["prompt"] = cleaned_prompt
 
     def _bearer_token(authorization: str | None) -> str:
         scheme, _, token = (authorization or "").partition(" ")

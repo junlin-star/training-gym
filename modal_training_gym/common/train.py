@@ -31,6 +31,28 @@ from pydantic import ConfigDict
 from pydantic.dataclasses import dataclass
 
 
+def _stop_app(app_id: str) -> None:
+    """Stop a detached Modal app (best effort).
+
+    Detached apps survive client disconnect, so they don't auto-stop when the
+    ``app.run()`` context exits on normal completion — we stop them explicitly.
+    Mirrors what ``modal app stop`` does. Never raises.
+    """
+    try:
+        import modal
+        from modal_proto import api_pb2
+
+        with modal.Client.from_env() as client:
+            client.stub.AppStop(
+                api_pb2.AppStopRequest(
+                    app_id=app_id,
+                    source=api_pb2.APP_STOP_SOURCE_PYTHON_CLIENT,
+                )
+            )
+    except Exception as exc:  # noqa: BLE001 — auto-stop is best-effort
+        print(f"WARNING: could not auto-stop app {app_id}: {exc}")
+
+
 def _merge_recipe(base: SlimeRecipe, overrides: SlimeRecipe) -> SlimeRecipe:
     base_fields = {f.name: getattr(base, f.name) for f in _dc.fields(base)}
     for f in _dc.fields(overrides):
@@ -481,6 +503,7 @@ class TrainConfig:
 
         app = self._build_app()
         result_dict = None
+        modal_app_id = ""
         with modal.enable_output():
             with app.run(detach=self.detach):
                 modal_app_id = app.app_id or ""
@@ -603,6 +626,12 @@ class TrainConfig:
                     # Give any in-flight status POSTs a moment to land
                     # before the process exits.
                     flush_status_reporter(timeout_seconds=2.0)
+        # A detached app survives client disconnect (so a closed terminal won't
+        # kill a run) — but for the same reason it won't auto-stop when the run
+        # finishes. Stop it ourselves once training completed successfully; on
+        # interrupt/failure we leave it up so it can be inspected.
+        if self.detach and modal_app_id and result_dict is not None:
+            _stop_app(modal_app_id)
         if result_dict is None:
             raise RuntimeError(
                 "Training app exited before returning a result. "

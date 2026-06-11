@@ -27,6 +27,11 @@
     (allRuns || []).find((r) => r.run_id === runId) || null
   );
 
+  // Status as a primitive so effects depending on it don't re-run every time
+  // the auto-refresh hands us a new `run` object with the same status (which
+  // would otherwise tear down and rebuild the log stream, flashing the tail).
+  let runStatus = $derived(String(run?.status || "").toLowerCase());
+
   // Active tab: "summary" | "rollouts" | "logs". Each tab loads only its own
   // data — rollout summaries for summary/rollouts, the log stream for logs.
   let activeTab = $state("summary");
@@ -232,7 +237,9 @@
   $effect(() => {
     const id = runId;
     const tab = activeTab;
-    const status = String(run?.status || "").toLowerCase();
+    // Depend on the primitive status (not `run`) so a same-status refresh
+    // doesn't tear down and rebuild the stream.
+    const status = runStatus;
     // Re-create the EventSource whenever any of the connection params change.
     const search = logSearch;
     const rate = logRateCap;
