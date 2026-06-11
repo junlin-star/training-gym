@@ -238,10 +238,14 @@
       activeStatuses = new Set(allRuns.map(getStatus));
     } catch (e) {
       if (isStale()) return;
-      error = getErrorMessage(e);
-      allRuns = [];
-      activeRecipes = new Set();
-      activeStatuses = new Set();
+      // Keep the data we already have on a transient refresh failure — only
+      // surface the error (and clear) when there's nothing to show yet.
+      // Otherwise the page flickers to "Loading…"/empty on every flaky poll.
+      if (!allRuns.length) {
+        error = getErrorMessage(e);
+        activeRecipes = new Set();
+        activeStatuses = new Set();
+      }
     }
     if (!isStale()) loading = false;
   }
@@ -258,7 +262,7 @@
       hasLoadedEvals = true;
     } catch (reason) {
       if (isStale()) return;
-      allEvals = [];
+      if (!allEvals.length) allEvals = [];
       console.warn(getErrorMessage(reason));
     }
     if (!isStale()) loadingEvals = false;
@@ -276,7 +280,7 @@
       hasLoadedDeployments = true;
     } catch (reason) {
       if (isStale()) return;
-      allDeployments = [];
+      if (!allDeployments.length) allDeployments = [];
       console.warn(getErrorMessage(reason));
     }
     if (!isStale()) loadingDeployments = false;

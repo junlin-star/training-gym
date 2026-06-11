@@ -346,20 +346,19 @@
     logDropped = 0;
   }
 
-  let chartPath = $derived.by(() => {
-    if (!rolloutSummaries.length) return "";
+  // Build an SVG polyline path for a per-rollout-step series (x = rollout_id).
+  function _rolloutLinePath(getY) {
     const points = rolloutSummaries.map((r) => ({
       x: Number(r.rollout_id) || 0,
-      y: Number(r.mean) || 0,
+      y: getY(r),
     }));
+    if (!points.length) return "";
     const xs = points.map((p) => p.x);
     const ys = points.map((p) => p.y);
     const xMin = Math.min(...xs);
-    const xMax = Math.max(...xs);
+    const xSpan = Math.max(...xs) - xMin || 1;
     const yMin = Math.min(...ys);
-    const yMax = Math.max(...ys);
-    const xSpan = xMax - xMin || 1;
-    const ySpan = yMax - yMin || 1;
+    const ySpan = Math.max(...ys) - yMin || 1;
     const W = 640;
     const H = 140;
     return points
@@ -369,16 +368,23 @@
         return `${i === 0 ? "M" : "L"} ${x.toFixed(1)} ${y.toFixed(1)}`;
       })
       .join(" ");
-  });
+  }
 
-  let chartStats = $derived.by(() => {
+  function _seriesStats(getY) {
     if (!rolloutSummaries.length) return null;
-    const means = rolloutSummaries.map((r) => Number(r.mean) || 0);
-    const min = Math.min(...means);
-    const max = Math.max(...means);
-    const latest = means[means.length - 1];
-    return { min, max, latest };
-  });
+    const values = rolloutSummaries.map(getY);
+    return {
+      min: Math.min(...values),
+      max: Math.max(...values),
+      latest: values[values.length - 1],
+    };
+  }
+
+  let chartPath = $derived(_rolloutLinePath((r) => Number(r.mean) || 0));
+  let chartStats = $derived(_seriesStats((r) => Number(r.mean) || 0));
+  // Samples generated per rollout step.
+  let samplesPath = $derived(_rolloutLinePath((r) => Number(r.total) || 0));
+  let samplesStats = $derived(_seriesStats((r) => Number(r.total) || 0));
 </script>
 
 <svelte:window onkeydown={onSampleKeydown} />
@@ -442,6 +448,7 @@
             <div class="empty">No rollouts recorded yet.</div>
           {:else}
             <div class="rollout-chart">
+              <div class="rollout-chart-title">Reward</div>
               {#if rolloutSummaries.length >= 2}
                 <svg viewBox="0 0 640 140" preserveAspectRatio="none" aria-hidden="true">
                   <path d={chartPath} fill="none" stroke="var(--accent)" stroke-width="1.5" />
@@ -452,6 +459,26 @@
                   <span>min {formatMean(chartStats.min)}</span>
                   <span>latest {formatMean(chartStats.latest)}</span>
                   <span>max {formatMean(chartStats.max)}</span>
+                </div>
+              {/if}
+            </div>
+            <div class="rollout-chart">
+              <div class="rollout-chart-title">Num samples</div>
+              {#if rolloutSummaries.length >= 2}
+                <svg viewBox="0 0 640 140" preserveAspectRatio="none" aria-hidden="true">
+                  <path
+                    d={samplesPath}
+                    fill="none"
+                    stroke="var(--green, var(--accent))"
+                    stroke-width="1.5"
+                  />
+                </svg>
+              {/if}
+              {#if samplesStats}
+                <div class="rollout-chart-meta">
+                  <span>min {samplesStats.min}</span>
+                  <span>latest {samplesStats.latest}</span>
+                  <span>max {samplesStats.max}</span>
                 </div>
               {/if}
             </div>
@@ -825,7 +852,14 @@
   }
 
   .rollout-chart {
-    margin-bottom: 16px;
+    margin-bottom: 20px;
+  }
+
+  .rollout-chart-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-bright);
+    margin-bottom: 6px;
   }
 
   .rollout-chart svg {
