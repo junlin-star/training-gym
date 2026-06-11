@@ -479,9 +479,17 @@ def report_weight_sync(args: Any) -> None:
     )
 
 
+def report_generate_rollouts(args: Any) -> None:
+    report_phase(
+        SlimeStatus.ROLLOUT_LOGGING,
+        args,
+    )
+
+
 __all__ = [
     "before_log_prob_hook",
     "before_train_step_hook",
+    "report_generate_rollouts",
     "report_phase",
     "report_rollout_initializing",
     "report_rollout_samples",
