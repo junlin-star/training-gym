@@ -24,6 +24,10 @@
   let search = $state("");
   let activeRecipes = $state(new Set());
   let activeStatuses = $state(new Set());
+  // Recipe/status values we've seen across loads. New ones are auto-enabled in
+  // the filters once; the user's selections are never reset by a refresh.
+  let seenRecipes = new Set();
+  let seenStatuses = new Set();
   let activePage = $state("training");
   let activeTrainingRunId = $state(null);
   // When set (and no full detail page is open), the training list shows a
@@ -234,8 +238,28 @@
       const runs = await fetchWithTimeout(fetchRuns, 30000, "runs");
       if (isStale()) return;
       allRuns = runs;
-      activeRecipes = new Set(allRuns.map(getRecipe));
-      activeStatuses = new Set(allRuns.map(getStatus));
+      // Auto-enable newly-seen recipes/statuses without resetting the user's
+      // current filter selection on every refresh.
+      const nextRecipes = new Set(activeRecipes);
+      const nextStatuses = new Set(activeStatuses);
+      let recipesChanged = false;
+      let statusesChanged = false;
+      for (const run of allRuns) {
+        const recipe = getRecipe(run);
+        if (!seenRecipes.has(recipe)) {
+          seenRecipes.add(recipe);
+          nextRecipes.add(recipe);
+          recipesChanged = true;
+        }
+        const status = getStatus(run);
+        if (!seenStatuses.has(status)) {
+          seenStatuses.add(status);
+          nextStatuses.add(status);
+          statusesChanged = true;
+        }
+      }
+      if (recipesChanged) activeRecipes = nextRecipes;
+      if (statusesChanged) activeStatuses = nextStatuses;
     } catch (e) {
       if (isStale()) return;
       // Keep the data we already have on a transient refresh failure — only

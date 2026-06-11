@@ -141,7 +141,10 @@
       rolloutsError = "";
     } catch (err) {
       if (signal?.aborted) return;
-      rolloutsError = String(err?.message || err);
+      // Keep the rollouts we already have on a transient poll failure — only
+      // surface the error when there's nothing to show, so the charts/table
+      // don't flip to an error message (and back) every flaky 5s poll.
+      if (!rolloutSummaries.length) rolloutsError = String(err?.message || err);
     } finally {
       rolloutsLoading = false;
     }
