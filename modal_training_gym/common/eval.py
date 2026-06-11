@@ -5,7 +5,7 @@ import re
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 import datetime
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any, Callable, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -23,6 +23,10 @@ if TYPE_CHECKING:
 EVAL_SUMMARY_STORE = MetadataStore.EVALS
 EVAL_SUMMARY_KEY = "summary"
 EVAL_SUMMARY_PAYLOAD_KEY = "summaries"
+
+#: How often (in completed rows) a running eval flushes partial results to the
+#: metadata volume. Smaller = fresher dashboard, more volume writes.
+_INTERMEDIATE_SAVE_EVERY = 5
 
 
 def _callable_name(fn: Callable[..., Any]) -> str:
@@ -97,12 +101,21 @@ class AudioEvalRowResult(Sample):
         return data
 
 
+#: Lifecycle of an eval run. ``running`` rows are streamed in as examples
+#: complete so the dashboard shows intermediate output; ``completed`` is the
+#: terminal success state and ``failed`` marks a run that raised partway
+#: through. The default is ``completed`` so records written before this field
+#: existed validate as finished runs.
+EvalStatus = Literal["running", "completed", "failed"]
+
+
 class EvalSummary(BaseModel):
     eval_id: str
     eval_config_id: str
     created_at: datetime.datetime
     total: int
     mean: float
+    status: EvalStatus = "completed"
 
     @classmethod
     def list_summaries(cls) -> list["EvalSummary"]:
@@ -141,6 +154,7 @@ class EvalResult(BaseModel):
     created_at: datetime.datetime = Field(
         default_factory=lambda: datetime.datetime.now(datetime.UTC)
     )
+    status: EvalStatus = "completed"
     rows: list[EvalRowResult] = Field(default_factory=list)
 
     @property
@@ -158,6 +172,7 @@ class EvalResult(BaseModel):
             created_at=self.created_at,
             total=self.total,
             mean=self.mean,
+            status=self.status,
         )
 
     def save(self) -> None:
@@ -232,7 +247,7 @@ class EvalConfig:
                 class_name,
                 dataset_name,
                 eval_fn_name,
-                "",
+                self.prompt_column or "",
             )
         if self.eval_fn is None:
             assert self.eval_response_fn is not None, (
@@ -318,36 +333,52 @@ class EvalConfig:
             idx, example = item
             return idx, self.eval_fn(deployment, example)
 
-        results: list[EvalRowResult] = []
-        with ThreadPoolExecutor(max_workers=max_concurrency) as executor:
-            indexed_results = executor.map(
-                _evaluate_indexed,
-                enumerate(self.dataset.load(split="eval"), start=1),
-            )
-            for idx, result in indexed_results:
-                if debug:
-                    print(
-                        f"Finished example {idx}: "
-                        f"response={result.response!r} score={result.score}",
-                        flush=True,
-                    )
-                results.append(result)
-
-        created_at = datetime.datetime.now(datetime.UTC)
+        # Persist a ``running`` record up front (and stream rows into it as
+        # they complete) so the dashboard surfaces an in-progress eval with
+        # intermediate output instead of nothing until the whole run finishes.
         eval_id = create_hash(
             "eval",
             self.eval_config_id,
             deployment.deployment_id,
-            "",
-            "",
+            type(self.dataset).__name__,
+            _callable_name(self.eval_fn or self.eval_response_fn),
         )
         result = EvalResult(
             eval_id=eval_id,
             deployment_id=deployment.deployment_id,
             eval_config_id=self.eval_config_id,
-            created_at=created_at,
-            rows=results,
+            created_at=datetime.datetime.now(datetime.UTC),
+            status="running",
+            rows=[],
         )
+        result.save()
+
+        try:
+            with ThreadPoolExecutor(max_workers=max_concurrency) as executor:
+                indexed_results = executor.map(
+                    _evaluate_indexed,
+                    enumerate(self.dataset.load(split="eval"), start=1),
+                )
+                for idx, row_result in indexed_results:
+                    if debug:
+                        print(
+                            f"Finished example {idx}: "
+                            f"response={row_result.response!r} "
+                            f"score={row_result.score}",
+                            flush=True,
+                        )
+                    result.rows.append(row_result)
+                    # Flush partial progress periodically rather than per row:
+                    # each save rewrites the shared summary list, so throttle to
+                    # keep volume writes bounded on large datasets.
+                    if result.total % _INTERMEDIATE_SAVE_EVERY == 0:
+                        result.save()
+        except Exception:
+            result.status = "failed"
+            result.save()
+            raise
+
+        result.status = "completed"
         result.save()
         return result
 

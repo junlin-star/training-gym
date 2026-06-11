@@ -569,6 +569,11 @@
                 {/if}
                 <span class="group-meta-pill">total evals: {group.totalEvals}</span>
                 <span class="group-meta-pill">avg: {group.avgAccuracy.toFixed(4)}</span>
+                {#if group.latestCreatedAt}
+                  <span class="group-meta-pill group-meta-pill-time">
+                    <TimeAgo timestamp={group.latestCreatedAt} showJustNow falsyRepresentation="—" />
+                  </span>
+                {/if}
                 <ChevronDown
                   size={14}
                   style={`color: var(--muted); transform: ${expandedConfigIds.has(group.evalConfigId) ? "rotate(180deg)" : "rotate(0deg)"};`}
@@ -1150,6 +1155,10 @@
     font-size: 0.68rem;
     color: var(--muted);
     background: color-mix(in srgb, var(--panel-alt) 70%, transparent);
+  }
+
+  .group-meta-pill-time {
+    font-variant-numeric: tabular-nums;
   }
 
   .table-wrap {
