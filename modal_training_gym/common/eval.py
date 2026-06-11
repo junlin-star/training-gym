@@ -13,7 +13,7 @@ from modal_training_gym.common.dataset import DatasetRow
 from modal_training_gym.common.ids import create_hash
 from modal_training_gym.utils.metadata import MetadataStore, vol_get, vol_list, vol_put
 
-from modal_training_gym.common.models.base import ParsedResponse
+from modal_training_gym.common.sample import Sample
 
 if TYPE_CHECKING:
     from modal_training_gym.common.dataset import DatasetConfig
@@ -57,20 +57,13 @@ class EvalConfigDurable(BaseModel):
         return [cls.model_validate(v) for v in vol_list(MetadataStore.EVAL_CONFIGS)]
 
 
-class EvalRowResult(BaseModel):
-    """One evaluated row: score, response text, and optional metadata."""
-
-    score: float
-    response: str = ""  # TODO, this doesn't have to be a string
-    prompt: str = ""
-    parsed_response: ParsedResponse | None = None
-    metadata: dict[str, Any] = Field(
-        default_factory=dict
-    )  # metadata that user can inject about the evaluation result
+# An eval row is just a Sample. Kept as an alias for the public API / existing
+# imports; new code should use Sample directly.
+EvalRowResult = Sample
 
 
-class AudioEvalRowResult(EvalRowResult):
-    """``EvalRowResult`` for an audio eval, with the audio fields lifted to
+class AudioEvalRowResult(Sample):
+    """``Sample`` for an audio eval, with the audio fields lifted to
     constructor arguments.
 
     ``audio`` (a browser-playable data-URI), ``reference`` (the ground truth), and

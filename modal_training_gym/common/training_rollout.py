@@ -14,6 +14,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from modal_training_gym.common.sample import Sample
 from modal_training_gym.utils.metadata import (
     MetadataStore,
     vol_get,
@@ -25,17 +26,9 @@ from modal_training_gym.utils.metadata import (
     vol_upsert_summary_item_async,
 )
 
-
-class TrainingRolloutSample(BaseModel):
-    """One generated sample inside a rollout."""
-
-    score: float = 0.0
-    prompt: str = ""
-    response: str = ""
-    # Parsed by the slime recorder (content/thinking/tool_calls), mirroring
-    # eval's EvalRowResult so the dashboard can show cleaned content as-is.
-    parsed_response: dict[str, Any] | None = None
-    metadata: dict[str, Any] = Field(default_factory=dict)
+# A rollout sample is just a Sample (shared with eval rows). Alias kept for any
+# existing imports; new code should use Sample.
+TrainingRolloutSample = Sample
 
 
 class TrainingRolloutResult(BaseModel):
@@ -44,7 +37,7 @@ class TrainingRolloutResult(BaseModel):
     training_run_id: str
     rollout_id: int
     created_at: int = 0
-    samples: list[TrainingRolloutSample] = Field(default_factory=list)
+    samples: list[Sample] = Field(default_factory=list)
     metrics: dict[str, Any] = Field(default_factory=dict)
     rollout_time: float | None = None
 
