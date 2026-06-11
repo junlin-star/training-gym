@@ -140,6 +140,7 @@ export async function fetchRuns({ signal } = {}) {
       modal_app_url: modalAppUrl(modalAppId),
       framework: safeStr(run.framework) || "(untagged)",
       status: run.status || "running",
+      framework_status: safeStr(run.framework_status || ""),
       dataset_id: safeStr(run.dataset_id || ""),
       deployment_id: safeStr(run.deployment_id || ""),
       config: run.config || {},

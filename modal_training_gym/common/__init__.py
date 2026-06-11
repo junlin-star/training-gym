@@ -11,6 +11,10 @@ from __future__ import annotations
 import os
 
 from modal_training_gym.utils.gpu import GPUType
+from modal_training_gym.common.modal_refs import (
+    ModalCaptureError,
+    register_modal_cloudpickle_reducers,
+)
 from modal_training_gym.utils.metadata import (
     METADATA_VOLUME_NAME,
     MetadataStore,
@@ -55,6 +59,8 @@ __all__ = [
     "GPUType",
     "METADATA_VOLUME_NAME",
     "MetadataStore",
+    "ModalCaptureError",
+    "register_modal_cloudpickle_reducers",
     "hf_secrets",
     "vol_get",
     "vol_list",

@@ -25,9 +25,7 @@ from __future__ import annotations
 import argparse
 import ast
 import json
-import os
 import pathlib
-import subprocess
 import symtable
 import textwrap
 import urllib.parse
@@ -49,6 +47,7 @@ _README_BEGIN = "<!-- BEGIN TUTORIAL TABLE -->"
 _README_END = "<!-- END TUTORIAL TABLE -->"
 _REPO_SLUG = "modal-projects/training-gym"
 _BADGE_IMG = "https://modal-cdn.com/open-in-modal.svg"
+_BRANCH = "main"
 
 _MARKDOWN = "markdown"
 _CODE = "code"
@@ -70,70 +69,24 @@ _BUCKET_DISPLAY = {
     "agent": "Agents",
     "misc": "Misc",
 }
-
-
-def _branch_exists_on_origin(branch: str) -> bool:
-    if not branch:
-        return False
-    result = subprocess.run(
-        ["git", "ls-remote", "--exit-code", "--heads", "origin", branch],
-        cwd=REPO_ROOT,
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    return result.returncode == 0
-
-
-def _resolve_branch() -> str:
-    for env_var in ("GITHUB_REF_NAME", "VERCEL_GIT_COMMIT_REF"):
-        value = os.getenv(env_var)
-        if value and _branch_exists_on_origin(value):
-            return value
-
-    result = subprocess.run(
-        ["git", "branch", "--show-current"],
-        cwd=REPO_ROOT,
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    branch = result.stdout.strip()
-    if _branch_exists_on_origin(branch):
-        return branch
-
-    return "main"
-
-
-_BRANCH = _resolve_branch()
-
-
 # Injected before every tutorial's first code cell so missing secrets fail
 # fast locally instead of mid-launch on a Modal worker.
-_HF_SECRET_CHECK_MARKDOWN = (
-    "## Prerequisites\n"
-    "\n"
-    "This tutorial requires a Modal Secret named `huggingface-secret` containing your\n"
-    "`HF_TOKEN`. Create one at [modal.com/secrets](https://modal.com/secrets) if you\n"
-    "haven't already — the cell below fails fast with instructions otherwise."
+_DEFAULT_REQUIRED_MODAL_SECRETS = (
+    {
+        "name": "huggingface-secret",
+        "key": "HF_TOKEN",
+    },
 )
 _NOTEBOOK_GPU_NOTE_MARKDOWN = (
     "> **Note:** you do **not** need to attach a GPU to this notebook. All training and\n"
     "> serving happens on Modal-managed GPU workers spun up by the SDK — the notebook\n"
     "> itself only needs to issue API calls."
 )
-_HF_SECRET_CHECK_CODE = (
-    "import modal\n"
-    "\n"
-    "try:\n"
-    '    modal.Secret.from_name("huggingface-secret").hydrate()\n'
-    "except modal.exception.NotFoundError as e:\n"
-    "    raise RuntimeError(\n"
-    "        \"Missing Modal Secret 'huggingface-secret'. Create one at \"\n"
-    '        "https://modal.com/secrets with an HF_TOKEN entry, then re-run."\n'
-    "    ) from e"
+_MULTINODE_DISCLAIMER_MARKDOWN = (
+    "> **Multi-node workspace required:** This is a multi-node example. To run it,\n"
+    "> your Modal workspace must have multi-node enabled. Contact\n"
+    "> [support@modal.com](mailto:support@modal.com) to enable multi-node."
 )
-
 
 @dataclass
 class Cell:
@@ -182,7 +135,12 @@ def _find_shell_command(node: ast.FunctionDef | ast.AsyncFunctionDef) -> str | N
     return None
 
 
-def _extract_cells(source: str) -> list[Cell]:
+def _extract_cells(
+    source: str,
+    *,
+    required_modal_secrets: tuple[dict[str, str], ...],
+    include_multinode_disclaimer: bool = False,
+) -> list[Cell]:
     tree = ast.parse(source)
     lines = source.splitlines(keepends=True)
     cells: list[Cell] = []
@@ -209,17 +167,113 @@ def _extract_cells(source: str) -> list[Cell]:
             body_src = "".join(lines[start:end])
             body_src = textwrap.dedent(body_src).rstrip("\n")
             cells.append(Cell(kind="code", source=body_src, targets=targets))
-    return _inject_hf_secret_check(cells)
+    cells = _inject_secret_check(cells, required_modal_secrets)
+    if include_multinode_disclaimer:
+        cells = _inject_multinode_disclaimer(cells)
+    return cells
 
 
-def _inject_hf_secret_check(cells: list[Cell]) -> list[Cell]:
-    """Insert the HF secret precheck right before the first code cell."""
+def _inject_multinode_disclaimer(cells: list[Cell]) -> list[Cell]:
+    """Prepend the multi-node workspace warning to multi-node tutorials."""
+    return [
+        Cell(
+            kind="markdown",
+            source=_MULTINODE_DISCLAIMER_MARKDOWN,
+            targets=frozenset({_PY, _NB}),
+        ),
+        *cells,
+    ]
+
+
+def _secret_check_markdown(required_modal_secrets: tuple[dict[str, str], ...]) -> str:
+    if len(required_modal_secrets) == 1:
+        secret = required_modal_secrets[0]
+        return (
+            "## Prerequisites\n"
+            "\n"
+            f"This tutorial requires a Modal Secret named `{secret['name']}` containing your\n"
+            f"`{secret['key']}`. Create one at [modal.com/secrets](https://modal.com/secrets) if you\n"
+            "haven't already — the cell below fails fast with instructions otherwise."
+        )
+
+    secret_lines = "\n".join(
+        f"- `{secret['name']}` containing `{secret['key']}`"
+        for secret in required_modal_secrets
+    )
+    return (
+        "## Prerequisites\n"
+        "\n"
+        "This tutorial requires these Modal Secrets:\n"
+        f"{secret_lines}\n"
+        "\n"
+        "Create them at [modal.com/secrets](https://modal.com/secrets) if you "
+        "haven't already — the cell below fails fast with instructions otherwise."
+    )
+
+
+def _secret_check_code(required_modal_secrets: tuple[dict[str, str], ...]) -> str:
+    if len(required_modal_secrets) == 1:
+        secret = required_modal_secrets[0]
+        if secret == _DEFAULT_REQUIRED_MODAL_SECRETS[0]:
+            return (
+                "import modal\n"
+                "\n"
+                "try:\n"
+                '    modal.Secret.from_name("huggingface-secret").hydrate()\n'
+                "except modal.exception.NotFoundError as e:\n"
+                "    raise RuntimeError(\n"
+                "        \"Missing Modal Secret 'huggingface-secret'. Create one at \"\n"
+                '        "https://modal.com/secrets with an HF_TOKEN entry, then re-run."\n'
+                "    ) from e"
+            )
+        return (
+            "import modal\n"
+            "\n"
+            "try:\n"
+            f'    modal.Secret.from_name("{secret["name"]}", required_keys=["{secret["key"]}"]).hydrate()\n'
+            "except modal.exception.NotFoundError as e:\n"
+            "    raise RuntimeError(\n"
+            f'        "Missing Modal Secret \'{secret["name"]}\'. Create one at "\n'
+            f'        "https://modal.com/secrets with a {secret["key"]} entry, then re-run."\n'
+            "    ) from e"
+        )
+
+    secret_list = ",\n".join(
+        f'    ("{secret["name"]}", "{secret["key"]}")'
+        for secret in required_modal_secrets
+    )
+    return (
+        "import modal\n"
+        "\n"
+        "for secret_name, required_key in [\n"
+        f"{secret_list},\n"
+        "]:\n"
+        "    try:\n"
+        "        modal.Secret.from_name(\n"
+        "            secret_name, required_keys=[required_key]\n"
+        "        ).hydrate()\n"
+        "    except modal.exception.NotFoundError as e:\n"
+        "        raise RuntimeError(\n"
+        "            f\"Missing Modal Secret '{secret_name}'. Create one at \"\n"
+        "            f\"https://modal.com/secrets with a {required_key} entry, then re-run.\"\n"
+        "        ) from e"
+    )
+
+
+def _inject_secret_check(
+    cells: list[Cell], required_modal_secrets: tuple[dict[str, str], ...]
+) -> list[Cell]:
+    """Insert the Modal secret precheck right before the first code cell."""
     both = frozenset({_PY, _NB})
     nb_only = frozenset({_NB})
     prereq = [
-        Cell(kind="markdown", source=_HF_SECRET_CHECK_MARKDOWN, targets=both),
+        Cell(
+            kind="markdown",
+            source=_secret_check_markdown(required_modal_secrets),
+            targets=both,
+        ),
         Cell(kind="markdown", source=_NOTEBOOK_GPU_NOTE_MARKDOWN, targets=nb_only),
-        Cell(kind="code", source=_HF_SECRET_CHECK_CODE, targets=both),
+        Cell(kind="code", source=_secret_check_code(required_modal_secrets), targets=both),
     ]
     for i, cell in enumerate(cells):
         if cell.kind == "code":
@@ -314,9 +368,7 @@ def _split_py_code_cell(
     lines = source.splitlines(keepends=True)
     blocks: list[tuple[str, str]] = []
 
-    stmt_scopes = [
-        _stmt_belongs_at_module_scope(stmt, globals_used_by_defs) for stmt in tree.body
-    ]
+    stmt_scopes = _resolve_module_scope_statements(tree.body, globals_used_by_defs)
     group_start = 0
 
     for i in range(1, len(tree.body) + 1):
@@ -333,6 +385,34 @@ def _split_py_code_cell(
         group_start = i
 
     return blocks
+
+
+def _resolve_module_scope_statements(
+    statements: list[ast.stmt],
+    globals_used_by_defs: set[str],
+) -> list[bool]:
+    stmt_scopes = [
+        _stmt_belongs_at_module_scope(stmt, globals_used_by_defs) for stmt in statements
+    ]
+
+    changed = True
+    while changed:
+        changed = False
+        names_required_by_module_scope = set(globals_used_by_defs)
+        for stmt, belongs_at_module_scope in zip(statements, stmt_scopes, strict=True):
+            if belongs_at_module_scope:
+                names_required_by_module_scope.update(_module_scope_references(stmt))
+
+        for i, stmt in enumerate(statements):
+            if stmt_scopes[i]:
+                continue
+            if isinstance(stmt, (ast.Assign, ast.AnnAssign, ast.AugAssign)) and (
+                _assigned_names(stmt) & names_required_by_module_scope
+            ):
+                stmt_scopes[i] = True
+                changed = True
+
+    return stmt_scopes
 
 
 def _stmt_belongs_at_module_scope(
@@ -353,6 +433,48 @@ def _stmt_belongs_at_module_scope(
     if isinstance(stmt, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
         return bool(_assigned_names(stmt) & globals_used_by_defs)
     return False
+
+
+def _module_scope_references(stmt: ast.stmt) -> set[str]:
+    if isinstance(stmt, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+        nodes: list[ast.AST] = []
+        if isinstance(stmt, ast.Assign):
+            nodes.extend(stmt.targets)
+            nodes.append(stmt.value)
+        elif isinstance(stmt, ast.AnnAssign):
+            nodes.append(stmt.target)
+            nodes.append(stmt.annotation)
+            if stmt.value is not None:
+                nodes.append(stmt.value)
+        else:
+            nodes.append(stmt.target)
+            nodes.append(stmt.value)
+        return _referenced_names(nodes)
+
+    if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        nodes = [*stmt.decorator_list, *stmt.args.defaults, *stmt.args.kw_defaults]
+        if stmt.returns is not None:
+            nodes.append(stmt.returns)
+        return _referenced_names([node for node in nodes if node is not None])
+
+    if isinstance(stmt, ast.ClassDef):
+        return _referenced_names([*stmt.decorator_list, *stmt.bases, *stmt.keywords])
+
+    return _referenced_names([stmt])
+
+
+def _referenced_names(nodes: list[ast.AST]) -> set[str]:
+    refs: set[str] = set()
+
+    class ReferenceVisitor(ast.NodeVisitor):
+        def visit_Name(self, node: ast.Name) -> None:
+            if isinstance(node.ctx, ast.Load):
+                refs.add(node.id)
+
+    visitor = ReferenceVisitor()
+    for node in nodes:
+        visitor.visit(node)
+    return refs
 
 
 def _assigned_names(stmt: ast.Assign | ast.AnnAssign | ast.AugAssign) -> set[str]:
@@ -443,9 +565,14 @@ def generate_one(
     input_path: pathlib.Path, output_root: pathlib.Path
 ) -> tuple[pathlib.Path, pathlib.Path]:
     source = input_path.read_text()
-    cells = _extract_cells(source)
     name = input_path.stem
     bucket = _bucket_for(input_path)
+    metadata = _extract_metadata(source) or {}
+    cells = _extract_cells(
+        source,
+        required_modal_secrets=_required_modal_secrets(metadata),
+        include_multinode_disclaimer=bucket == "multinode",
+    )
     out_dir = output_root / bucket / name
     out_dir.mkdir(parents=True, exist_ok=True)
     py_path = out_dir / f"{name}.py"
@@ -473,6 +600,24 @@ def _extract_metadata(source: str) -> dict | None:
                 if isinstance(value, dict):
                     return value
     return None
+
+
+def _required_modal_secrets(metadata: dict) -> tuple[dict[str, str], ...]:
+    extra_secrets = metadata.get("required_modal_secrets", ())
+    if not isinstance(extra_secrets, (list, tuple)):
+        raise ValueError("required_modal_secrets must be a list of {name, key} dicts")
+
+    secrets = list(_DEFAULT_REQUIRED_MODAL_SECRETS)
+    for secret in extra_secrets:
+        if not isinstance(secret, dict):
+            raise ValueError("required_modal_secrets must contain {name, key} dicts")
+        name = secret.get("name")
+        key = secret.get("key")
+        if not isinstance(name, str) or not isinstance(key, str):
+            raise ValueError("required_modal_secrets entries need string name and key")
+        secrets.append({"name": name, "key": key})
+
+    return tuple(secrets)
 
 
 def _render_launch_cell(bucket: str, name: str) -> str:

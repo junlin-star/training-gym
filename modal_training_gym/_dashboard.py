@@ -70,6 +70,7 @@ def fastapi_app():
     from modal_training_gym.utils.metadata import (
         MetadataStore,
         vol_get,
+        vol_compact_summary_items,
         vol_get_summary_items,
         vol_put_summary_items,
     )
@@ -91,6 +92,64 @@ def fastapi_app():
         "evals": asyncio.Lock(),
         "deployments": asyncio.Lock(),
     }
+    _compact_lock = asyncio.Lock()
+
+    async def _run_compact() -> None:
+        """Compact all summary stores from canonical metadata."""
+        for summary_store, item_store, id_key, sk, rev in [
+            (
+                MetadataStore.TRAINING_RUNS_SUMMARY,
+                MetadataStore.TRAINING_RUNS,
+                "training_run_id",
+                lambda item: (
+                    int(item.get("created_at", 0) or 0),
+                    str(item.get("training_run_id", "")),
+                ),
+                True,
+            ),
+            (
+                MetadataStore.TRAIN_RESULTS_SUMMARY,
+                MetadataStore.TRAIN_RESULTS,
+                "training_run_id",
+                lambda item: str(item.get("training_run_id", "")),
+                True,
+            ),
+            (
+                MetadataStore.DEPLOYMENTS_SUMMARY,
+                MetadataStore.DEPLOYMENTS,
+                "deployment_id",
+                lambda item: (
+                    str(item.get("deployment_config", {}).get("app_name", "")),
+                    str(item.get("deployment_id", "")),
+                ),
+                True,
+            ),
+        ]:
+            await run_in_threadpool(
+                vol_compact_summary_items,
+                summary_store,
+                item_store,
+                item_id_key=id_key,
+                sort_key=sk,
+                reverse=rev,
+            )
+        for key in cache_entries:
+            cache_entries[key] = (0.0, [])
+
+    def _make_compact_task() -> Any:
+        """Return a BackgroundTask that compacts summaries, or None if already running."""
+        if _compact_lock.locked():
+            return None
+
+        async def _guarded_compact() -> None:
+            if _compact_lock.locked():
+                return
+            async with _compact_lock:
+                await _run_compact()
+
+        from starlette.background import BackgroundTask
+
+        return BackgroundTask(_guarded_compact)
 
     web.mount("/assets", StaticFiles(directory=f"{STATIC_DIR}/assets"), name="assets")
 
@@ -263,7 +322,7 @@ def fastapi_app():
             data = await get_cached_list("runs", load_runs)
         except Exception:
             data = []
-        return JSONResponse(data)
+        return JSONResponse(data, background=_make_compact_task())
 
     # ── Train results ────────────────────────────────────────────────────
 
@@ -273,7 +332,7 @@ def fastapi_app():
             data = await get_cached_list("train_results", load_train_results)
         except Exception:
             data = []
-        return JSONResponse(data)
+        return JSONResponse(data, background=_make_compact_task())
 
     @web.get("/api/train-results/{training_run_id}")
     async def train_result(training_run_id: str):
@@ -317,7 +376,16 @@ def fastapi_app():
             data = await get_cached_list("deployments", load_deployments)
         except Exception:
             data = []
-        return JSONResponse(data)
+        return JSONResponse(data, background=_make_compact_task())
+
+    # ── Compaction (on-demand repair) ─────────────────────────────────────
+
+    @web.post("/api/compact")
+    async def compact():
+        """Rebuild summary caches from canonical per-item metadata files."""
+        async with _compact_lock:
+            await _run_compact()
+        return JSONResponse({"status": "compacted"})
 
     # ── SPA fallback ─────────────────────────────────────────────────────
 

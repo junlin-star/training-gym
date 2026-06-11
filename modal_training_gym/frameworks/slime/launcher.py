@@ -32,7 +32,6 @@ from enum import Enum
 from modal import App, Image, Secret, Volume
 
 from modal_training_gym.common import hf_secrets
-from modal.experimental import clustered
 
 import cloudpickle
 
@@ -42,10 +41,16 @@ from modal_training_gym.common.framework import (
     mount_tools_dir,
     resolve_caller_module,
 )
+from modal_training_gym.common.modal_refs import register_modal_cloudpickle_reducers
 from modal_training_gym.common.models import ModelConfig
 from modal_training_gym.common.modal_urls import modal_app_dashboard_url
-from modal_training_gym.common.ray_cluster import ModalRayCluster
+from modal_training_gym.common.ray_cluster import (
+    ModalRayCluster,
+    _supports_rdma,
+    clustered_if,
+)
 from modal_training_gym.common.run import TrainingRun, TrainingRunStatus
+from modal_training_gym.common.status import SlimeStatus
 from modal_training_gym.common.train_result import TrainResult
 
 from modal_training_gym.train_recipes.slime_recipe.recipe import (
@@ -83,30 +88,15 @@ _PATCH_BRIDGE_PER_TOKEN_LOSS_B64 = encode_patch(
     "patch_bridge_provider_per_token_loss", _SLIME_PATCHES
 )
 _PATCH_STOP_TOKEN_DIAG_B64 = encode_patch("patch_stop_token_diagnostic", _SLIME_PATCHES)
-
-
-def _clustered_if(
-    use_clustered: bool, size: int, *, rdma: bool
-) -> Callable[[Callable], Callable]:
-    """Return a decorator: ``clustered(size, rdma=rdma)`` when ``use_clustered``,
-    else an identity decorator that registers the function as a plain
-    ``@app.function``.
-
-    For a single-node run (``size == 1``) Modal's clustered scheduler is pure
-    overhead: ``ModalRayCluster.discover_cluster(1)`` already short-circuits to
-    ``127.0.0.1``/head/rank-0 and never calls ``modal.experimental.get_cluster_info``,
-    RDMA/EFA are already off, and the body runs identically. Skipping ``@clustered``
-    only changes how the single container is *scheduled* — it dodges the multi-
-    container reservation wait (which can hang for >1h under capacity pressure) and
-    the sub-8-GPU clustered-function deprecation. The function body is unchanged.
-    """
-    if use_clustered:
-        return clustered(size, rdma=rdma)  # pyright: ignore[reportCallIssue, reportOptionalCall]
-
-    def _identity(fn):
-        return fn
-
-    return _identity
+# The Qwen3-ASR Megatron->HF converter (registers the qwen3_asr mapping incl. the
+# audio tower). It lives in the base image — not the ASR recipe — because torch_dist
+# -> HF conversion runs in the shared convert_checkpoint_to_hf path (deploy/eval),
+# which has no recipe; baking it here makes both train-time export and deploy-time
+# conversion ASR-capable. Additive + idempotent, so non-ASR runs are untouched.
+_PATCH_QWEN3_ASR_EXPORT_B64 = encode_patch(
+    "patch_qwen3_asr_export",
+    _SLIME_PATCHES / "model_specific_patches" / "qwen3_asr",
+)
 
 
 def _build_slime_base_image() -> "Image":
@@ -119,8 +109,35 @@ def _build_slime_base_image() -> "Image":
             f"echo {_PATCH_ADVANTAGES_B64} | base64 -d | python3",
             f"echo {_PATCH_BRIDGE_NONE_TASK_B64} | base64 -d | python3",
             f"echo {_PATCH_STOP_TOKEN_DIAG_B64} | base64 -d | python3",
+            f"echo {_PATCH_QWEN3_ASR_EXPORT_B64} | base64 -d | python3",
         )
     )
+
+
+def _build_conversion_config(slime_cfg: Any, model: Any = None) -> dict[str, Any]:
+    """Build a dict of parameters that affect the torch_dist checkpoint layout.
+
+    Written to ``.conversion_config.json`` inside the checkpoint directory after
+    conversion so that later runs can detect stale checkpoints whose parallelism
+    no longer matches the current recipe.
+    """
+    from modal_training_gym.frameworks.slime.modal_helpers.utils import (
+        get_checkpoint_conversion_policy,
+    )
+
+    num_nodes, nproc_per_node, extra_args = get_checkpoint_conversion_policy(
+        slime_cfg, model=model
+    )
+    return {
+        "num_nodes": num_nodes,
+        "nproc_per_node": nproc_per_node,
+        "extra_args": extra_args,
+        "model_name": model.model_name if model else None,
+        "slime_model_script": getattr(slime_cfg, "slime_model_script", ""),
+    }
+
+
+_CONVERSION_CONFIG_FILE = ".conversion_config.json"
 
 
 def _has_torch_dist_checkpoint(save_path: str) -> bool:
@@ -235,11 +252,8 @@ def build_slime_app(
     SlimeRecipe._validate_custom_model_architecture(model)
     SlimeRecipe._validate_dataset(dataset)
 
-    # Models whose bridge forward can't do THD packing (e.g. Qwen3-ASR) must train
-    # on padded (bshd) batches. Enforce it here so a recipe that leaves slime's
-    # default thd packing on fails fast with a fix, not a deep "packed_seq_params is
-    # not supported" crash. Qwen3ASR_Recipe sets these; bare SlimeRecipe users get
-    # this pointer.
+    # Models that can't do THD packing (model.requires_bshd, e.g. Qwen3-ASR) must
+    # train on padded (bshd) batches; fail fast with the fix if the recipe didn't.
     if model and getattr(model, "requires_bshd", False):
         cfg = slime.extra_config or {}
         if cfg.get("qkv_format") != "bshd" or slime.use_dynamic_batch_size:
@@ -247,15 +261,21 @@ def build_slime_app(
                 f"{model.model_name} requires padded (bshd) batches: its "
                 "megatron-bridge forward doesn't implement THD sequence packing. "
                 'Set extra_config={"qkv_format": "bshd", "micro_batch_size": N} and '
-                "use_dynamic_batch_size=False — or use Qwen3ASR_Recipe, which sets "
+                "use_dynamic_batch_size=False — or use Qwen3_ASR_1_7b_Recipe, which sets "
                 f"these. Got qkv_format={cfg.get('qkv_format')!r}, "
                 f"use_dynamic_batch_size={slime.use_dynamic_batch_size}."
             )
 
-    if model and getattr(slime, "megatron_to_hf_mode", "") != "bridge":
+    if (
+        model
+        and getattr(slime, "megatron_to_hf_mode", "") != "bridge"
+        and not slime.ref_load
+    ):
+        # Non-bridge: pre-convert HF -> torch_dist (convert_checkpoint) and load that as the
+        # reference checkpoint. In bridge mode we instead load the HF weights directly via
+        # AutoBridge; ref_load is set to the local HF snapshot dir at train time.
         slug = model.model_name.replace("/", "--")
-        if not slime.ref_load:
-            object.__setattr__(slime, "ref_load", f"/checkpoints/torch_dist/{slug}-v31")
+        object.__setattr__(slime, "ref_load", f"/checkpoints/torch_dist/{slug}-v31")
 
     # ── GDN compatibility ─────────────────────────────────────────────────
     # Models with Gated Delta Net (GDN) layers (use_gated_attention=True)
@@ -274,6 +294,7 @@ def build_slime_app(
     caller_module = resolve_caller_module()
     if caller_module is not None and caller_module.__name__ != "__main__":
         cloudpickle.register_pickle_by_value(caller_module)
+    register_modal_cloudpickle_reducers()
 
     caller_script = None
     if caller_module is not None:
@@ -577,18 +598,26 @@ def build_slime_app(
     @app.function(
         image=image,
         gpu=gpu_spec,
+        memory=slime.memory,
+        cloud=slime.cloud,
+        region=slime.region,
         volumes=all_volumes,
         timeout=4 * 60 * 60,
         experimental_options={"efa_enabled": True},
         serialized=True,
         name="convert_checkpoint",
     )
-    @_clustered_if(convert_nnodes > 1, convert_nnodes, rdma=convert_nnodes > 1)
+    @clustered_if(convert_nnodes > 1, convert_nnodes, gpu_type=slime.gpu_type)
     def convert_checkpoint():
         from huggingface_hub import snapshot_download
 
+        # Bridge mode loads the HF weights directly into Megatron via AutoBridge at train time
+        # (slime's _load_checkpoint_hf), so there is no offline HF→torch_dist conversion to run.
+        # The HF reference path is wired into `ref_load` in `train` below.
         if getattr(slime, "megatron_to_hf_mode", None) == "bridge":
-            print("Bridge mode — no conversion needed.")
+            print(
+                "Bridge mode — HF weights loaded directly via AutoBridge; no conversion needed."
+            )
             return
 
         hf_cache_volume.reload()
@@ -607,20 +636,73 @@ def build_slime_app(
         )
         node_rank, master_addr, _, nnodes = get_modal_cluster_context(num_nodes)
 
+        import json
+        import shutil
+
+        current_config = _build_conversion_config(slime, model=model)
+
         if os.path.exists(save_path):
             if _has_torch_dist_checkpoint(save_path):
-                if node_rank == 0:
-                    print(f"Using existing torch_dist checkpoint at {save_path}.")
-                return
-            if node_rank == 0:
-                import shutil
+                config_path = os.path.join(save_path, _CONVERSION_CONFIG_FILE)
+                stale = False
+                if os.path.isfile(config_path):
+                    try:
+                        with open(config_path) as f:
+                            stored_config = json.load(f)
+                        if stored_config != current_config:
+                            stale = True
+                            if node_rank == 0:
+                                print(
+                                    f"Checkpoint at {save_path} was built with "
+                                    f"different config:\n  stored: {stored_config}"
+                                    f"\n  current: {current_config}"
+                                )
+                    except (OSError, json.JSONDecodeError):
+                        stale = True
+                        if node_rank == 0:
+                            print(
+                                f"Checkpoint at {save_path} has unreadable "
+                                f"conversion config — reconverting."
+                            )
+                else:
+                    # Legacy checkpoint without config metadata — cannot
+                    # verify compatibility.  Force re-conversion so the
+                    # checkpoint is rebuilt with the correct layout and
+                    # metadata for future validation.
+                    stale = True
+                    if node_rank == 0:
+                        print(
+                            f"Checkpoint at {save_path} has no conversion "
+                            f"config metadata — reconverting to ensure "
+                            f"compatibility."
+                        )
 
-                print(f"Removing incomplete torch_dist checkpoint at {save_path}.")
-                shutil.rmtree(save_path, ignore_errors=True)
-                checkpoints_volume.commit()
+                if stale:
+                    if node_rank == 0:
+                        print(
+                            f"Removing stale torch_dist checkpoint at "
+                            f"{save_path} (parallelism config changed)."
+                        )
+                        shutil.rmtree(save_path, ignore_errors=True)
+                        checkpoints_volume.commit()
+                    else:
+                        time.sleep(5)
+                        checkpoints_volume.reload()
+                else:
+                    if node_rank == 0:
+                        print(
+                            f"Using existing torch_dist checkpoint at "
+                            f"{save_path} (config matches)."
+                        )
+                    return
             else:
-                time.sleep(5)
-                checkpoints_volume.reload()
+                if node_rank == 0:
+                    print(f"Removing incomplete torch_dist checkpoint at {save_path}.")
+                    shutil.rmtree(save_path, ignore_errors=True)
+                    checkpoints_volume.commit()
+                else:
+                    time.sleep(5)
+                    checkpoints_volume.reload()
 
         torchrun_args = [f"--nproc-per-node={nproc_per_node}"]
         if nnodes > 1:
@@ -677,6 +759,14 @@ def build_slime_app(
         )
         print(f"Running: bash -c {cmd!r}")
         subprocess.run(["bash", "-c", cmd], check=True, env=env)
+
+        if node_rank == 0:
+            config_path = os.path.join(save_path, _CONVERSION_CONFIG_FILE)
+            try:
+                with open(config_path, "w") as f:
+                    json.dump(current_config, f)
+            except OSError as exc:
+                print(f"WARNING: could not write conversion config: {exc}")
         checkpoints_volume.commit()
 
         if node_rank == 0:
@@ -736,11 +826,12 @@ def build_slime_app(
         checkpoints_volume.commit()
         print(f"Saved HF checkpoint to {output_dir}")
 
+    # Use Modal's clustered scheduler for multi-node runs AND for single-node
+    # runs on RDMA-capable GPUs.  The `rdma=True` flag enables GPU interconnect
+    # optimisations (e.g. NVLink/NVSwitch peer paths) that significantly speed
+    # up NCCL collectives used during weight sync — even within a single node.
     _multi_node = slime.total_nodes > 1
-    # Single-node clustered scheduling is pure reservation overhead (see
-    # _clustered_if). Auto-skip it for 1 node; `disable_clustered` is an
-    # escape hatch (ignored for multi-node, which always needs the cluster).
-    _use_clustered = _multi_node and not slime.disable_clustered
+    _use_clustered = _multi_node or _supports_rdma(slime.gpu_type)
 
     train_secrets: list[Secret] = []
     if slime.wandb is not None:
@@ -775,7 +866,7 @@ def build_slime_app(
         serialized=True,
         name="train",
     )
-    @_clustered_if(_use_clustered, slime.total_nodes, rdma=_multi_node)
+    @clustered_if(_use_clustered, slime.total_nodes, gpu_type=slime.gpu_type)
     async def train(
         modal_app_id: str = "",
         modal_app_url: str = "",
@@ -825,14 +916,20 @@ def build_slime_app(
             modal_app_url=modal_app_url or modal_app_dashboard_url(modal_app_id),
             framework=Framework.SLIME,
             config=config_summary,
+            framework_status=SlimeStatus.INITIALIZING,
             created_at=created_at,
             started_at=created_at,
         )
         await run_record.save_async()
         print(f"TrainingRun recorded: {training_run_id}")
 
+        async def _set_framework_status(status: SlimeStatus) -> None:
+            run_record.framework_status = status
+            await run_record.save_async()
+
         try:
             if model:
+                await _set_framework_status(SlimeStatus.DOWNLOAD_MODEL)
                 cache_dir = (
                     HF_CACHE_PATH
                     / "hub"
@@ -846,6 +943,7 @@ def build_slime_app(
                 await hf_cache_volume.commit.aio()
 
             if dataset:
+                await _set_framework_status(SlimeStatus.PREPARE_DATASET)
                 prompt_data, eval_paths = SlimeRecipe._resolve_data_paths(dataset)
                 needs_prepare = not os.path.exists(prompt_data)
                 if dataset.always_prepare and os.path.exists(prompt_data):
@@ -864,6 +962,7 @@ def build_slime_app(
                     if os.path.exists(ep):
                         dataset.validate_prepared(ep)
 
+            await _set_framework_status(SlimeStatus.CONVERT_MODEL)
             prepare_slime_config(slime, model, tempfile.mkdtemp())
 
             if wandb_key := os.environ.get("WANDB_API_KEY", ""):
@@ -889,18 +988,41 @@ def build_slime_app(
 
             original_save = slime.save
             original_load = slime.load
+            original_ref_load = slime.ref_load
             object.__setattr__(slime, "save", save_root)
+
+            # Resolve the local HF snapshot dir (used for bridge-mode load below).
+            _hf_ref: str | None = None
+            if model and (slime.megatron_to_hf_mode == "bridge" or slime.ref_load):
+                from huggingface_hub import snapshot_download as _snap0
+
+                _hf_ref = (
+                    str(model.model_path)
+                    if model.model_path
+                    else _snap0(model.model_name, local_files_only=True)
+                )
+
             if _has_torch_dist_checkpoint(save_root):
                 print(
                     f"Detected existing checkpoint in {save_root}; "
                     "will resume training from last saved iteration."
                 )
                 object.__setattr__(slime, "load", save_root)
+            elif (
+                slime.megatron_to_hf_mode == "bridge" and not slime.ref_load and _hf_ref
+            ):
+                # Fresh bridge run: load the HF weights directly via AutoBridge. slime falls back
+                # args.load -> args.ref_load, and _load_checkpoint_hf maps the HF dir into Megatron
+                # (weights only — no optimizer/RNG state, so no torch_dist is required). Pointing
+                # ref_load at a torch_dist here would instead trigger the full-resume path and fail
+                # on the missing optimizer state.
+                object.__setattr__(slime, "ref_load", _hf_ref)
             try:
                 cmd = build_train_cmd(slime, SLIME_ROOT, model=model, dataset=dataset)
             finally:
                 object.__setattr__(slime, "save", original_save)
                 object.__setattr__(slime, "load", original_load)
+                object.__setattr__(slime, "ref_load", original_ref_load)
             runtime_env = {
                 "env_vars": {
                     "no_proxy": f"127.0.0.1,{cluster.head_addr}",
@@ -915,6 +1037,7 @@ def build_slime_app(
             )
             print(f"Command: {cmd}, runtime_env: {runtime_env}")
 
+            await _set_framework_status(SlimeStatus.TRAINING)
             async with cluster.forward_dashboard() as tunnel:
                 print(f"Ray dashboard: {tunnel.url}")
                 await cluster.submit_and_tail(cmd, runtime_env=runtime_env)
