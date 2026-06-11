@@ -382,9 +382,67 @@
 
   let chartPath = $derived(_rolloutLinePath((r) => Number(r.mean) || 0));
   let chartStats = $derived(_seriesStats((r) => Number(r.mean) || 0));
-  // Samples generated per rollout step.
-  let samplesPath = $derived(_rolloutLinePath((r) => Number(r.total) || 0));
-  let samplesStats = $derived(_seriesStats((r) => Number(r.total) || 0));
+
+  // Score-distribution comparison: the first rollout (step 0) vs the most
+  // recent one, to see how sample scores shifted over training.
+  let firstRolloutId = $derived(
+    rolloutSummaries.length
+      ? Math.min(...rolloutSummaries.map((r) => Number(r.rollout_id) || 0))
+      : null,
+  );
+  let lastRolloutId = $derived(
+    rolloutSummaries.length
+      ? Math.max(...rolloutSummaries.map((r) => Number(r.rollout_id) || 0))
+      : null,
+  );
+  let scoreDist = $state(null);
+
+  function buildScoreDist(firstSamples, lastSamples, firstId, lastId) {
+    const scores = [...firstSamples, ...lastSamples].map((s) => Number(s.score) || 0);
+    if (!scores.length) return null;
+    const lo = Math.min(...scores);
+    const hi = Math.max(...scores);
+    const n = lo === hi ? 1 : 12;
+    const span = hi - lo || 1;
+    const bins = Array.from({ length: n }, (_, i) => ({
+      lo: lo + (i / n) * span,
+      hi: lo + ((i + 1) / n) * span,
+      first: 0,
+      last: 0,
+    }));
+    const idx = (s) => Math.max(0, Math.min(n - 1, Math.floor(((s - lo) / span) * n)));
+    for (const s of firstSamples) bins[idx(Number(s.score) || 0)].first += 1;
+    for (const s of lastSamples) bins[idx(Number(s.score) || 0)].last += 1;
+    const max = Math.max(1, ...bins.map((b) => Math.max(b.first, b.last)));
+    return { bins, max, lo, hi, firstId, lastId };
+  }
+
+  // Fetch the two rollouts' samples only when the endpoints change (a new step
+  // lands), not on every 5s poll — the payloads are large.
+  $effect(() => {
+    if (activeTab !== "summary") return;
+    const id = runId;
+    const fId = firstRolloutId;
+    const lId = lastRolloutId;
+    if (!id || fId == null || lId == null) {
+      scoreDist = null;
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const first = await fetchRollout(id, fId);
+        const last = fId === lId ? first : await fetchRollout(id, lId);
+        if (cancelled) return;
+        scoreDist = buildScoreDist(first?.samples || [], last?.samples || [], fId, lId);
+      } catch {
+        if (!cancelled) scoreDist = null;
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  });
 </script>
 
 <svelte:window onkeydown={onSampleKeydown} />
@@ -463,23 +521,46 @@
               {/if}
             </div>
             <div class="rollout-chart">
-              <div class="rollout-chart-title">Num samples</div>
-              {#if rolloutSummaries.length >= 2}
-                <svg viewBox="0 0 640 140" preserveAspectRatio="none" aria-hidden="true">
-                  <path
-                    d={samplesPath}
-                    fill="none"
-                    stroke="var(--green, var(--accent))"
-                    stroke-width="1.5"
-                  />
-                </svg>
-              {/if}
-              {#if samplesStats}
-                <div class="rollout-chart-meta">
-                  <span>min {samplesStats.min}</span>
-                  <span>latest {samplesStats.latest}</span>
-                  <span>max {samplesStats.max}</span>
+              <div class="rollout-chart-title">Score distribution</div>
+              {#if scoreDist}
+                <div class="dist-legend">
+                  <span class="dist-legend-item">
+                    <span class="dist-swatch swatch-first"></span>
+                    rollout {scoreDist.firstId}
+                  </span>
+                  {#if scoreDist.firstId !== scoreDist.lastId}
+                    <span class="dist-legend-item">
+                      <span class="dist-swatch swatch-last"></span>
+                      latest (rollout {scoreDist.lastId})
+                    </span>
+                  {/if}
                 </div>
+                <div class="dist-compare">
+                  {#each scoreDist.bins as bin, i (i)}
+                    <div
+                      class="dist-compare-bin"
+                      title={`reward ${formatMean(bin.lo)}–${formatMean(bin.hi)} · rollout ${scoreDist.firstId}: ${bin.first}, latest: ${bin.last}`}
+                    >
+                      <div
+                        class="dist-compare-bar swatch-first"
+                        style:height={`${(bin.first / scoreDist.max) * 100}%`}
+                      ></div>
+                      {#if scoreDist.firstId !== scoreDist.lastId}
+                        <div
+                          class="dist-compare-bar swatch-last"
+                          style:height={`${(bin.last / scoreDist.max) * 100}%`}
+                        ></div>
+                      {/if}
+                    </div>
+                  {/each}
+                </div>
+                <div class="dist-axis">
+                  <span>{formatMean(scoreDist.lo)}</span>
+                  <span class="dist-axis-label">reward</span>
+                  <span>{formatMean(scoreDist.hi)}</span>
+                </div>
+              {:else}
+                <div class="empty">Loading distribution…</div>
               {/if}
             </div>
           {/if}
@@ -860,6 +941,59 @@
     font-weight: 600;
     color: var(--text-bright);
     margin-bottom: 6px;
+  }
+
+  /* Score-distribution comparison (first vs latest rollout). */
+  .swatch-first {
+    background: var(--color-c-gray-40, #5e5e5e);
+  }
+
+  .swatch-last {
+    background: var(--accent);
+  }
+
+  .dist-legend {
+    display: flex;
+    gap: 16px;
+    margin-bottom: 8px;
+    font-size: 11px;
+    color: var(--muted);
+  }
+
+  .dist-legend-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .dist-swatch {
+    width: 10px;
+    height: 10px;
+    border-radius: 2px;
+  }
+
+  .dist-compare {
+    display: flex;
+    align-items: flex-end;
+    gap: 3px;
+    height: 120px;
+    padding-top: 8px;
+    border-bottom: 1px solid var(--border, #2f2f2f);
+  }
+
+  .dist-compare-bin {
+    flex: 1;
+    height: 100%;
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+    gap: 2px;
+  }
+
+  .dist-compare-bar {
+    flex: 1;
+    min-height: 1px;
+    border-radius: 2px 2px 0 0;
   }
 
   .rollout-chart svg {
