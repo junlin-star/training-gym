@@ -320,18 +320,48 @@ def _coerce_arg_value(raw: str) -> Any:
         return raw.strip()
 
 
-# ── Qwen3 family ───────────────────────────────────────────────────────
+# ── Qwen family ────────────────────────────────────────────────────────
 
 _QWEN3_TOOL_CALL_RE = re.compile(r"<tool_call>\s*(.*?)\s*</tool_call>", re.DOTALL)
+# Qwen3.5/3.6 (Qwen3-Coder lineage) wire format inside <tool_call> blocks:
+#   <function=NAME>
+#   <parameter=KEY>
+#   value (may span lines)
+#   </parameter>
+#   </function>
+_QWEN3_XML_FN_RE = re.compile(r"<function=([^>\n]+)>\s*(.*?)\s*(?:</function>|\Z)", re.DOTALL)
+_QWEN3_XML_PARAM_RE = re.compile(r"<parameter=([^>\n]+)>\n?(.*?)\n?</parameter>", re.DOTALL)
 
 
-def parse_qwen3_response(text: str) -> ParsedResponse:
-    """Parse Qwen3-family model output into structured content.
+def _parse_json_tool_block(block: str) -> ToolCall | None:
+    """Qwen3 wire format: the ``<tool_call>`` body is one JSON object."""
+    try:
+        data = json.loads(block)
+        return ToolCall(name=data.get("name", ""), arguments=data.get("arguments", {}))
+    except (json.JSONDecodeError, KeyError, TypeError, AttributeError):
+        return None
 
-    Handles ``<think>``/``</think>`` reasoning blocks,
-    ``<|im_start|>``/``<|im_end|>`` chat-template delimiters,
-    and ``<tool_call>``/``</tool_call>`` tool invocations.
-    """
+
+def _parse_xml_tool_block(block: str) -> ToolCall | None:
+    """Qwen3.5/3.6 wire format: ``<function=NAME>`` + ``<parameter=KEY>`` pairs."""
+    fn = _QWEN3_XML_FN_RE.search(block)
+    if fn is None:
+        return None
+    # values are rendered raw by the chat template (JSON only for non-strings),
+    # so JSON-decode where possible and keep the raw string otherwise
+    args = {
+        key.strip(): _coerce_arg_value(value)
+        for key, value in _QWEN3_XML_PARAM_RE.findall(fn.group(2))
+    }
+    return ToolCall(name=fn.group(1).strip(), arguments=args)
+
+
+def _parse_qwen_chat(
+    text: str, block_parsers: tuple[Callable[[str], ToolCall | None], ...]
+) -> ParsedResponse:
+    """Shared Qwen chat scaffolding: ``<think>`` blocks, ``<|im_*|>`` delimiters,
+    and ``<tool_call>`` extraction; each block is decoded by the first
+    ``block_parser`` that accepts it."""
     text = text.replace("\r\n", "\n").replace("\r", "\n")
 
     if "<|im_start|>assistant" in text:
@@ -347,16 +377,11 @@ def parse_qwen3_response(text: str) -> ParsedResponse:
 
     tool_calls: list[ToolCall] = []
     for match in _QWEN3_TOOL_CALL_RE.finditer(text):
-        try:
-            data = json.loads(match.group(1))
-            tool_calls.append(
-                ToolCall(
-                    name=data.get("name", ""),
-                    arguments=data.get("arguments", {}),
-                )
-            )
-        except (json.JSONDecodeError, KeyError, TypeError):
-            continue
+        for block_parser in block_parsers:
+            call = block_parser(match.group(1))
+            if call is not None:
+                tool_calls.append(call)
+                break
     content = _QWEN3_TOOL_CALL_RE.sub("", text).strip()
 
     return ParsedResponse(
@@ -364,6 +389,28 @@ def parse_qwen3_response(text: str) -> ParsedResponse:
         tool_calls=tool_calls,
         thinking=thinking,
     )
+
+
+def parse_qwen3_response(text: str) -> ParsedResponse:
+    """Parse Qwen3-family model output into structured content.
+
+    Handles ``<think>``/``</think>`` reasoning blocks,
+    ``<|im_start|>``/``<|im_end|>`` chat-template delimiters,
+    and ``<tool_call>``/``</tool_call>`` tool invocations with Qwen3's
+    JSON body (``{"name": ..., "arguments": {...}}``).
+    """
+    return _parse_qwen_chat(text, (_parse_json_tool_block,))
+
+
+def parse_qwen3_6_response(text: str) -> ParsedResponse:
+    """Parse Qwen3.5/3.6-family model output into structured content.
+
+    Same chat scaffolding as :func:`parse_qwen3_response`, but tool calls use
+    the Qwen3-Coder-lineage XML body (``<function=...><parameter=...>...``)
+    that the Qwen3.5/3.6 chat template emits. A JSON body is tolerated as a
+    fallback so format drift still parses to a real call.
+    """
+    return _parse_qwen_chat(text, (_parse_xml_tool_block, _parse_json_tool_block))
 
 
 # ── GLM family (GLM-4.5 / 4.6 / 4.7) ───────────────────────────────────

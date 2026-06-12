@@ -1,6 +1,6 @@
 """Qwen3.6-35B-A3B model spec as a concrete HFModelConfiguration subclass."""
 
-from .base import HFModelConfiguration, ModelArchitecture, parse_qwen3_response
+from .base import HFModelConfiguration, ModelArchitecture, parse_qwen3_6_response
 
 
 class Qwen3_6_35B(HFModelConfiguration):
@@ -11,7 +11,7 @@ class Qwen3_6_35B(HFModelConfiguration):
     frameworks (slime). Downloads from ``Qwen/Qwen3.6-35B-A3B`` on HuggingFace.
     """
 
-    response_parser = staticmethod(parse_qwen3_response)
+    response_parser = staticmethod(parse_qwen3_6_response)
 
     model_name = "Qwen/Qwen3.6-35B-A3B"
     architecture = ModelArchitecture(
