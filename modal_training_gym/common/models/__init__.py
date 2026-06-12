@@ -6,6 +6,7 @@ from .base import (
     ToolCall,
     parse_glm_response,
     parse_kimi_k2_response,
+    parse_qwen3_6_response,
     parse_qwen3_response,
 )
 from .glm_4_7 import GLM_4_7
@@ -40,6 +41,7 @@ __all__ = [
     "ToolCall",
     "parse_glm_response",
     "parse_kimi_k2_response",
+    "parse_qwen3_6_response",
     "parse_qwen3_response",
     "Qwen3_6_27B",
     "Qwen3_6_35B",
