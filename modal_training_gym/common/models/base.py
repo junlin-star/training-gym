@@ -329,8 +329,12 @@ _QWEN3_TOOL_CALL_RE = re.compile(r"<tool_call>\s*(.*?)\s*</tool_call>", re.DOTAL
 #   value (may span lines)
 #   </parameter>
 #   </function>
-_QWEN3_XML_FN_RE = re.compile(r"<function=([^>\n]+)>\s*(.*?)\s*(?:</function>|\Z)", re.DOTALL)
-_QWEN3_XML_PARAM_RE = re.compile(r"<parameter=([^>\n]+)>\n?(.*?)\n?</parameter>", re.DOTALL)
+_QWEN3_XML_FN_RE = re.compile(
+    r"<function=([^>\n]+)>\s*(.*?)\s*(?:</function>|\Z)", re.DOTALL
+)
+_QWEN3_XML_PARAM_RE = re.compile(
+    r"<parameter=([^>\n]+)>\n?(.*?)\n?</parameter>", re.DOTALL
+)
 
 
 def _parse_json_tool_block(block: str) -> ToolCall | None:
