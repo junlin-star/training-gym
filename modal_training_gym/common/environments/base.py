@@ -258,6 +258,21 @@ class DirectorySnapshotLibrary:
     def has(self, item: str, step: int) -> bool:
         return self.key(item, step) in self.catalog()
 
+    # TODO(joyliu-q/atoniolo76) Switch to named images when feature releases
+    def missing_steps(self, item: str, n_steps: int) -> list[int]:
+        """Steps in ``0..n_steps`` with no cataloged snapshot.
+
+        Reads each present entry (not just a membership check) so the check
+        also refreshes the entry's server-side TTL — ``modal.Dict`` entries
+        expire after 7 days of inactivity (no reads or writes).
+        """
+        catalog = self.catalog()
+        return [
+            step
+            for step in range(n_steps + 1)
+            if catalog.get(self.key(item, step)) is None
+        ]
+
     def mount(self, sandbox: Any, item: str, step: int) -> None:
         """Mount the ``(item, step)`` snapshot at ``root`` inside ``sandbox``."""
         sandbox.mount_image(self.root, self.get(item, step))
