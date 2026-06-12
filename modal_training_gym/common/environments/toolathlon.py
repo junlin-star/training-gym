@@ -569,9 +569,9 @@ def build_snapshot_library(
     app = modal.App(f"{config.sandbox_app}-builder")
 
     @app.function(
-        image=modal.Image.debian_slim(python_version="3.12").pip_install(
-            "modal~=1.4.3"
-        ),
+        image=modal.Image.debian_slim(python_version="3.12")
+        .pip_install("modal~=1.4.3")
+        .add_local_python_source("modal_training_gym", copy=True),
         timeout=60 * 60,
         max_containers=16,
         serialized=True,
