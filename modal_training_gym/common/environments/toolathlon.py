@@ -543,19 +543,25 @@ def build_snapshot_library(
 ) -> None:
     """Build the ``(task, K)`` snapshot catalog, one Modal container per task, in parallel.
 
-    Resumable: a task is skipped if its final snapshot (K = len(golden)) is already cataloged, so
-    re-runs after a partial build (or a TTL refresh of only some tasks) are cheap.
+    Resumable and self-healing: a task is skipped only if *every* snapshot K = 0..len(golden) is
+    still cataloged (catalog entries expire after 7 days of inactivity — see
+    ``DirectorySnapshotLibrary.missing_steps``, whose reads also refresh the surviving entries'
+    TTLs). Tasks with any expired/missing step are rebuilt in full.
     """
     import modal
 
     snapshots = DirectorySnapshotLibrary(config.snapshot_catalog, config.snapshot_root)
     pending = []
     for task_name, golden_calls in task_to_golden.items():
-        if snapshots.has(task_name, len(golden_calls)):
+        missing = snapshots.missing_steps(task_name, len(golden_calls))
+        if not missing:
             print(
-                f"  {task_name}: already cataloged ({len(golden_calls) + 1}), skipping"
+                f"  {task_name}: all {len(golden_calls) + 1} snapshots cataloged (TTLs refreshed), skipping"
             )
         else:
+            print(
+                f"  {task_name}: {len(missing)}/{len(golden_calls) + 1} snapshots missing, rebuilding"
+            )
             pending.append((task_name, golden_calls))
     if not pending:
         return
