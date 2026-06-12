@@ -635,16 +635,13 @@ class TrainConfig:
                     flush_status_reporter(timeout_seconds=2.0)
         # A detached app survives client disconnect (so a closed terminal won't
         # kill a run) — but for the same reason it won't auto-stop when the run
-        # finishes. Stop it ourselves once training completed successfully; on
-        # interrupt/failure we leave it up so it can be inspected.
-        if self.detach and modal_app_id and result_dict is not None:
+        # finishes. Stop it ourselves so containers don't idle after completion
+        # or failure. Logs are still available via `modal app logs <app-id>`.
+        if self.detach and modal_app_id:
             _stop_app(modal_app_id)
         if result_dict is None:
             raise RuntimeError(
-                "Training app exited before returning a result. "
-                "The run is detached, so it keeps running on Modal even if this "
-                "client disconnects — reattach with `modal app logs <app-id>` or "
-                "stop it with `modal app stop <app-id>`."
+                "Training app exited before returning a result."
             )
         result = TrainResult(**TrainResult._parse_model_config(result_dict))
         print(f"Training complete: {result.training_run_id}")
