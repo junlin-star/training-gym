@@ -331,6 +331,14 @@
     return "var(--color-c-red-80)";
   }
 
+  // Average-score coloring for the runs table: a passing run reads green, a
+  // weak one amber, a zero red. Uses the brighter green-100 to match the design.
+  function avgScoreColor(score) {
+    if (score >= 0.5) return "var(--color-c-green-100)";
+    if (score > 0) return "var(--color-c-orange-80)";
+    return "var(--color-c-red-80)";
+  }
+
   function examplePromptText(row) {
     return row.prompt || row.metadata?.prompt || row.metadata?.question || row.metadata?.instruction || row.metadata?.input || "";
   }
@@ -575,7 +583,7 @@
                   </span>
                 {/if}
                 <ChevronDown
-                  size={14}
+                  size={16}
                   style={`color: var(--muted); transform: ${expandedConfigIds.has(group.evalConfigId) ? "rotate(180deg)" : "rotate(0deg)"};`}
                 />
               </div>
@@ -601,8 +609,8 @@
                       <th>Training run</th>
                       <th>Base model</th>
                       <th>Status</th>
-                      <th>Average score</th>
-                      <th>Examples</th>
+                      <th class="num-head">Average score</th>
+                      <th class="num-head">Examples</th>
                       <th>Created</th>
                     </tr>
                   </thead>
@@ -645,10 +653,10 @@
                         <td>
                           <StatusPill status={run.status} />
                         </td>
-                        <td class="eval-score">
-                          {run.status === "Failed" ? "—" : run.avgScore.toFixed(4)}
+                        <td class="eval-score num-cell" style:color={run.status === "Failed" ? "var(--muted)" : avgScoreColor(run.avgScore)}>
+                          {run.status === "Failed" ? "—" : run.avgScore.toFixed(3)}
                         </td>
-                        <td>{run.totalRows ? run.totalRows : "—"}</td>
+                        <td class="num-cell examples-cell">{run.totalRows ? run.totalRows : "—"}</td>
                         <td class="created-cell">
                           <TimeAgo timestamp={run.createdAt} showJustNow falsyRepresentation="—" />
                         </td>
@@ -1109,14 +1117,18 @@
     border: 0;
     width: 100%;
     text-align: left;
-    background: transparent;
+    background: var(--panel-alt);
     color: inherit;
     cursor: pointer;
     display: flex;
     justify-content: space-between;
     align-items: center;
     gap: 0.8rem;
-    padding: 0.75rem 0.9rem;
+    padding: 14px 16px;
+  }
+
+  .eval-group-header:hover {
+    background: color-mix(in srgb, var(--panel-alt) 80%, var(--text-bright) 4%);
   }
 
   .eval-group-title-wrap {
@@ -1135,6 +1147,7 @@
   .eval-group-subtitle {
     color: var(--muted);
     font-size: 0.74rem;
+    margin-top: 2px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -1174,6 +1187,16 @@
     table-layout: fixed;
   }
 
+  /* Column-header row carries the same fill as the group header so the two
+     read as one banded top section, matching the design. */
+  :global(table.evals-runs-table thead th) {
+    background: var(--panel-alt);
+  }
+
+  :global(table.evals-runs-table th.num-head) {
+    text-align: right;
+  }
+
   :global(table.evals-runs-table col.col-name) {
     width: 20%;
   }
@@ -1202,10 +1225,21 @@
     width: 8%;
   }
 
+  .num-cell {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+
   .mono {
     font-family: var(--font-mono);
     color: color-mix(in srgb, var(--accent) 78%, white);
     font-size: 0.72rem;
+  }
+
+  /* Name reads as a neutral identifier (per the design), not the green
+     cross-link accent the .mono class applies elsewhere. */
+  .name-cell {
+    color: var(--text);
   }
 
   .name-cell .truncate-text {
@@ -1263,7 +1297,6 @@
   }
 
   .eval-score {
-    color: var(--text-bright);
     font-weight: 600;
   }
 

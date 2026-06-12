@@ -267,11 +267,7 @@ def build_miles_app(
         "_modal_framework": "miles",
         **miles.app_tags,
     }
-    if miles.wandb is not None:
-        tags["_modal_wandb_project"] = miles.wandb.project
-        if miles.wandb.group:
-            tags["_modal_wandb_group"] = miles.wandb.group
-
+    
     app = App(app_name, tags=tags)
     gpu_spec = f"{miles.gpu_type}:{miles.actor_num_gpus_per_node}"
 

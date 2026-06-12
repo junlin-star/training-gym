@@ -628,10 +628,6 @@ def build_slime_app(
         "_modal_framework": "slime",
         **slime.app_tags,
     }
-    if slime.wandb is not None:
-        tags["_modal_wandb_project"] = slime.wandb.project
-        if slime.wandb.group:
-            tags["_modal_wandb_group"] = slime.wandb.group
     app = App(app_name, tags=tags)
     gpu_spec = f"{slime.gpu_type}:{slime.actor_num_gpus_per_node}"
 
@@ -1166,6 +1162,7 @@ def build_slime_app(
             original_save = slime.save
             original_load = slime.load
             original_ref_load = slime.ref_load
+            original_override_opd = slime.override_opt_param_scheduler
             object.__setattr__(slime, "save", save_root)
 
             # Resolve the local HF snapshot dir (used for bridge-mode load below).
@@ -1185,6 +1182,11 @@ def build_slime_app(
                     "will resume training from last saved iteration."
                 )
                 object.__setattr__(slime, "load", save_root)
+                # Batch/sampling args (num_rollout, rollout_batch_size,
+                # n_samples_per_prompt) may have changed since the checkpoint
+                # was written; re-derive the LR scheduler from current args
+                # instead of failing Megatron's strict-match assert.
+                object.__setattr__(slime, "override_opt_param_scheduler", True)
             elif (
                 slime.megatron_to_hf_mode == "bridge" and not slime.ref_load and _hf_ref
             ):
@@ -1200,6 +1202,9 @@ def build_slime_app(
                 object.__setattr__(slime, "save", original_save)
                 object.__setattr__(slime, "load", original_load)
                 object.__setattr__(slime, "ref_load", original_ref_load)
+                object.__setattr__(
+                    slime, "override_opt_param_scheduler", original_override_opd
+                )
 
             phase_report_url = (
                 os.environ.get("SLIME_PHASE_REPORT_URL")

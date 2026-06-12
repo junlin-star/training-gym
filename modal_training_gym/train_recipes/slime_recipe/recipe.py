@@ -60,6 +60,12 @@ _SLIME_SKIP = {
 YAML_CONFIG_FIELDS = ("eval_config", "extra_config", "sglang_config")
 JSON_CONFIG_FIELDS = ("train_env_vars", "apply_chat_template_kwargs", "multimodal_keys")
 
+# Megatron spells these flags with a literal underscore in "opt_param", so the
+# generic "_" → "-" conversion in cli_args would produce an unrecognized flag.
+_FLAG_SPELLINGS = {
+    "override_opt_param_scheduler": "--override-opt_param-scheduler",
+}
+
 _HOOK_PATH_CONFIG_KEYS = {
     "custom_rollout_log_function": "training_gym_custom_rollout_log_function_path",
     "custom_eval_rollout_log_function": "training_gym_custom_eval_rollout_log_function_path",
@@ -189,6 +195,10 @@ class SlimeRecipe(BaseTrainRecipe):
     save: str = "/checkpoints"
     load: str = ""
     no_save_optim: bool = False
+    # When resuming, re-derive the LR scheduler from current args instead of
+    # asserting they match the checkpoint's (which breaks whenever
+    # num_rollout/rollout_batch_size/n_samples_per_prompt change between runs).
+    override_opt_param_scheduler: bool = False
     megatron_to_hf_mode: str = ""
     use_fault_tolerance: bool = True
 
@@ -477,7 +487,7 @@ class SlimeRecipe(BaseTrainRecipe):
         for key, val in self._fields(dataset=dataset, model=model).items():
             if val is None or val is False or val == "":
                 continue
-            flag = f"--{key.replace('_', '-')}"
+            flag = _FLAG_SPELLINGS.get(key, f"--{key.replace('_', '-')}")
             if val is True:
                 out.append(flag)
             elif isinstance(val, dict) and key in JSON_CONFIG_FIELDS:
