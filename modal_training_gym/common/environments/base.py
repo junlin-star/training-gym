@@ -258,6 +258,7 @@ class DirectorySnapshotLibrary:
     def has(self, item: str, step: int) -> bool:
         return self.key(item, step) in self.catalog()
 
+    # TODO(joyliu-q/atoniolo76) Switch to named images when feature releases
     def missing_steps(self, item: str, n_steps: int) -> list[int]:
         """Steps in ``0..n_steps`` with no cataloged snapshot.
 
