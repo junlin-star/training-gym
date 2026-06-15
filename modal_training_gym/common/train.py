@@ -630,7 +630,10 @@ class TrainConfig:
                         # Terminal-state write is synchronous to guarantee
                         # the failure shows up in the dashboard even if the
                         # background reporter is still draining.
-                        run_record.save()
+                        try:
+                            run_record.save()
+                        except RuntimeError:
+                            pass
                     raise
                 finally:
                     status_display.stop_polling()
