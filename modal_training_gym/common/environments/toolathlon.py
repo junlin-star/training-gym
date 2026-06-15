@@ -35,6 +35,7 @@ from typing import Any, Callable
 from modal_training_gym.common.dataset import DatasetConfig
 from modal_training_gym.common.environments.base import (
     DirectorySnapshotLibrary,
+    Environment,
     EvalVerdict,
     Observation,
     SandboxEnvironment,
@@ -453,6 +454,13 @@ class ToolathlonEnvPool(SandboxEnvironmentPool):
     mount-of-a-plain-dir bug) — so :meth:`release` terminates the sandbox; creation from the cached
     image (no rebuild) is cheap.
     """
+
+    def release(self, env: Environment) -> None:
+        try:
+            if isinstance(env, SandboxEnvironment):
+                env.sandbox.terminate()
+        except Exception:
+            pass
 
     def __init__(self, config: ToolathlonEnvConfig = DEFAULT_CONFIG) -> None:
         super().__init__()

@@ -123,18 +123,22 @@ class Environment:
 class SandboxEnvironment(Environment):
     """An :class:`Environment` whose mutable state lives inside a Modal sandbox.
 
-    Holds the ``modal.Sandbox`` handle; :meth:`close` terminates it. Subclasses
-    implement :meth:`step` / :meth:`evaluate` by ``exec``-ing inside the sandbox.
+    Holds the ``modal.Sandbox`` handle; :meth:`close` terminates it unless the
+    environment was created with a ``pool`` back-reference, in which case
+    ``close()`` returns the sandbox to the pool for reuse.
     """
 
-    def __init__(self, sandbox: Any) -> None:
+    def __init__(self, sandbox: Any, *, pool: "SandboxEnvironmentPool | None" = None) -> None:
         self.sandbox = sandbox
+        self._pool = pool
 
     def close(self) -> None:
-        try:
+        pool = self._pool
+        self._pool = None
+        if pool is not None:
+            pool._return_sandbox(self.sandbox)
+        else:
             self.sandbox.terminate()
-        except Exception:
-            pass
 
 
 # ── Pooling ──────────────────────────────────────────────────────────────
@@ -145,8 +149,14 @@ class SandboxEnvironmentPool:
 
     Subclasses override :meth:`build_image` (the base sandbox image) and
     :meth:`acquire` (turn acquire-args into a ready :class:`Environment`), and
-    can use :meth:`create_sandbox` as a helper. The default :meth:`release`
-    closes the env.
+    can use :meth:`create_sandbox` / :meth:`_acquire_sandbox` as helpers.
+
+    **Sandbox reuse.** Released sandboxes are returned to an idle pool
+    instead of being terminated. :meth:`_acquire_sandbox` pops an idle
+    sandbox when available, falling back to :meth:`create_sandbox`. Override
+    :meth:`reset_sandbox` to clean up sandbox state between uses (kill
+    background processes, unmount snapshots, etc.). If a subclass needs the
+    old terminate-on-release behaviour, override :meth:`release`.
 
     **Cloudpickle safety.** A pool is often instantiated client-side (e.g. a
     base eval) and then captured when a rollout/reward function is cloudpickled
@@ -156,7 +166,9 @@ class SandboxEnvironmentPool:
     """
 
     def __init__(self) -> None:
+        # TODO: Remove type Any and replace with modal.App under typing.TYPE_CHECKING
         self._app: Any = None
+        self._idle: list[Any] = []
 
     @property
     def app_name(self) -> str:
@@ -171,9 +183,9 @@ class SandboxEnvironmentPool:
         return f"{type(self).__name__.replace('_', '-').lower()}-sandboxes"
 
     def __getstate__(self) -> dict:
-        # Drop the live App handle so cloudpickle can ship the pool by value.
         state = dict(self.__dict__)
         state["_app"] = None
+        state["_idle"] = []
         return state
 
     def app_handle(self) -> Any:
@@ -208,6 +220,25 @@ class SandboxEnvironmentPool:
             **kwargs,
         )
 
+    def _acquire_sandbox(self, **kwargs: Any) -> Any:
+        if self._idle:
+            return self._idle.pop()
+        return self.create_sandbox(**kwargs)
+
+    def reset_sandbox(self, sandbox: Any) -> None:
+        """Clean up sandbox state so it can be reused by the next :meth:`acquire`.
+
+        Override to kill background processes, clear temp files, unmount
+        snapshots, etc. The default is a no-op (the sandbox is returned as-is).
+
+        Must not raise an exception.
+        """
+
+    def _return_sandbox(self, sandbox: Any) -> None:
+        """Return a sandbox to the idle pool after resetting it."""
+        self.reset_sandbox(sandbox)
+        self._idle.append(sandbox)
+
     def acquire(self, *args: Any, **kwargs: Any) -> Environment:
         """Return a ready :class:`Environment` for the given acquire-args."""
         raise NotImplementedError(f"{type(self).__name__} has no acquire()")
@@ -215,6 +246,20 @@ class SandboxEnvironmentPool:
     def release(self, env: Environment) -> None:
         """Release an environment acquired from this pool."""
         env.close()
+
+    def shutdown(self) -> None:
+        """Terminate all idle sandboxes. Call when the pool is no longer needed."""
+        while self._idle:
+            try:
+                self._idle.pop().terminate()
+            except Exception:
+                pass
+
+    def __enter__(self) -> "SandboxEnvironmentPool":
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.shutdown()
 
 
 # ── Directory snapshots ─────────────────────────────────────────────────────
