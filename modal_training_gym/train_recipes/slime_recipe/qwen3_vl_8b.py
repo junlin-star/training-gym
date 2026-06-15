@@ -32,12 +32,12 @@ class Qwen3VL_Recipe(SlimeRecipe):
       slime's standalone ``convert_hf_to_torch_dist.py`` torch_dist pre-conversion,
       which assigns the VL model a pipeline stage (PP=2) the gym's conversion
       launcher doesn't expect (``world_size(2) % total_model_size(4) != 0``). Same
-      reasoning as Qwen3ASR_Recipe.
+      reasoning as Qwen3_ASR_1_7b_Recipe.
     * ``freeze_params_name_list=["vision_model"]`` — freeze the ViT during RL. A
-      short grounding run shouldn't perturb the pretrained visual features, it cuts
-      memory/compute, and it makes the MB->HF export tractable: with the vision
-      tower unchanged, ``Qwen3VL_8B``'s export shim skips it and refills it from
-      the base HF weights (see that model's ``compat_patches``).
+      short grounding run shouldn't perturb the pretrained visual features, and it
+      cuts memory/compute. With the tower frozen its weights equal the base HF
+      weights, so ``Qwen3VL_8B``'s export shim can identity-pass it on MB->HF
+      export (see that model's ``compat_patches``).
     """
 
     gpu_type: str = "H100"

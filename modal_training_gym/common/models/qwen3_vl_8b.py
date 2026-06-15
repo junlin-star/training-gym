@@ -8,11 +8,11 @@ drives Megatron *training*.
 
 Megatron-bridge support: AutoBridge loads/trains the full VL model natively (no
 ViT shim needed — verified empirically). The one gap is the MB→HF *export*:
-slime's torch_dist converter assumes a single decoder stack and chokes on the
-vision tower. With the ViT frozen during RL (see ``Qwen3VL_Recipe``), the
-``patch_qwen3vl_export`` shim skips ``vision_model.*`` and
-``export_merge_from_origin_hf`` refills it from the base HF weights, so only the
-trained language backbone is converted. Report upstream; drop once fixed there.
+slime's stock qwen3 converter can't map the vision tower. The
+``patch_qwen3_vl_export`` shim ships a qwen3_vl MB→HF converter that converts the
+trained language backbone and identity-passes the frozen ViT
+(``vision_model.*`` → ``model.visual.*``), mirroring the qwen3_asr audio-tower
+converter. Report upstream; drop once fixed there.
 """
 
 from __future__ import annotations
@@ -55,8 +55,9 @@ class Qwen3VL_8B(HFModelConfiguration):
         untie_embeddings_and_output_weights=True,
         use_rotary_position_embeddings=True,
         rotary_base=5000000,
-        # slime's MB->HF converter can't express the vision tower; skip it and
-        # refill the frozen ViT + projector from the base HF weights on export.
-        compat_patches=["patch_qwen3vl_export"],
-        export_merge_from_origin_hf=True,
+        # slime's stock qwen3 export can't map the vision tower; ship a qwen3_vl
+        # MB->HF converter that converts the language stack and identity-passes the
+        # frozen ViT (vision_model.* -> model.visual.*), mirroring the qwen3_asr
+        # audio-tower converter.
+        compat_patches=["patch_qwen3_vl_export"],
     )
