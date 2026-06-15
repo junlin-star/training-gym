@@ -228,6 +228,44 @@
   let logRateCap = $state(0); // 0 = no cap
   let logFollow = $state(true); // auto-scroll to bottom
 
+  // The backend emits one SSE event per log line. Mutating `logLines` (and
+  // auto-scrolling) on every message means hundreds of synchronous reactive
+  // updates per second under a chatty run, which freezes the tab. Instead we
+  // buffer incoming lines and flush them into `logLines` once per animation
+  // frame — coalescing a burst into a single render + scroll.
+  let pendingLogLines = []; // plain array, not reactive
+  let logFlushHandle = null; // requestAnimationFrame handle
+  let logSeq = 0; // monotonic id for stable keying
+
+  function flushPendingLogs() {
+    logFlushHandle = null;
+    if (!pendingLogLines.length) return;
+    const next = logLines.length
+      ? logLines.concat(pendingLogLines)
+      : pendingLogLines;
+    pendingLogLines = [];
+    logLines = next.length > LOG_BUFFER_MAX ? next.slice(-LOG_BUFFER_MAX) : next;
+    if (logFollow && logTailEl) {
+      // Scroll after Svelte has flushed the new rows to the DOM.
+      queueMicrotask(() => {
+        if (logTailEl) logTailEl.scrollTop = logTailEl.scrollHeight;
+      });
+    }
+  }
+
+  function scheduleLogFlush() {
+    if (logFlushHandle != null) return;
+    logFlushHandle = requestAnimationFrame(flushPendingLogs);
+  }
+
+  function resetLogBuffer() {
+    if (logFlushHandle != null) {
+      cancelAnimationFrame(logFlushHandle);
+      logFlushHandle = null;
+    }
+    pendingLogLines = [];
+  }
+
   // Debounce search input → URL
   $effect(() => {
     const value = logSearchInput;
@@ -248,6 +286,7 @@
     const rate = logRateCap;
     const paused = logPaused;
 
+    resetLogBuffer();
     logLines = [];
     logState = "idle";
     logError = "";
@@ -275,22 +314,17 @@
         const line = String(payload.line || "");
         if (!line) return;
         const parts = line.split(/\r?\n/);
-        const additions = parts
-          .filter((p) => p.length > 0)
-          .map((p) => ({
-            task_id: payload.task_id || "",
-            line: p,
-            ts: payload.ts || Date.now(),
-          }));
-        if (!additions.length) return;
-        const next = [...logLines, ...additions];
-        logLines =
-          next.length > LOG_BUFFER_MAX ? next.slice(-LOG_BUFFER_MAX) : next;
-        if (logFollow && logTailEl) {
-          queueMicrotask(() => {
-            if (logTailEl) logTailEl.scrollTop = logTailEl.scrollHeight;
-          });
+        const task_id = payload.task_id || "";
+        const ts = payload.ts || Date.now();
+        for (const p of parts) {
+          if (!p.length) continue;
+          pendingLogLines.push({ id: logSeq++, task_id, line: p, ts });
         }
+        // Bound the buffer in case a burst arrives between frames.
+        if (pendingLogLines.length > LOG_BUFFER_MAX) {
+          pendingLogLines = pendingLogLines.slice(-LOG_BUFFER_MAX);
+        }
+        scheduleLogFlush();
       } catch {
         // ignore malformed payloads
       }
@@ -334,6 +368,7 @@
     };
 
     return () => {
+      resetLogBuffer();
       try {
         es.close();
       } catch {}
@@ -345,6 +380,7 @@
   }
 
   function clearLogs() {
+    resetLogBuffer();
     logLines = [];
     logDropped = 0;
   }
@@ -778,7 +814,7 @@
         </div>
       {:else}
         <div class="log-tail" bind:this={logTailEl}>
-          {#each logLines as entry, i (i)}
+          {#each logLines as entry (entry.id)}
             <div class="log-row">
               <span class="log-task">{entry.task_id || ""}</span>
               <span class="log-line">{entry.line}</span>
