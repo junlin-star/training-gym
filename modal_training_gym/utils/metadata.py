@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 from enum import Enum
 from typing import Any, Callable
 
@@ -28,6 +29,10 @@ class MetadataStore(Enum):
 
 SUMMARY_KEY = "summary"
 SUMMARY_ITEMS_KEY = "items"
+
+
+def _is_remote() -> bool:
+    return bool(os.environ.get("MODAL_IS_REMOTE"))
 
 
 def _metadata_volume():
@@ -106,7 +111,10 @@ def vol_get(store: MetadataStore | str, key: str) -> dict[str, Any]:
     try:
         return json.loads(b"".join(vol.read_file(path)))
     except FileNotFoundError:
-        vol.reload()
+        if _is_remote():
+            vol.reload()
+        else:
+            raise KeyError(key) from None
     try:
         return json.loads(b"".join(vol.read_file(path)))
     except FileNotFoundError:
@@ -120,7 +128,10 @@ async def vol_get_async(store: MetadataStore | str, key: str) -> dict[str, Any]:
         chunks = [chunk async for chunk in vol.read_file.aio(path)]
         return json.loads(b"".join(chunks))
     except FileNotFoundError:
-        await vol.reload.aio()
+        if _is_remote():
+            await vol.reload.aio()
+        else:
+            raise KeyError(key) from None
     try:
         chunks = [chunk async for chunk in vol.read_file.aio(path)]
         return json.loads(b"".join(chunks))
@@ -130,7 +141,8 @@ async def vol_get_async(store: MetadataStore | str, key: str) -> dict[str, Any]:
 
 def vol_list(store: MetadataStore | str) -> list[dict[str, Any]]:
     vol = _metadata_volume()
-    vol.reload()
+    if _is_remote():
+        vol.reload()
     results = []
     try:
         for entry in vol.iterdir(_store_path(store)):
@@ -144,7 +156,8 @@ def vol_list(store: MetadataStore | str) -> list[dict[str, Any]]:
 
 async def vol_list_async(store: MetadataStore | str) -> list[dict[str, Any]]:
     vol = _metadata_volume()
-    await vol.reload.aio()
+    if _is_remote():
+        await vol.reload.aio()
     results = []
     try:
         async for entry in vol.iterdir.aio(_store_path(store)):
@@ -178,7 +191,8 @@ def vol_get_summary_items(
     payload_key: str = SUMMARY_ITEMS_KEY,
 ) -> list[dict[str, Any]] | None:
     vol = _metadata_volume()
-    vol.reload()
+    if _is_remote():
+        vol.reload()
     try:
         payload = vol_get(store, key)
     except KeyError:
@@ -193,7 +207,8 @@ async def vol_get_summary_items_async(
     payload_key: str = SUMMARY_ITEMS_KEY,
 ) -> list[dict[str, Any]] | None:
     vol = _metadata_volume()
-    await vol.reload.aio()
+    if _is_remote():
+        await vol.reload.aio()
     try:
         payload = await vol_get_async(store, key)
     except KeyError:
