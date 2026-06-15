@@ -62,9 +62,7 @@ def _merge_recipe(base: SlimeRecipe, overrides: SlimeRecipe) -> SlimeRecipe:
         if f.name not in base_fields:
             continue
         user_val = getattr(overrides, f.name)
-        default_val = _field_default(f)
-        if default_val is _dc.MISSING or user_val != default_val:
-            base_fields[f.name] = user_val
+        base_fields[f.name] = user_val
     return type(base)(**base_fields)
 
 
@@ -549,13 +547,19 @@ class TrainConfig:
                 )
                 # Initial write is synchronous so the record exists before any
                 # downstream HTTP status updates try to update it.
-                run_record.save()
-                framework_status_token = _secrets.token_urlsafe(32)
-                vol_put(
-                    MetadataStore.FRAMEWORK_STATUS_TOKENS,
-                    training_run_id,
-                    {"token": framework_status_token},
-                )
+                try:
+                    run_record.save()
+                except RuntimeError:
+                    pass
+                try:
+                    framework_status_token = _secrets.token_urlsafe(32)
+                    vol_put(
+                        MetadataStore.FRAMEWORK_STATUS_TOKENS,
+                        training_run_id,
+                        {"token": framework_status_token},
+                    )
+                except RuntimeError:
+                    framework_status_token = ""
                 print(f"TrainingRun recorded: {training_run_id}")
 
                 # Mid-flight status bumps are fire-and-forget HTTP posts to
@@ -645,7 +649,10 @@ class TrainConfig:
                         # Terminal-state write is synchronous to guarantee
                         # the failure shows up in the dashboard even if the
                         # background reporter is still draining.
-                        run_record.save()
+                        try:
+                            run_record.save()
+                        except RuntimeError:
+                            pass
                     raise
                 finally:
                     status_display.stop_polling()

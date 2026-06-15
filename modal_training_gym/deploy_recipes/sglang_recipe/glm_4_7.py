@@ -5,7 +5,7 @@ from modal_training_gym.deploy_recipes.sglang_recipe.recipe import SglangRecipe
 _GLM_4_7_DEFAULTS = {
     "gpu": "H200",
     "tp": 8,
-    "context_length": 32768,
+    "context_length": 65536,
     "mem_fraction_static": 0.70,
     "chunked_prefill_size": 8192,
     "max_running_requests": 8,
