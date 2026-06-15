@@ -146,23 +146,6 @@ class SandboxEnvironment(Environment):
 
 class SandboxEnvironmentPool:
     """Creates sandbox-backed environments on demand, sharing one Modal ``App``.
-
-    Subclasses override :meth:`build_image` (the base sandbox image) and
-    :meth:`acquire` (turn acquire-args into a ready :class:`Environment`), and
-    can use :meth:`create_sandbox` / :meth:`_acquire_sandbox` as helpers.
-
-    **Sandbox reuse.** Released sandboxes are returned to an idle pool
-    instead of being terminated. :meth:`_acquire_sandbox` pops an idle
-    sandbox when available, falling back to :meth:`create_sandbox`. Override
-    :meth:`reset_sandbox` to clean up sandbox state between uses (kill
-    background processes, unmount snapshots, etc.). If a subclass needs the
-    old terminate-on-release behaviour, override :meth:`release`.
-
-    **Cloudpickle safety.** A pool is often instantiated client-side (e.g. a
-    base eval) and then captured when a rollout/reward function is cloudpickled
-    *by value* to remote workers. Live ``modal.App`` handles hold asyncio
-    futures and aren't picklable, so :meth:`__getstate__` drops them; they are
-    re-created lazily via :meth:`app_handle` on the worker.
     """
 
     def __init__(self) -> None:
