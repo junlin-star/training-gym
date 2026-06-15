@@ -128,15 +128,31 @@ def rewrite_links(
     return MARKDOWN_LINK.sub(replace, markdown)
 
 
+_RAW_ASSET_PREFIX = (
+    "https://raw.githubusercontent.com/modal-projects/training-gym/main/assets/"
+)
+
+
 def rewrite_images(markdown: str, *, source_dir: PurePosixPath) -> str:
     def replace(match: re.Match[str]) -> str:
         alt_text, target = match.groups()
+
+        if target.startswith(_RAW_ASSET_PREFIX):
+            filename = target[len(_RAW_ASSET_PREFIX) :]
+            return f"![{alt_text}](/{filename})"
+
         if target.startswith(("http://", "https://", "data:", "#", "/")):
             return match.group(0)
 
         path_part, hash_part = (target.split("#", 1) + [""])[:2]
         normalized = posixpath.normpath(PurePosixPath(source_dir, path_part).as_posix())
-        rewritten = f"{RAW_BASE}/{normalized}"
+
+        if normalized.startswith("assets/"):
+            filename = normalized[len("assets/") :]
+            rewritten = f"/{filename}"
+        else:
+            rewritten = f"{RAW_BASE}/{normalized}"
+
         if hash_part:
             rewritten = f"{rewritten}#{hash_part}"
         return f"![{alt_text}]({rewritten})"
@@ -197,7 +213,7 @@ def starlight_frontmatter(destination: str) -> str:
             f"""\
             ---
             title: Training Gym SDK
-            description: Reusable building blocks and runnable examples for RL post-training on Modal.
+            description: Open-source Python SDK for GRPO and RL post-training of LLMs on Modal GPU clusters — tutorials, API reference, and runnable examples.
             editUrl: {EDIT_BASE}/README.md
             next: false
             ---

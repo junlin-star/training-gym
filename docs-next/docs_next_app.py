@@ -49,10 +49,27 @@ app = modal.App("training-gym-docs", image=image)
 @modal.concurrent(max_inputs=100)
 @modal.asgi_app(custom_domains=["gym.modal.dev"])
 def serve():
-    from fastapi import FastAPI
+    from fastapi import FastAPI, Request, Response
+    from fastapi.middleware.gzip import GZipMiddleware
     from fastapi.staticfiles import StaticFiles
 
     web = FastAPI()
+    web.add_middleware(GZipMiddleware, minimum_size=500)
+
+    @web.middleware("http")
+    async def cache_control(request: Request, call_next):
+        response: Response = await call_next(request)
+        path = request.url.path
+        if path.startswith("/_astro/"):
+            response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        elif path.endswith(".html") or "text/html" in response.headers.get(
+            "content-type", ""
+        ):
+            response.headers["Cache-Control"] = (
+                "public, max-age=3600, stale-while-revalidate=86400"
+            )
+        return response
+
     web.mount("/", StaticFiles(directory=REMOTE_DIST, html=True), name="static")
 
     return web
