@@ -100,11 +100,6 @@ def test_train_result_payload_is_json_serializable(fw):
     assert json.loads(json.dumps(payload))["framework"] == fw.value
 
 
-def test_reload_volume_is_best_effort(fake_volume):
-    """The helper must swallow reload failures (local / unattached)."""
-    metadata._reload_volume(fake_volume)  # must not raise
-
-
 @pytest.mark.skipif(
     os.environ.get("RUN_MODAL_TESTS") != "1",
     reason="hits Modal (no GPU); opt in with RUN_MODAL_TESTS=1",

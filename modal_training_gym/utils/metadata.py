@@ -36,30 +36,6 @@ def _metadata_volume():
     return modal.Volume.from_name(METADATA_VOLUME_NAME, create_if_missing=True)
 
 
-def _reload_volume(vol) -> None:
-    """Best-effort refresh of ``vol`` against committed state.
-
-    ``Volume.reload()`` only succeeds for a volume attached to the *running*
-    Modal function. It raises otherwise — from the local ``train()``/eval
-    drivers, or inside a function that writes metadata without mounting this
-    volume (the training functions mount only HF cache / data / checkpoints).
-    Reload is just a freshness hint here: ``vol_get``/``vol_put`` resolve
-    committed state regardless, so a failed reload is skipped, not fatal.
-    """
-    try:
-        vol.reload()
-    except RuntimeError:
-        pass
-
-
-async def _reload_volume_async(vol) -> None:
-    """Async twin of :func:`_reload_volume`."""
-    try:
-        await vol.reload.aio()
-    except RuntimeError:
-        pass
-
-
 def _store_path(store: MetadataStore | str) -> str:
     if isinstance(store, MetadataStore):
         return store.value
@@ -130,7 +106,10 @@ def vol_get(store: MetadataStore | str, key: str) -> dict[str, Any]:
     try:
         return json.loads(b"".join(vol.read_file(path)))
     except FileNotFoundError:
-        _reload_volume(vol)
+        try:
+            vol.reload()
+        except RuntimeError:
+            pass
     try:
         return json.loads(b"".join(vol.read_file(path)))
     except FileNotFoundError:
@@ -144,7 +123,7 @@ async def vol_get_async(store: MetadataStore | str, key: str) -> dict[str, Any]:
         chunks = [chunk async for chunk in vol.read_file.aio(path)]
         return json.loads(b"".join(chunks))
     except FileNotFoundError:
-        await _reload_volume_async(vol)
+        await vol.reload.aio()
     try:
         chunks = [chunk async for chunk in vol.read_file.aio(path)]
         return json.loads(b"".join(chunks))
@@ -154,7 +133,10 @@ async def vol_get_async(store: MetadataStore | str, key: str) -> dict[str, Any]:
 
 def vol_list(store: MetadataStore | str) -> list[dict[str, Any]]:
     vol = _metadata_volume()
-    _reload_volume(vol)
+    try:
+        vol.reload()
+    except RuntimeError:
+        pass
     results = []
     try:
         for entry in vol.iterdir(_store_path(store)):
@@ -168,7 +150,7 @@ def vol_list(store: MetadataStore | str) -> list[dict[str, Any]]:
 
 async def vol_list_async(store: MetadataStore | str) -> list[dict[str, Any]]:
     vol = _metadata_volume()
-    await _reload_volume_async(vol)
+    await vol.reload.aio()
     results = []
     try:
         async for entry in vol.iterdir.aio(_store_path(store)):
@@ -202,7 +184,10 @@ def vol_get_summary_items(
     payload_key: str = SUMMARY_ITEMS_KEY,
 ) -> list[dict[str, Any]] | None:
     vol = _metadata_volume()
-    _reload_volume(vol)
+    try:
+        vol.reload()
+    except RuntimeError:
+        pass
     try:
         payload = vol_get(store, key)
     except KeyError:
@@ -217,7 +202,10 @@ async def vol_get_summary_items_async(
     payload_key: str = SUMMARY_ITEMS_KEY,
 ) -> list[dict[str, Any]] | None:
     vol = _metadata_volume()
-    await _reload_volume_async(vol)
+    try:
+        await vol.reload.aio()
+    except (RuntimeError, Exception):
+        pass
     try:
         payload = await vol_get_async(store, key)
     except KeyError:
