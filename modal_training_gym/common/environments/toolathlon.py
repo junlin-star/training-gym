@@ -457,10 +457,13 @@ class ToolathlonEnvPool(SandboxEnvironmentPool):
     def __init__(self, config: ToolathlonEnvConfig = DEFAULT_CONFIG) -> None:
         super().__init__()
         self.config = config
-        self.app_name = config.sandbox_app
         self.snapshots = DirectorySnapshotLibrary(
             config.snapshot_catalog, config.snapshot_root
         )
+
+    @property
+    def app_name(self) -> str:
+        return self.config.sandbox_app
 
     def build_image(self) -> Any:
         return build_env_image(self.config)
