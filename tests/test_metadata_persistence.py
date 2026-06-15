@@ -84,9 +84,7 @@ def test_training_run_save_survives_unmounted_volume(fake_volume):
 def test_train_result_save_survives_unmounted_volume(fake_volume):
     """TrainResult.save() is the path that hit both the reload crash and the
     non-serializable Framework enum (asdict keeps the enum)."""
-    TrainResult(
-        app_name="a", framework=Framework.MILES, training_run_id="t2"
-    ).save()
+    TrainResult(app_name="a", framework=Framework.MILES, training_run_id="t2").save()
 
     blob = fake_volume.files[f"{MetadataStore.TRAIN_RESULTS.value}/t2.json"]
     assert json.loads(blob)["framework"] == "miles"
