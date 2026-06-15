@@ -208,11 +208,40 @@ def convert_checkpoint_to_hf(
         create_if_missing=True,
     )
     from modal_training_gym.common import hf_secrets
-    from modal_training_gym.frameworks.slime.launcher import _build_slime_base_image
 
-    image = _build_slime_base_image().add_local_python_source(
-        "modal_training_gym", copy=True
-    )
+    # Convert in the image that produced the checkpoint. A vime torch_dist
+    # checkpoint's pickled metadata references ``vllm``, which the slime image
+    # (SGLang-based) lacks — so unpickling it there fails with
+    # ``ModuleNotFoundError: No module named 'vllm'``. vime ships an equivalent
+    # converter in-image, so we run that under the vime image instead. slime and
+    # miles (and an unknown framework) keep the slime converter.
+    framework = Framework.SLIME
+    if checkpoint.training_run_id:
+        try:
+            framework = TrainResult.from_training_run_id(
+                checkpoint.training_run_id
+            ).framework
+        except Exception:
+            pass
+
+    if framework in {Framework.VIME, Framework.VIME.value}:
+        from modal_training_gym.frameworks.vime.launcher import _build_vime_base_image
+        from modal_training_gym.train_recipes.vime_recipe import VimeConfig
+
+        base_image = _build_vime_base_image(VimeConfig())
+        convert_script = "/root/vime/tools/convert_torch_dist_to_hf.py"
+        convert_pythonpath = "/root/vime:/root/Megatron-LM/"
+    else:
+        from modal_training_gym.frameworks.slime.launcher import (
+            _build_slime_base_image,
+        )
+
+        base_image = _build_slime_base_image()
+        # Empty → resolved from the shipped slime wrapper inside the function.
+        convert_script = ""
+        convert_pythonpath = ""
+
+    image = base_image.add_local_python_source("modal_training_gym", copy=True)
     conversion_app = App("training-gym-checkpoint-convert")
     gpu_spec = _conversion_gpu_spec(checkpoint, recipe)
 
@@ -232,6 +261,8 @@ def convert_checkpoint_to_hf(
         input_dir: str,
         output_dir: str,
         model_ref: str,
+        convert_script: str,
+        convert_pythonpath: str,
     ) -> str:
         import importlib.util
         import shlex
@@ -247,14 +278,23 @@ def convert_checkpoint_to_hf(
         else:
             hf_path = snapshot_download(model_ref, local_files_only=True)
 
-        spec = importlib.util.find_spec(
-            "modal_training_gym.frameworks.slime.modal_helpers.convert_torch_dist_to_hf"
-        )
-        convert_script = spec.origin if spec is not None else None
         if not convert_script:
-            raise RuntimeError(
-                "modal_training_gym.frameworks.slime.modal_helpers.convert_torch_dist_to_hf not found"
+            spec = importlib.util.find_spec(
+                "modal_training_gym.frameworks.slime.modal_helpers.convert_torch_dist_to_hf"
             )
+            if spec is None or not spec.origin:
+                raise RuntimeError(
+                    "modal_training_gym.frameworks.slime.modal_helpers.convert_torch_dist_to_hf not found"
+                )
+            convert_script = spec.origin
+
+        env = dict(os.environ)
+        if convert_pythonpath:
+            existing = env.get("PYTHONPATH", "")
+            env["PYTHONPATH"] = (
+                f"{convert_pythonpath}:{existing}" if existing else convert_pythonpath
+            )
+
         cmd = (
             f"python {convert_script} "
             f"--input-dir {shlex.quote(input_dir)} "
@@ -263,7 +303,7 @@ def convert_checkpoint_to_hf(
             f"--force"
         )
         print(f"Converting checkpoint for serving: {cmd}")
-        subprocess.run(["bash", "-c", cmd], check=True)
+        subprocess.run(["bash", "-c", cmd], check=True, env=env)
         checkpoints_volume.commit()
         return output_dir
 
@@ -274,6 +314,8 @@ def convert_checkpoint_to_hf(
                 input_dir=checkpoint.path,
                 output_dir=output_path,
                 model_ref=model_ref,
+                convert_script=convert_script,
+                convert_pythonpath=convert_pythonpath,
             )
 
     return Checkpoint(
