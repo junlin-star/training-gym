@@ -36,6 +36,13 @@ def _metadata_volume():
     return modal.Volume.from_name(METADATA_VOLUME_NAME, create_if_missing=True)
 
 
+def _safe_reload(vol) -> None:
+    try:
+        vol.reload()
+    except RuntimeError:
+        pass
+
+
 def _store_path(store: MetadataStore | str) -> str:
     if isinstance(store, MetadataStore):
         return store.value
@@ -106,10 +113,7 @@ def vol_get(store: MetadataStore | str, key: str) -> dict[str, Any]:
     try:
         return json.loads(b"".join(vol.read_file(path)))
     except FileNotFoundError:
-        try:
-            vol.reload()
-        except RuntimeError:
-            pass
+        _safe_reload(vol)
     try:
         return json.loads(b"".join(vol.read_file(path)))
     except FileNotFoundError:
@@ -133,10 +137,7 @@ async def vol_get_async(store: MetadataStore | str, key: str) -> dict[str, Any]:
 
 def vol_list(store: MetadataStore | str) -> list[dict[str, Any]]:
     vol = _metadata_volume()
-    try:
-        vol.reload()
-    except RuntimeError:
-        pass
+    _safe_reload(vol)
     results = []
     try:
         for entry in vol.iterdir(_store_path(store)):
@@ -184,10 +185,7 @@ def vol_get_summary_items(
     payload_key: str = SUMMARY_ITEMS_KEY,
 ) -> list[dict[str, Any]] | None:
     vol = _metadata_volume()
-    try:
-        vol.reload()
-    except RuntimeError:
-        pass
+    _safe_reload(vol)
     try:
         payload = vol_get(store, key)
     except KeyError:
