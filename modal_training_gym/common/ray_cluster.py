@@ -280,6 +280,7 @@ class ModalRayCluster:
         entrypoint: str,
         *,
         runtime_env: dict | None = None,
+        max_retries: int = 35,
     ) -> str:
         """Submit a Ray job, stream its logs to stdout, and return the final status."""
         if not self.is_head:
@@ -290,18 +291,38 @@ class ModalRayCluster:
             runtime_env=runtime_env or {},
         )
         print(f"Submitted Ray job: {job_id}")
-        log_stream = self._client.tail_job_logs(job_id)
-        if inspect.isawaitable(log_stream):
-            log_stream = await log_stream
-        if hasattr(log_stream, "__aiter__"):
-            async for line in log_stream:
-                print(line, end="", flush=True)
+
+        _TERMINAL = {"SUCCEEDED", "FAILED", "STOPPED"}
+        retry_count = 0
+
+        while retry_count < max_retries:
+            log_stream = self._client.tail_job_logs(job_id)
+            if inspect.isawaitable(log_stream):
+                log_stream = await log_stream
+            if hasattr(log_stream, "__aiter__"):
+                async for line in log_stream:
+                    print(line, end="", flush=True)
+            else:
+                for line in log_stream:
+                    print(line, end="", flush=True)
+
+            status = self._client.get_job_status(job_id).value
+            if status in _TERMINAL:
+                break
+            retry_count += 1
+            print(
+                f"\n[ray] Log stream ended but job {job_id} is still {status}; "
+                f"reconnecting in 2s... (retry {retry_count}/{max_retries})"
+            )
+            await asyncio.sleep(2)
         else:
-            for line in log_stream:
-                print(line, end="", flush=True)
-        status = self._client.get_job_status(job_id).value
+            raise RuntimeError(
+                f"Ray job {job_id} log stream disconnected {max_retries} times "
+                f"without reaching terminal status (current: {status})"
+            )
+
         print(f"\nFinal Ray job status: {status}")
-        if status not in ("SUCCEEDED",):
+        if status != "SUCCEEDED":
             raise RuntimeError(f"Ray job {job_id} finished with status: {status}")
         return status
 
