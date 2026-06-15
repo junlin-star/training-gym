@@ -38,7 +38,7 @@ def _metadata_volume():
 
 def _safe_reload(vol) -> None:
     try:
-        _safe_reload(vol)
+        vol.reload()
     except RuntimeError:
         pass
 
