@@ -44,7 +44,7 @@ API_REFERENCE_MANIFEST = [
     },
     {
         "class_name": "HarborDataset",
-        "module": "modal_training_gym.common.dataset",
+        "module": "modal_training_gym.common.harbor.dataset",
         "group": "core",
         "class_type": "config_data",
         "sidebar_label": "HarborDataset",
@@ -94,7 +94,7 @@ API_REFERENCE_MANIFEST = [
     },
     {
         "class_name": "HarborEval",
-        "module": "modal_training_gym.common.eval",
+        "module": "modal_training_gym.common.harbor.eval",
         "group": "evaluation",
         "class_type": "config_data",
         "sidebar_label": "HarborEval",

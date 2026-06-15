@@ -20,7 +20,8 @@ from modal.experimental import clustered
 
 from modal_training_gym.common import COMMON_TRAINING_GYM_TAGS, hf_secrets
 from modal_training_gym.common.checkpoint import Checkpoint
-from modal_training_gym.common.dataset import DatasetConfig, HarborDataset
+from modal_training_gym.common.dataset import DatasetConfig
+from modal_training_gym.common.harbor.dataset import HarborDataset
 from modal_training_gym.common.framework import (
     Framework,
     mount_tools_dir,

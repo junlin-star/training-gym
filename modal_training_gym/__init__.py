@@ -4,7 +4,7 @@ from importlib import import_module
 
 _EXPORTS = {
     "DatasetConfig": ("modal_training_gym.common.dataset", "DatasetConfig"),
-    "HarborDataset": ("modal_training_gym.common.dataset", "HarborDataset"),
+    "HarborDataset": ("modal_training_gym.common.harbor.dataset", "HarborDataset"),
     "DeploymentConfig": ("modal_training_gym.common.deployment", "DeploymentConfig"),
     "EvalConfig": ("modal_training_gym.common.eval", "EvalConfig"),
     "EvalConfigDurable": ("modal_training_gym.common.eval", "EvalConfigDurable"),
@@ -12,8 +12,8 @@ _EXPORTS = {
     "EvalRowResult": ("modal_training_gym.common.eval", "EvalRowResult"),
     "AudioEvalRowResult": ("modal_training_gym.common.eval", "AudioEvalRowResult"),
     "Sample": ("modal_training_gym.common.sample", "Sample"),
-    "extract_code": ("modal_training_gym.common.eval", "extract_code"),
-    "HarborEval": ("modal_training_gym.common.eval", "HarborEval"),
+    "extract_code": ("modal_training_gym.common.harbor.eval", "extract_code"),
+    "HarborEval": ("modal_training_gym.common.harbor.eval", "HarborEval"),
     "GLM_4_7": ("modal_training_gym.common.models", "GLM_4_7"),
     "HFModelConfiguration": (
         "modal_training_gym.common.models",
@@ -65,7 +65,7 @@ _EXPORTS = {
         "modal_training_gym.train_recipes.slime_recipe",
         "Qwen3_ASR_1_7b_Recipe",
     ),
-    "score_in_sandbox": ("modal_training_gym.common.eval", "score_in_sandbox"),
+    "score_in_sandbox": ("modal_training_gym.common.harbor.eval", "score_in_sandbox"),
     "SlimeRecipe": ("modal_training_gym.train_recipes.slime_recipe", "SlimeRecipe"),
     "SlimeRecipeBlock": (
         "modal_training_gym.train_recipes.slime_recipe",

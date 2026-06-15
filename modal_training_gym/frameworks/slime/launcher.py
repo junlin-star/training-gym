@@ -37,7 +37,8 @@ from modal_training_gym.common import hf_secrets
 import cloudpickle
 
 from modal_training_gym.common import COMMON_TRAINING_GYM_TAGS
-from modal_training_gym.common.dataset import DatasetConfig, HarborDataset
+from modal_training_gym.common.dataset import DatasetConfig
+from modal_training_gym.common.harbor.dataset import HarborDataset
 from modal_training_gym.common.framework import (
     mount_tools_dir,
     resolve_caller_module,
