@@ -282,9 +282,9 @@ class ModalRayCluster:
             retry_count += 1
             print(
                 f"\n[ray] Log stream ended but job {job_id} is still {status}; "
-                f"reconnecting in 5s... (retry {retry_count}/{max_retries})"
+                f"reconnecting in 2s... (retry {retry_count}/{max_retries})"
             )
-            await asyncio.sleep(5)
+            await asyncio.sleep(2)
         else:
             raise RuntimeError(
                 f"Ray job {job_id} log stream disconnected {max_retries} times "
