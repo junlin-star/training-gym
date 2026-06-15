@@ -250,7 +250,7 @@ class ModalRayCluster:
         entrypoint: str,
         *,
         runtime_env: dict | None = None,
-        max_retries: int = 10,
+        max_retries: int = 35,
     ) -> str:
         """Submit a Ray job, stream its logs to stdout, and return the final status."""
         if not self.is_head:
@@ -265,7 +265,7 @@ class ModalRayCluster:
         _TERMINAL = {"SUCCEEDED", "FAILED", "STOPPED"}
         retry_count = 0
 
-        while True:
+        while retry_count < max_retries:
             log_stream = self._client.tail_job_logs(job_id)
             if inspect.isawaitable(log_stream):
                 log_stream = await log_stream
@@ -280,16 +280,16 @@ class ModalRayCluster:
             if status in _TERMINAL:
                 break
             retry_count += 1
-            if retry_count >= max_retries:
-                raise RuntimeError(
-                    f"Ray job {job_id} log stream disconnected {max_retries} times "
-                    f"without reaching terminal status (current: {status})"
-                )
             print(
                 f"\n[ray] Log stream ended but job {job_id} is still {status}; "
                 f"reconnecting in 5s... (retry {retry_count}/{max_retries})"
             )
             await asyncio.sleep(5)
+        else:
+            raise RuntimeError(
+                f"Ray job {job_id} log stream disconnected {max_retries} times "
+                f"without reaching terminal status (current: {status})"
+            )
 
         print(f"\nFinal Ray job status: {status}")
         if status != "SUCCEEDED":
