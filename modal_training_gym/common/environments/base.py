@@ -155,11 +155,20 @@ class SandboxEnvironmentPool:
     re-created lazily via :meth:`app_handle` on the worker.
     """
 
-    #: Name of the shared ``modal.App`` sandboxes are created under.
-    app_name: str = ""
-
     def __init__(self) -> None:
         self._app: Any = None
+
+    @property
+    def app_name(self) -> str:
+        """Stable Modal app name shared by this pool class' sandboxes.
+
+        The default is derived from the pool class, not stored on the instance.
+        Some rollout code creates one pool object per task/environment; if those
+        instances synthesize unique app names, Modal sees one app per sandbox.
+        Keeping this read-only by default preserves the desired
+        many-sandboxes-to-one-app shape.
+        """
+        return f"{type(self).__name__.replace('_', '-').lower()}-sandboxes"
 
     def __getstate__(self) -> dict:
         # Drop the live App handle so cloudpickle can ship the pool by value.
@@ -172,9 +181,10 @@ class SandboxEnvironmentPool:
         import modal
 
         if self._app is None:
-            if not self.app_name:
+            app_name = self.app_name
+            if not app_name:
                 raise ValueError(f"{type(self).__name__}.app_name must be set")
-            self._app = modal.App.lookup(self.app_name, create_if_missing=True)
+            self._app = modal.App.lookup(app_name, create_if_missing=True)
         return self._app
 
     def build_image(self) -> Any:
