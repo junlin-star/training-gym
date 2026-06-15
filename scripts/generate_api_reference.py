@@ -117,6 +117,7 @@ def _seo_description(cls: type, class_name: str) -> str:
         first_para += "."
     if len(first_para) > 160:
         first_para = first_para[:157] + "..."
+    first_para = first_para.replace("'", "''")
     return first_para
 
 
@@ -650,6 +651,7 @@ def main() -> None:
                 else:
                     first_sentence = para if para.endswith(".") else para + "."
             desc = first_sentence or f"API reference for {entry['class_name']}"
+            desc = desc.replace("'", "''")
             lines = [
                 "---",
                 f'title: "{entry.get("sidebar_label", entry["class_name"])}"',
