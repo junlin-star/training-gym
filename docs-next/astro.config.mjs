@@ -14,7 +14,7 @@ export default defineConfig({
       title: 'Training Gym',
       favicon: '/modal-logo.svg',
       description:
-        'Reusable building blocks + runnable examples for RL post-training on Modal.',
+        'Open-source Python SDK for GRPO and RL post-training of LLMs on Modal GPU clusters — tutorials, API reference, and runnable examples.',
       tagline:
         'GRPO, PPO, custom reward and generate functions — runnable on Modal in minutes.',
       head: [
@@ -37,6 +37,27 @@ export default defineConfig({
         {
           tag: 'meta',
           attrs: { name: 'twitter:image', content: 'https://gym.modal.dev/og-image.png' },
+        },
+        {
+          tag: 'meta',
+          attrs: { name: 'twitter:site', content: '@modal_labs' },
+        },
+        {
+          tag: 'script',
+          attrs: { type: 'application/ld+json' },
+          content: JSON.stringify({
+            '@context': 'https://schema.org',
+            '@type': 'WebSite',
+            name: 'Training Gym',
+            url: 'https://gym.modal.dev',
+            description:
+              'Open-source Python SDK for GRPO and RL post-training of LLMs on Modal GPU clusters.',
+            publisher: {
+              '@type': 'Organization',
+              name: 'Modal Labs',
+              url: 'https://modal.com',
+            },
+          }),
         },
       ],
       social: [

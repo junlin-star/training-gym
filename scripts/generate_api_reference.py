@@ -103,6 +103,23 @@ def _rst_to_md(text: str) -> str:
     return re.sub(r"``(.*?)``", r"`\1`", text)
 
 
+def _seo_description(cls: type, class_name: str) -> str:
+    """Extract first sentence of docstring for SEO meta description."""
+    doc = inspect.getdoc(cls) or ""
+    if not doc:
+        return f"API reference for {class_name}"
+    first_para = doc.split("\n\n")[0].replace("\n", " ").strip()
+    first_para = re.sub(r"``(.*?)``", r"\1", first_para)
+    period = first_para.find(". ")
+    if period != -1:
+        first_para = first_para[: period + 1]
+    elif not first_para.endswith("."):
+        first_para += "."
+    if len(first_para) > 160:
+        first_para = first_para[:157] + "..."
+    return first_para
+
+
 def _format_type(type_hint: Any) -> str:
     """Format a type hint for display."""
     raw = str(type_hint)
@@ -268,7 +285,7 @@ def generate_config_data_page(
     lines = [
         "---",
         f"title: {entry['sidebar_label']}",
-        f"description: API reference for {entry['class_name']}",
+        f"description: '{_seo_description(cls, entry['class_name'])}'",
         "---",
         "",
         "```python",
@@ -386,7 +403,7 @@ def generate_behavior_page(
     lines = [
         "---",
         f"title: {entry['sidebar_label']}",
-        f"description: API reference for {entry['class_name']}",
+        f"description: '{_seo_description(cls, entry['class_name'])}'",
         "---",
         "",
         "```python",
@@ -623,9 +640,20 @@ def main() -> None:
                 sig_str = f"`{entry['class_name']}{inspect.signature(cls)}`"
             except (ValueError, TypeError):
                 pass
+            first_sentence = ""
+            if doc:
+                para = doc.split("\n\n")[0].replace("\n", " ").strip()
+                para = re.sub(r"``(.*?)``", r"\1", para)
+                dot = para.find(". ")
+                if dot != -1:
+                    first_sentence = para[: dot + 1]
+                else:
+                    first_sentence = para if para.endswith(".") else para + "."
+            desc = first_sentence or f"API reference for {entry['class_name']}"
             lines = [
                 "---",
                 f'title: "{entry.get("sidebar_label", entry["class_name"])}"',
+                f"description: '{desc}'",
                 "---",
                 "",
                 f"# `{entry['class_name']}`",
