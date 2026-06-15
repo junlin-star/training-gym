@@ -17,7 +17,7 @@ from modal_training_gym.deploy_recipes.sglang_recipe.recipe import SglangRecipe
 _DEEPSEEK_V4_FLASH_DEFAULTS = {
     "gpu": "B200",
     "tp": 4,
-    "context_length": 32768,
+    "context_length": 262144,
     "mem_fraction_static": 0.80,
     "chunked_prefill_size": 4096,
     "max_running_requests": 16,
