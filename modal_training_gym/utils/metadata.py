@@ -106,7 +106,10 @@ def vol_get(store: MetadataStore | str, key: str) -> dict[str, Any]:
     try:
         return json.loads(b"".join(vol.read_file(path)))
     except FileNotFoundError:
-        vol.reload()
+        try:
+            vol.reload()
+        except RuntimeError:
+            pass
     try:
         return json.loads(b"".join(vol.read_file(path)))
     except FileNotFoundError:
@@ -130,7 +133,10 @@ async def vol_get_async(store: MetadataStore | str, key: str) -> dict[str, Any]:
 
 def vol_list(store: MetadataStore | str) -> list[dict[str, Any]]:
     vol = _metadata_volume()
-    vol.reload()
+    try:
+        vol.reload()
+    except RuntimeError:
+        pass
     results = []
     try:
         for entry in vol.iterdir(_store_path(store)):
@@ -178,7 +184,10 @@ def vol_get_summary_items(
     payload_key: str = SUMMARY_ITEMS_KEY,
 ) -> list[dict[str, Any]] | None:
     vol = _metadata_volume()
-    vol.reload()
+    try:
+        vol.reload()
+    except RuntimeError:
+        pass
     try:
         payload = vol_get(store, key)
     except KeyError:
@@ -193,7 +202,10 @@ async def vol_get_summary_items_async(
     payload_key: str = SUMMARY_ITEMS_KEY,
 ) -> list[dict[str, Any]] | None:
     vol = _metadata_volume()
-    await vol.reload.aio()
+    try:
+        await vol.reload.aio()
+    except (RuntimeError, Exception):
+        pass
     try:
         payload = await vol_get_async(store, key)
     except KeyError:
