@@ -45,6 +45,9 @@ def list_checkpoints(training_run_id: str) -> list[Checkpoint]:
         return _list_checkpoints_for_slime(result)
     if result.framework in {Framework.MILES, Framework.MILES.value}:
         return _list_checkpoints_for_slime(result)
+    if result.framework in {Framework.VIME, Framework.VIME.value}:
+        # vime writes slime/Megatron torch_dist checkpoints, same layout as slime.
+        return _list_checkpoints_for_slime(result)
     raise ValueError(f"Unsupported framework: {result.framework}")
 
 

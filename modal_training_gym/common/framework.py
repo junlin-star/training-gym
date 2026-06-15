@@ -88,3 +88,4 @@ def resolve_caller_module(
 class Framework(Enum):
     SLIME = "slime"
     MILES = "miles"
+    VIME = "vime"

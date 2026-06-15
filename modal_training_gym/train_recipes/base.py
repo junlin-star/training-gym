@@ -5,6 +5,7 @@ from enum import Enum
 class RecipeType(Enum):
     SLIME = "slime"
     MILES = "miles"
+    VIME = "vime"
 
 
 class BaseTrainRecipe(ABC):

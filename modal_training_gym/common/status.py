@@ -29,4 +29,12 @@ class MilesStatus(str, Enum):
     TRAINING = "training"
 
 
-FrameworkStatus: TypeAlias = SlimeStatus | MilesStatus
+class VimeStatus(str, Enum):
+    INITIALIZING = "initializing"
+    DOWNLOAD_MODEL = "download_model"
+    CONVERT_MODEL = "convert_model"
+    PREPARE_DATASET = "prepare_dataset"
+    TRAINING = "training"
+
+
+FrameworkStatus: TypeAlias = SlimeStatus | MilesStatus | VimeStatus
