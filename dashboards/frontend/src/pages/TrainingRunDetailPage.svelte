@@ -739,6 +739,15 @@
                               </button>
                             </div>
                           </div>
+                          {#if activeSample.sample.metadata?._metadata_type === "audio" || activeSample.sample.metadata?.audio}
+                            <div class="rollout-sample-label">audio</div>
+                            <audio
+                              class="sample-audio"
+                              controls
+                              preload="none"
+                              src={activeSample.sample.metadata.audio}
+                            ></audio>
+                          {/if}
                           {#if activeSample.sample.prompt}
                             <div class="rollout-sample-label">prompt</div>
                             <pre class="rollout-sample-text">{activeSample.sample.prompt}</pre>
@@ -747,6 +756,16 @@
                             <div class="rollout-sample-label">response</div>
                             <pre class="rollout-sample-text">{activeSample.sample.response}</pre>
                           {/if}
+                          {#if activeSample.sample.metadata?.reference}
+                            <div class="rollout-sample-label">reference</div>
+                            <pre class="rollout-sample-text">{activeSample.sample.metadata.reference}</pre>
+                          {/if}
+                          {#each Object.entries(activeSample.sample.metadata?.metrics ?? {}) as [name, value]}
+                            <div class="rollout-sample-label">{name}</div>
+                            <span class="rollout-sample-metric">
+                              {typeof value === "number" ? value.toFixed(3) : value}
+                            </span>
+                          {/each}
                           {#if activeSample.sample.trace?.length}
                             <div class="rollout-sample-label">trajectory timeline</div>
                             <SampleTimeline trace={activeSample.sample.trace} />
@@ -1271,6 +1290,20 @@
     color: var(--muted);
     margin-top: 8px;
     margin-bottom: 2px;
+  }
+
+  .sample-audio {
+    display: block;
+    width: 100%;
+    max-width: 400px;
+    margin: 4px 0 8px;
+    border-radius: 4px;
+  }
+
+  .rollout-sample-metric {
+    font-size: 13px;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-bright);
   }
 
   .rollout-sample-text {
