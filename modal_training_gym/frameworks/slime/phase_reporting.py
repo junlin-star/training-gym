@@ -342,9 +342,7 @@ def _normalize_span(raw: Any) -> dict[str, Any] | None:
         return None
     get = raw.get
     name = get("name") or get("event") or get("span") or ""
-    start = _coerce_float(
-        get("start", get("start_time", get("ts", get("timestamp"))))
-    )
+    start = _coerce_float(get("start", get("start_time", get("ts", get("timestamp")))))
     end = _coerce_float(get("end", get("end_time")))
     if start is None:
         # An instant event may only carry an end/ts; fall back to it.
@@ -375,9 +373,7 @@ def _normalize_trace(raw: Any) -> list[dict[str, Any]] | None:
                 spans = (spans or []) + value
         if spans is None:
             # A dict keyed by span name -> attrs/timing.
-            spans = [
-                {"name": k, **v} for k, v in raw.items() if isinstance(v, dict)
-            ]
+            spans = [{"name": k, **v} for k, v in raw.items() if isinstance(v, dict)]
     if not spans:
         return None
     out: list[dict[str, Any]] = []

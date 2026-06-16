@@ -169,7 +169,7 @@ def vol_list(store: MetadataStore | str) -> list[dict[str, Any]]:
             return results
         except Exception as exc:
             if "rate limit" in str(exc).lower() and attempt < 2:
-                _time.sleep(2 ** attempt)
+                _time.sleep(2**attempt)
                 results = []
                 continue
             raise

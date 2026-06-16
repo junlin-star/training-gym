@@ -148,7 +148,10 @@ if _is_local():
 
 def _run_compact_sync() -> None:
     """Rebuild all summary stores from canonical per-item metadata."""
-    from modal_training_gym.utils.metadata import vol_compact_summary_items, MetadataStore
+    from modal_training_gym.utils.metadata import (
+        vol_compact_summary_items,
+        MetadataStore,
+    )
 
     for summary_store, item_store, id_key, sk, rev in [
         (
