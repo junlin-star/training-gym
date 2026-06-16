@@ -4,6 +4,7 @@
   import RunSummary from "../components/RunSummary.svelte";
   import StatusPill from "../components/StatusPill.svelte";
   import TimeAgo from "../components/TimeAgo.svelte";
+  import SampleTimeline from "../components/SampleTimeline.svelte";
   import { fetchRunRollouts, fetchRollout } from "../lib/api.js";
 
   let {
@@ -308,7 +309,16 @@
     const es = new EventSource(url);
     logState = "streaming";
 
+    es.onopen = () => {
+      logState = "streaming";
+      logError = "";
+    };
+
     es.onmessage = (evt) => {
+      if (logState !== "streaming") {
+        logState = "streaming";
+        logError = "";
+      }
       try {
         const payload = JSON.parse(evt.data);
         const line = String(payload.line || "");
@@ -320,7 +330,6 @@
           if (!p.length) continue;
           pendingLogLines.push({ id: logSeq++, task_id, line: p, ts });
         }
-        // Bound the buffer in case a burst arrives between frames.
         if (pendingLogLines.length > LOG_BUFFER_MAX) {
           pendingLogLines = pendingLogLines.slice(-LOG_BUFFER_MAX);
         }
@@ -500,9 +509,20 @@
             <span>Collapse</span>
           </button>
         {/if}
+        {#if run?.train_result?.wandb_url || run?.config_summary?.wandb_project}
+          <a
+            class="header-link wandb-link"
+            href={run.train_result?.wandb_url || `https://wandb.ai/home?search=${encodeURIComponent(run.config_summary.wandb_project)}`}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            <span>Open in W&B</span>
+            <ExternalLink size={12} strokeWidth={2.1} />
+          </a>
+        {/if}
         {#if run?.modal_app_url}
           <a
-            class="modal-link"
+            class="header-link"
             href={run.modal_app_url}
             target="_blank"
             rel="noopener noreferrer"
@@ -727,6 +747,10 @@
                             <div class="rollout-sample-label">response</div>
                             <pre class="rollout-sample-text">{activeSample.sample.response}</pre>
                           {/if}
+                          {#if activeSample.sample.trace?.length}
+                            <div class="rollout-sample-label">trajectory timeline</div>
+                            <SampleTimeline trace={activeSample.sample.trace} />
+                          {/if}
                         </div>
                       {:else}
                         <div class="dist-hint">Click a bar to inspect its samples.</div>
@@ -749,7 +773,7 @@
           {:else if logState === "paused"}
             <span class="dot dot-dim"></span> paused
           {:else if logState === "reconnecting"}
-            <span class="dot dot-warn"></span> reconnecting…
+            <span class="dot dot-warn"></span> reconnecting…{#if logError} <span class="log-reconnect-reason">({logError})</span>{/if}
           {:else if logState === "done"}
             <span class="dot dot-dim"></span> finished
           {:else if logState === "error"}
@@ -902,7 +926,7 @@
     border-color: var(--border-strong, #4a4a4a);
   }
 
-  .modal-link {
+  .header-link {
     display: inline-flex;
     align-items: center;
     gap: 6px;
@@ -911,8 +935,17 @@
     text-decoration: none;
   }
 
-  .modal-link:hover {
+  .header-link:hover {
     color: var(--accent);
+  }
+
+  .wandb-link {
+    color: var(--yellow, #fbbf24);
+  }
+
+  .wandb-link:hover {
+    color: var(--yellow, #fbbf24);
+    opacity: 0.8;
   }
 
   .detail-title-row {

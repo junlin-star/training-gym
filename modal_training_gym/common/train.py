@@ -382,6 +382,7 @@ class TrainConfig:
                 model=self.model,
                 dataset=self.dataset,
                 checkpoint=self.checkpoint,
+                name=self.training_run_id,
             )
         if recipe_type == RecipeType.SLIME:
             if not isinstance(self.recipe, SlimeRecipe):
@@ -399,6 +400,7 @@ class TrainConfig:
                 model=self.model,
                 dataset=self.dataset,
                 checkpoint=self.checkpoint,
+                name=self.training_run_id,
             )
         raise ValueError(f"Unknown recipe type: {recipe_type}")
 
@@ -525,6 +527,34 @@ class TrainConfig:
         )
         status_display.print_banner()
 
+        # Write the initial TrainingRun record before the app starts so the
+        # dashboard shows the run immediately (even during image build).
+        created_at = int(time.time())
+        run_record = TrainingRun(
+            training_run_id=training_run_id,
+            modal_app_id="",
+            modal_app_url="",
+            framework=self._framework(),
+            config=self._build_config_summary(),
+            framework_status=self._initializing_status(),
+            created_at=created_at,
+            started_at=created_at,
+        )
+        try:
+            run_record.save()
+        except RuntimeError:
+            pass
+        try:
+            framework_status_token = _secrets.token_urlsafe(32)
+            vol_put(
+                MetadataStore.FRAMEWORK_STATUS_TOKENS,
+                training_run_id,
+                {"token": framework_status_token},
+            )
+        except RuntimeError:
+            framework_status_token = ""
+        print(f"TrainingRun recorded: {training_run_id}")
+
         app = self._build_app()
         result_dict = None
         modal_app_id = ""
@@ -534,33 +564,13 @@ class TrainConfig:
                 modal_app_url = modal_app_dashboard_url(modal_app_id)
                 status_display.set_modal_app_url(modal_app_url)
 
-                created_at = int(time.time())
-                run_record = TrainingRun(
-                    training_run_id=training_run_id,
-                    modal_app_id=modal_app_id,
-                    modal_app_url=modal_app_url,
-                    framework=self._framework(),
-                    config=self._build_config_summary(),
-                    framework_status=self._initializing_status(),
-                    created_at=created_at,
-                    started_at=created_at,
-                )
-                # Initial write is synchronous so the record exists before any
-                # downstream HTTP status updates try to update it.
+                # Update the record with the Modal app ID now that we have it.
+                run_record.modal_app_id = modal_app_id
+                run_record.modal_app_url = modal_app_url
                 try:
                     run_record.save()
                 except RuntimeError:
                     pass
-                try:
-                    framework_status_token = _secrets.token_urlsafe(32)
-                    vol_put(
-                        MetadataStore.FRAMEWORK_STATUS_TOKENS,
-                        training_run_id,
-                        {"token": framework_status_token},
-                    )
-                except RuntimeError:
-                    framework_status_token = ""
-                print(f"TrainingRun recorded: {training_run_id}")
 
                 # Mid-flight status bumps are fire-and-forget HTTP posts to
                 # the dashboard so the orchestration thread doesn't block on
@@ -638,6 +648,13 @@ class TrainConfig:
                     )
                 except BaseException:
                     if result_dict is None:
+                        # Re-read from the volume so we don't clobber
+                        # metadata the dashboard built up during training
+                        # (latest_rollout, framework_progress, etc.).
+                        try:
+                            run_record = TrainingRun.from_id(training_run_id)
+                        except (KeyError, Exception):
+                            pass
                         run_record.status = TrainingRunStatus.FAILED
                         finished_at = int(time.time())
                         run_record.ended_at = finished_at

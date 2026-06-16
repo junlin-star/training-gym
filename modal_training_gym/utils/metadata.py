@@ -49,6 +49,23 @@ def _store_path(store: MetadataStore | str) -> str:
     return store
 
 
+def vol_remove(store: MetadataStore | str, key: str) -> bool:
+    """Delete a single item from a store. Returns True if removed."""
+    from modal.exception import InvalidError, NotFoundError
+
+    vol = _metadata_volume()
+    path = f"{_store_path(store)}/{key}.json"
+    try:
+        vol.remove_file(path)
+        return True
+    except (FileNotFoundError, NotFoundError):
+        return False
+    except InvalidError as exc:
+        if "No such file or directory" in str(exc):
+            return False
+        raise
+
+
 def vol_put(store: MetadataStore | str, key: str, value: dict[str, Any]) -> None:
     import time
 
@@ -136,16 +153,26 @@ async def vol_get_async(store: MetadataStore | str, key: str) -> dict[str, Any]:
 
 
 def vol_list(store: MetadataStore | str) -> list[dict[str, Any]]:
+    import time as _time
+
     vol = _metadata_volume()
     _safe_reload(vol)
     results = []
-    try:
-        for entry in vol.iterdir(_store_path(store)):
-            if entry.path.endswith(".json"):
-                data = b"".join(vol.read_file(entry.path))
-                results.append(json.loads(data))
-    except FileNotFoundError:
-        pass
+    for attempt in range(3):
+        try:
+            for entry in vol.iterdir(_store_path(store)):
+                if entry.path.endswith(".json"):
+                    data = b"".join(vol.read_file(entry.path))
+                    results.append(json.loads(data))
+            return results
+        except FileNotFoundError:
+            return results
+        except Exception as exc:
+            if "rate limit" in str(exc).lower() and attempt < 2:
+                _time.sleep(2**attempt)
+                results = []
+                continue
+            raise
     return results
 
 
@@ -329,6 +356,7 @@ __all__ = [
     "vol_list_async",
     "vol_put",
     "vol_put_async",
+    "vol_remove",
     "vol_get_summary_items",
     "vol_get_summary_items_async",
     "vol_put_summary_items",

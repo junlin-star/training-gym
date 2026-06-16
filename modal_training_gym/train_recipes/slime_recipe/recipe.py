@@ -34,6 +34,8 @@ _SLIME_SKIP = {
     "wandb",
     "name",
     "app_tags",
+    "capture_trace",
+    "trace_sample_limit",
     "image_overlay",
     "local_slime",
     "memory",
@@ -122,6 +124,14 @@ class SlimeRecipe(BaseTrainRecipe):
     image_run_commands: list[str] = field(default_factory=list)
     image_env: dict[str, str] = field(default_factory=dict)
     train_function_kwargs: dict[str, Any] = field(default_factory=dict)
+
+    # ── Per-sample execution tracing (dashboard timeline) ───────────────────
+    # When True, the rollout recorder attaches slime's per-sample trace (the
+    # generate/reward/tool-call timeline) to the first `trace_sample_limit`
+    # samples of each rollout. Off by default — traces inflate payloads, so
+    # sampling keeps the added volume well under 1%. Not a slime CLI flag.
+    capture_trace: bool = False
+    trace_sample_limit: int = 16
 
     # ── Cluster and parallelism (optional) ─────────────────────────────────
     actor_num_nodes: int = 1

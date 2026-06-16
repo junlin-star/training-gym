@@ -313,6 +313,7 @@ def build_slime_app(
 ) -> App:
     """Return a Modal App with `download`, `prepare_dataset`, `convert_checkpoint`, and `train` defined."""
     app_name = name or f"slime-{type(slime).__name__.lstrip('_').lower()}"
+    volume_prefix = f"slime-{type(slime).__name__.lstrip('_').lower()}"
 
     SlimeRecipe._validate_custom_model_architecture(model)
     SlimeRecipe._validate_dataset(dataset)
@@ -600,11 +601,11 @@ def build_slime_app(
 
     # ── Volumes ──────────────────────────────────────────────────────────────
     hf_cache_volume = Volume.from_name("huggingface-cache", create_if_missing=True)
-    data_volume = Volume.from_name(f"{app_name}-data", create_if_missing=True)
+    data_volume = Volume.from_name(f"{volume_prefix}-data", create_if_missing=True)
     checkpoints_volume_name = (
         checkpoint.checkpoints_volume_name
         if checkpoint is not None and checkpoint.checkpoints_volume_name
-        else f"{app_name}-checkpoints"
+        else f"{volume_prefix}-checkpoints"
     )
     checkpoints_mount_path = (
         checkpoint.checkpoints_mount_path.rstrip("/") or "/"
@@ -614,12 +615,14 @@ def build_slime_app(
     checkpoints_volume = Volume.from_name(
         checkpoints_volume_name, create_if_missing=True
     )
+    metadata_volume = Volume.from_name("training-gym-metadata", create_if_missing=True)
     if checkpoint is not None and checkpoint.path and not model.model_path:
         model.model_path = checkpoint.path
     all_volumes: dict[str | PurePosixPath, Any] = {
         str(HF_CACHE_PATH): hf_cache_volume,
         str(DATA_PATH): data_volume,
         checkpoints_mount_path: checkpoints_volume,
+        "/metadata": metadata_volume,
     }
 
     # ── App ──────────────────────────────────────────────────────────────────
@@ -1223,6 +1226,12 @@ def build_slime_app(
                     "TRAINING_GYM_APP_NAME": app_name,
                     "TRAINING_GYM_TOTAL_STEPS": str(slime.num_rollout),
                     "TRAINING_GYM_RESPONSE_PARSER_PATH": _response_parser_path(model),
+                    "TRAINING_GYM_CAPTURE_TRACE": (
+                        "1" if getattr(slime, "capture_trace", False) else ""
+                    ),
+                    "TRAINING_GYM_TRACE_SAMPLE_LIMIT": str(
+                        getattr(slime, "trace_sample_limit", 16)
+                    ),
                     "SLIME_PHASE_REPORT_URL": phase_report_url,
                     **slime.environment,
                     "SLIME_PHASE_REPORT_TOKEN": framework_status_token,

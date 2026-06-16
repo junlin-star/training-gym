@@ -17,6 +17,16 @@ PHASE_REPORT_TOKEN_ENV = "SLIME_PHASE_REPORT_TOKEN"
 # Import path of the run model's response parser (a (str) -> ParsedResponse
 # callable). The launcher exports it; the recorder resolves and applies it.
 RESPONSE_PARSER_PATH_ENV = "TRAINING_GYM_RESPONSE_PARSER_PATH"
+# Per-sample execution-trace capture (off by default — traces inflate rollout
+# payloads). When on, only the first TRACE_SAMPLE_LIMIT_ENV samples of each
+# rollout carry a trace, and only timing/scalar attributes are kept.
+CAPTURE_TRACE_ENV = "TRAINING_GYM_CAPTURE_TRACE"
+TRACE_SAMPLE_LIMIT_ENV = "TRAINING_GYM_TRACE_SAMPLE_LIMIT"
+_TRACE_SAMPLE_LIMIT_DEFAULT = 16
+# Backstops so a pathological trace can't blow up the payload we already keep
+# small by sampling + dropping payload-bearing attributes.
+_TRACE_MAX_SPANS = 256
+_TRACE_ATTR_STR_MAX = 200
 CUSTOM_ROLLOUT_LOG_FUNCTION_PATH_KEY = "training_gym_custom_rollout_log_function_path"
 CUSTOM_EVAL_ROLLOUT_LOG_FUNCTION_PATH_KEY = (
     "training_gym_custom_eval_rollout_log_function_path"
@@ -282,7 +292,124 @@ def _parsed_response_dict(text: str, parser: Any) -> dict[str, Any] | None:
     }
 
 
-def _sample_to_dict(sample: Any, parser: Any = None) -> dict[str, Any]:
+def _trace_enabled() -> bool:
+    return os.environ.get(CAPTURE_TRACE_ENV, "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+
+def _trace_sample_limit() -> int:
+    try:
+        n = int(os.environ.get(TRACE_SAMPLE_LIMIT_ENV, "").strip())
+    except (TypeError, ValueError):
+        return _TRACE_SAMPLE_LIMIT_DEFAULT
+    return max(0, n)
+
+
+def _coerce_float(value: Any) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _trace_scalar(value: Any) -> Any:
+    """Keep only small scalar attributes (timings/counts/flags). Drop lists,
+    dicts, and long strings so trace payloads can't carry response/tool data
+    that already lives on the Sample."""
+    if isinstance(value, bool) or isinstance(value, (int, float)):
+        return value
+    if isinstance(value, str):
+        return value if len(value) <= _TRACE_ATTR_STR_MAX else None
+    return None
+
+
+def _trace_attrs(raw: Any) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    if isinstance(raw, dict):
+        for key, value in raw.items():
+            scalar = _trace_scalar(value)
+            if scalar is not None:
+                out[str(key)] = scalar
+    return out
+
+
+def _normalize_span(raw: Any) -> dict[str, Any] | None:
+    if not isinstance(raw, dict):
+        return None
+    get = raw.get
+    name = get("name") or get("event") or get("span") or ""
+    start = _coerce_float(get("start", get("start_time", get("ts", get("timestamp")))))
+    end = _coerce_float(get("end", get("end_time")))
+    if start is None:
+        # An instant event may only carry an end/ts; fall back to it.
+        start = end
+    if start is None:
+        return None
+    parent = get("parent") or get("parent_name")
+    return {
+        "name": str(name),
+        "start": start,
+        "end": end if (end is not None and end != start) else None,
+        "attributes": _trace_attrs(get("attributes") or get("attrs") or {}),
+        "parent": str(parent) if parent else None,
+    }
+
+
+def _normalize_trace(raw: Any) -> list[dict[str, Any]] | None:
+    """Coerce slime's per-sample trace (shape varies by version) into a list of
+    ``{name, start, end, attributes, parent}`` spans rebased to start at 0.
+    Returns ``None`` when there's nothing usable."""
+    spans: list[Any] | None = None
+    if isinstance(raw, list):
+        spans = raw
+    elif isinstance(raw, dict):
+        for key in ("spans", "events", "timeline"):
+            value = raw.get(key)
+            if isinstance(value, list):
+                spans = (spans or []) + value
+        if spans is None:
+            # A dict keyed by span name -> attrs/timing.
+            spans = [{"name": k, **v} for k, v in raw.items() if isinstance(v, dict)]
+    if not spans:
+        return None
+    out: list[dict[str, Any]] = []
+    for entry in spans[:_TRACE_MAX_SPANS]:
+        norm = _normalize_span(entry)
+        if norm is not None:
+            out.append(norm)
+    if not out:
+        return None
+    base = min(s["start"] for s in out)
+    for s in out:
+        s["start"] = round(s["start"] - base, 6)
+        if s["end"] is not None:
+            s["end"] = round(s["end"] - base, 6)
+    return out
+
+
+def _extract_trace(sample: Any) -> Any:
+    """Pull slime's trace carrier off a sample — it lives either as a ``trace``
+    attribute/key or nested under ``metadata['trace']``, depending on version."""
+    if isinstance(sample, dict):
+        raw = sample.get("trace")
+        if raw is None and isinstance(sample.get("metadata"), dict):
+            raw = sample["metadata"].get("trace")
+        return raw
+    raw = getattr(sample, "trace", None)
+    if raw is None:
+        meta = getattr(sample, "metadata", None)
+        if isinstance(meta, dict):
+            raw = meta.get("trace")
+    return raw
+
+
+def _sample_to_dict(
+    sample: Any, parser: Any = None, *, include_trace: bool = False
+) -> dict[str, Any]:
     """Best-effort extraction of (prompt, response, reward, metadata) from a
     slime Sample-like object. Duck-typed so we don't import slime here."""
     if isinstance(sample, dict):
@@ -316,6 +443,10 @@ def _sample_to_dict(sample: Any, parser: Any = None) -> dict[str, Any]:
     parsed = _parsed_response_dict(response_text, parser)
     if parsed is not None:
         out["parsed_response"] = parsed
+    if include_trace:
+        trace = _normalize_trace(_extract_trace(sample))
+        if trace:
+            out["trace"] = trace
     return out
 
 
@@ -336,8 +467,14 @@ def report_rollout_samples(
     if samples is None:
         return
     parser = _response_parser()
+    # Trace only the first `trace_limit` samples (and only when enabled) so the
+    # payload stays small — the cap is what keeps volume growth well under 1%.
+    trace_limit = _trace_sample_limit() if _trace_enabled() else 0
     try:
-        sample_dicts = [_sample_to_dict(s, parser) for s in samples]
+        sample_dicts = [
+            _sample_to_dict(s, parser, include_trace=(i < trace_limit))
+            for i, s in enumerate(samples)
+        ]
     except TypeError:
         return
     payload = {
