@@ -216,13 +216,18 @@ class VimeConfig(BaseTrainRecipe):
             eval_prompt_data = [
                 v for name, path in eval_paths.items() for v in (name, path)
             ]
-        return {
+        fields: dict[str, Any] = {
             "prompt_data": prompt_data,
             "eval_prompt_data": eval_prompt_data,
             "input_key": ds.input_key,
             "label_key": ds.label_key,
             "apply_chat_template": ds.apply_chat_template,
         }
+        # A MultimodalDataset declares ``{modality: media_column}``; vime's default
+        # rollout forwards those columns to the engine as image/audio content.
+        if getattr(ds, "multimodal_keys", None):
+            fields["multimodal_keys"] = ds.multimodal_keys
+        return fields
 
     @staticmethod
     def _model_to_fields(m: ModelConfig) -> dict[str, Any]:

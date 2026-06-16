@@ -66,6 +66,7 @@ _EXPORTS = {
     "Qwen3_6_27B": ("modal_training_gym.common.models", "Qwen3_6_27B"),
     "Qwen3_6_35B": ("modal_training_gym.common.models", "Qwen3_6_35B"),
     "Qwen3_ASR_1_7B": ("modal_training_gym.common.models", "Qwen3_ASR_1_7B"),
+    "Qwen3_VL_4B": ("modal_training_gym.common.models", "Qwen3_VL_4B"),
     "Qwen3_ASR_1_7b_Recipe": (
         "modal_training_gym.train_recipes.slime_recipe",
         "Qwen3_ASR_1_7b_Recipe",
@@ -126,6 +127,7 @@ __all__ = [
     "Qwen3_6_27B",
     "Qwen3_6_35B",
     "Qwen3_ASR_1_7B",
+    "Qwen3_VL_4B",
     "Qwen3_ASR_1_7b_Recipe",
     "score_in_sandbox",
     "SlimeRecipe",
