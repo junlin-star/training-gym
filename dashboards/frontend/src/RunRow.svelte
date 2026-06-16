@@ -193,21 +193,19 @@
         onclick={(event) => event.stopPropagation()}>Modal</a
       >
     {/if}
-    {#if result}
-      {#if result.wandb_url}
-        <a
-          class="pill-link pill-wandb"
-          href={result.wandb_url}
-          target="_blank"
-          rel="noopener noreferrer"
-          onclick={(event) => event.stopPropagation()}>W&B</a
-        >
-      {/if}
-      {#if result.checkpoint_dir}
-        <span class="tag" title={result.checkpoint_dir}>
-          <strong>ckpt</strong>
-        </span>
-      {/if}
+    {#if result?.wandb_url || summary.wandb_url}
+      <a
+        class="pill-link pill-wandb"
+        href={result?.wandb_url || summary.wandb_url}
+        target="_blank"
+        rel="noopener noreferrer"
+        onclick={(event) => event.stopPropagation()}>W&B</a
+      >
+    {/if}
+    {#if result?.checkpoint_dir}
+      <span class="tag" title={result.checkpoint_dir}>
+        <strong>ckpt</strong>
+      </span>
     {/if}
   </td>
 </tr>

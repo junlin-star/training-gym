@@ -517,7 +517,16 @@ def build_miles_app(
 
         run_record: TrainingRun | None = None
 
+        wandb_entity = ""
+        wandb_run_id = ""
+
         if cluster.is_head:
+            if miles.wandb is not None:
+                from modal_training_gym.common.wandb import preflight_wandb
+
+                wandb_entity = preflight_wandb(miles.wandb)
+            wandb_run_id = training_run_id[:8] if miles.wandb else ""
+
             print(f"Training run id: {training_run_id}")
             config_summary = {
                 "model": {"model_name": model.model_name} if model else {},
@@ -527,7 +536,12 @@ def build_miles_app(
                     "actor_num_gpus_per_node": miles.actor_num_gpus_per_node,
                 },
                 "wandb": (
-                    {"project": miles.wandb.project, "group": miles.wandb.group}
+                    {
+                        "project": miles.wandb.project,
+                        "group": miles.wandb.group,
+                        "entity": wandb_entity,
+                        "run_id": wandb_run_id,
+                    }
                     if miles.wandb
                     else {}
                 ),
@@ -716,10 +730,15 @@ def build_miles_app(
                 miles.save = original_save
                 miles.load = original_load
 
+            wandb_env = {}
+            if wandb_run_id:
+                wandb_env["WANDB_RUN_ID"] = wandb_run_id
+
             runtime_env = {
                 "env_vars": {
                     "no_proxy": f"127.0.0.1,{cluster.head_addr}",
                     "MASTER_ADDR": cluster.head_addr,
+                    **wandb_env,
                     **miles.environment,
                 }
             }
@@ -743,6 +762,9 @@ def build_miles_app(
                 "model_config": model,
                 "checkpoints_volume_name": checkpoints_volume_name,
                 "checkpoints_mount_path": checkpoints_mount_path,
+                "wandb_project": miles.wandb.project if miles.wandb else "",
+                "wandb_entity": wandb_entity,
+                "wandb_training_run_id": wandb_run_id,
             }
             accepted_fields = set(inspect.signature(TrainResult).parameters)
             result = TrainResult(
