@@ -112,6 +112,9 @@ class TrainResult:
     checkpoints_volume_name: str = ""
     checkpoints_mount_path: str = ""
     model_config: "ModelConfig | None" = None
+    wandb_project: str = ""
+    wandb_entity: str = ""
+    wandb_training_run_id: str = ""
     extra: dict[str, Any] = field(default_factory=dict)
 
     # ── Persistence ────────────────────────────────────────────────────────
