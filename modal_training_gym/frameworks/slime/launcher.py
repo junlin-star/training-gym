@@ -313,6 +313,7 @@ def build_slime_app(
 ) -> App:
     """Return a Modal App with `download`, `prepare_dataset`, `convert_checkpoint`, and `train` defined."""
     app_name = name or f"slime-{type(slime).__name__.lstrip('_').lower()}"
+    volume_prefix = f"slime-{type(slime).__name__.lstrip('_').lower()}"
 
     SlimeRecipe._validate_custom_model_architecture(model)
     SlimeRecipe._validate_dataset(dataset)
@@ -600,11 +601,11 @@ def build_slime_app(
 
     # ── Volumes ──────────────────────────────────────────────────────────────
     hf_cache_volume = Volume.from_name("huggingface-cache", create_if_missing=True)
-    data_volume = Volume.from_name(f"{app_name}-data", create_if_missing=True)
+    data_volume = Volume.from_name(f"{volume_prefix}-data", create_if_missing=True)
     checkpoints_volume_name = (
         checkpoint.checkpoints_volume_name
         if checkpoint is not None and checkpoint.checkpoints_volume_name
-        else f"{app_name}-checkpoints"
+        else f"{volume_prefix}-checkpoints"
     )
     checkpoints_mount_path = (
         checkpoint.checkpoints_mount_path.rstrip("/") or "/"

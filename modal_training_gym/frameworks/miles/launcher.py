@@ -111,6 +111,7 @@ def build_miles_app(
     name: str | None = None,
 ) -> App:
     app_name = name or miles.name or f"miles-{type(miles).__name__.lstrip('_').lower()}"
+    volume_prefix = miles.name or f"miles-{type(miles).__name__.lstrip('_').lower()}"
 
     caller_module = resolve_caller_module()
     if caller_module is not None and caller_module.__name__ != "__main__":
@@ -239,11 +240,11 @@ def build_miles_app(
     miles.custom_generate_function = None
 
     hf_cache_volume = Volume.from_name("huggingface-cache", create_if_missing=True)
-    data_volume = Volume.from_name(f"{app_name}-data", create_if_missing=True)
+    data_volume = Volume.from_name(f"{volume_prefix}-data", create_if_missing=True)
     checkpoints_volume_name = (
         checkpoint.checkpoints_volume_name
         if checkpoint is not None and checkpoint.checkpoints_volume_name
-        else f"{app_name}-checkpoints"
+        else f"{volume_prefix}-checkpoints"
     )
     checkpoints_mount_path = (
         checkpoint.checkpoints_mount_path.rstrip("/") or "/"
