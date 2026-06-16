@@ -38,4 +38,15 @@ class Qwen3_Omni_30B(HFModelConfiguration):
         untie_embeddings_and_output_weights=True,
         use_rotary_position_embeddings=True,
         rotary_base=1000000,
+        # MoE (128 experts, top-8). Required on the CLI for expert parallelism —
+        # not auto-read from the HF config. Values from the omni config + vime's
+        # proven Qwen3-30B-A3B model script.
+        num_experts=128,
+        moe_ffn_hidden_size=768,
+        moe_router_topk=8,
+        moe_router_score_function="softmax",
+        moe_token_drop_policy="probs",
+        moe_router_dtype="fp32",
+        moe_grouped_gemm=True,
+        moe_permute_fusion=True,
     )
