@@ -526,7 +526,7 @@ def score_in_sandbox(
     if memory_arg is not None:
         resource_kwargs["memory"] = memory_arg
 
-    sb = modal.Sandbox.create(
+    sb = modal.Sandbox._experimental_create(
         "python",
         "-c",
         runner,
