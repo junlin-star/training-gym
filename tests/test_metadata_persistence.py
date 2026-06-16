@@ -70,6 +70,10 @@ def test_remote_save_from_unmounted_container():
         from modal_training_gym.common.run import TrainingRun
         from modal_training_gym.common.train_result import TrainResult
 
+        # Framework is incidental here — this probes volume/reload mechanics,
+        # which are framework-independent. Per-framework serialization is
+        # covered by the fast parametrized tests above, so we don't pay for N
+        # real Modal apps to re-check it.
         rid = "ci-remote-save-probe"  # fixed id → overwrites, no junk accrual
         TrainingRun(training_run_id=rid, framework=Framework.SLIME, config={}).save()
         TrainResult(app_name=rid, framework=Framework.SLIME, training_run_id=rid).save()
