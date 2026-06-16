@@ -638,6 +638,13 @@ class TrainConfig:
                     )
                 except BaseException:
                     if result_dict is None:
+                        # Re-read from the volume so we don't clobber
+                        # metadata the dashboard built up during training
+                        # (latest_rollout, framework_progress, etc.).
+                        try:
+                            run_record = TrainingRun.from_id(training_run_id)
+                        except (KeyError, Exception):
+                            pass
                         run_record.status = TrainingRunStatus.FAILED
                         finished_at = int(time.time())
                         run_record.ended_at = finished_at

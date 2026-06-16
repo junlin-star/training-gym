@@ -125,11 +125,11 @@ def ensure_creds_secret(interactive: bool = False) -> bool:
         return False
 
     try:
+        env_values = {"MODAL_TOKEN_ID": token_id, "MODAL_TOKEN_SECRET": token_secret}
         modal.Secret.objects.create(
-            MODAL_CREDS_SECRET_NAME,
-            {"MODAL_TOKEN_ID": token_id, "MODAL_TOKEN_SECRET": token_secret},
-            allow_existing=True,
+            MODAL_CREDS_SECRET_NAME, env_values, allow_existing=True
         )
+        modal.Secret.from_name(MODAL_CREDS_SECRET_NAME).update(env_values)
         print(f"Provisioned Modal Secret {MODAL_CREDS_SECRET_NAME!r} (from {source}).")
         return True
     except Exception as exc:
@@ -144,6 +144,55 @@ def ensure_creds_secret(interactive: bool = False) -> bool:
 # fires inside the deployed container.
 if _is_local():
     ensure_creds_secret(interactive=False)
+
+
+def _run_compact_sync() -> None:
+    """Rebuild all summary stores from canonical per-item metadata."""
+    from modal_training_gym.utils.metadata import vol_compact_summary_items, MetadataStore
+
+    for summary_store, item_store, id_key, sk, rev in [
+        (
+            MetadataStore.TRAINING_RUNS_SUMMARY,
+            MetadataStore.TRAINING_RUNS,
+            "training_run_id",
+            lambda item: (
+                int(item.get("created_at", 0) or 0),
+                str(item.get("training_run_id", "")),
+            ),
+            True,
+        ),
+        (
+            MetadataStore.TRAIN_RESULTS_SUMMARY,
+            MetadataStore.TRAIN_RESULTS,
+            "training_run_id",
+            lambda item: str(item.get("training_run_id", "")),
+            True,
+        ),
+        (
+            MetadataStore.DEPLOYMENTS_SUMMARY,
+            MetadataStore.DEPLOYMENTS,
+            "deployment_id",
+            lambda item: (
+                str(item.get("deployment_config", {}).get("app_name", "")),
+                str(item.get("deployment_id", "")),
+            ),
+            True,
+        ),
+    ]:
+        vol_compact_summary_items(
+            summary_store,
+            item_store,
+            item_id_key=id_key,
+            sort_key=sk,
+            reverse=rev,
+        )
+
+
+@app.function(schedule=modal.Cron("*/30 * * * *"))
+def compact_summaries() -> None:
+    """Scheduled compaction of summary stores (every 30 min)."""
+    _run_compact_sync()
+    print("Compaction complete.")
 
 
 @app.function(
@@ -168,7 +217,6 @@ def fastapi_app():
     from modal_training_gym.utils.metadata import (
         MetadataStore,
         vol_get,
-        vol_compact_summary_items,
         vol_get_summary_items,
         vol_put_summary_items,
     )
@@ -190,65 +238,6 @@ def fastapi_app():
         "evals": asyncio.Lock(),
         "deployments": asyncio.Lock(),
     }
-    _compact_lock = asyncio.Lock()
-
-    async def _run_compact() -> None:
-        """Compact all summary stores from canonical metadata."""
-        for summary_store, item_store, id_key, sk, rev in [
-            (
-                MetadataStore.TRAINING_RUNS_SUMMARY,
-                MetadataStore.TRAINING_RUNS,
-                "training_run_id",
-                lambda item: (
-                    int(item.get("created_at", 0) or 0),
-                    str(item.get("training_run_id", "")),
-                ),
-                True,
-            ),
-            (
-                MetadataStore.TRAIN_RESULTS_SUMMARY,
-                MetadataStore.TRAIN_RESULTS,
-                "training_run_id",
-                lambda item: str(item.get("training_run_id", "")),
-                True,
-            ),
-            (
-                MetadataStore.DEPLOYMENTS_SUMMARY,
-                MetadataStore.DEPLOYMENTS,
-                "deployment_id",
-                lambda item: (
-                    str(item.get("deployment_config", {}).get("app_name", "")),
-                    str(item.get("deployment_id", "")),
-                ),
-                True,
-            ),
-        ]:
-            await run_in_threadpool(
-                vol_compact_summary_items,
-                summary_store,
-                item_store,
-                item_id_key=id_key,
-                sort_key=sk,
-                reverse=rev,
-            )
-        for key in cache_entries:
-            cache_entries[key] = (0.0, [])
-
-    def _make_compact_task() -> Any:
-        """Return a BackgroundTask that compacts summaries, or None if already running."""
-        if _compact_lock.locked():
-            return None
-
-        async def _guarded_compact() -> None:
-            if _compact_lock.locked():
-                return
-            async with _compact_lock:
-                await _run_compact()
-
-        from starlette.background import BackgroundTask
-
-        return BackgroundTask(_guarded_compact)
-
     web.mount("/assets", StaticFiles(directory=f"{STATIC_DIR}/assets"), name="assets")
 
     async def get_cached_list(
@@ -526,7 +515,7 @@ def fastapi_app():
             data = await get_cached_list("runs", load_runs)
         except Exception:
             data = []
-        return JSONResponse(data, background=_make_compact_task())
+        return JSONResponse(data)
 
     @web.post("/api/framework-status")
     async def framework_status(
@@ -728,23 +717,19 @@ def fastapi_app():
                 ),
             )
 
-        token_id = os.environ.get("MODAL_TOKEN_ID")
-        token_secret = os.environ.get("MODAL_TOKEN_SECRET")
-        if not token_id or not token_secret:
-            raise HTTPException(
-                status_code=503,
-                detail=(
-                    f"Dashboard isn't configured with Modal credentials. "
-                    f"Run `training-gym setup` to populate the "
-                    f"'{MODAL_CREDS_SECRET_NAME}' Modal Secret."
-                ),
-            )
-
         search_lower = search.strip().lower() if search else ""
         rate_cap = max(0, int(max_lines_per_sec or 0))
 
         async def event_stream():
             try:
+                token_id = os.environ.get("MODAL_TOKEN_ID", "")
+                token_secret = os.environ.get("MODAL_TOKEN_SECRET", "")
+                if not token_id or not token_secret:
+                    yield (
+                        "event: error\n"
+                        f"data: {json.dumps({'error': 'No Modal credentials configured. Run training-gym setup.'})}\n\n"
+                    )
+                    return
                 client = await _Client.from_credentials(token_id, token_secret)
             except Exception as exc:
                 yield (
@@ -757,6 +742,8 @@ def fastapi_app():
             window_start = time.monotonic()
             window_emitted = 0
             window_dropped = 0
+            consecutive_errors = 0
+            max_consecutive_errors = 10
 
             def _drain_drop_event() -> str | None:
                 nonlocal window_dropped
@@ -779,6 +766,7 @@ def fastapi_app():
                         async for log_batch in client.stub.AppGetLogs.unary_stream(req):
                             if await request.is_disconnected():
                                 return
+                            consecutive_errors = 0
                             if log_batch.entry_id:
                                 last_entry_id = log_batch.entry_id
                             for log in log_batch.items:
@@ -820,14 +808,20 @@ def fastapi_app():
                     except asyncio.CancelledError:
                         return
                     except Exception as exc:
-                        # Long-poll EOF / transient network blips: notify
-                        # client, brief pause, reconnect.
+                        consecutive_errors += 1
+                        if consecutive_errors >= max_consecutive_errors:
+                            yield (
+                                "event: error\n"
+                                f"data: {json.dumps({'error': f'log stream failed after {consecutive_errors} retries: {exc!s}'})}\n\n"
+                            )
+                            return
+                        backoff = min(2 ** (consecutive_errors - 1), 10)
                         yield (
                             "event: reconnect\n"
                             f"data: {json.dumps({'reason': str(exc)})}\n\n"
                         )
                         try:
-                            await asyncio.sleep(1.0)
+                            await asyncio.sleep(backoff)
                         except asyncio.CancelledError:
                             return
             finally:
@@ -851,7 +845,7 @@ def fastapi_app():
             data = await get_cached_list("train_results", load_train_results)
         except Exception:
             data = []
-        return JSONResponse(data, background=_make_compact_task())
+        return JSONResponse(data)
 
     @web.get("/api/train-results/{training_run_id}")
     async def train_result(training_run_id: str):
@@ -897,15 +891,14 @@ def fastapi_app():
             data = await get_cached_list("deployments", load_deployments)
         except Exception:
             data = []
-        return JSONResponse(data, background=_make_compact_task())
+        return JSONResponse(data)
 
     # ── Compaction (on-demand repair) ─────────────────────────────────────
 
     @web.post("/api/compact")
     async def compact():
-        """Rebuild summary caches from canonical per-item metadata files."""
-        async with _compact_lock:
-            await _run_compact()
+        """Trigger an on-demand compaction (the scheduled cron is the primary path)."""
+        await run_in_threadpool(_run_compact_sync)
         return JSONResponse({"status": "compacted"})
 
     # ── SPA fallback ─────────────────────────────────────────────────────

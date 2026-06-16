@@ -86,6 +86,7 @@
             {progress}
             progressLabel={progressLabel(progress)}
             stageLabel={frameworkStatusLabel()}
+            active={getStatus(run).toLowerCase() === "running"}
           />
         </div>
       {/if}

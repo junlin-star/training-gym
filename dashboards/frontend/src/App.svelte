@@ -129,7 +129,8 @@
   }
 
   function showFrameworkStatus(run) {
-    return getTrainingRunStatus(run) === "running";
+    if (getTrainingRunStatus(run) === "running") return true;
+    return !!run.framework_status;
   }
 
   function modelName(run) {

@@ -614,12 +614,14 @@ def build_slime_app(
     checkpoints_volume = Volume.from_name(
         checkpoints_volume_name, create_if_missing=True
     )
+    metadata_volume = Volume.from_name("training-gym-metadata", create_if_missing=True)
     if checkpoint is not None and checkpoint.path and not model.model_path:
         model.model_path = checkpoint.path
     all_volumes: dict[str | PurePosixPath, Any] = {
         str(HF_CACHE_PATH): hf_cache_volume,
         str(DATA_PATH): data_volume,
         checkpoints_mount_path: checkpoints_volume,
+        "/metadata": metadata_volume,
     }
 
     # ── App ──────────────────────────────────────────────────────────────────
@@ -1223,6 +1225,12 @@ def build_slime_app(
                     "TRAINING_GYM_APP_NAME": app_name,
                     "TRAINING_GYM_TOTAL_STEPS": str(slime.num_rollout),
                     "TRAINING_GYM_RESPONSE_PARSER_PATH": _response_parser_path(model),
+                    "TRAINING_GYM_CAPTURE_TRACE": (
+                        "1" if getattr(slime, "capture_trace", False) else ""
+                    ),
+                    "TRAINING_GYM_TRACE_SAMPLE_LIMIT": str(
+                        getattr(slime, "trace_sample_limit", 16)
+                    ),
                     "SLIME_PHASE_REPORT_URL": phase_report_url,
                     **slime.environment,
                     "SLIME_PHASE_REPORT_TOKEN": framework_status_token,

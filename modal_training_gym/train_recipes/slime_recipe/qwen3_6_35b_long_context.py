@@ -83,6 +83,6 @@ class Qwen3_6_35b_Recipe_Long_Context(SlimeRecipe):
             "PYTHONPATH": "/root/Megatron-LM/",
             "CUDA_DEVICE_MAX_CONNECTIONS": "1",
             "NCCL_NVLS_ENABLE": "1",
-            "PYTORCH_CUDA_ALLOC_CONF": "max_split_size_mb:128",
+            "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
         }
     )

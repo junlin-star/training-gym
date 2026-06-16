@@ -196,6 +196,7 @@
                         progressLabel={progressLabel(progress)}
                         stageLabel={stageLabel}
                         compact
+                        active={status.toLowerCase() === "running"}
                       />
                     {:else}
                       <span class="stage-empty">—</span>

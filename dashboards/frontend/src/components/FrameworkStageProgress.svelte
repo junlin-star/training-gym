@@ -1,5 +1,5 @@
 <script>
-  let { progress = null, progressLabel = "", stageLabel = "", compact = false } = $props();
+  let { progress = null, progressLabel = "", stageLabel = "", compact = false, active = true } = $props();
 
   function progressPercent(value) {
     if (!value?.total) return 0;
@@ -17,6 +17,7 @@
     <span class="progress-track" aria-hidden="true">
       <span
         class="progress-fill"
+        class:progress-fill-done={!active}
         style={`width: ${progressPercent(progress)}%`}
       ></span>
     </span>
@@ -25,7 +26,7 @@
     <span class="progress-label">{progressLabel}</span>
   {/if}
   {#if stageLabel}
-    <span class="stage-label">{stageLabel}</span>
+    <span class="stage-label" class:stage-label-done={!active}>{stageLabel}</span>
   {/if}
 </div>
 
@@ -64,6 +65,10 @@
     background: var(--accent);
   }
 
+  .progress-fill-done {
+    background: var(--muted);
+  }
+
   .progress-label {
     color: var(--muted);
     font-size: 11px;
@@ -91,6 +96,14 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .stage-label-done {
+    animation: none;
+    color: var(--muted);
+    text-shadow: none;
+    opacity: 1;
+    filter: none;
   }
 
   @keyframes stage-label-flash {
