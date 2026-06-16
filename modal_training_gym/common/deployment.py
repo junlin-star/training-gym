@@ -163,18 +163,26 @@ class DeploymentConfig:
             strategy=strategy,
         )
 
-        if recipe.recipe_type == DeployRecipeType.SGLANG:
-            server = getattr(app, "SGLangEndpoint", None)
-            if server is None and hasattr(app, "registered_functions"):
-                server = app.registered_functions.get("SGLangEndpoint")
-            if server is None:
-                raise RuntimeError(
-                    f"Deployed {self.app_name!r} but could not resolve SGLang endpoint server handle."
-                )
-            urls = asyncio.run(server.get_urls())
-            url = next(iter(urls.values()), None) if urls else None
-        else:
-            url = app.serve.get_web_url()
+        # SGLang and vLLM both register their endpoint via
+        # ``@app._experimental_server`` — SGLang as ``SGLangEndpoint``, vLLM as
+        # ``Server`` — and both expose the Flash URLs through ``get_urls()``.
+        endpoint_name = (
+            "SGLangEndpoint"
+            if recipe.recipe_type == DeployRecipeType.SGLANG
+            else "Server"
+        )
+        server = getattr(app, endpoint_name, None)
+        if server is None and hasattr(app, "registered_classes"):
+            server = app.registered_classes.get(endpoint_name)
+        if server is None and hasattr(app, "registered_functions"):
+            server = app.registered_functions.get(endpoint_name)
+        if server is None:
+            raise RuntimeError(
+                f"Deployed {self.app_name!r} but could not resolve the "
+                f"{endpoint_name!r} server handle."
+            )
+        urls = asyncio.run(server.get_urls())
+        url = next(iter(urls.values()), None) if urls else None
         modal_app_id = app.app_id
         modal_app_url = modal_app_dashboard_url(modal_app_id)
         if not url:

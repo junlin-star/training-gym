@@ -1,10 +1,12 @@
 """vLLM serving helper — builds a Modal app that hosts a model via vLLM.
 
-Thin wrapper around the canonical
-[Modal vLLM inference example](https://modal.com/docs/examples/vllm_inference):
-one `@modal.web_server`-decorated function that runs `vllm serve` and
-exposes the OpenAI-compatible chat-completions API at
-`https://<workspace>--<app_name>-serve.modal.run/v1/chat/completions`.
+The model is served by ``Server``, a Modal *server* class registered with
+``@app._experimental_server`` (Modal's low-latency routing service for inference
+workloads) — the same mechanism the SGLang endpoint uses. Its ``@modal.enter()``
+launches ``vllm serve``; Modal proxies HTTP straight to the vLLM port and exposes
+the OpenAI-compatible chat-completions API, so there's no separate wrapper
+function. Serving via vLLM (rather than SGLang) keeps eval/serving on the same
+engine as a vime/vLLM rollout.
 
 `model_path` accepts either:
   - a **HuggingFace repo id** (e.g. `"Qwen/Qwen3-4B"`) — vLLM downloads
@@ -84,22 +86,20 @@ def build_vllm_serve_app(
     _extra = list(recipe.extra_vllm_args or [])
     _deployment_id = deployment_id
 
-    @app.cls(
+    @app._experimental_server(
         image=image,
         gpu=f"{gpu}:{n_gpu}",
         scaledown_window=10 * 60,
-        timeout=24 * 60 * 60,
+        startup_timeout=10 * 60,
         volumes=volumes,
         secrets=hf_secrets(),
         serialized=True,
         include_source=False,
-    )
-    @modal.experimental.http_server(
         port=vllm_port,
-        startup_timeout=10 * 60,
+        exit_grace_period=25,
         proxy_regions=["us-east"],
+        target_concurrency=32,
     )
-    @modal.concurrent(max_inputs=32)
     class Server:
         @modal.enter()
         def startup(self):
@@ -151,4 +151,8 @@ def build_vllm_serve_app(
         setattr(app, tag, fn)
     for tag, cls in app.registered_classes.items():
         setattr(app, tag, cls)
+    # `_experimental_server` returns the `_Server` handle (carries `get_urls()`);
+    # bind it under its class name so deployment URL resolution can reach it
+    # (mirrors the SGLang endpoint).
+    setattr(app, "Server", Server)
     return app
