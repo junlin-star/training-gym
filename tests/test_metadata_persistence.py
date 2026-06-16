@@ -19,14 +19,13 @@ from modal_training_gym.common.train_result import TrainResult
 from modal_training_gym.utils.metadata import MetadataStore
 
 
-def test_training_run_save_survives_unmounted_volume(fake_volume):
-    """TrainingRun.save() completes when reload() raises, and persists valid JSON."""
-    run_mod.TrainingRun(
-        training_run_id="t1", framework=Framework.SLIME, config={}
-    ).save()
+@pytest.mark.parametrize("fw", list(Framework))
+def test_training_run_save_survives_unmounted_volume(fake_volume, fw):
+    """TrainingRun.save() completes when reload() raises, for every framework."""
+    run_mod.TrainingRun(training_run_id="t1", framework=fw, config={}).save()
 
     blob = fake_volume.files[f"{MetadataStore.TRAINING_RUNS.value}/t1.json"]
-    assert json.loads(blob)["framework"] == "slime"
+    assert json.loads(blob)["framework"] == fw.value
 
 
 @pytest.mark.parametrize("fw", list(Framework))
