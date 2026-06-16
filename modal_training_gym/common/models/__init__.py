@@ -23,6 +23,7 @@ from .qwen3_6_27b import Qwen3_6_27B
 from .qwen3_6_35b import Qwen3_6_35B
 from .qwen3_asr_1_7b import Qwen3_ASR_1_7B
 from .qwen3_vl_4b import Qwen3_VL_4B
+from .qwen3_omni_30b import Qwen3_Omni_30B
 
 __all__ = [
     "HFModelConfiguration",
@@ -48,4 +49,5 @@ __all__ = [
     "Qwen3_6_35B",
     "Qwen3_ASR_1_7B",
     "Qwen3_VL_4B",
+    "Qwen3_Omni_30B",
 ]
