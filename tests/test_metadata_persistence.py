@@ -1,0 +1,84 @@
+"""Drive the real ``save()`` chain to completion without Modal or a GPU.
+
+``TrainingRun.save()`` and ``TrainResult.save()`` are exercised against an
+in-memory ``FakeVolume`` (see ``conftest.py``) so the full serialize-and-write
+path is covered in CI: the payload must stay JSON-serializable, and ``save()``
+must complete even when ``Volume.reload()`` is unavailable.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+
+import pytest
+
+from modal_training_gym.common import run as run_mod
+from modal_training_gym.common.framework import Framework
+from modal_training_gym.common.train_result import TrainResult
+from modal_training_gym.utils.metadata import MetadataStore
+
+
+@pytest.mark.parametrize("fw", list(Framework))
+def test_training_run_save_survives_unmounted_volume(fake_volume, fw):
+    """TrainingRun.save() completes when reload() raises, for every framework."""
+    run_mod.TrainingRun(training_run_id="t1", framework=fw, config={}).save()
+
+    blob = fake_volume.files[f"{MetadataStore.TRAINING_RUNS.value}/t1.json"]
+    assert json.loads(blob)["framework"] == fw.value
+
+
+@pytest.mark.parametrize("fw", list(Framework))
+def test_train_result_save_survives_unmounted_volume(fake_volume, fw):
+    """TrainResult.save() completes when reload() raises, for every framework."""
+    TrainResult(app_name="a", framework=fw, training_run_id="t2").save()
+
+    blob = fake_volume.files[f"{MetadataStore.TRAIN_RESULTS.value}/t2.json"]
+    assert json.loads(blob)["framework"] == fw.value
+
+
+@pytest.mark.parametrize("fw", list(Framework))
+def test_train_result_payload_is_json_serializable(fw):
+    payload = TrainResult(app_name="a", framework=fw, training_run_id="t")._to_dict()
+    assert json.loads(json.dumps(payload))["framework"] == fw.value
+
+
+@pytest.mark.skipif(
+    os.environ.get("RUN_MODAL_TESTS") != "1",
+    reason="hits Modal (no GPU); opt in with RUN_MODAL_TESTS=1",
+)
+def test_remote_save_from_unmounted_container():
+    """The faithful remote counterpart: run save() inside a real Modal container
+    that does *not* mount the metadata volume — the exact context where the
+    original training run crashed with `volume … not attached`. The fake-volume
+    tests simulate that; this proves it against real Modal Volume semantics
+    (reload unavailable, but the client-side write still lands).
+    """
+    import modal
+
+    image = (
+        modal.Image.debian_slim(python_version="3.12")
+        .pip_install("modal>=1.4.0", "pydantic")
+        .add_local_python_source("modal_training_gym")
+    )
+    app = modal.App("training-gym-metadata-save-probe")
+
+    # NB: deliberately no volumes= — this is the unmounted case.
+    @app.function(image=image, serialized=True)
+    def _save_probe() -> str:
+        from modal_training_gym.common.framework import Framework
+        from modal_training_gym.common.run import TrainingRun
+        from modal_training_gym.common.train_result import TrainResult
+
+        # Framework is incidental here — this probes volume/reload mechanics,
+        # which are framework-independent. Per-framework serialization is
+        # covered by the fast parametrized tests above, so we don't pay for N
+        # real Modal apps to re-check it.
+        rid = "ci-remote-save-probe"  # fixed id → overwrites, no junk accrual
+        TrainingRun(training_run_id=rid, framework=Framework.SLIME, config={}).save()
+        TrainResult(app_name=rid, framework=Framework.SLIME, training_run_id=rid).save()
+        return "ok"
+
+    with modal.enable_output():
+        with app.run():
+            assert _save_probe.remote() == "ok"

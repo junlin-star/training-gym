@@ -1242,7 +1242,7 @@ def build_slime_app(
 
             result_kwargs = {
                 "app_name": app_name,
-                "framework": "slime",
+                "framework": Framework.SLIME,
                 "training_run_id": training_run_id,
                 "checkpoint_dir": save_root,
                 "model_config": model,

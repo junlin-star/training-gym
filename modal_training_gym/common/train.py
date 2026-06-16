@@ -55,11 +55,30 @@ def _stop_app(app_id: str) -> None:
 
 def _merge_recipe(base: SlimeRecipe, overrides: SlimeRecipe) -> SlimeRecipe:
     base_fields = {f.name: getattr(base, f.name) for f in _dc.fields(base)}
+
+    # Fields that a recipe *subclass* declares in its own body are intentional
+    # config and must override the model preset even when they equal the
+    # framework base recipe's default (e.g. a long-context recipe pinning
+    # context_parallel_size=1, or disabling use_kl_loss). We collect those by
+    # walking the MRO from the concrete recipe down to — but not including — the
+    # framework's base recipe class (the immediate subclass of BaseTrainRecipe,
+    # e.g. SlimeRecipe / MilesConfig). For a plain base recipe (no subclass
+    # layer) this set is empty, so we fall back to "value differs from default"
+    # — which keeps an untouched recipe from clobbering the preset with bare
+    # defaults (e.g. a preset's n_samples_per_prompt=8 vs default 2).
+    declared: set[str] = set()
+    for cls in type(overrides).__mro__:
+        if cls is BaseTrainRecipe or BaseTrainRecipe in getattr(cls, "__bases__", ()):
+            break
+        declared |= set(getattr(cls, "__annotations__", {}))
+
     for f in _dc.fields(overrides):
         if f.name not in base_fields:
             continue
         user_val = getattr(overrides, f.name)
-        base_fields[f.name] = user_val
+        default_val = _field_default(f)
+        if f.name in declared or default_val is _dc.MISSING or user_val != default_val:
+            base_fields[f.name] = user_val
     return type(base)(**base_fields)
 
 
