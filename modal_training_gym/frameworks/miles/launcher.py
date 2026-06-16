@@ -536,7 +536,12 @@ def build_miles_app(
                     "actor_num_gpus_per_node": miles.actor_num_gpus_per_node,
                 },
                 "wandb": (
-                    {"project": miles.wandb.project, "group": miles.wandb.group}
+                    {
+                        "project": miles.wandb.project,
+                        "group": miles.wandb.group,
+                        "entity": wandb_entity,
+                        "run_id": wandb_run_id,
+                    }
                     if miles.wandb
                     else {}
                 ),

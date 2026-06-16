@@ -36,6 +36,15 @@ function extractConfigSummary(config) {
     safeStr(dataset.hf_repo) ||
     safeStr(dataset.prompt_data) ||
     safeStr(dataset.name);
+  const wandbProject = wandb.project || "";
+  const wandbEntity = wandb.entity || "";
+  const wandbRunId = wandb.run_id || "";
+  let wandb_url = null;
+  if (wandbProject && wandbEntity && wandbRunId) {
+    wandb_url = `https://wandb.ai/${wandbEntity}/${wandbProject}/runs/${wandbRunId}`;
+  } else if (wandbProject && wandbEntity) {
+    wandb_url = `https://wandb.ai/${wandbEntity}/${wandbProject}`;
+  }
   return {
     model_name: safeStr(model.model_name || ""),
     gpu_type: safeStr(compute.gpu_type || ""),
@@ -43,8 +52,9 @@ function extractConfigSummary(config) {
     actor_num_gpus_per_node: compute.actor_num_gpus_per_node || 0,
     lr: config.lr || 0,
     global_batch_size: config.global_batch_size || 0,
-    wandb_project: (wandb.project) || "",
+    wandb_project: wandbProject,
     wandb_group: (wandb.group) || "",
+    wandb_url,
     dataset_name: datasetName,
     dataset_prompt_data: safeStr(dataset.prompt_data || ""),
   };

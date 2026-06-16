@@ -1010,7 +1010,12 @@ def build_slime_app(
             "model": {"model_name": model.model_name} if model else {},
             "recipe": _serialize_slime_params(slime, dataset=dataset, model=model),
             "wandb": (
-                {"project": slime.wandb.project, "group": slime.wandb.group}
+                {
+                    "project": slime.wandb.project,
+                    "group": slime.wandb.group,
+                    "entity": wandb_entity,
+                    "run_id": wandb_run_id,
+                }
                 if slime.wandb
                 else {}
             ),
