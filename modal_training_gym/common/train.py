@@ -58,14 +58,17 @@ def _merge_recipe(base: SlimeRecipe, overrides: SlimeRecipe) -> SlimeRecipe:
 
     # Fields that a recipe *subclass* declares in its own body are intentional
     # config and must override the model preset even when they equal the
-    # SlimeRecipe default (e.g. a long-context recipe pinning
-    # context_parallel_size=1, or disabling use_kl_loss). For a plain SlimeRecipe
-    # (no subclass layer) this set is empty, so we fall back to "value differs
-    # from default" — which keeps an untouched recipe from clobbering the preset
-    # with bare defaults (e.g. a preset's n_samples_per_prompt=8 vs default 2).
+    # framework base recipe's default (e.g. a long-context recipe pinning
+    # context_parallel_size=1, or disabling use_kl_loss). We collect those by
+    # walking the MRO from the concrete recipe down to — but not including — the
+    # framework's base recipe class (the immediate subclass of BaseTrainRecipe,
+    # e.g. SlimeRecipe / MilesConfig). For a plain base recipe (no subclass
+    # layer) this set is empty, so we fall back to "value differs from default"
+    # — which keeps an untouched recipe from clobbering the preset with bare
+    # defaults (e.g. a preset's n_samples_per_prompt=8 vs default 2).
     declared: set[str] = set()
     for cls in type(overrides).__mro__:
-        if cls is SlimeRecipe:
+        if cls is BaseTrainRecipe or BaseTrainRecipe in getattr(cls, "__bases__", ()):
             break
         declared |= set(getattr(cls, "__annotations__", {}))
 
