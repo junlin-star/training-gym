@@ -201,7 +201,7 @@ class SandboxEnvironmentPool:
         """Create a long-lived sandbox from ``image`` (defaults to :meth:`build_image`)."""
         import modal
 
-        return modal.Sandbox.create(
+        return modal.Sandbox._experimental_create(
             *command,
             image=image if image is not None else self.build_image(),
             app=self.app_handle(),

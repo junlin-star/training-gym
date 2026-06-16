@@ -505,7 +505,7 @@ def build_task_snapshots(
     import modal
 
     app = modal.App.lookup(config.sandbox_app, create_if_missing=True)
-    sandbox = modal.Sandbox.create(
+    sandbox = modal.Sandbox._experimental_create(
         "sleep", "infinity", image=build_env_image(config), app=app, timeout=60 * 60
     )
     snapshots = DirectorySnapshotLibrary(config.snapshot_catalog, config.snapshot_root)
