@@ -18,15 +18,18 @@ from modal_training_gym.common.status import (
     FrameworkStatus,
     MilesStatus,
     SlimeStatus,
+    VimeStatus,
 )
 from modal_training_gym.common.train_result import TrainResult
 from modal_training_gym.common.modal_urls import modal_app_dashboard_url
 from modal_training_gym.utils.metadata import MetadataStore, vol_put
 from modal_training_gym.frameworks.miles import build_miles_app
 from modal_training_gym.frameworks.slime import build_slime_app
+from modal_training_gym.frameworks.vime import build_vime_app
 from modal_training_gym.train_recipes.base import BaseTrainRecipe, RecipeType
 from modal_training_gym.train_recipes.miles_recipe import MilesConfig
 from modal_training_gym.train_recipes.slime_recipe import SlimeRecipe
+from modal_training_gym.train_recipes.vime_recipe import VimeConfig
 from pydantic import ConfigDict
 from pydantic.dataclasses import dataclass
 
@@ -402,6 +405,18 @@ class TrainConfig:
                 checkpoint=self.checkpoint,
                 name=self.training_run_id,
             )
+        if recipe_type == RecipeType.VIME:
+            if not isinstance(self.recipe, VimeConfig):
+                raise TypeError(
+                    f"Recipe type {recipe_type} requires VimeConfig, got {type(self.recipe).__name__}"
+                )
+            return build_vime_app(
+                training_run_id=self.training_run_id,
+                vime=cast(VimeConfig, self.recipe),
+                model=self.model,
+                dataset=self.dataset,
+                checkpoint=self.checkpoint,
+            )
         raise ValueError(f"Unknown recipe type: {recipe_type}")
 
     def recipe_param_summary(self) -> dict[str, dict[str, Any]]:
@@ -422,6 +437,8 @@ class TrainConfig:
     def _framework(self) -> Framework:
         if isinstance(self.recipe, SlimeRecipe):
             return Framework.SLIME
+        if isinstance(self.recipe, VimeConfig):
+            return Framework.VIME
         if isinstance(self.recipe, MilesConfig):
             return Framework.MILES
         raise ValueError(f"Unknown recipe type: {type(self.recipe).__name__}")
@@ -429,6 +446,8 @@ class TrainConfig:
     def _initializing_status(self) -> FrameworkStatus:
         if isinstance(self.recipe, SlimeRecipe):
             return SlimeStatus.INITIALIZING
+        if isinstance(self.recipe, VimeConfig):
+            return VimeStatus.INITIALIZING
         if isinstance(self.recipe, MilesConfig):
             return MilesStatus.INITIALIZING
         raise ValueError(f"Unknown recipe type: {type(self.recipe).__name__}")

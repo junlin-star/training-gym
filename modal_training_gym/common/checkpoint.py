@@ -34,21 +34,27 @@ class Checkpoint:
     app_name: str = ""
     checkpoints_volume_name: str = ""
     checkpoints_mount_path: str = ""
+    # Framework that produced the checkpoint — set when it is listed, so
+    # downstream conversion knows which image can read it without re-deriving it.
+    framework: Framework | None = None
 
 
 CheckpointConfig = Checkpoint
 
+# slime, miles, and vime all write the same Megatron torch_dist checkpoint
+# layout (``iter_<step>`` directories, optionally with a sibling ``_hf`` export),
+# so they share one listing routine.
+_MEGATRON_FRAMEWORKS = frozenset({Framework.SLIME, Framework.MILES, Framework.VIME})
+
 
 def list_checkpoints(training_run_id: str) -> list[Checkpoint]:
     result = TrainResult.from_training_run_id(training_run_id)
-    if result.framework in {Framework.SLIME, Framework.SLIME.value}:
-        return _list_checkpoints_for_slime(result)
-    if result.framework in {Framework.MILES, Framework.MILES.value}:
-        return _list_checkpoints_for_slime(result)
-    raise ValueError(f"Unsupported framework: {result.framework}")
+    if result.framework in _MEGATRON_FRAMEWORKS:
+        return _list_megatron_checkpoints(result)
+    raise ValueError(f"Unsupported framework: {result.framework!r}")
 
 
-def _get_slime_checkpoint_prefix() -> str:
+def _get_checkpoint_prefix() -> str:
     return "iter_"
 
 
@@ -68,7 +74,7 @@ def _to_volume_path(checkpoint_dir: str, checkpoints_mount_path: str) -> str:
     return checkpoint_dir_norm.lstrip("/")
 
 
-def _list_checkpoints_for_slime(train_result: "TrainResult") -> list[Checkpoint]:
+def _list_megatron_checkpoints(train_result: "TrainResult") -> list[Checkpoint]:
     checkpoint_dir = train_result.checkpoint_dir.rstrip("/")
     if not checkpoint_dir:
         return []
@@ -84,7 +90,7 @@ def _list_checkpoints_for_slime(train_result: "TrainResult") -> list[Checkpoint]
     )
     checkpoints_mount_path = train_result.checkpoints_mount_path or "/checkpoints"
     volume = Volume.from_name(checkpoints_volume_name, create_if_missing=True)
-    prefix = _get_slime_checkpoint_prefix()
+    prefix = _get_checkpoint_prefix()
     rel = _to_volume_path(checkpoint_dir, checkpoints_mount_path)
 
     try:
@@ -113,6 +119,7 @@ def _list_checkpoints_for_slime(train_result: "TrainResult") -> list[Checkpoint]
                 app_name=train_result.app_name,
                 checkpoints_volume_name=checkpoints_volume_name,
                 checkpoints_mount_path=checkpoints_mount_path,
+                framework=train_result.framework,
             )
         ]
 
@@ -147,9 +154,28 @@ def _list_checkpoints_for_slime(train_result: "TrainResult") -> list[Checkpoint]
                 app_name=train_result.app_name,
                 checkpoints_volume_name=checkpoints_volume_name,
                 checkpoints_mount_path=checkpoints_mount_path,
+                framework=train_result.framework,
             )
         )
     return checkpoints
+
+
+def _resolve_checkpoint_framework(checkpoint: Checkpoint) -> Framework | None:
+    """Framework that produced ``checkpoint``.
+
+    Prefers the value carried on the checkpoint (set when it was listed); for a
+    checkpoint built without one, falls back to the TrainResult. Returns ``None``
+    when it can't be determined — callers treat that as the slime/megatron
+    default converter.
+    """
+    if checkpoint.framework is not None:
+        return checkpoint.framework
+    if not checkpoint.training_run_id:
+        return None
+    try:
+        return TrainResult.from_training_run_id(checkpoint.training_run_id).framework
+    except (KeyError, FileNotFoundError):
+        return None
 
 
 def _conversion_gpu_spec(
@@ -176,6 +202,38 @@ def _conversion_gpu_spec(
         gpu = recipe.gpu
         n_gpu = recipe.n_gpu or 1
     return f"{gpu}:{n_gpu}" if n_gpu > 1 else str(gpu)
+
+
+def _converter_spec(framework: Framework | None):
+    """``(base_image, convert_script, convert_pythonpath)`` for the converter that
+    can read ``framework``'s checkpoint — each converts in the image that produced
+    it (a vime checkpoint pickles references to ``vllm``, absent from the slime
+    image)."""
+    if framework not in _MEGATRON_FRAMEWORKS:
+        raise ValueError(f"Cannot convert checkpoint for framework {framework!r}")
+    if framework is Framework.VIME:
+        from modal_training_gym.frameworks.vime.launcher import (
+            VIME_ROOT,
+            _build_vime_base_image,
+        )
+        from modal_training_gym.train_recipes.vime_recipe import VimeConfig
+
+        # vime's converter is a loose script, so vime + Megatron-LM must be on
+        # PYTHONPATH for its imports.
+        return (
+            _build_vime_base_image(VimeConfig()),
+            f"{VIME_ROOT}/tools/convert_torch_dist_to_hf.py",
+            f"{VIME_ROOT}:/root/Megatron-LM/",
+        )
+    if framework in (Framework.SLIME, Framework.MILES):
+        # slime + miles share the slime converter (an installed module, resolved
+        # by name inside the function).
+        from modal_training_gym.frameworks.slime.launcher import (
+            _build_slime_base_image,
+        )
+
+        return _build_slime_base_image(), "", ""
+    raise AssertionError(f"unhandled framework {framework!r}")  # _MEGATRON guards above
 
 
 def convert_checkpoint_to_hf(
@@ -205,11 +263,11 @@ def convert_checkpoint_to_hf(
         create_if_missing=True,
     )
     from modal_training_gym.common import hf_secrets
-    from modal_training_gym.frameworks.slime.launcher import _build_slime_base_image
 
-    image = _build_slime_base_image().add_local_python_source(
-        "modal_training_gym", copy=True
+    base_image, convert_script, convert_pythonpath = _converter_spec(
+        _resolve_checkpoint_framework(checkpoint)
     )
+    image = base_image.add_local_python_source("modal_training_gym", copy=True)
     conversion_app = App("training-gym-checkpoint-convert")
     gpu_spec = _conversion_gpu_spec(checkpoint, recipe)
 
@@ -229,6 +287,8 @@ def convert_checkpoint_to_hf(
         input_dir: str,
         output_dir: str,
         model_ref: str,
+        convert_script: str,
+        convert_pythonpath: str,
     ) -> str:
         import importlib.util
         import shlex
@@ -244,14 +304,23 @@ def convert_checkpoint_to_hf(
         else:
             hf_path = snapshot_download(model_ref, local_files_only=True)
 
-        spec = importlib.util.find_spec(
-            "modal_training_gym.frameworks.slime.modal_helpers.convert_torch_dist_to_hf"
-        )
-        convert_script = spec.origin if spec is not None else None
         if not convert_script:
-            raise RuntimeError(
-                "modal_training_gym.frameworks.slime.modal_helpers.convert_torch_dist_to_hf not found"
+            spec = importlib.util.find_spec(
+                "modal_training_gym.frameworks.slime.modal_helpers.convert_torch_dist_to_hf"
             )
+            if spec is None or not spec.origin:
+                raise RuntimeError(
+                    "modal_training_gym.frameworks.slime.modal_helpers.convert_torch_dist_to_hf not found"
+                )
+            convert_script = spec.origin
+
+        env = dict(os.environ)
+        if convert_pythonpath:
+            existing = env.get("PYTHONPATH", "")
+            env["PYTHONPATH"] = (
+                f"{convert_pythonpath}:{existing}" if existing else convert_pythonpath
+            )
+
         cmd = (
             f"python {convert_script} "
             f"--input-dir {shlex.quote(input_dir)} "
@@ -260,7 +329,7 @@ def convert_checkpoint_to_hf(
             f"--force"
         )
         print(f"Converting checkpoint for serving: {cmd}")
-        subprocess.run(["bash", "-c", cmd], check=True)
+        subprocess.run(["bash", "-c", cmd], check=True, env=env)
         checkpoints_volume.commit()
         return output_dir
 
@@ -271,6 +340,8 @@ def convert_checkpoint_to_hf(
                 input_dir=checkpoint.path,
                 output_dir=output_path,
                 model_ref=model_ref,
+                convert_script=convert_script,
+                convert_pythonpath=convert_pythonpath,
             )
 
     return Checkpoint(
