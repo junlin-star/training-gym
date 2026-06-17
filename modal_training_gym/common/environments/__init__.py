@@ -29,6 +29,7 @@ from modal_training_gym.common.environments.toolathlon import (
     get_env_pool,
     prune_prefix,
     render_tool_catalog,
+    tool_schemas_to_openai,
 )
 
 __all__ = [
@@ -59,4 +60,5 @@ __all__ = [
     "prune_prefix",
     "render_tool_catalog",
     "default_system_prompt",
+    "tool_schemas_to_openai",
 ]
