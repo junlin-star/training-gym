@@ -34,7 +34,7 @@ class Qwen3_6_35b_Recipe_Long_Context(SlimeRecipe):
     num_rollout: int = 1
     rollout_batch_size: int = 16
     rollout_num_gpus_per_engine: int = 4
-    rollout_max_response_len: int = 32768
+    rollout_max_response_len: int = 8192
     rollout_temperature: float = 1.0
     global_batch_size: int = 128
     sglang_mem_fraction_static: float = 0.75

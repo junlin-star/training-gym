@@ -407,6 +407,28 @@ def _extract_trace(sample: Any) -> Any:
     return raw
 
 
+def _extract_audio_from_prompt(prompt: Any) -> str | None:
+    """Pull a browser-playable audio data-URI out of a conversation-list prompt.
+
+    Multimodal datasets keep audio as ``{"type": "audio", "audio": "<data-uri>"}``
+    inside message content lists.  Returns ``None`` for plain-text prompts.
+    """
+    if not isinstance(prompt, list):
+        return None
+    for msg in prompt:
+        content = msg.get("content") if isinstance(msg, dict) else None
+        if not isinstance(content, list):
+            continue
+        for item in content:
+            if isinstance(item, dict) and (
+                item.get("type") == "audio" or "audio" in item
+            ):
+                ref = item.get("audio") or item.get("audio_url")
+                if isinstance(ref, str) and ref:
+                    return ref
+    return None
+
+
 def _sample_to_dict(
     sample: Any, parser: Any = None, *, include_trace: bool = False
 ) -> dict[str, Any]:
@@ -430,6 +452,10 @@ def _sample_to_dict(
         value = get(key) if attrs is not None else get(key, None)
         if value is not None:
             metadata[key] = value
+
+    if audio_uri := _extract_audio_from_prompt(prompt):
+        metadata["_metadata_type"] = "audio"
+        metadata["audio"] = audio_uri
 
     response_text = _coerce_text(response)
     out: dict[str, Any] = {
