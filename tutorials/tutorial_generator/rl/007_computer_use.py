@@ -86,7 +86,6 @@ def _prereqs():
 @code
 def _imports():
     import re
-    from typing import Any
 
     from modal_training_gym import (
         DeploymentConfig,
@@ -124,10 +123,8 @@ def _dataset_intro():
 
 @code
 def _dataset():
-    # One "<image>" placeholder per image: slime's _build_messages splits the
-    # prompt on "<image>" to interleave the image column, and asserts the count
-    # matches (one screenshot here). apply_chat_template then renders it into the
-    # Qwen3-VL vision tokens.
+    # One "<image>" placeholder per screenshot — slime interleaves the image
+    # column at that marker before the Qwen3-VL processor tokenizes the prompt.
     GROUNDING_PROMPT = (
         "<image>\n"
         "You are a GUI agent. Given the screenshot, click on the element "
@@ -143,21 +140,22 @@ def _dataset():
         """GUI grounding dataset from ScreenSpot."""
 
         modality = "image"
-        hf_repo: str = "rootsautomation/ScreenSpot"
-        hf_split: str = "test"
-        n_rows: int = 800
-        row_offset: int = 0
-        always_prepare: bool = True
-        # True so slime renders the prompt + image into a single chat-templated
-        # string (with vision tokens) before the Qwen3-VL processor tokenizes it.
-        # With False the rollout hands the processor a raw message list and crashes
-        # ('dict' object has no attribute 'replace').
-        apply_chat_template: bool = True
+        hf_repo = "rootsautomation/ScreenSpot"
+        hf_split = "test"
+        n_rows = 800
+        row_offset = 0
+        always_prepare = True
+        # Collapse prompt + image into a single chat-templated string so the
+        # Qwen3-VL processor tokenizes it correctly (raw message lists crash).
+        apply_chat_template = True
 
         def __init__(self, **kwargs):
             super().__init__(rows=[], **kwargs)
 
         def _build_rows(self) -> list[dict]:
+            import base64
+            import io
+
             from datasets import load_dataset
 
             ds = load_dataset(self.hf_repo, split=self.hf_split)
@@ -165,14 +163,8 @@ def _dataset():
             stop = min(start + self.n_rows, len(ds))
             rows = []
             for row in ds.select(range(start, stop)):
-                # Keep the full box: a click succeeds anywhere inside the element,
-                # and the reward scales its tolerance to the element's own size.
                 left, top, right, bottom = row["bbox"]
                 instruction = row["instruction"]
-
-                # Convert PIL image to a data URI for the multimodal pipeline
-                import base64
-                import io
 
                 buf = io.BytesIO()
                 row["image"].save(buf, format="PNG")
@@ -199,8 +191,8 @@ def _dataset():
             rows = self._build_rows()
             self._write_jsonl(rows, path)
             if eval_paths:
-                for ep in eval_paths.values():
-                    self._write_jsonl(rows, ep)
+                for eval_path in eval_paths.values():
+                    self._write_jsonl(rows, eval_path)
 
 
 @code
@@ -326,8 +318,6 @@ def _eval_helpers():
         label = example.get("label", "")
         images = example.get("images", [])
 
-        # Pass the screenshot through — a text-only request would grade the model
-        # without ever showing it the GUI.
         response = deployment.generate(prompt, images=images, ensure_ready=False)
 
         pred = _parse_coordinates(response)
@@ -339,8 +329,6 @@ def _eval_helpers():
             outside = _distance_outside_box(pred[0], pred[1], box)
             inside = outside == 0.0
 
-        # A "hit" is a real click success: the predicted point lands inside the
-        # element's bounding box.
         return EvalRowResult(
             score=1.0 if inside else 0.0,
             response=response,
