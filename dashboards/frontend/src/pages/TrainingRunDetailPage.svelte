@@ -1,5 +1,5 @@
 <script>
-  import { ArrowLeft, ChevronLeft, ChevronRight, ExternalLink, Minimize2, X } from "lucide-svelte";
+  import { ArrowLeft, ChevronLeft, ChevronRight, Download, ExternalLink, Minimize2, X } from "lucide-svelte";
   import Tabs from "../components/Tabs.svelte";
   import RunSummary from "../components/RunSummary.svelte";
   import StatusPill from "../components/StatusPill.svelte";
@@ -132,6 +132,51 @@
       e.preventDefault();
       stepSample(1);
     }
+  }
+
+  function sampleToPayload(s) {
+    return {
+      score: s.score,
+      prompt: s.prompt || null,
+      response: s.response || null,
+      thinking: s.thinking || null,
+      raw_response: s.raw_response || null,
+      raw_prompt: s.raw_prompt || null,
+      trace: s.trace || null,
+      metadata: s.metadata || null,
+    };
+  }
+
+  function downloadSampleTrajectory() {
+    if (!activeSample) return;
+    const payload = sampleToPayload(activeSample.sample);
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    const rollout = expandedRolloutId ?? 0;
+    a.download = `trajectory_r${rollout}_s${activeSample.pos}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function downloadAllTrajectories() {
+    if (!expandedRollout?.samples?.length) return;
+    const rollout = expandedRolloutId ?? 0;
+    const payload = {
+      training_run_id: runId,
+      rollout_id: rollout,
+      total: expandedRollout.samples.length,
+      mean: expandedRollout.samples.reduce((a, s) => a + (s.score || 0), 0) / expandedRollout.samples.length,
+      samples: expandedRollout.samples.map(sampleToPayload),
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `rollout_${runId}_r${rollout}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
   }
 
   async function loadRollouts(signal) {
@@ -724,6 +769,16 @@
                         {/if}
                       {/if}
                       <div class="dist">
+                        <div class="dist-toolbar">
+                          <button
+                            class="download-all-btn"
+                            onclick={downloadAllTrajectories}
+                            title="Download all samples as JSON"
+                          >
+                            <Download size={13} />
+                            Download all ({sampleDist.total} samples)
+                          </button>
+                        </div>
                         <div
                           class="dist-bars"
                           role="group"
@@ -779,6 +834,14 @@
                               <span class="rollout-sample-score">
                                 reward {formatMean(activeSample.sample.score)}
                               </span>
+                              <button
+                                class="sample-nav-btn"
+                                onclick={downloadSampleTrajectory}
+                                aria-label="Download trajectory JSON"
+                                title="Download trajectory"
+                              >
+                                <Download size={14} />
+                              </button>
                               <button
                                 class="sample-nav-btn"
                                 onclick={closeBucket}
@@ -1217,6 +1280,30 @@
   /* ── Per-step sample score distribution ──────────────────────────────── */
   .dist {
     margin-bottom: 16px;
+  }
+
+  .dist-toolbar {
+    display: flex;
+    justify-content: flex-end;
+    margin-bottom: 6px;
+  }
+
+  .download-all-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    background: none;
+    border: 1px solid var(--border, #2f2f2f);
+    border-radius: 4px;
+    color: var(--muted);
+    font-size: 11px;
+    padding: 3px 8px;
+    cursor: pointer;
+  }
+
+  .download-all-btn:hover {
+    color: var(--text);
+    border-color: var(--border-strong, #4a4a4a);
   }
 
   .dist-bars {
