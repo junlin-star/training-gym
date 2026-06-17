@@ -763,17 +763,30 @@ class ToolathlonTrajectoryDataset(DatasetConfig):
 
 # ── Prompt-prefix reconstruction ────────────────────────────────────────────
 
-DEFAULT_SYSTEM_PROMPT_TEMPLATE = (
-    "You are a tool-using agent completing a task against real tools. Work one step at a time. "
-    "First, briefly explain your plan for this step in 1-3 sentences of plain prose. Then end "
-    "your reply with EXACTLY ONE JSON object and nothing after it:\n"
-    '{{"name": "<tool_name>", "arguments": {{<args>}}}}\n'
-    "Rules: keep the plan short (no <think> blocks, no step-by-step essays); use only the tools "
-    "listed below (a `*` marks a required argument); use the exact tool names; pass file paths "
-    "as given in the task; do NOT wrap the JSON in markdown or add text after it; call "
-    "`local-claim_done` when the task is complete.\n\n"
-    "## Available tools\n{catalog}"
-)
+DEFAULT_SYSTEM_PROMPT = """\
+You are a tool-using agent completing a task against real tools. Work one step at a time.
+
+Rules:
+- Make EXACTLY ONE tool call per turn. Emit only the tool call — no extra prose, narration, or markdown fences around it.
+- Use only the tools provided to you, with their exact names. Do not invent tools, arguments, or file paths.
+- Pass file paths exactly as given in the task; inspect files (list/read) before editing or overwriting them.
+- After each tool result, check whether it succeeded before continuing; do not blindly repeat a failed call with the same arguments.
+- Call `local-claim_done` only once the task's success condition is actually satisfied.
+
+Emit every tool call in exactly this format — a single <function> block wrapped in <emoji>, with one <parameter> block per argument. For example, a real call that writes a JSON file (content abbreviated with … here) looks like:
+
+<emoji>
+<function=filesystem-write_file>
+<parameter=path>
+train-ticket-plan.json
+</parameter>
+<parameter=content>
+{"thursday": {"train number": "G385", "departure station": "Beijing South", "arrival station": "Qufu East", …}}
+</parameter>
+</function>
+</emoji>
+
+Use the actual tool name, parameters, and full (untruncated) values required by your task; the call above is only an illustration of the wire format."""
 
 
 def render_tool_catalog(tool_schemas: dict, desc_chars: int = 160) -> str:
@@ -804,9 +817,39 @@ def render_tool_catalog(tool_schemas: dict, desc_chars: int = 160) -> str:
 
 
 def default_system_prompt(tool_schemas: dict) -> str:
-    return DEFAULT_SYSTEM_PROMPT_TEMPLATE.format(
-        catalog=render_tool_catalog(tool_schemas)
-    )
+    """Behavioral rules only — the tool catalog travels via the chat template's
+    ``tools=`` parameter (see :func:`tool_schemas_to_openai`), not prompt text."""
+    return DEFAULT_SYSTEM_PROMPT
+
+
+def tool_schemas_to_openai(tool_schemas: dict) -> list[dict]:
+    """Convert the dataset's ``{name: {description, parameters}}`` map into the
+    OpenAI/HF ``tools=`` list.
+
+    Pass the result to ``tokenizer.apply_chat_template(..., tools=...)`` (training
+    rollouts) or as the ``tools`` field of a chat-completions request (eval), so the
+    model sees the catalog in its NATIVE tool-calling format instead of a hand-rendered
+    text catalog, and emits calls in the wire format its template was trained on.
+    """
+    tools = []
+    for name in sorted(tool_schemas or {}):
+        spec = tool_schemas[name]
+        # tolerate both {description, parameters} and bare parameters (older cached rows)
+        if isinstance(spec, dict) and ("parameters" in spec or "description" in spec):
+            desc, params = spec.get("description", ""), spec.get("parameters", {})
+        else:
+            desc, params = "", spec
+        tools.append(
+            {
+                "type": "function",
+                "function": {
+                    "name": name,
+                    "description": desc,
+                    "parameters": params or {"type": "object", "properties": {}},
+                },
+            }
+        )
+    return tools
 
 
 def build_prefix_messages(
@@ -818,9 +861,14 @@ def build_prefix_messages(
 ) -> list[dict]:
     """Rebuild the step-K prompt prefix from the compact trajectory in the dataset ``label``.
 
-    system (with the tool catalog) + task request + interleaved [assistant(golden call_i),
-    user(<observation>obs_i)] for i in 0..k-1. We keep only the structured tool calls (no expert prose)
-    and truncate each observation to ``obs_limit`` — matching how the prompt was constructed.
+    system + task request + interleaved [assistant(golden call_i as a native ``tool_calls``
+    entry), tool(obs_i)] for i in 0..k-1. Golden calls are structured ``tool_calls`` (not
+    JSON text) so the chat template renders them in the model's native tool-call wire
+    format — the same format the model is post-trained to emit — and observations are
+    ``role: "tool"`` turns. Render with ``apply_chat_template(msgs,
+    tools=tool_schemas_to_openai(label["tool_schemas"]), ...)`` (or pass both straight to a
+    chat-completions request). We keep only the structured tool calls (no expert prose) and
+    truncate each observation to ``obs_limit`` — matching how the prompt was constructed.
     """
     golden = label.get("golden_calls", [])
     obs = label.get("observations", [])
@@ -829,12 +877,29 @@ def build_prefix_messages(
         {"role": "user", "content": label.get("task_request", "")},
     ]
     for i in range(min(k, len(golden))):
-        msgs.append({"role": "assistant", "content": json.dumps(golden[i])})
+        call = golden[i] or {}
+        msgs.append(
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": f"call_{i}",
+                        "type": "function",
+                        "function": {
+                            "name": call.get("name", ""),
+                            "arguments": call.get("arguments") or {},
+                        },
+                    }
+                ],
+            }
+        )
         if i < len(obs):
             msgs.append(
                 {
-                    "role": "user",
-                    "content": f"<observation>{str(obs[i])[:obs_limit]}</observation>",
+                    "role": "tool",
+                    "tool_call_id": f"call_{i}",
+                    "content": str(obs[i])[:obs_limit],
                 }
             )
     return msgs
@@ -870,7 +935,13 @@ def prune_prefix(
         def count_tokens(s: str) -> int:  # noqa: E306
             return int(len(str(s)) / 3.5)
 
-    sizes = [count_tokens(m.get("content", "")) for m in messages]
+    def _msg_text(m: dict) -> str:
+        text = str(m.get("content", "") or "")
+        for tc in m.get("tool_calls") or []:
+            text += json.dumps(tc.get("function", {}))
+        return text
+
+    sizes = [count_tokens(_msg_text(m)) for m in messages]
     if sum(sizes) <= budget:
         return messages
 
@@ -884,13 +955,34 @@ def prune_prefix(
     old = list(range(head, tail_start))
 
     def _is_obs(m):
-        return m.get("role") == "user" and str(m.get("content", "")).startswith(
-            "<observation>"
+        return m.get("role") == "tool" or (
+            m.get("role") == "user"
+            and str(m.get("content", "")).startswith("<observation>")
+        )
+
+    def _truncate_assistant(m: dict) -> dict:
+        """Shrink an old tool call to its head: name + the first ``old_call_chars`` of args."""
+        if m.get("tool_calls"):
+            calls = []
+            for tc in m["tool_calls"]:
+                fn = dict(tc.get("function", {}))
+                args = fn.get("arguments", {})
+                blob = args if isinstance(args, str) else json.dumps(args)
+                if len(blob) > old_call_chars:
+                    # truncated args are no longer valid JSON; keep them as a string trace
+                    fn["arguments"] = blob[:old_call_chars] + " …"
+                calls.append({**tc, "function": fn})
+            return {**m, "content": "", "tool_calls": calls}
+        c = str(m.get("content", ""))
+        return (
+            {**m, "content": c[:old_call_chars] + " …"}
+            if len(c) > old_call_chars
+            else m
         )
 
     cur = sum(sizes)
     to_drop: set[int] = set()
-    truncated: dict[int, str] = {}
+    truncated: dict[int, dict] = {}
 
     # Tier 1: drop old observations (oldest first).
     for i in old:
@@ -905,18 +997,16 @@ def prune_prefix(
             break
         if i in to_drop or messages[i].get("role") != "assistant":
             continue
-        c = str(messages[i].get("content", ""))
-        if len(c) > old_call_chars:
-            new = c[:old_call_chars] + " …"
-            cur -= sizes[i] - count_tokens(new)
-            truncated[i] = new
+        new = _truncate_assistant(messages[i])
+        cur -= sizes[i] - count_tokens(_msg_text(new))
+        truncated[i] = new
     # Tier 3 (last resort): drop old tool calls entirely (oldest first).
     for i in old:
         if cur <= budget:
             break
         if i in to_drop or messages[i].get("role") != "assistant":
             continue
-        cur -= count_tokens(truncated[i]) if i in truncated else sizes[i]
+        cur -= count_tokens(_msg_text(truncated[i])) if i in truncated else sizes[i]
         to_drop.add(i)
 
     out = []
@@ -924,6 +1014,6 @@ def prune_prefix(
         if i in to_drop:
             continue
         if i in truncated:
-            msg = {**msg, "content": truncated[i]}
+            msg = truncated[i]
         out.append(msg)
     return out
