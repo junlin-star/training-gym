@@ -64,9 +64,7 @@ def main() -> None:
             count=1,
         )
         if n != 1:
-            print(
-                "compat: WARNING - parse_args anchor changed; skipping fill-force"
-            )
+            print("compat: WARNING - parse_args anchor changed; skipping fill-force")
         else:
             src = new_src
             changed = True
