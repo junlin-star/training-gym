@@ -1,17 +1,8 @@
-"""Install a process-wide base64 log-eliding hook via a site ``.pth`` file.
+"""Elide base64 blobs (audio/image data-URIs) from slime's logs.
 
-slime logs the full rollout prompt (e.g. ``sglang_rollout.py``'s
-``Finish rollout: [...]``), and for multimodal runs the prompt carries a
-``data:...;base64,<...>`` audio data-URI — megabytes of base64 per line.
-
-The eliding has to run in **every** process, not just the train.py driver:
-slime's ``RolloutManager`` and Megatron actors are separate Ray processes, and a
-hook installed only in the driver never reaches them (that was the bug in the
-first attempt). A ``.pth`` file in a site-packages dir is executed by ``site`` at
-interpreter startup in *every* Python process, so we drop a tiny self-contained
-hook there. It wraps ``logging.Handler.handle`` to replace long base64 runs with
-``<elided>`` before emit. Self-contained (logging + re only) so it's safe to run
-at startup in every process; idempotent; a no-op for text-only runs.
+Installs a ``logging.Handler`` wrapper via a site ``.pth`` so it loads in every
+process — slime logs the prompt from the ``RolloutManager`` Ray actor, which a
+driver-only hook misses.
 """
 
 from __future__ import annotations
