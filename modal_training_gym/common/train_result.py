@@ -117,11 +117,6 @@ class TrainResult:
     wandb_training_run_id: str = ""
     extra: dict[str, Any] = field(default_factory=dict)
 
-    def __post_init__(self) -> None:
-        # asdict -> json stores ``framework`` as its bare value, and load doesn't
-        # re-hydrate it; normalize once so callers always get a Framework enum.
-        self.framework = Framework(self.framework)
-
     # ── Persistence ────────────────────────────────────────────────────────
 
     def _to_dict(self) -> dict[str, Any]:

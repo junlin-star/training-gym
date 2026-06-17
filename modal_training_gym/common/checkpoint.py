@@ -41,18 +41,6 @@ class Checkpoint:
 
 CheckpointConfig = Checkpoint
 
-# slime, miles, and vime all write the same Megatron torch_dist checkpoint
-# layout (``iter_<step>`` directories, optionally with a sibling ``_hf`` export),
-# so they share one listing routine.
-_MEGATRON_FRAMEWORKS = frozenset({Framework.SLIME, Framework.MILES, Framework.VIME})
-
-
-def list_checkpoints(training_run_id: str) -> list[Checkpoint]:
-    result = TrainResult.from_training_run_id(training_run_id)
-    if result.framework in _MEGATRON_FRAMEWORKS:
-        return _list_megatron_checkpoints(result)
-    raise ValueError(f"Unsupported framework: {result.framework!r}")
-
 
 def _get_checkpoint_prefix() -> str:
     return "iter_"
@@ -74,7 +62,10 @@ def _to_volume_path(checkpoint_dir: str, checkpoints_mount_path: str) -> str:
     return checkpoint_dir_norm.lstrip("/")
 
 
-def _list_megatron_checkpoints(train_result: "TrainResult") -> list[Checkpoint]:
+def list_checkpoints(training_run_id: str) -> list[Checkpoint]:
+    # slime, miles, and vime all write the same Megatron torch_dist layout
+    # (``iter_<step>`` dirs, optionally with a sibling ``_hf`` export).
+    train_result = TrainResult.from_training_run_id(training_run_id)
     checkpoint_dir = train_result.checkpoint_dir.rstrip("/")
     if not checkpoint_dir:
         return []
@@ -209,9 +200,7 @@ def _converter_spec(framework: Framework | None):
     can read ``framework``'s checkpoint — each converts in the image that produced
     it (a vime checkpoint pickles references to ``vllm``, absent from the slime
     image)."""
-    if framework not in _MEGATRON_FRAMEWORKS:
-        raise ValueError(f"Cannot convert checkpoint for framework {framework!r}")
-    if framework is Framework.VIME:
+    if framework == Framework.VIME:
         from modal_training_gym.frameworks.vime.launcher import (
             VIME_ROOT,
             _build_vime_base_image,
@@ -233,7 +222,7 @@ def _converter_spec(framework: Framework | None):
         )
 
         return _build_slime_base_image(), "", ""
-    raise AssertionError(f"unhandled framework {framework!r}")  # _MEGATRON guards above
+    raise ValueError(f"No checkpoint converter for framework {framework!r}")
 
 
 def convert_checkpoint_to_hf(
