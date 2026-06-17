@@ -15,15 +15,6 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from modal_training_gym.common.sample import Sample
-
-
-def _safe_int(value: Any) -> int:
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return 0
-
-
 from modal_training_gym.utils.metadata import (
     MetadataStore,
     vol_get,
@@ -34,6 +25,14 @@ from modal_training_gym.utils.metadata import (
     vol_upsert_summary_item,
     vol_upsert_summary_item_async,
 )
+
+
+def _safe_int(value: Any) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
 
 # A rollout sample is just a Sample (shared with eval rows). Alias kept for any
 # existing imports; new code should use Sample.
