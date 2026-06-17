@@ -5,6 +5,7 @@
   import StatusPill from "../components/StatusPill.svelte";
   import TimeAgo from "../components/TimeAgo.svelte";
   import SampleTimeline from "../components/SampleTimeline.svelte";
+  import ConversationView from "../components/ConversationView.svelte";
   import { fetchRunRollouts, fetchRollout } from "../lib/api.js";
 
   let {
@@ -657,10 +658,19 @@
             {#each rolloutSummaries as r (r.rollout_id)}
               <tr
                 class:expanded={expandedRolloutId === r.rollout_id}
+                class:rollout-error={r.error_summary?.verdict === "all_infra_failure"}
+                class:rollout-warn={r.error_summary?.verdict === "partial_infra_failure"}
                 onclick={() => toggleRolloutDetail(r.rollout_id)}
               >
                 <td>#{r.rollout_id}</td>
-                <td class="rollout-mean">{formatMean(r.mean)}</td>
+                <td class="rollout-mean">
+                  {formatMean(r.mean)}
+                  {#if r.error_summary?.verdict === "all_infra_failure"}
+                    <span class="rollout-error-badge" title="All samples failed due to infrastructure error">infra failure</span>
+                  {:else if r.error_summary?.verdict === "partial_infra_failure"}
+                    <span class="rollout-warn-badge" title="Some samples failed due to infrastructure error">partial failure</span>
+                  {/if}
+                </td>
                 <td>{r.total}</td>
                 <td>
                   <TimeAgo timestamp={r.created_at} showJustNow falsyRepresentation="—" />
@@ -674,6 +684,45 @@
                     {:else if !expandedRollout || !sampleDist}
                       <div class="empty">No samples recorded.</div>
                     {:else}
+                      {#if expandedRollout.metrics && Object.keys(expandedRollout.metrics).length}
+                        {@const m = expandedRollout.metrics}
+                        {@const remoteErr = Number(m["agent/exit_status/remoteerror_sample_count"]) || 0}
+                        {@const responseMissing = Number(m["agent/response_missing_sample_count"]) || 0}
+                        {@const infraInvalid = Number(m["agent/invalid_infra_sample_count"]) || 0}
+                        {@const limitsExceeded = Number(m["agent/limits_exceeded_sample_count"]) || 0}
+                        {@const totalSamples = Number(m["agent/valid_sample_count"]) || sampleDist.total || 0}
+                        {@const hasErrors = remoteErr > 0 || responseMissing > 0 || infraInvalid > 0}
+                        {#if hasErrors}
+                          <div class="rollout-diagnostics" class:diag-critical={remoteErr >= totalSamples}>
+                            <div class="diag-title">
+                              {#if remoteErr >= totalSamples}
+                                All {totalSamples} samples failed — infrastructure error
+                              {:else}
+                                {remoteErr + infraInvalid} / {totalSamples} samples hit infrastructure errors
+                              {/if}
+                            </div>
+                            <div class="diag-details">
+                              {#if remoteErr}
+                                <span class="diag-tag">RemoteError: {remoteErr}</span>
+                              {/if}
+                              {#if responseMissing}
+                                <span class="diag-tag">Response missing: {responseMissing}</span>
+                              {/if}
+                              {#if infraInvalid}
+                                <span class="diag-tag">Infra invalid: {infraInvalid}</span>
+                              {/if}
+                              {#if limitsExceeded}
+                                <span class="diag-tag">Limits exceeded: {limitsExceeded}</span>
+                              {/if}
+                            </div>
+                            {#if remoteErr >= totalSamples}
+                              <div class="diag-hint">
+                                Check the Modal app logs for sandbox/image build errors. Common cause: the environment image failed to build.
+                              </div>
+                            {/if}
+                          </div>
+                        {/if}
+                      {/if}
                       <div class="dist">
                         <div
                           class="dist-bars"
@@ -752,10 +801,13 @@
                             <div class="rollout-sample-label">prompt</div>
                             <pre class="rollout-sample-text">{activeSample.sample.prompt}</pre>
                           {/if}
-                          {#if activeSample.sample.response}
-                            <div class="rollout-sample-label">response</div>
-                            <pre class="rollout-sample-text">{activeSample.sample.response}</pre>
-                          {/if}
+                          <div class="rollout-sample-label">conversation</div>
+                          <ConversationView
+                            messages={activeSample.sample.metadata?.trajectory_messages}
+                            response={activeSample.sample.response || ""}
+                            thinking={activeSample.sample.thinking || ""}
+                            evalReport={activeSample.sample.metadata?.eval_report}
+                          />
                           {#if activeSample.sample.metadata?.reference}
                             <div class="rollout-sample-label">reference</div>
                             <pre class="rollout-sample-text">{activeSample.sample.metadata.reference}</pre>
@@ -766,6 +818,12 @@
                               {typeof value === "number" ? value.toFixed(3) : value}
                             </span>
                           {/each}
+                          {#if activeSample.sample.metadata?.exit_status}
+                            <div class="rollout-sample-label">exit status</div>
+                            <span class="rollout-sample-metric sample-exit-status" class:exit-ok={activeSample.sample.metadata.exit_status === "ok"} class:exit-err={activeSample.sample.metadata.exit_status !== "ok"}>
+                              {activeSample.sample.metadata.exit_status}
+                            </span>
+                          {/if}
                           {#if activeSample.sample.trace?.length}
                             <div class="rollout-sample-label">trajectory timeline</div>
                             <SampleTimeline trace={activeSample.sample.trace} />
@@ -1319,6 +1377,21 @@
     overflow: auto;
   }
 
+  .sample-exit-status {
+    padding: 2px 8px;
+    border-radius: 3px;
+    font-size: 11px;
+    font-weight: 500;
+  }
+  .exit-ok {
+    background: rgba(74, 222, 128, 0.12);
+    color: #4ade80;
+  }
+  .exit-err {
+    background: rgba(248, 113, 113, 0.12);
+    color: #f87171;
+  }
+
   .empty {
     color: var(--muted);
     font-size: 13px;
@@ -1462,5 +1535,80 @@
     border-radius: 4px;
     padding: 2px 6px;
     font-size: 12px;
+  }
+
+  /* ── Rollout error indicators ──────────────────────────────────────── */
+
+  .rollout-error td {
+    background: rgba(239, 68, 68, 0.06);
+  }
+  .rollout-warn td {
+    background: rgba(251, 191, 36, 0.06);
+  }
+
+  .rollout-error-badge,
+  .rollout-warn-badge {
+    display: inline-block;
+    font-size: 10px;
+    font-weight: 500;
+    padding: 1px 6px;
+    border-radius: 3px;
+    margin-left: 6px;
+    vertical-align: middle;
+  }
+  .rollout-error-badge {
+    background: rgba(239, 68, 68, 0.15);
+    color: #ef4444;
+    border: 1px solid rgba(239, 68, 68, 0.25);
+  }
+  .rollout-warn-badge {
+    background: rgba(251, 191, 36, 0.15);
+    color: #fbbf24;
+    border: 1px solid rgba(251, 191, 36, 0.25);
+  }
+
+  /* ── Rollout diagnostics banner ────────────────────────────────────── */
+
+  .rollout-diagnostics {
+    padding: 10px 14px;
+    border-radius: 6px;
+    margin-bottom: 12px;
+    background: rgba(251, 191, 36, 0.08);
+    border: 1px solid rgba(251, 191, 36, 0.2);
+  }
+  .rollout-diagnostics.diag-critical {
+    background: rgba(239, 68, 68, 0.08);
+    border-color: rgba(239, 68, 68, 0.2);
+  }
+
+  .diag-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: #fbbf24;
+    margin-bottom: 6px;
+  }
+  .diag-critical .diag-title {
+    color: #ef4444;
+  }
+
+  .diag-details {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 4px;
+  }
+  .diag-tag {
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 3px;
+    background: rgba(255, 255, 255, 0.06);
+    color: var(--text, #d1d1d1);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .diag-hint {
+    font-size: 11px;
+    color: var(--muted, #a3a3a3);
+    margin-top: 6px;
   }
 </style>

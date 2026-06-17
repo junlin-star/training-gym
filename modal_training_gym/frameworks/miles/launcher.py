@@ -691,7 +691,7 @@ def build_miles_app(
             return
         assert run_record is not None
 
-        try:
+        try:  # Wraps all post-setup work so any failure marks the run terminal.
             prepare_miles_config(miles, model, tempfile.mkdtemp())
 
             if wandb_key := os.environ.get("WANDB_API_KEY", ""):
@@ -787,7 +787,10 @@ def build_miles_app(
             if run_record.completed_at is None:
                 run_record.completed_at = finished_at
             run_record.duration_seconds = max(0, finished_at - run_record.started_at)
-            await run_record.save_async()
+            try:
+                await run_record.save_async()
+            except Exception:
+                pass
 
     for tag, fn in app.registered_functions.items():
         setattr(app, tag, fn)

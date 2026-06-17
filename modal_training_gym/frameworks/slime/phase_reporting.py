@@ -454,6 +454,38 @@ def _sample_to_dict(
         if value is not None:
             metadata[key] = value
 
+    # Pull display-relevant fields from the sample's own metadata dict so the
+    # dashboard can render exit status, eval checks, etc. without needing the
+    # (potentially huge) full trajectory_messages blob.
+    sample_meta = get("metadata") if attrs is not None else get("metadata", None)
+    if isinstance(sample_meta, dict):
+        for key in (
+            "exit_status",
+            "training_response_source",
+            "training_assistant_turns",
+        ):
+            if key in sample_meta and sample_meta[key] is not None:
+                metadata[key] = sample_meta[key]
+        # Store eval_report but only the compact summary/checks, not huge blobs
+        eval_report = sample_meta.get("eval_report")
+        if isinstance(eval_report, dict):
+            compact: dict[str, Any] = {}
+            if "check_summary" in eval_report:
+                compact["check_summary"] = eval_report["check_summary"]
+            if "checks" in eval_report and isinstance(eval_report["checks"], dict):
+                compact["checks"] = {
+                    name: {
+                        "passed": bool(detail.get("passed")),
+                        "status": str(detail.get("status", "")),
+                        "score": detail.get("score"),
+                        "errors": (detail.get("errors") or [])[:3],
+                    }
+                    for name, detail in eval_report["checks"].items()
+                    if isinstance(detail, dict)
+                }
+            if compact:
+                metadata["eval_report"] = compact
+
     if audio_uri := _extract_audio_from_prompt(prompt):
         metadata["_metadata_type"] = "audio"
         metadata["audio"] = audio_uri

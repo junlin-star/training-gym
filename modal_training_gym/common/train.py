@@ -655,21 +655,25 @@ class TrainConfig:
                             run_record = TrainingRun.from_id(training_run_id)
                         except (KeyError, Exception):
                             pass
-                        run_record.status = TrainingRunStatus.FAILED
-                        finished_at = int(time.time())
-                        run_record.ended_at = finished_at
-                        if run_record.completed_at is None:
-                            run_record.completed_at = finished_at
-                        run_record.duration_seconds = max(
-                            0, finished_at - run_record.started_at
-                        )
-                        # Terminal-state write is synchronous to guarantee
-                        # the failure shows up in the dashboard even if the
-                        # background reporter is still draining.
-                        try:
-                            run_record.save()
-                        except RuntimeError:
-                            pass
+                        # Only mark FAILED if the remote hasn't already set a
+                        # terminal state (it may have completed/failed on its
+                        # own while we lost the RPC connection).
+                        if run_record.status == TrainingRunStatus.RUNNING:
+                            run_record.status = TrainingRunStatus.FAILED
+                            finished_at = int(time.time())
+                            run_record.ended_at = finished_at
+                            if run_record.completed_at is None:
+                                run_record.completed_at = finished_at
+                            run_record.duration_seconds = max(
+                                0, finished_at - run_record.started_at
+                            )
+                            # Terminal-state write is synchronous to guarantee
+                            # the failure shows up in the dashboard even if the
+                            # background reporter is still draining.
+                            try:
+                                run_record.save()
+                            except RuntimeError:
+                                pass
                     raise
                 finally:
                     status_display.stop_polling()
