@@ -67,6 +67,43 @@ class Qwen3_ASR_1_7B(HFModelConfiguration):
         rotary_base=1000000,  # rope_theta
     )
 
+    def download(self) -> None:
+        """Download the checkpoint, then materialize a fast ``tokenizer.json``.
+
+        Qwen3-ASR ships only a *slow* tokenizer (``vocab.json`` + ``merges.txt`` +
+        ``tokenizer_config.json``, no ``tokenizer.json``). SGLang's Python engine
+        and Megatron-Bridge load that fine, but SGLang's Rust ``sgl-router`` can
+        only register a tokenizer from a ``tokenizer.json`` — without one it logs a
+        stream of ``AddTokenizer`` "does not contain a valid tokenizer file"
+        errors at rollout. They're harmless (the transcription rollout posts
+        straight to the engine, and training proceeds) but alarming. transformers
+        builds the fast tokenizer from the slow files, so we serialize it into the
+        snapshot once, at download, in the exact format the Rust router reads.
+        """
+        super().download()
+        self._materialize_router_tokenizer()
+
+    def _materialize_router_tokenizer(self) -> None:
+        import os
+
+        from huggingface_hub import snapshot_download
+
+        snapshot_dir = snapshot_download(repo_id=self.model_name, local_files_only=True)
+        target = os.path.join(snapshot_dir, "tokenizer.json")
+        if os.path.exists(target):
+            return
+
+        from transformers import AutoTokenizer
+
+        tokenizer = AutoTokenizer.from_pretrained(snapshot_dir)
+        backend = getattr(tokenizer, "backend_tokenizer", None)
+        if backend is None:
+            # Slow-only tokenizer with no fast backend — nothing the Rust router
+            # could load anyway; leave the snapshot untouched.
+            return
+        backend.save(target)
+        print(f"[training-gym] Wrote router-loadable tokenizer.json -> {target}")
+
 
 @functools.lru_cache(maxsize=None)
 def _processor(checkpoint: str) -> Any:
