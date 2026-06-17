@@ -40,8 +40,9 @@ def _intro():
     benchmark — a standard GUI grounding evaluation set covering iOS, Android,
     macOS, Windows, and Web screenshots with annotated bounding boxes.
 
-    The reward is distance-based: +1 for a prediction within 5% of the target,
-    linearly decaying to −1 for predictions 50%+ away.
+    The reward is bbox-aware: a click that lands anywhere inside the target
+    element scores +1 (a real click succeeds), and predictions that miss decay
+    toward −1 over a margin scaled to the element's own size.
     """
 
 
@@ -113,8 +114,9 @@ def _dataset_intro():
     - `instruction` — e.g. "click the Submit button"
     - `bbox` — `[left, top, right, bottom]` in normalized [0, 1] coordinates
 
-    We convert each bounding box to a center-point `(x, y)` as the training
-    target. The model learns to output these coordinates.
+    We keep the full bounding box as the training target (a click anywhere
+    inside it counts as a hit) and ask the model to output a single `(x, y)`
+    click point.
 
     For this tutorial we train on 800 samples and hold out 200 for evaluation.
     """
@@ -163,9 +165,9 @@ def _dataset():
             stop = min(start + self.n_rows, len(ds))
             rows = []
             for row in ds.select(range(start, stop)):
-                bbox = row["bbox"]
-                cx = (bbox[0] + bbox[2]) / 2
-                cy = (bbox[1] + bbox[3]) / 2
+                # Keep the full box: a click succeeds anywhere inside the element,
+                # and the reward scales its tolerance to the element's own size.
+                left, top, right, bottom = row["bbox"]
                 instruction = row["instruction"]
 
                 # Convert PIL image to a data URI for the multimodal pipeline
@@ -183,7 +185,9 @@ def _dataset():
                             instruction=instruction
                         ),
                         self.media_column: [data_uri],
-                        self.label_key: f"{cx:.4f},{cy:.4f}",
+                        self.label_key: (
+                            f"{left:.4f},{top:.4f},{right:.4f},{bottom:.4f}"
+                        ),
                     }
                 )
             return rows
@@ -211,7 +215,7 @@ def _dataset_peek():
     rows = eval_dataset.load()
     for row in rows[:2]:
         print(f"prompt: {row['prompt'][:100]}...")
-        print(f"  label (cx, cy): {row['label']}")
+        print(f"  label (left, top, right, bottom): {row['label']}")
         print()
 
 
@@ -220,19 +224,28 @@ def _reward_intro():
     """
     ## Reward function
 
-    The reward is based on Euclidean distance between the predicted and target
-    coordinates:
+    Rather than measuring distance to the box's *center*, we reward whether the
+    click would actually land on the element. Let `outside` be the Euclidean
+    distance from the predicted point to the bounding box (`0` when the point is
+    inside it), and `margin = max(diagonal_of_box, 0.05)`:
 
     ```text
-    R = +1.0                                    if dist < 0.05  (within 5%)
-      = 1.0 - 2.0 * (dist - 0.05) / 0.45      if 0.05 <= dist < 0.50
-      = -1.0                                    if dist >= 0.50
+    R = +1.0                          if outside == 0   (click inside element)
+      = 1.0 - 2.0 * outside / margin  if 0 < outside < margin
+      = -1.0                          if outside >= margin
     ```
 
-    This gives a clear positive signal for accurate predictions (within ~5% of
-    the screen), a linear gradient for near-misses, and a flat penalty for
-    completely wrong answers. The model also gets −1 if it fails to output
-    parseable coordinates.
+    This fixes two problems with a center-distance reward:
+
+    - **Click success is rewarded directly.** Any point inside the element gets
+      the full +1, even if it's far from the geometric center — exactly like a
+      real click.
+    - **Tolerance scales with element size.** A fixed 5%-of-screen threshold is
+      too lenient on tiny icons (you can miss and still score) and too harsh on
+      big buttons (a valid click gets penalized). Scaling the falloff to the
+      element's own diagonal (with a 5% floor for tiny targets) avoids both.
+
+    The model also gets −1 if it fails to output parseable coordinates.
     """
 
 
@@ -251,6 +264,20 @@ def _reward():
             pass
         return None
 
+    def _parse_bbox(label: str) -> tuple[float, float, float, float]:
+        """Parse a 'left,top,right,bottom' label into floats."""
+        left, top, right, bottom = (float(v) for v in label.split(","))
+        return left, top, right, bottom
+
+    def _distance_outside_box(
+        x: float, y: float, box: tuple[float, float, float, float]
+    ) -> float:
+        """Euclidean distance from (x, y) to the bbox; 0.0 when inside it."""
+        left, top, right, bottom = box
+        dx = max(left - x, 0.0, x - right)
+        dy = max(top - y, 0.0, y - bottom)
+        return (dx * dx + dy * dy) ** 0.5
+
     async def grounding_reward(args, sample, **kwargs) -> float:
         response = getattr(sample, "response", "") or ""
         label = getattr(sample, "label", "") or ""
@@ -259,17 +286,23 @@ def _reward():
         if pred is None:
             return -1.0
 
-        gt_parts = label.split(",")
-        gt_x, gt_y = float(gt_parts[0]), float(gt_parts[1])
+        box = _parse_bbox(label)
+        left, top, right, bottom = box
 
-        dist = ((pred[0] - gt_x) ** 2 + (pred[1] - gt_y) ** 2) ** 0.5
-
-        if dist < 0.05:
+        # A click that lands anywhere inside the element succeeds → full reward,
+        # regardless of how far it is from the geometric center.
+        outside = _distance_outside_box(pred[0], pred[1], box)
+        if outside == 0.0:
             return 1.0
-        elif dist < 0.50:
-            return 1.0 - 2.0 * (dist - 0.05) / 0.45
-        else:
+
+        # Outside the box, decay over a margin scaled to the element's own size
+        # (floored so tiny targets still get a usable gradient). Reward is +1 at
+        # the edge and −1 once the click is a full element-diagonal away.
+        diag = ((right - left) ** 2 + (bottom - top) ** 2) ** 0.5
+        margin = max(diag, 0.05)
+        if outside >= margin:
             return -1.0
+        return 1.0 - 2.0 * outside / margin
 
 
 @markdown
@@ -298,21 +331,24 @@ def _eval_helpers():
         response = deployment.generate(prompt, images=images, ensure_ready=False)
 
         pred = _parse_coordinates(response)
+        box = _parse_bbox(label)
         if pred is None:
-            dist = 1.0
+            inside = False
+            outside = 1.0
         else:
-            gt_parts = label.split(",")
-            gt_x, gt_y = float(gt_parts[0]), float(gt_parts[1])
-            dist = ((pred[0] - gt_x) ** 2 + (pred[1] - gt_y) ** 2) ** 0.5
+            outside = _distance_outside_box(pred[0], pred[1], box)
+            inside = outside == 0.0
 
+        # A "hit" is a real click success: the predicted point lands inside the
+        # element's bounding box.
         return EvalRowResult(
-            score=1.0 if dist < 0.10 else 0.0,
+            score=1.0 if inside else 0.0,
             response=response,
             metadata={
-                "distance": round(dist, 4),
+                "inside_box": inside,
+                "dist_outside": round(outside, 4),
                 "pred": f"{pred[0]:.4f},{pred[1]:.4f}" if pred else "PARSE_FAIL",
                 "label": label,
-                "hit_at_10pct": dist < 0.10,
             },
         )
 
@@ -326,10 +362,10 @@ def _eval_base():
     eval_config = EvalConfig(dataset=eval_dataset, eval_fn=grounding_eval_fn)
     print("--- Evaluating base model... ---")
     base_eval = eval_config.evaluate(base_deployment, debug=True)
-    n_hits = sum(1 for r in base_eval.rows if r.metadata.get("hit_at_10pct"))
+    n_hits = sum(1 for r in base_eval.rows if r.metadata.get("inside_box"))
     print(
-        f"Base accuracy (@10%): {n_hits}/{len(base_eval.rows)} "
-        f"({base_eval.mean:.1%})"
+        f"Base accuracy (clicks inside element): "
+        f"{n_hits}/{len(base_eval.rows)} ({base_eval.mean:.1%})"
     )
 
 
@@ -337,9 +373,9 @@ def _eval_base():
 @code
 def _base_examples():
     for r in base_eval.rows[:3]:
-        status = "HIT" if r.metadata["hit_at_10pct"] else "MISS"
+        status = "HIT" if r.metadata["inside_box"] else "MISS"
         print(f"[{status}] label={r.metadata['label']}, pred={r.metadata['pred']}")
-        print(f"  dist={r.metadata['distance']:.4f}")
+        print(f"  dist_outside={r.metadata['dist_outside']:.4f}")
         print(f"  ...{r.response[-100:]}")
         print()
 
@@ -350,6 +386,12 @@ def _train_intro():
     ## Training
 
     We use `Qwen3VL_Recipe` which carries VL-specific defaults:
+    - **Frozen vision tower** (`freeze_params_name_list=["vision_model"]`) — RL
+      only updates the language backbone. This is the standard recipe for VLM RL:
+      a single sparse reward is too noisy to safely fine-tune a pretrained visual
+      encoder (you'd risk collapsing its features), and grounding is really about
+      teaching the decoder to *read out* coordinates from features the ViT already
+      provides. It's also cheaper — no optimizer state or backward pass for the ViT.
     - Padded (bshd) batches for the vision encoder
     - TP=2 for the 8B model across 8 H100s
     - Short response cap (256 tokens — coordinates are brief)
@@ -404,10 +446,10 @@ def _eval_trained():
 
     print("--- Evaluating trained model... ---")
     trained_eval = eval_config.evaluate(trained_deployment, debug=True)
-    n_hits = sum(1 for r in trained_eval.rows if r.metadata.get("hit_at_10pct"))
+    n_hits = sum(1 for r in trained_eval.rows if r.metadata.get("inside_box"))
     print(
-        f"Trained accuracy (@10%): {n_hits}/{len(trained_eval.rows)} "
-        f"({trained_eval.mean:.1%})"
+        f"Trained accuracy (clicks inside element): "
+        f"{n_hits}/{len(trained_eval.rows)} ({trained_eval.mean:.1%})"
     )
 
 
@@ -416,11 +458,11 @@ def _eval_trained():
 def _trained_examples():
     for base_r, trained_r in zip(base_eval.rows[:3], trained_eval.rows[:3]):
         label = base_r.metadata["label"]
-        b_status = "HIT" if base_r.metadata["hit_at_10pct"] else "MISS"
-        t_status = "HIT" if trained_r.metadata["hit_at_10pct"] else "MISS"
+        b_status = "HIT" if base_r.metadata["inside_box"] else "MISS"
+        t_status = "HIT" if trained_r.metadata["inside_box"] else "MISS"
         print(f"label={label}")
-        print(f"  Base:    [{b_status}] pred={base_r.metadata['pred']} dist={base_r.metadata['distance']:.4f}")
-        print(f"  Trained: [{t_status}] pred={trained_r.metadata['pred']} dist={trained_r.metadata['distance']:.4f}")
+        print(f"  Base:    [{b_status}] pred={base_r.metadata['pred']} dist_outside={base_r.metadata['dist_outside']:.4f}")
+        print(f"  Trained: [{t_status}] pred={trained_r.metadata['pred']} dist_outside={trained_r.metadata['dist_outside']:.4f}")
         print()
 
 
@@ -435,9 +477,9 @@ def _compare_intro():
 
 @code
 def _compare():
-    base_hits = sum(1 for r in base_eval.rows if r.metadata.get("hit_at_10pct"))
+    base_hits = sum(1 for r in base_eval.rows if r.metadata.get("inside_box"))
     trained_hits = sum(
-        1 for r in trained_eval.rows if r.metadata.get("hit_at_10pct")
+        1 for r in trained_eval.rows if r.metadata.get("inside_box")
     )
     total = len(base_eval.rows)
     print(f"Base model:    {base_hits}/{total} ({base_eval.mean:.1%})")

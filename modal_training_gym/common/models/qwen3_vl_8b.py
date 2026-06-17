@@ -58,6 +58,9 @@ class Qwen3VL_8B(HFModelConfiguration):
         # slime's stock qwen3 export can't map the vision tower; ship a qwen3_vl
         # MB->HF converter that converts the language stack and identity-passes the
         # frozen ViT (vision_model.* -> model.visual.*), mirroring the qwen3_asr
-        # audio-tower converter.
-        compat_patches=["patch_qwen3_vl_export"],
+        # audio-tower converter. The torch_dist patch additionally teaches the
+        # deploy/eval torch_dist->HF tool to skip the frozen ViT's stacked layers
+        # (whose depth != the LLM's num_layers) and refill them from the base HF
+        # checkpoint, since slime's converter otherwise asserts on them.
+        compat_patches=["patch_qwen3_vl_export", "patch_qwen3_vl_torch_dist"],
     )
