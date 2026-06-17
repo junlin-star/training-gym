@@ -151,22 +151,21 @@ def list_checkpoints(training_run_id: str) -> list[Checkpoint]:
     return checkpoints
 
 
-def _resolve_checkpoint_framework(checkpoint: Checkpoint) -> Framework | None:
+def _resolve_checkpoint_framework(checkpoint: Checkpoint) -> Framework:
     """Framework that produced ``checkpoint``.
 
-    Prefers the value carried on the checkpoint (set when it was listed); for a
-    checkpoint built without one, falls back to the TrainResult. Returns ``None``
-    when it can't be determined — callers treat that as the slime/megatron
-    default converter.
+    Prefers the value stamped on the checkpoint when it was listed, else reads it
+    off the TrainResult. Raises if neither is available — set
+    ``checkpoint.framework`` for a checkpoint brought into the gym from outside.
     """
     if checkpoint.framework is not None:
         return checkpoint.framework
-    if not checkpoint.training_run_id:
-        return None
-    try:
+    if checkpoint.training_run_id:
         return TrainResult.from_training_run_id(checkpoint.training_run_id).framework
-    except (KeyError, FileNotFoundError):
-        return None
+    raise ValueError(
+        "Cannot determine the checkpoint's framework — set checkpoint.framework "
+        "(or training_run_id) before converting."
+    )
 
 
 def _conversion_gpu_spec(
@@ -195,7 +194,7 @@ def _conversion_gpu_spec(
     return f"{gpu}:{n_gpu}" if n_gpu > 1 else str(gpu)
 
 
-def _converter_spec(framework: Framework | None):
+def _converter_spec(framework: Framework):
     """``(base_image, convert_script, convert_pythonpath)`` for the converter that
     can read ``framework``'s checkpoint — each converts in the image that produced
     it (a vime checkpoint pickles references to ``vllm``, absent from the slime
