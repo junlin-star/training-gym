@@ -43,7 +43,7 @@ class Qwen3_6_35b_Recipe_Long_Context(SlimeRecipe):
     sglang_cuda_graph_bs: list[int] | None = field(
         default_factory=lambda: [1, 2, 4, 8] + list(range(16, 257, 8))
     )
-    sglang_max_running_requests: int | None = 512
+    sglang_max_running_requests: int | None = 256
     sglang_speculative_algorithm: str = "EAGLE"
     sglang_speculative_num_steps: int = 3
     sglang_speculative_eagle_topk: int = 1
