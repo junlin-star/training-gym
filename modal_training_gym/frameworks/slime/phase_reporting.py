@@ -38,6 +38,7 @@ CUSTOM_BEFORE_TRAIN_STEP_HOOK_PATH_KEY = (
     "training_gym_custom_megatron_before_train_step_hook_path"
 )
 
+
 # Internal queue entry: each item is {"_url": str, "_timeout": float, **payload}.
 # Status reports use the SLIME_PHASE_REPORT_URL with a short 1s timeout;
 # rollout-data reports derive a /api/training-rollouts URL from the same base
