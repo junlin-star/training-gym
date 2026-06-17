@@ -12,6 +12,17 @@ references (log_probs, rollout_log_probs, values) as None, crashing the
 This patch makes the None-xs path fall back to creating zero-KL tensors
 from ``loss_masks`` shapes.
 
+It also makes the on-policy-distillation (OPD) KL term in
+``apply_opd_kl_to_advantages`` NaN-safe: a per-sample ``teacher_log_probs``
+tensor containing any NaN is treated as "no teacher signal for this
+trajectory", so its ``reverse_kl`` is set to zero (equivalent to a
+``student - student`` self-reference) instead of subtracting NaN/garbage.
+This lets a rollout deliberately disable OPD for individual trajectories
+(e.g. when a remote teacher / reward server is unavailable) by writing a
+NaN ``teacher_log_probs`` tensor, while keeping that trajectory's policy
+(GRPO) gradient intact. It is behaviour-neutral for normal runs because
+real teacher logprobs never contain NaN.
+
 Executed at image-build time via ``python3 <this file>``.
 """
 
@@ -33,4 +44,23 @@ new = """\
             kl = [torch.zeros(rl, dtype=torch.float32, device=_dev) for rl in response_lengths]"""
 
 if old in src:
-    p.write_text(src.replace(old, new, 1))
+    src = src.replace(old, new, 1)
+    p.write_text(src)
+    print("[patch_advantages] patched None-xs KL fallback")
+else:
+    print("[patch_advantages] WARNING: None-xs KL fallback target not found; skipped")
+
+opd_old = """\
+        reverse_kl = student_log_probs[i] - teacher_log_probs[i]"""
+
+opd_new = """\
+        if torch.isnan(teacher_log_probs[i]).any():
+            reverse_kl = torch.zeros_like(student_log_probs[i])
+        else:
+            reverse_kl = student_log_probs[i] - teacher_log_probs[i]"""
+
+if opd_old in src:
+    p.write_text(src.replace(opd_old, opd_new, 1))
+    print("[patch_advantages] patched OPD reverse_kl to be NaN-safe")
+else:
+    print("[patch_advantages] WARNING: OPD reverse_kl target not found; skipped")

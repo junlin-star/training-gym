@@ -164,15 +164,15 @@ class DeploymentConfig:
         )
 
         if recipe.recipe_type == DeployRecipeType.SGLANG:
-            server = getattr(app, "Server", None)
-            if server is None and hasattr(app, "registered_classes"):
-                server = app.registered_classes.get("Server")
+            server = getattr(app, "SGLangEndpoint", None)
+            if server is None and hasattr(app, "registered_functions"):
+                server = app.registered_functions.get("SGLangEndpoint")
             if server is None:
                 raise RuntimeError(
-                    f"Deployed {self.app_name!r} but could not resolve SGLang Server class handle."
+                    f"Deployed {self.app_name!r} but could not resolve SGLang endpoint server handle."
                 )
-            urls = server._experimental_get_flash_urls()
-            url = urls[0] if urls else None
+            urls = asyncio.run(server.get_urls())
+            url = next(iter(urls.values()), None) if urls else None
         else:
             url = app.serve.get_web_url()
         modal_app_id = app.app_id

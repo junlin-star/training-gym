@@ -79,12 +79,18 @@ rest of the cells run as-is.
 |---|---|---|---|---|
 | [`000_rl_basics`](tutorials/rl/000_rl_basics/000_rl_basics.ipynb) | Qwen3-4B haiku evaluation with verifiable rewards — serve, evaluate, train, compare | Beginner | `slime` | <a href="https://modal.com/notebooks/new/https://github.com/modal-projects/training-gym/blob/main/tutorials/rl/000_rl_basics/000_rl_basics.ipynb" target="_blank" rel="nofollow noopener noreferrer"><img src="https://modal-cdn.com/open-in-modal.svg" alt="Open in Modal"></a> |
 | [`001_sandboxes`](tutorials/rl/001_sandboxes/001_sandboxes.ipynb) | Code RL with Harbor hello-world and sandboxed verification | Intermediate | `slime` | <a href="https://modal.com/notebooks/new/https://github.com/modal-projects/training-gym/blob/main/tutorials/rl/001_sandboxes/001_sandboxes.ipynb" target="_blank" rel="nofollow noopener noreferrer"><img src="https://modal-cdn.com/open-in-modal.svg" alt="Open in Modal"></a> |
-| [`004_qwen35b`](tutorials/rl/004_qwen35b/004_qwen35b.ipynb) | Train Qwen3.6-35B-A3B on DAPO-math with GRPO | Advanced | `slime` | <a href="https://modal.com/notebooks/new/https://github.com/modal-projects/training-gym/blob/main/tutorials/rl/004_qwen35b/004_qwen35b.ipynb" target="_blank" rel="nofollow noopener noreferrer"><img src="https://modal-cdn.com/open-in-modal.svg" alt="Open in Modal"></a> |
 | [`002_multiturn`](tutorials/rl/002_multiturn/002_multiturn.ipynb) | Multi-turn number-guessing RL with custom generate and reward functions | Intermediate | `slime` | <a href="https://modal.com/notebooks/new/https://github.com/modal-projects/training-gym/blob/main/tutorials/rl/002_multiturn/002_multiturn.ipynb" target="_blank" rel="nofollow noopener noreferrer"><img src="https://modal-cdn.com/open-in-modal.svg" alt="Open in Modal"></a> |
 | [`003_on_policy_distillation`](tutorials/rl/003_on_policy_distillation/003_on_policy_distillation.ipynb) | On-policy distillation on math — Qwen3-8B teacher, Qwen3-4B student | Intermediate | `slime` | <a href="https://modal.com/notebooks/new/https://github.com/modal-projects/training-gym/blob/main/tutorials/rl/003_on_policy_distillation/003_on_policy_distillation.ipynb" target="_blank" rel="nofollow noopener noreferrer"><img src="https://modal-cdn.com/open-in-modal.svg" alt="Open in Modal"></a> |
 | [`005_dapo`](tutorials/rl/005_dapo/005_dapo.ipynb) | DAPO on math with Qwen3-4B | Advanced | `slime` | <a href="https://modal.com/notebooks/new/https://github.com/modal-projects/training-gym/blob/main/tutorials/rl/005_dapo/005_dapo.ipynb" target="_blank" rel="nofollow noopener noreferrer"><img src="https://modal-cdn.com/open-in-modal.svg" alt="Open in Modal"></a> |
 | [`006_audio_asr`](tutorials/rl/006_audio_asr/006_audio_asr.ipynb) | Audio GRPO on Qwen3-ASR-1.7B — transcribe LibriSpeech, reward −WER | Intermediate | `slime` | <a href="https://modal.com/notebooks/new/https://github.com/modal-projects/training-gym/blob/main/tutorials/rl/006_audio_asr/006_audio_asr.ipynb" target="_blank" rel="nofollow noopener noreferrer"><img src="https://modal-cdn.com/open-in-modal.svg" alt="Open in Modal"></a> |
 | [`007_computer_use`](tutorials/rl/007_computer_use/007_computer_use.ipynb) | GUI grounding with Qwen3-VL-8B — predict click coordinates from screenshots | Advanced | `slime` | <a href="https://modal.com/notebooks/new/https://github.com/modal-projects/training-gym/blob/main/tutorials/rl/007_computer_use/007_computer_use.ipynb" target="_blank" rel="nofollow noopener noreferrer"><img src="https://modal-cdn.com/open-in-modal.svg" alt="Open in Modal"></a> |
+
+### Single Node
+
+| Tutorial | Summary | Difficulty | Framework | Launch |
+|---|---|---|---|---|
+| [`001_qwen27b`](tutorials/singlenode/001_qwen27b/001_qwen27b.ipynb) | Train Qwen3.6-27B on DAPO-math with GRPO | Advanced | `slime` | <a href="https://modal.com/notebooks/new/https://github.com/modal-projects/training-gym/blob/main/tutorials/singlenode/001_qwen27b/001_qwen27b.ipynb" target="_blank" rel="nofollow noopener noreferrer"><img src="https://modal-cdn.com/open-in-modal.svg" alt="Open in Modal"></a> |
+| [`000_qwen35b`](tutorials/singlenode/000_qwen35b/000_qwen35b.ipynb) | Train Qwen3.6-35B-A3B on DAPO-math with GRPO | Advanced | `slime` | <a href="https://modal.com/notebooks/new/https://github.com/modal-projects/training-gym/blob/main/tutorials/singlenode/000_qwen35b/000_qwen35b.ipynb" target="_blank" rel="nofollow noopener noreferrer"><img src="https://modal-cdn.com/open-in-modal.svg" alt="Open in Modal"></a> |
 
 ### Agents
 
@@ -92,7 +98,7 @@ rest of the cells run as-is.
 |---|---|---|---|---|
 | [`000_agent_sandbox`](tutorials/agent/000_agent_sandbox/000_agent_sandbox.ipynb) | Build an LLM agent harness with a self-hosted model and Modal Sandbox tool execution | Beginner | Modal Sandbox | <a href="https://modal.com/notebooks/new/https://github.com/modal-projects/training-gym/blob/main/tutorials/agent/000_agent_sandbox/000_agent_sandbox.ipynb" target="_blank" rel="nofollow noopener noreferrer"><img src="https://modal-cdn.com/open-in-modal.svg" alt="Open in Modal"></a> |
 
-### multinode
+### Multinode
 
 | Tutorial | Summary | Difficulty | Framework | Launch |
 |---|---|---|---|---|

@@ -37,6 +37,12 @@ class SglangRecipe(BaseDeployRecipe):
         Modal environment to deploy into. Default ``None``.
     deploy_strategy : str
         Modal deployment strategy. Default ``"rolling"``.
+    startup_timeout : int
+        Seconds the server container is allowed to spend in startup before
+        Modal kills it — gates both Modal's container ``startup_timeout`` and
+        the SGLang health-check poll. Bump this for very large models whose
+        weight load exceeds the default (e.g. GLM-4.7 at 355B, Kimi-K2.5 at
+        ~1T). Default ``1200`` (20 minutes).
     """
 
     recipe_type: DeployRecipeType = DeployRecipeType.SGLANG
@@ -52,9 +58,10 @@ class SglangRecipe(BaseDeployRecipe):
     extra_server_args: dict[str, str] | None = None
     environment_name: str | None = None
     deploy_strategy: str = "rolling"
+    startup_timeout: int = 20 * 60
 
     def server_args(self, *, served_model_name: str) -> dict[str, str]:
-        """Build the ``--flag value`` dict for ``SGLangEndpoint``."""
+        """Build the ``--flag value`` dict for the SGLang launch command."""
         args: dict[str, str] = {"--served-model-name": served_model_name}
         if self.context_length is not None:
             args["--context-length"] = str(self.context_length)

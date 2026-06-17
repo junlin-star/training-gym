@@ -12,7 +12,6 @@ TUTORIAL_METADATA = {
         "Qwen3_ASR_1_7b_Recipe",
         "MultimodalDataset",
         "TrainConfig",
-        "WandbConfig",
         "DeploymentConfig",
         "EvalConfig",
     ],
@@ -82,7 +81,6 @@ def _imports():
         Qwen3_ASR_1_7B,
         Qwen3_ASR_1_7b_Recipe,
         TrainConfig,
-        WandbConfig,
         list_checkpoints,
     )
 
@@ -232,9 +230,12 @@ def _train_intro():
     `Qwen3_ASR_1_7b_Recipe` carries the ASR-specific defaults — the transcription
     rollout, padded (bshd) batches, the lighter SGLang memory fraction, and the
     many-samples/high-temperature settings that surface reward variance — so the
-    recipe you write only sets the reward and (optionally) W&B logging. It defaults
-    to a `H100:2` single node; pass `actor_num_gpus_per_node=8` (and a larger
-    `num_rollout`) to use a full node.
+    recipe you write only sets the reward. It defaults to a `H100:2` single node;
+    pass `actor_num_gpus_per_node=8` (and a larger `num_rollout`) to use a full node.
+
+    To log training curves to W&B, also pass `wandb=WandbConfig(project="…")` to the
+    recipe — that needs a W&B account with write access, supplied via the
+    `wandb-secret` Modal secret.
 
     `TrainConfig.train()` builds the Modal app, runs GRPO, and saves the trained
     model as a Megatron checkpoint (exported to HuggingFace on demand at deploy).
@@ -246,14 +247,7 @@ def _train():
     training_run = TrainConfig(
         model=Qwen3_ASR_1_7B(),
         dataset=dataset,
-        recipe=Qwen3_ASR_1_7b_Recipe(
-            custom_rm_function=word_error_rate_reward,
-            wandb=WandbConfig(
-                project="qwen3-asr-rl",
-                group="gym-demo",
-                exp_name="qwen3-asr-grpo-audio-demo",
-            ),
-        ),
+        recipe=Qwen3_ASR_1_7b_Recipe(custom_rm_function=word_error_rate_reward),
     )
     print("Starting training...")
     train_result = training_run.train()

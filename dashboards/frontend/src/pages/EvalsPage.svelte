@@ -569,6 +569,11 @@
                 {/if}
                 <span class="group-meta-pill">total evals: {group.totalEvals}</span>
                 <span class="group-meta-pill">avg: {group.avgAccuracy.toFixed(4)}</span>
+                {#if group.latestCreatedAt}
+                  <span class="group-meta-pill group-meta-pill-time">
+                    <TimeAgo timestamp={group.latestCreatedAt} showJustNow falsyRepresentation="—" />
+                  </span>
+                {/if}
                 <ChevronDown
                   size={14}
                   style={`color: var(--muted); transform: ${expandedConfigIds.has(group.evalConfigId) ? "rotate(180deg)" : "rotate(0deg)"};`}
@@ -823,17 +828,31 @@
                       {#if row.parsed_response.thinking}
                         <div class="example-section">
                           <span class="example-section-label">Thinking</span>
-                          <pre class="example-section-text parsed-thinking">{row.parsed_response.thinking}</pre>
+                          <pre class="example-section-text box-thinking">{row.parsed_response.thinking}</pre>
                         </div>
                       {/if}
-                      <div class="example-section">
-                        <span class="example-section-label">Content</span>
-                        <pre class="example-section-text">{row.parsed_response.content}</pre>
-                      </div>
+                      {#if row.parsed_response.content}
+                        <div class="example-section">
+                          <span class="example-section-label">Answer</span>
+                          <pre class="example-section-text box-answer">{row.parsed_response.content}</pre>
+                        </div>
+                      {/if}
                       {#if row.parsed_response.tool_calls?.length}
                         <div class="example-section">
                           <span class="example-section-label">Tool calls</span>
-                          <pre class="example-section-text">{JSON.stringify(row.parsed_response.tool_calls, null, 2)}</pre>
+                          <div class="tool-calls">
+                            {#each row.parsed_response.tool_calls as call, i (i)}
+                              {@const result = call.response ?? call.result ?? call.output}
+                              <div class="tool-call">
+                                <div class="tool-call-name">{call.name || `tool ${i + 1}`}</div>
+                                <pre class="example-section-text box-tool">{JSON.stringify(call.arguments ?? {}, null, 2)}</pre>
+                                {#if result != null}
+                                  <span class="example-section-label">Response</span>
+                                  <pre class="example-section-text box-tool-response">{typeof result === "string" ? result : JSON.stringify(result, null, 2)}</pre>
+                                {/if}
+                              </div>
+                            {/each}
+                          </div>
                         </div>
                       {/if}
                     {:else if row.response}
@@ -1136,6 +1155,10 @@
     font-size: 0.68rem;
     color: var(--muted);
     background: color-mix(in srgb, var(--panel-alt) 70%, transparent);
+  }
+
+  .group-meta-pill-time {
+    font-variant-numeric: tabular-nums;
   }
 
   .table-wrap {
@@ -1612,10 +1635,52 @@
     overflow-y: auto;
   }
 
-  .parsed-thinking {
-    opacity: 0.6;
-    border-left: 2px solid var(--color-c-orange-80, #f0a040);
-    padding-left: 10px;
+  /* Distinct boxes for the parsed response: reasoning, the answer, and each
+     tool call (with its response) are visually separated. */
+  .box-thinking {
+    color: var(--muted);
+    border: 1px solid var(--color-c-gray-10, #2f2f2f);
+    border-left: 3px solid var(--color-c-orange-80, #f0a040);
+    background: rgba(240, 160, 64, 0.06);
+  }
+
+  .box-answer {
+    border: 1px solid var(--color-c-gray-10, #2f2f2f);
+    border-left: 3px solid var(--green, var(--accent));
+    background: rgba(255, 255, 255, 0.02);
+  }
+
+  .tool-calls {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .tool-call {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    border: 1px solid var(--color-c-gray-10, #2f2f2f);
+    border-left: 3px solid var(--accent);
+    border-radius: 4px;
+    padding: 8px;
+    background: rgba(124, 156, 255, 0.05);
+  }
+
+  .tool-call-name {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-bright);
+  }
+
+  .box-tool,
+  .box-tool-response {
+    background: rgba(0, 0, 0, 0.25);
+  }
+
+  .box-tool-response {
+    border-left: 2px solid var(--accent);
   }
 
   .example-section-score {

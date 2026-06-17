@@ -13,8 +13,11 @@ METADATA_VOLUME_NAME = "training-gym-metadata"
 class MetadataStore(Enum):
     TRAINING_RUNS = "training-runs"
     TRAINING_RUNS_SUMMARY = "training-runs-summary"
+    FRAMEWORK_STATUS_TOKENS = "framework-status-tokens"
     TRAIN_RESULTS = "train-results"
     TRAIN_RESULTS_SUMMARY = "train-results-summary"
+    TRAINING_ROLLOUTS = "training-rollouts"
+    TRAINING_ROLLOUTS_SUMMARY = "training-rollouts-summary"
     EVAL_RESULTS = "eval-results"
     EVALS = "evals"
     EVAL_SUMMARIES = "eval-summaries"
@@ -33,10 +36,34 @@ def _metadata_volume():
     return modal.Volume.from_name(METADATA_VOLUME_NAME, create_if_missing=True)
 
 
+def _safe_reload(vol) -> None:
+    try:
+        vol.reload()
+    except RuntimeError:
+        pass
+
+
 def _store_path(store: MetadataStore | str) -> str:
     if isinstance(store, MetadataStore):
         return store.value
     return store
+
+
+def vol_remove(store: MetadataStore | str, key: str) -> bool:
+    """Delete a single item from a store. Returns True if removed."""
+    from modal.exception import InvalidError, NotFoundError
+
+    vol = _metadata_volume()
+    path = f"{_store_path(store)}/{key}.json"
+    try:
+        vol.remove_file(path)
+        return True
+    except (FileNotFoundError, NotFoundError):
+        return False
+    except InvalidError as exc:
+        if "No such file or directory" in str(exc):
+            return False
+        raise
 
 
 def vol_put(store: MetadataStore | str, key: str, value: dict[str, Any]) -> None:
@@ -99,40 +126,59 @@ async def vol_put_async(
 
 def vol_get(store: MetadataStore | str, key: str) -> dict[str, Any]:
     vol = _metadata_volume()
+    path = f"{_store_path(store)}/{key}.json"
     try:
-        data = b"".join(vol.read_file(f"{_store_path(store)}/{key}.json"))
-        return json.loads(data)
+        return json.loads(b"".join(vol.read_file(path)))
+    except FileNotFoundError:
+        _safe_reload(vol)
+    try:
+        return json.loads(b"".join(vol.read_file(path)))
     except FileNotFoundError:
         raise KeyError(key) from None
 
 
 async def vol_get_async(store: MetadataStore | str, key: str) -> dict[str, Any]:
     vol = _metadata_volume()
+    path = f"{_store_path(store)}/{key}.json"
     try:
-        chunks = [
-            chunk
-            async for chunk in vol.read_file.aio(f"{_store_path(store)}/{key}.json")
-        ]
+        chunks = [chunk async for chunk in vol.read_file.aio(path)]
+        return json.loads(b"".join(chunks))
+    except FileNotFoundError:
+        await vol.reload.aio()
+    try:
+        chunks = [chunk async for chunk in vol.read_file.aio(path)]
         return json.loads(b"".join(chunks))
     except FileNotFoundError:
         raise KeyError(key) from None
 
 
 def vol_list(store: MetadataStore | str) -> list[dict[str, Any]]:
+    import time as _time
+
     vol = _metadata_volume()
+    _safe_reload(vol)
     results = []
-    try:
-        for entry in vol.iterdir(_store_path(store)):
-            if entry.path.endswith(".json"):
-                data = b"".join(vol.read_file(entry.path))
-                results.append(json.loads(data))
-    except FileNotFoundError:
-        pass
+    for attempt in range(3):
+        try:
+            for entry in vol.iterdir(_store_path(store)):
+                if entry.path.endswith(".json"):
+                    data = b"".join(vol.read_file(entry.path))
+                    results.append(json.loads(data))
+            return results
+        except FileNotFoundError:
+            return results
+        except Exception as exc:
+            if "rate limit" in str(exc).lower() and attempt < 2:
+                _time.sleep(2**attempt)
+                results = []
+                continue
+            raise
     return results
 
 
 async def vol_list_async(store: MetadataStore | str) -> list[dict[str, Any]]:
     vol = _metadata_volume()
+    await vol.reload.aio()
     results = []
     try:
         async for entry in vol.iterdir.aio(_store_path(store)):
@@ -165,6 +211,8 @@ def vol_get_summary_items(
     key: str = SUMMARY_KEY,
     payload_key: str = SUMMARY_ITEMS_KEY,
 ) -> list[dict[str, Any]] | None:
+    vol = _metadata_volume()
+    _safe_reload(vol)
     try:
         payload = vol_get(store, key)
     except KeyError:
@@ -178,6 +226,11 @@ async def vol_get_summary_items_async(
     key: str = SUMMARY_KEY,
     payload_key: str = SUMMARY_ITEMS_KEY,
 ) -> list[dict[str, Any]] | None:
+    vol = _metadata_volume()
+    try:
+        await vol.reload.aio()
+    except (RuntimeError, Exception):
+        pass
     try:
         payload = await vol_get_async(store, key)
     except KeyError:
@@ -303,6 +356,7 @@ __all__ = [
     "vol_list_async",
     "vol_put",
     "vol_put_async",
+    "vol_remove",
     "vol_get_summary_items",
     "vol_get_summary_items_async",
     "vol_put_summary_items",

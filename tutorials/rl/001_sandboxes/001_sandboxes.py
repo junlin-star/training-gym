@@ -81,6 +81,14 @@ base_model = Qwen3_4B()
 # For training, we reuse the same `score_in_sandbox` and `extract_code`
 # helpers that `HarborEval` uses internally — wrapped in an async
 # reward function for SLIME's `custom_rm_function`.
+#
+# `score_in_sandbox` enforces `sandbox_cpu`/`sandbox_memory` with a
+# `"limit"` policy by default: rather than reserving that capacity up
+# front, the values become burst ceilings, so Modal bills each sandbox
+# by actual CPU-/RAM-second usage instead of the (usually idle)
+# reservation. Pass `cpu_policy="ignore"` to let rollouts burst above
+# the configured values, or `"reserve"` for the legacy fixed-reservation
+# behavior.
 
 async def sandbox_rm(args, sample, **kwargs) -> float:
     import asyncio

@@ -3,6 +3,7 @@ import base64
 import hashlib
 import inspect
 import os
+import secrets as _secrets
 import shlex
 import subprocess
 import shutil
@@ -32,6 +33,7 @@ from modal_training_gym.common.ray_cluster import ModalRayCluster
 from modal_training_gym.common.run import TrainingRun, TrainingRunStatus
 from modal_training_gym.common.status import MilesStatus
 from modal_training_gym.common.train_result import TrainResult
+from modal_training_gym.utils.metadata import MetadataStore, vol_put_async
 from modal_training_gym.train_recipes.miles_recipe.recipe import (
     CHECKPOINTS_PATH,
     DATA_PATH,
@@ -47,7 +49,10 @@ from modal_training_gym.frameworks.miles.modal_helpers.utils import (
 )
 
 MILES_ROOT = "/root/miles"
-HARBOR_PKG_VERSION = "0.6.6"
+# v0.8.0+ makes per-task CPU/memory requests configurable via enforcement
+# policies ("limit"/"ignore"), letting sandboxes burst on Modal and bill by
+# actual CPU-/RAM-second usage instead of over-provisioning a static reservation.
+HARBOR_PKG_VERSION = "0.8.0"
 
 _MILES_PATCHES = Path(__file__).parent / "modal_helpers" / "patches"
 _PATCH_SGLANG_ABORT_B64 = encode_patch("patch_sglang_abort", _MILES_PATCHES)
@@ -106,6 +111,7 @@ def build_miles_app(
     name: str | None = None,
 ) -> App:
     app_name = name or miles.name or f"miles-{type(miles).__name__.lstrip('_').lower()}"
+    volume_prefix = miles.name or f"miles-{type(miles).__name__.lstrip('_').lower()}"
 
     caller_module = resolve_caller_module()
     if caller_module is not None and caller_module.__name__ != "__main__":
@@ -234,11 +240,11 @@ def build_miles_app(
     miles.custom_generate_function = None
 
     hf_cache_volume = Volume.from_name("huggingface-cache", create_if_missing=True)
-    data_volume = Volume.from_name(f"{app_name}-data", create_if_missing=True)
+    data_volume = Volume.from_name(f"{volume_prefix}-data", create_if_missing=True)
     checkpoints_volume_name = (
         checkpoint.checkpoints_volume_name
         if checkpoint is not None and checkpoint.checkpoints_volume_name
-        else f"{app_name}-checkpoints"
+        else f"{volume_prefix}-checkpoints"
     )
     checkpoints_mount_path = (
         checkpoint.checkpoints_mount_path.rstrip("/") or "/"
@@ -281,7 +287,24 @@ def build_miles_app(
         serialized=True,
         name="download",
     )
-    def download():
+    def download(
+        training_run_id: str = "",
+        framework_status_url: str = "",
+        framework_status_token: str = "",
+    ):
+        from modal_training_gym.common.status_reporter import (
+            enqueue_framework_status,
+            flush as flush_status_reporter,
+        )
+
+        if training_run_id:
+            enqueue_framework_status(
+                training_run_id,
+                MilesStatus.DOWNLOAD_MODEL.value,
+                url=framework_status_url or None,
+                token=framework_status_token or None,
+                is_active=True,
+            )
         hf_cache_volume.reload()
         checkpoints_volume.reload()
         model.download()
@@ -289,6 +312,8 @@ def build_miles_app(
         miles.post_process_model()
         hf_cache_volume.commit()
         checkpoints_volume.commit()
+        if training_run_id:
+            flush_status_reporter(timeout_seconds=2.0)
 
     @app.function(
         image=image,
@@ -326,9 +351,29 @@ def build_miles_app(
         name="convert_checkpoint",
     )
     @clustered(convert_nnodes, rdma=convert_multi_node)
-    def convert_checkpoint():
+    def convert_checkpoint(
+        training_run_id: str = "",
+        framework_status_url: str = "",
+        framework_status_token: str = "",
+    ):
+        from modal_training_gym.common.status_reporter import (
+            enqueue_framework_status,
+            flush as flush_status_reporter,
+        )
+
+        if training_run_id:
+            enqueue_framework_status(
+                training_run_id,
+                MilesStatus.CONVERT_MODEL.value,
+                url=framework_status_url or None,
+                token=framework_status_token or None,
+                is_active=True,
+            )
+
         if getattr(miles, "megatron_to_hf_mode", None) == "bridge":
             print("Bridge mode - no conversion needed.")
+            if training_run_id:
+                flush_status_reporter(timeout_seconds=2.0)
             return
 
         hf_cache_volume.reload()
@@ -413,6 +458,9 @@ def build_miles_app(
         if node_rank == 0:
             print(f"Saved Megatron torch_dist checkpoint to {save_path}")
 
+        if training_run_id:
+            flush_status_reporter(timeout_seconds=2.0)
+
     _multi_node = miles.total_nodes > 1
 
     @app.function(
@@ -435,9 +483,18 @@ def build_miles_app(
         name="train",
     )
     @clustered(miles.total_nodes, rdma=_multi_node)
-    async def train(modal_app_id: str = "", modal_app_url: str = ""):
+    async def train(
+        modal_app_id: str = "",
+        modal_app_url: str = "",
+        framework_status_url: str = "",
+        framework_status_token: str = "",
+    ):
         modal_app_id = modal_app_id or os.environ.get("MODAL_APP_ID", "")
         modal_app_url = modal_app_url or modal_app_dashboard_url(modal_app_id)
+        if framework_status_url:
+            os.environ["TRAINING_GYM_FRAMEWORK_STATUS_URL"] = framework_status_url
+        if framework_status_token:
+            os.environ["TRAINING_GYM_FRAMEWORK_STATUS_TOKEN"] = framework_status_token
 
         await asyncio.gather(
             hf_cache_volume.reload.aio(),
@@ -460,8 +517,16 @@ def build_miles_app(
 
         run_record: TrainingRun | None = None
 
+        wandb_entity = ""
+        wandb_run_id = ""
+
         if cluster.is_head:
-            created_at = int(time.time())
+            if miles.wandb is not None:
+                from modal_training_gym.common.wandb import preflight_wandb
+
+                wandb_entity = preflight_wandb(miles.wandb)
+            wandb_run_id = training_run_id[:8] if miles.wandb else ""
+
             print(f"Training run id: {training_run_id}")
             config_summary = {
                 "model": {"model_name": model.model_name} if model else {},
@@ -471,7 +536,12 @@ def build_miles_app(
                     "actor_num_gpus_per_node": miles.actor_num_gpus_per_node,
                 },
                 "wandb": (
-                    {"project": miles.wandb.project, "group": miles.wandb.group}
+                    {
+                        "project": miles.wandb.project,
+                        "group": miles.wandb.group,
+                        "entity": wandb_entity,
+                        "run_id": wandb_run_id,
+                    }
                     if miles.wandb
                     else {}
                 ),
@@ -482,24 +552,52 @@ def build_miles_app(
                 "lr": miles.lr,
                 "global_batch_size": miles.global_batch_size,
             }
-            run_record = TrainingRun(
-                training_run_id=training_run_id,
-                modal_app_id=modal_app_id,
-                modal_app_url=modal_app_url,
-                framework=Framework.MILES,
-                config=config_summary,
-                framework_status=MilesStatus.INITIALIZING,
-                created_at=created_at,
-                started_at=created_at,
-            )
+            # The local TrainConfig.train() driver creates the initial
+            # TrainingRun record before invoking download/convert_checkpoint
+            # so those phases are visible in the dashboard. Reuse it; fall
+            # back to a fresh record if someone invokes train() directly.
+            try:
+                run_record = await TrainingRun.from_id_async(training_run_id)
+                run_record.modal_app_id = modal_app_id
+                run_record.modal_app_url = modal_app_url
+                run_record.config = config_summary
+                run_record.framework_status = MilesStatus.INITIALIZING
+            except KeyError:
+                created_at = int(time.time())
+                run_record = TrainingRun(
+                    training_run_id=training_run_id,
+                    modal_app_id=modal_app_id,
+                    modal_app_url=modal_app_url,
+                    framework=Framework.MILES,
+                    config=config_summary,
+                    framework_status=MilesStatus.INITIALIZING,
+                    created_at=created_at,
+                    started_at=created_at,
+                )
+            if not framework_status_token:
+                framework_status_token = _secrets.token_urlsafe(32)
             await run_record.save_async()
+            await vol_put_async(
+                MetadataStore.FRAMEWORK_STATUS_TOKENS,
+                training_run_id,
+                {"token": framework_status_token},
+            )
             print(f"TrainingRun recorded: {training_run_id}")
+
+        # In-flight status updates are fire-and-forget HTTP POSTs to the
+        # dashboard so they don't block on Modal Volume writes. Terminal
+        # state is committed synchronously below.
+        from modal_training_gym.common.status_reporter import (
+            enqueue_framework_status,
+        )
 
         async def _set_framework_status(status: MilesStatus) -> None:
             if run_record is None:
                 return
             run_record.framework_status = status
-            await run_record.save_async()
+            enqueue_framework_status(
+                training_run_id, status.value, token=framework_status_token
+            )
 
         async def _prepare_shared_inputs() -> None:
             await _set_framework_status(MilesStatus.DOWNLOAD_MODEL)
@@ -632,10 +730,15 @@ def build_miles_app(
                 miles.save = original_save
                 miles.load = original_load
 
+            wandb_env = {}
+            if wandb_run_id:
+                wandb_env["WANDB_RUN_ID"] = wandb_run_id
+
             runtime_env = {
                 "env_vars": {
                     "no_proxy": f"127.0.0.1,{cluster.head_addr}",
                     "MASTER_ADDR": cluster.head_addr,
+                    **wandb_env,
                     **miles.environment,
                 }
             }
@@ -659,6 +762,9 @@ def build_miles_app(
                 "model_config": model,
                 "checkpoints_volume_name": checkpoints_volume_name,
                 "checkpoints_mount_path": checkpoints_mount_path,
+                "wandb_project": miles.wandb.project if miles.wandb else "",
+                "wandb_entity": wandb_entity,
+                "wandb_training_run_id": wandb_run_id,
             }
             accepted_fields = set(inspect.signature(TrainResult).parameters)
             result = TrainResult(

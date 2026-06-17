@@ -5,7 +5,7 @@ import re
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 import datetime
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any, Callable, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -13,7 +13,7 @@ from modal_training_gym.common.dataset import DatasetRow
 from modal_training_gym.common.ids import create_hash
 from modal_training_gym.utils.metadata import MetadataStore, vol_get, vol_list, vol_put
 
-from modal_training_gym.common.models.base import ParsedResponse
+from modal_training_gym.common.sample import Sample
 
 if TYPE_CHECKING:
     from modal_training_gym.common.dataset import DatasetConfig
@@ -23,6 +23,10 @@ if TYPE_CHECKING:
 EVAL_SUMMARY_STORE = MetadataStore.EVALS
 EVAL_SUMMARY_KEY = "summary"
 EVAL_SUMMARY_PAYLOAD_KEY = "summaries"
+
+#: How often (in completed rows) a running eval flushes partial results to the
+#: metadata volume. Smaller = fresher dashboard, more volume writes.
+_INTERMEDIATE_SAVE_EVERY = 5
 
 
 def _callable_name(fn: Callable[..., Any]) -> str:
@@ -57,20 +61,13 @@ class EvalConfigDurable(BaseModel):
         return [cls.model_validate(v) for v in vol_list(MetadataStore.EVAL_CONFIGS)]
 
 
-class EvalRowResult(BaseModel):
-    """One evaluated row: score, response text, and optional metadata."""
-
-    score: float
-    response: str = ""  # TODO, this doesn't have to be a string
-    prompt: str = ""
-    parsed_response: ParsedResponse | None = None
-    metadata: dict[str, Any] = Field(
-        default_factory=dict
-    )  # metadata that user can inject about the evaluation result
+# An eval row is just a Sample. Kept as an alias for the public API / existing
+# imports; new code should use Sample directly.
+EvalRowResult = Sample
 
 
-class AudioEvalRowResult(EvalRowResult):
-    """``EvalRowResult`` for an audio eval, with the audio fields lifted to
+class AudioEvalRowResult(Sample):
+    """``Sample`` for an audio eval, with the audio fields lifted to
     constructor arguments.
 
     ``audio`` (a browser-playable data-URI), ``reference`` (the ground truth), and
@@ -104,12 +101,21 @@ class AudioEvalRowResult(EvalRowResult):
         return data
 
 
+#: Lifecycle of an eval run. ``running`` rows are streamed in as examples
+#: complete so the dashboard shows intermediate output; ``completed`` is the
+#: terminal success state and ``failed`` marks a run that raised partway
+#: through. The default is ``completed`` so records written before this field
+#: existed validate as finished runs.
+EvalStatus = Literal["running", "completed", "failed"]
+
+
 class EvalSummary(BaseModel):
     eval_id: str
     eval_config_id: str
     created_at: datetime.datetime
     total: int
     mean: float
+    status: EvalStatus = "completed"
 
     @classmethod
     def list_summaries(cls) -> list["EvalSummary"]:
@@ -148,6 +154,7 @@ class EvalResult(BaseModel):
     created_at: datetime.datetime = Field(
         default_factory=lambda: datetime.datetime.now(datetime.UTC)
     )
+    status: EvalStatus = "completed"
     rows: list[EvalRowResult] = Field(default_factory=list)
 
     @property
@@ -165,6 +172,7 @@ class EvalResult(BaseModel):
             created_at=self.created_at,
             total=self.total,
             mean=self.mean,
+            status=self.status,
         )
 
     def save(self) -> None:
@@ -239,7 +247,7 @@ class EvalConfig:
                 class_name,
                 dataset_name,
                 eval_fn_name,
-                "",
+                self.prompt_column or "",
             )
         if self.eval_fn is None:
             assert self.eval_response_fn is not None, (
@@ -309,8 +317,12 @@ class EvalConfig:
         debug: bool = False,
         max_concurrency: int = 1,
     ) -> EvalResult:
+        from modal_training_gym.setup import ensure_dashboard_deployed
+
         if max_concurrency < 1:
             raise ValueError("max_concurrency must be >= 1")
+
+        ensure_dashboard_deployed()
 
         self.save()
         deployment.wait_until_ready()
@@ -321,36 +333,52 @@ class EvalConfig:
             idx, example = item
             return idx, self.eval_fn(deployment, example)
 
-        results: list[EvalRowResult] = []
-        with ThreadPoolExecutor(max_workers=max_concurrency) as executor:
-            indexed_results = executor.map(
-                _evaluate_indexed,
-                enumerate(self.dataset.load(split="eval"), start=1),
-            )
-            for idx, result in indexed_results:
-                if debug:
-                    print(
-                        f"Finished example {idx}: "
-                        f"response={result.response!r} score={result.score}",
-                        flush=True,
-                    )
-                results.append(result)
-
-        created_at = datetime.datetime.now(datetime.UTC)
+        # Persist a ``running`` record up front (and stream rows into it as
+        # they complete) so the dashboard surfaces an in-progress eval with
+        # intermediate output instead of nothing until the whole run finishes.
         eval_id = create_hash(
             "eval",
             self.eval_config_id,
             deployment.deployment_id,
-            "",
-            "",
+            type(self.dataset).__name__,
+            _callable_name(self.eval_fn or self.eval_response_fn),
         )
         result = EvalResult(
             eval_id=eval_id,
             deployment_id=deployment.deployment_id,
             eval_config_id=self.eval_config_id,
-            created_at=created_at,
-            rows=results,
+            created_at=datetime.datetime.now(datetime.UTC),
+            status="running",
+            rows=[],
         )
+        result.save()
+
+        try:
+            with ThreadPoolExecutor(max_workers=max_concurrency) as executor:
+                indexed_results = executor.map(
+                    _evaluate_indexed,
+                    enumerate(self.dataset.load(split="eval"), start=1),
+                )
+                for idx, row_result in indexed_results:
+                    if debug:
+                        print(
+                            f"Finished example {idx}: "
+                            f"response={row_result.response!r} "
+                            f"score={row_result.score}",
+                            flush=True,
+                        )
+                    result.rows.append(row_result)
+                    # Flush partial progress periodically rather than per row:
+                    # each save rewrites the shared summary list, so throttle to
+                    # keep volume writes bounded on large datasets.
+                    if result.total % _INTERMEDIATE_SAVE_EVERY == 0:
+                        result.save()
+        except Exception:
+            result.status = "failed"
+            result.save()
+            raise
+
+        result.status = "completed"
         result.save()
         return result
 
@@ -389,6 +417,41 @@ def extract_code(text: str, model: "ModelConfig | None" = None) -> str:
     return content
 
 
+# Modal's per-container default resource request (modal.com/docs/guide/resources).
+# Used as the request "floor" for the "limit" enforcement policy so sandboxes bill by
+# actual CPU-/RAM-second usage rather than a static reservation.
+_MODAL_DEFAULT_CPU_REQUEST = 0.125
+_MODAL_DEFAULT_MEMORY_REQUEST = 128  # MiB
+
+#: Accepted CPU/memory enforcement policies, mirroring Harbor v0.8.0's ``--cpus`` /
+#: ``--memory`` flags. Modal bills for ``max(request, actual usage)``, so reserving more
+#: than a sandbox uses over-provisions and inflates cost.
+RESOURCE_POLICIES = ("reserve", "limit", "ignore")
+
+
+def _sandbox_resource(
+    value: float, policy: str, default_request: float
+) -> float | tuple[float, float] | None:
+    """Translate a Harbor-style enforcement *policy* into a Modal cpu/memory kwarg.
+
+    - ``"reserve"`` — reserve *value* outright (billed for the full reservation, even
+      when idle). This is the static-reservation behavior that over-provisions on Modal.
+    - ``"limit"`` — request the small Modal default and cap bursting at *value*, so the
+      sandbox is billed by actual usage up to that ceiling.
+    - ``"ignore"`` — no enforcement; returns ``None`` so the caller omits the kwarg and
+      the sandbox bursts freely on Modal's default request, billed by actual usage.
+    """
+    if policy == "reserve":
+        return value
+    if policy == "limit":
+        return (min(default_request, value), value)
+    if policy == "ignore":
+        return None
+    raise ValueError(
+        f"invalid resource policy {policy!r}; expected one of {RESOURCE_POLICIES}"
+    )
+
+
 def score_in_sandbox(
     code: str,
     *,
@@ -397,12 +460,21 @@ def score_in_sandbox(
     sandbox_cpu: float = 1.0,
     sandbox_memory: int = 1024,
     python_version: str = "3.11",
+    cpu_policy: str = "limit",
+    memory_policy: str = "limit",
 ) -> tuple[float, dict[str, Any]]:
     """Run *code* against *test_cases* in a Modal sandbox.
 
     Each test case is a dict with ``input`` and ``expected_output`` keys.
     The code is executed once per test case with the input piped to stdin.
     Returns ``(fraction_passed, metadata_dict)``.
+
+    ``cpu_policy`` and ``memory_policy`` control how ``sandbox_cpu`` / ``sandbox_memory``
+    are enforced on Modal (see :data:`RESOURCE_POLICIES`). The default ``"limit"`` treats
+    them as burst ceilings rather than reservations, so the sandbox is billed by actual
+    CPU-/RAM-second usage instead of over-provisioning a static reservation. Use
+    ``"ignore"`` to let tasks burst above the configured values, or ``"reserve"`` for the
+    legacy fixed-reservation behavior.
     """
     import modal
 
@@ -443,16 +515,26 @@ def score_in_sandbox(
 
     app = modal.App.lookup("training-gym-sandbox-rm", create_if_missing=True)
     image = modal.Image.debian_slim(python_version=python_version)
-    sb = modal.Sandbox.create(
+
+    resource_kwargs: dict[str, Any] = {}
+    cpu_arg = _sandbox_resource(sandbox_cpu, cpu_policy, _MODAL_DEFAULT_CPU_REQUEST)
+    if cpu_arg is not None:
+        resource_kwargs["cpu"] = cpu_arg
+    memory_arg = _sandbox_resource(
+        sandbox_memory, memory_policy, _MODAL_DEFAULT_MEMORY_REQUEST
+    )
+    if memory_arg is not None:
+        resource_kwargs["memory"] = memory_arg
+
+    sb = modal.Sandbox._experimental_create(
         "python",
         "-c",
         runner,
         cases_payload,
         image=image,
-        cpu=sandbox_cpu,
-        memory=sandbox_memory,
         timeout=timeout_sec,
         app=app,
+        **resource_kwargs,
     )
     sb.wait()
 
@@ -489,6 +571,8 @@ class HarborEval(EvalConfig):
     sandbox_timeout: int = 60
     sandbox_cpu: float = 1.0
     sandbox_memory: int = 1024
+    sandbox_cpu_policy: str = "limit"
+    sandbox_memory_policy: str = "limit"
     sandbox_python_version: str = "3.11"
     extract_code_fn: Callable[[str], str] | None = None
 
@@ -544,6 +628,8 @@ class HarborEval(EvalConfig):
             timeout_sec=self.sandbox_timeout,
             sandbox_cpu=self.sandbox_cpu,
             sandbox_memory=self.sandbox_memory,
+            cpu_policy=self.sandbox_cpu_policy,
+            memory_policy=self.sandbox_memory_policy,
             python_version=self.sandbox_python_version,
         )
 

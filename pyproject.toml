@@ -36,9 +36,6 @@ docs = [
     "properdocs>=1.6.7",
     "pymdown-extensions>=10.21.2",
 ]
-tutorials = [
-    "nltk>=3.9.4",
-]
 
 [tool.ruff]
 extend-exclude = ["tutorials/**"]

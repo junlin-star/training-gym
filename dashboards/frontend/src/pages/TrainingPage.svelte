@@ -1,11 +1,14 @@
 <script>
-  import { ExternalLink, Loader2, PanelRightClose } from "lucide-svelte";
+  import { ExternalLink, Maximize2, PanelRightClose } from "lucide-svelte";
   import Drawer from "../components/Drawer.svelte";
   import FilterBar from "../components/FilterBar.svelte";
+  import FrameworkStageProgress from "../components/FrameworkStageProgress.svelte";
   import MinimalTable from "../components/MinimalTable.svelte";
   import MinimalTableSkeleton from "../components/MinimalTableSkeleton.svelte";
+  import RunSummary from "../components/RunSummary.svelte";
   import StatusPill from "../components/StatusPill.svelte";
   import TimeAgo from "../components/TimeAgo.svelte";
+  import { smoothedStageLabel } from "../lib/format.js";
 
   let {
     allRuns,
@@ -28,91 +31,63 @@
     showFrameworkStatus,
     fmtDuration,
     search = $bindable(),
+    drawerRunId = null,
+    onOpenDetail = () => {},
+    onCloseDrawer = () => {},
     onToggleRecipe,
     onToggleAllRecipes,
     onToggleStatus,
   } = $props();
 
-  let selectedRunId = $state(null);
-
+  // The drawer is now driven by the parent: it holds the run-summary while the
+  // full rollouts/logs detail lives on its own page. Clicking a run (or the
+  // drawer's Expand button) navigates to that page; the page's Collapse button
+  // brings the summary back as this drawer.
   let selectedRun = $derived.by(
-    () => allRuns.find((run) => run.run_id === selectedRunId) || null,
+    () => allRuns.find((run) => run.run_id === drawerRunId) || null,
   );
 
-  let selectedRecipe = $derived.by(() => {
-    if (!selectedRun) return {};
-    return selectedRun.config?.recipe || selectedRun.config?.preset || {};
-  });
-
-  let selectedRecipeEntries = $derived.by(() => {
-    return Object.entries(selectedRecipe).filter(
-      ([, value]) => value !== undefined && value !== null && String(value) !== "",
-    );
-  });
-
-  let selectedRecipeJson = $derived.by(() => {
-    if (!Object.keys(selectedRecipe).length) return "";
-    return JSON.stringify(selectedRecipe, null, 2);
-  });
+  const drawerWidth = "min(420px, calc(100vw - 24px))";
 
   function selectRun(runId) {
-    selectedRunId = runId;
+    onOpenDetail(runId);
   }
 
   function closeDrawer() {
-    selectedRunId = null;
+    onCloseDrawer();
   }
 
-  function formatFieldLabel(field) {
-    return field.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
-  }
-
-  function formatFieldValue(value) {
-    if (typeof value === "number") {
-      return Number.isInteger(value) ? String(value) : value.toExponential(1);
+  function frameworkProgress(run) {
+    const progress = run?.framework_progress;
+    if (!progress || typeof progress !== "object") return null;
+    const current = Number(progress.current);
+    const total = Number(progress.total);
+    if (!Number.isFinite(current) || !Number.isFinite(total) || total <= 0) {
+      return null;
     }
-    if (typeof value === "object") return JSON.stringify(value);
-    return String(value);
-  }
-
-  function isSlimeRun(run) {
-    return String(run?.framework || "").toLowerCase() === "slime";
-  }
-
-  function runDuration(run) {
-    if (typeof run.duration_seconds === "number" && run.duration_seconds >= 0) {
-      return fmtDuration(0, run.duration_seconds);
-    }
-    if (run.started_at) {
-      return fmtDuration(run.started_at, run.ended_at);
-    }
-    return "—";
-  }
-
-  function formatFrameworkStatus(status) {
-    const raw = String(status || "").trim();
-    if (!raw) return "";
-    const normalized = raw.toLowerCase();
-    const labels = {
-      initializing: "Initializing",
-      download_model: "Downloading model",
-      convert_model: "Converting model",
-      prepare_dataset: "Preparing dataset",
-      training: "Training",
+    return {
+      current: Math.max(0, Math.min(current, total)),
+      total,
+      unit: progress.unit || "step",
     };
-    return (
-      labels[normalized] ||
-      normalized.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase())
-    );
   }
 
   function frameworkStatusLabel(run) {
-    return formatFrameworkStatus(getFrameworkStatus(run));
+    // Pass the raw `framework_progress` so smoothedStageLabel sees is_active
+    // even for stages that don't have step counters yet (download/convert).
+    return smoothedStageLabel(getFrameworkStatus(run), run?.framework_progress);
+  }
+
+  function progressLabel(progress) {
+    if (!progress) return "";
+    const unit = String(progress.unit || "step");
+    const label = unit.charAt(0).toUpperCase() + unit.slice(1);
+    return `${label} ${progress.current} / ${progress.total}`;
   }
 
   $effect(() => {
-    if (selectedRunId && !allRuns.some((run) => run.run_id === selectedRunId)) {
-      selectedRunId = null;
+    if (drawerRunId && !allRuns.some((run) => run.run_id === drawerRunId)) {
+      onCloseDrawer();
     }
   });
 </script>
@@ -163,7 +138,7 @@
       <div class="table-wrap">
         <MinimalTableSkeleton
           class="runs-table"
-          columns={["Name", "Status", "Stage", "Model", "Dataset", "Recipe", "Created", ""]}
+          columns={["Name", "Status", "Stage", "Model", "Dataset", "Recipe", "Created", "Last updated", ""]}
           rows={8}
         />
       </div>
@@ -185,6 +160,7 @@
               <th>Dataset</th>
               <th>Recipe</th>
               <th>Created</th>
+              <th>Last updated</th>
               <th></th>
             </tr>
           </thead>
@@ -193,10 +169,11 @@
               {@const runName = run.run_id || "—"}
               {@const status = getStatus(run)}
               {@const stageLabel = frameworkStatusLabel(run)}
-              <tr class:row-selected={selectedRunId === run.run_id}>
+              {@const progress = frameworkProgress(run)}
+              <tr class:row-selected={drawerRunId === run.run_id}>
                 <td class="run-cell">
                   <button
-                    class="cell-open-button"
+                    class="cell-open-button run-name-button"
                     title={runName}
                     onclick={() => selectRun(run.run_id)}
                   >
@@ -209,14 +186,18 @@
                   </button>
                 </td>
                 <td class="stage-cell">
-                  <button class="cell-open-button" onclick={() => selectRun(run.run_id)}>
+                  <button
+                    class="cell-open-button stage-open-button"
+                    onclick={() => selectRun(run.run_id)}
+                  >
                     {#if showFrameworkStatus(run) && stageLabel}
-                      <span class="stage-pill" aria-label={stageLabel}>
-                        <span class="stage-spinner">
-                          <Loader2 size={16} />
-                        </span>
-                        <span>{stageLabel}</span>
-                      </span>
+                      <FrameworkStageProgress
+                        progress={progress}
+                        progressLabel={progressLabel(progress)}
+                        stageLabel={stageLabel}
+                        compact
+                        active={status.toLowerCase() === "pending"}
+                      />
                     {:else}
                       <span class="stage-empty">—</span>
                     {/if}
@@ -240,8 +221,23 @@
                 <td class="created-cell">
                   <TimeAgo timestamp={run.started_at || run.created_at} showJustNow falsyRepresentation="—" />
                 </td>
+                <td class="updated-cell">
+                  <TimeAgo timestamp={run.updated_at} showJustNow falsyRepresentation="—" />
+                </td>
                 <td class="modal-link-cell">
                   <div class="modal-link-wrap">
+                    <button
+                      class="expand-button"
+                      title="Open expanded view"
+                      aria-label={`Open expanded view for training run ${run.run_id}`}
+                      onclick={(event) => {
+                        event.stopPropagation();
+                        onOpenDetail(run.run_id);
+                      }}
+                    >
+                      <Maximize2 size={12} strokeWidth={2.1} />
+                      <span class="expand-button-label">Expand</span>
+                    </button>
                     {#if run.modal_app_url}
                       <a
                         class="open-modal-link"
@@ -271,14 +267,25 @@
 </section>
 
 {#if selectedRun}
-  <Drawer open={!!selectedRun} onclose={closeDrawer}>
-    <div class="run-drawer" aria-label={`Training run ${selectedRun.run_id}`}>
+  <Drawer open={!!selectedRun} onclose={closeDrawer} width={drawerWidth}>
+    <div
+      class="run-drawer"
+      aria-label={`Training run ${selectedRun.run_id}`}
+    >
       <div class="drawer-header">
         <div class="drawer-header-left">
           <div class="drawer-eyebrow">Training run</div>
           <h2 class="drawer-run-id" title={selectedRun.run_id}>{selectedRun.run_id}</h2>
         </div>
         <div class="drawer-actions">
+          <button
+            class="drawer-expand-button"
+            onclick={() => onOpenDetail(selectedRun.run_id)}
+            title="Expand to full view"
+          >
+            <Maximize2 size={12} />
+            <span>Expand</span>
+          </button>
           {#if selectedRun.modal_app_url}
             <a
               class="view-app-link"
@@ -296,66 +303,16 @@
         </div>
       </div>
 
-      <section class="drawer-section">
-        <div class="drawer-kv">
-          <span class="drawer-key">Status</span>
-          <StatusPill status={getStatus(selectedRun)} />
-        </div>
-        {#if showFrameworkStatus(selectedRun) && frameworkStatusLabel(selectedRun)}
-          <div class="drawer-kv">
-            <span class="drawer-key">Stage</span>
-            <span class="stage-pill" aria-label={frameworkStatusLabel(selectedRun)}>
-              <span class="stage-spinner">
-                <Loader2 size={16} />
-              </span>
-              <span>{frameworkStatusLabel(selectedRun)}</span>
-            </span>
-          </div>
-        {/if}
-        <div class="drawer-kv">
-          <span class="drawer-key">Model</span>
-          <span class="drawer-value">{modelName(selectedRun)}</span>
-        </div>
-        <div class="drawer-kv">
-          <span class="drawer-key">Dataset</span>
-          <span class="drawer-value">{selectedRun.config_summary?.dataset_name || "—"}</span>
-        </div>
-        <div class="drawer-kv">
-          <span class="drawer-key">Recipe</span>
-          <span class="drawer-value">{selectedRun.framework || "—"}</span>
-        </div>
-        <div class="drawer-kv">
-          <span class="drawer-key">Duration</span>
-          <span class="drawer-value">{runDuration(selectedRun)}</span>
-        </div>
-        <div class="drawer-kv">
-          <span class="drawer-key">Started</span>
-          <span class="drawer-value">
-            <TimeAgo timestamp={selectedRun.started_at || selectedRun.created_at} showJustNow />
-          </span>
-        </div>
-      </section>
-
-      {#if isSlimeRun(selectedRun) && selectedRecipeJson}
-        <section class="drawer-section">
-          <h3 class="drawer-section-title">Full Slime parameters</h3>
-          <pre class="drawer-json">{selectedRecipeJson}</pre>
-        </section>
-      {/if}
-
-      <section class="drawer-section">
-        <h3 class="drawer-section-title">Training recipe</h3>
-        {#if selectedRecipeEntries.length}
-          {#each selectedRecipeEntries as [field, value] (field)}
-            <div class="drawer-kv">
-              <span class="drawer-key">{formatFieldLabel(field)}</span>
-              <span class="drawer-value drawer-value-mono">{formatFieldValue(value)}</span>
-            </div>
-          {/each}
-        {:else}
-          <div class="drawer-empty">No recipe values found for this run.</div>
-        {/if}
-      </section>
+      <div class="drawer-summary">
+        <RunSummary
+          run={selectedRun}
+          {getStatus}
+          {showFrameworkStatus}
+          {getFrameworkStatus}
+          {modelName}
+          {fmtDuration}
+        />
+      </div>
     </div>
   </Drawer>
 {/if}
@@ -451,6 +408,11 @@
     color: var(--accent);
   }
 
+  .stage-open-button {
+    white-space: normal;
+    line-height: 16px;
+  }
+
   .run-name {
     display: block;
     color: var(--text-bright);
@@ -476,35 +438,12 @@
   }
 
   .stage-cell {
-    width: 14%;
+    width: 16%;
   }
 
-  .stage-pill {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    min-width: 0;
-    max-width: 100%;
-    border: 1px solid #3b2a37;
-    border-radius: 9999px;
-    background: #2f2436;
-    color: #d176bd;
-    padding: 3px 10px;
-    font-size: 12px;
-    font-weight: 500;
-    line-height: 12px;
+  .created-cell,
+  .updated-cell {
     white-space: nowrap;
-  }
-
-  .stage-pill span:last-child {
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .stage-spinner {
-    display: inline-flex;
-    flex: 0 0 auto;
-    animation: stage-pill-spin 1s linear infinite;
   }
 
   .stage-empty {
@@ -512,12 +451,37 @@
   }
 
   .modal-link-cell {
-    min-width: 9.75rem;
-    width: 12.5rem;
+    min-width: 14rem;
+    width: auto;
+    overflow: visible;
   }
 
   .modal-link-wrap {
     display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .expand-button {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    white-space: nowrap;
+    border: 1px solid var(--color-c-gray-10, #2f2f2f);
+    border-radius: 6px;
+    padding: 4px 8px;
+    font: inherit;
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 16px;
+    color: var(--muted);
+    background: transparent;
+    cursor: pointer;
+  }
+
+  .expand-button:hover {
+    color: var(--text-bright);
+    border-color: var(--border-strong);
   }
 
   .open-modal-link {
@@ -526,6 +490,7 @@
     justify-content: flex-start;
     gap: 6px;
     white-space: nowrap;
+    flex-shrink: 0;
     border: 1px solid var(--color-c-gray-10, #2f2f2f);
     border-radius: 6px;
     padding: 4px 8px;
@@ -556,8 +521,13 @@
   }
 
   .run-drawer {
-    width: min(420px, calc(100vw - 24px));
+    width: 100%;
     height: 100%;
+    max-height: 100vh;
+  }
+
+  .drawer-summary {
+    padding: 4px 20px 16px;
   }
 
   .drawer-header {
@@ -618,6 +588,27 @@
     border-color: var(--border-strong);
   }
 
+  .drawer-expand-button {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border: 1px solid var(--color-c-gray-10, #2f2f2f);
+    border-radius: 6px;
+    padding: 4px 8px;
+    font: inherit;
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 16px;
+    color: var(--muted);
+    background: transparent;
+    cursor: pointer;
+  }
+
+  .drawer-expand-button:hover {
+    color: var(--text-bright);
+    border-color: var(--border-strong);
+  }
+
   .drawer-close {
     border: 1px solid var(--color-c-gray-10, #2f2f2f);
     border-radius: 6px;
@@ -635,81 +626,11 @@
     border-color: var(--border-strong);
   }
 
-  .drawer-section {
-    border-bottom: 1px solid var(--color-c-gray-10, #2f2f2f);
-    padding: 16px 20px;
-  }
-
-  .drawer-section-title {
-    color: var(--text-bright);
-    font-size: 14px;
-    font-weight: 500;
-    line-height: 20px;
-    margin-bottom: 8px;
-  }
-
-  .drawer-kv {
-    display: grid;
-    grid-template-columns: 100px minmax(0, 1fr);
-    align-items: baseline;
-    gap: 8px;
-    padding: 4px 0;
-  }
-
-  .drawer-key {
-    color: var(--muted);
-    font-size: 12px;
-    line-height: 16px;
-  }
-
-  .drawer-value {
-    color: var(--text);
-    font-size: 14px;
-    line-height: 20px;
-    overflow-wrap: anywhere;
-  }
-
-  .drawer-value-mono {
-    font-family: var(--font-mono);
-    font-size: 12px;
-    line-height: 16px;
-  }
-
-  .drawer-empty {
-    color: var(--muted);
-    font-size: 12px;
-    line-height: 16px;
-  }
-
-  .drawer-json {
-    border: 1px solid var(--color-c-gray-10, #2f2f2f);
-    border-radius: 8px;
-    background: color-mix(in srgb, var(--panel-alt) 74%, black);
-    color: var(--text);
-    font-family: var(--font-mono);
-    font-size: 11px;
-    line-height: 16px;
-    margin: 0;
-    max-height: 360px;
-    overflow: auto;
-    padding: 10px;
-    white-space: pre;
-  }
-
   .empty {
     padding: 24px;
     color: var(--muted);
     text-align: center;
     font-size: 0.84rem;
-  }
-
-  @keyframes stage-pill-spin {
-    from {
-      transform: rotate(0deg);
-    }
-    to {
-      transform: rotate(360deg);
-    }
   }
 
   @media (max-width: 900px) {

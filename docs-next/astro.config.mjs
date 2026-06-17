@@ -14,7 +14,7 @@ export default defineConfig({
       title: 'Training Gym',
       favicon: '/modal-logo.svg',
       description:
-        'Reusable building blocks + runnable examples for RL post-training on Modal.',
+        'Open-source Python SDK for GRPO and RL post-training of LLMs on Modal GPU clusters — tutorials, API reference, and runnable examples.',
       tagline:
         'GRPO, PPO, custom reward and generate functions — runnable on Modal in minutes.',
       head: [
@@ -37,6 +37,27 @@ export default defineConfig({
         {
           tag: 'meta',
           attrs: { name: 'twitter:image', content: 'https://gym.modal.dev/og-image.png' },
+        },
+        {
+          tag: 'meta',
+          attrs: { name: 'twitter:site', content: '@modal_labs' },
+        },
+        {
+          tag: 'script',
+          attrs: { type: 'application/ld+json' },
+          content: JSON.stringify({
+            '@context': 'https://schema.org',
+            '@type': 'WebSite',
+            name: 'Training Gym',
+            url: 'https://gym.modal.dev',
+            description:
+              'Open-source Python SDK for GRPO and RL post-training of LLMs on Modal GPU clusters.',
+            publisher: {
+              '@type': 'Organization',
+              name: 'Modal Labs',
+              url: 'https://modal.com',
+            },
+          }),
         },
       ],
       social: [
@@ -151,6 +172,7 @@ export default defineConfig({
                 { label: 'Qwen3-14B', link: '/reference/models/qwen3_14b/' },
                 { label: 'Qwen3-30B-A3B', link: '/reference/models/qwen3_30b/' },
                 { label: 'Qwen3-32B', link: '/reference/models/qwen3_32b/' },
+                { label: 'Qwen3.6-27B', link: '/reference/models/qwen3_6_27b/' },
                 { label: 'Qwen3.6-35B-A3B', link: '/reference/models/qwen3_6_35b/' },
               ],
             },
@@ -160,6 +182,7 @@ export default defineConfig({
                 { label: 'TrainConfig', link: '/reference/training/trainconfig/' },
                 { label: 'MultiTurn', link: '/reference/training/multiturn/' },
                 { label: 'SlimeRecipe', link: '/reference/training/slimerecipe/' },
+                { label: 'Qwen3_6_27b_Recipe', link: '/reference/training/qwen3_6_27b_recipe/' },
                 { label: 'Qwen3_6_35b_Recipe', link: '/reference/training/qwen3_6_35b_recipe/' },
               ],
             },

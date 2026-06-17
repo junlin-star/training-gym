@@ -4,6 +4,9 @@ from .base import (
     ModelConfig,
     ParsedResponse,
     ToolCall,
+    parse_glm_response,
+    parse_kimi_k2_response,
+    parse_qwen3_6_response,
     parse_qwen3_response,
 )
 from .glm_4_7 import GLM_4_7
@@ -16,6 +19,7 @@ from .qwen3_30b import Qwen3_30B
 from .qwen3_32b import Qwen3_32B
 from .kimi_k2_5 import Kimi_K2_5
 from .kimi_k2_6 import Kimi_K2_6
+from .qwen3_6_27b import Qwen3_6_27B
 from .qwen3_6_35b import Qwen3_6_35B
 from .qwen3_asr_1_7b import Qwen3_ASR_1_7B
 from .qwen3_vl_8b import Qwen3VL_8B
@@ -24,8 +28,6 @@ __all__ = [
     "HFModelConfiguration",
     "ModelArchitecture",
     "ModelConfig",
-    "ParsedResponse",
-    "GLM_4_7",
     "ParsedResponse",
     "GLM_4_7",
     "Qwen3_0_6B",
@@ -38,7 +40,11 @@ __all__ = [
     "Kimi_K2_5",
     "Kimi_K2_6",
     "ToolCall",
+    "parse_glm_response",
+    "parse_kimi_k2_response",
+    "parse_qwen3_6_response",
     "parse_qwen3_response",
+    "Qwen3_6_27B",
     "Qwen3_6_35B",
     "Qwen3_ASR_1_7B",
     "Qwen3VL_8B",

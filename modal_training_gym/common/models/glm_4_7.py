@@ -2,7 +2,7 @@
 
 import subprocess
 
-from .base import HFModelConfiguration, ModelArchitecture
+from .base import HFModelConfiguration, ModelArchitecture, parse_glm_response
 
 _TOOLS_PATH = "/opt/training-gym/tools"
 
@@ -39,6 +39,8 @@ class GLM_4_7(HFModelConfiguration):
     Pre-configured with base ``ModelArchitecture`` for Megatron-based
     frameworks (slime). Downloads from ``zai-org/GLM-4.7`` on HuggingFace.
     """
+
+    response_parser = staticmethod(parse_glm_response)
 
     model_name = "zai-org/GLM-4.7"
     architecture = ModelArchitecture(

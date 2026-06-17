@@ -20,6 +20,7 @@ import base64
 import dataclasses as _dc
 import inspect
 import os
+import secrets as _secrets
 import shlex
 import subprocess
 import tempfile
@@ -50,8 +51,10 @@ from modal_training_gym.common.ray_cluster import (
     clustered_if,
 )
 from modal_training_gym.common.run import TrainingRun, TrainingRunStatus
+from modal_training_gym.common.wandb import WandbConfig
 from modal_training_gym.common.status import SlimeStatus
 from modal_training_gym.common.train_result import TrainResult
+from modal_training_gym.utils.metadata import MetadataStore, vol_put_async
 
 from modal_training_gym.train_recipes.slime_recipe.recipe import (
     CHECKPOINTS_PATH,
@@ -73,7 +76,10 @@ from modal_training_gym.common.framework import Framework
 SLIME_ROOT = "/root/slime"
 # Pin by digest to prevent mutable-tag drift.  Tag: nightly-dev-20260529a
 SLIME_IMAGE = "slimerl/slime@sha256:087a57732cf4fb271729df47530b01a9530144f4339247efc422f03e2b6988e1"
-HARBOR_PKG_VERSION = "0.6.6"
+# v0.8.0+ makes per-task CPU/memory requests configurable via enforcement
+# policies ("limit"/"ignore"), letting sandboxes burst on Modal and bill by
+# actual CPU-/RAM-second usage instead of over-provisioning a static reservation.
+HARBOR_PKG_VERSION = "0.8.0"
 
 _SLIME_PATCHES = Path(__file__).parent / "modal_helpers" / "patches"
 _PATCH_VALIDATION_B64 = encode_patch("patch_validation", _SLIME_PATCHES)
@@ -97,6 +103,9 @@ _PATCH_QWEN3_ASR_EXPORT_B64 = encode_patch(
     "patch_qwen3_asr_export",
     _SLIME_PATCHES / "model_specific_patches" / "qwen3_asr",
 )
+_PATCH_ROLLOUT_STATUS_B64 = encode_patch(
+    "patch_rollout_status_reporting", _SLIME_PATCHES
+)
 
 
 def _build_slime_base_image() -> "Image":
@@ -110,6 +119,7 @@ def _build_slime_base_image() -> "Image":
             f"echo {_PATCH_BRIDGE_NONE_TASK_B64} | base64 -d | python3",
             f"echo {_PATCH_STOP_TOKEN_DIAG_B64} | base64 -d | python3",
             f"echo {_PATCH_QWEN3_ASR_EXPORT_B64} | base64 -d | python3",
+            f"echo {_PATCH_ROLLOUT_STATUS_B64} | base64 -d | python3",
         )
     )
 
@@ -138,6 +148,17 @@ def _build_conversion_config(slime_cfg: Any, model: Any = None) -> dict[str, Any
 
 
 _CONVERSION_CONFIG_FILE = ".conversion_config.json"
+
+
+def _response_parser_path(model: Any) -> str:
+    """Import path of the model's response parser so the rollout recorder can
+    resolve and apply it remotely. Empty when the model sets no parser."""
+    fn = getattr(model, "response_parser", None) if model is not None else None
+    if fn is None:
+        return ""
+    module = getattr(fn, "__module__", "")
+    qualname = getattr(fn, "__qualname__", "") or getattr(fn, "__name__", "")
+    return f"{module}.{qualname}" if module and qualname else ""
 
 
 def _has_torch_dist_checkpoint(save_path: str) -> bool:
@@ -237,6 +258,13 @@ def _serialize_recipe_fields(recipe: SlimeRecipe) -> dict[str, Any]:
     }
 
 
+def _preflight_wandb(wandb_cfg: WandbConfig) -> str:
+    """Thin wrapper around :func:`~modal_training_gym.common.wandb.preflight_wandb`."""
+    from modal_training_gym.common.wandb import preflight_wandb
+
+    return preflight_wandb(wandb_cfg)
+
+
 def build_slime_app(
     *,
     training_run_id: str,
@@ -248,6 +276,7 @@ def build_slime_app(
 ) -> App:
     """Return a Modal App with `download`, `prepare_dataset`, `convert_checkpoint`, and `train` defined."""
     app_name = name or f"slime-{type(slime).__name__.lstrip('_').lower()}"
+    volume_prefix = f"slime-{type(slime).__name__.lstrip('_').lower()}"
 
     SlimeRecipe._validate_custom_model_architecture(model)
     SlimeRecipe._validate_dataset(dataset)
@@ -365,18 +394,11 @@ def build_slime_app(
             f"echo {_PATCH_VALIDATION_B64} | base64 -d | python3",
         )
 
-    # Model-declared compat shims for upstream gaps (e.g. Qwen3-ASR's bridge /
-    # processor / export patches). Applied to the base image so both the
-    # conversion and training images (train_image = image, below) inherit them,
-    # and after the local mounts above so a mounted slime can't overlay them.
-    # Each patch is idempotent; gated on the model declaring it, so non-ASR runs
-    # are untouched.
-    _model_pip_packages = (
-        list(getattr(model, "pip_packages", None) or []) if model else []
-    )
-    if _model_pip_packages:
-        image = image.uv_pip_install(*_model_pip_packages)
-
+    # Model-declared compat shims for upstream gaps (e.g. Qwen3-VL's MB->HF export
+    # converter). Applied to the base image so both the conversion and training
+    # images (train_image = image, below) inherit them, and after the local mounts
+    # above so a mounted slime can't overlay them. Each patch is idempotent; gated
+    # on the model declaring it, so models without compat_patches are untouched.
     _compat_patches = (
         list(getattr(model.architecture, "compat_patches", None) or [])
         if model and getattr(model, "architecture", None)
@@ -395,9 +417,19 @@ def build_slime_app(
         return raw if isinstance(raw, str) else ""
 
     def _set_custom_generate_path(path: str) -> None:
-        cfg = dict(slime.extra_config or {})
+        cfg = dict(slime.extra_config) if isinstance(slime.extra_config, dict) else {}
         cfg["custom_generate_function_path"] = path
         object.__setattr__(slime, "extra_config", cfg)
+
+    def _set_extra_config_path(key: str) -> Callable[[str], None]:
+        def setter(path: str) -> None:
+            cfg = (
+                dict(slime.extra_config) if isinstance(slime.extra_config, dict) else {}
+            )
+            cfg[key] = path
+            object.__setattr__(slime, "extra_config", cfg)
+
+        return setter
 
     def _ship_callable(
         fn: Any,
@@ -459,7 +491,7 @@ def build_slime_app(
         set_path(f"{mod_name}.{fn_name}")
 
     def _set_custom_rm_path(path: str) -> None:
-        cfg = dict(slime.extra_config or {})
+        cfg = dict(slime.extra_config) if isinstance(slime.extra_config, dict) else {}
         cfg["custom_rm_path"] = path
         object.__setattr__(slime, "extra_config", cfg)
 
@@ -478,6 +510,36 @@ def build_slime_app(
         fallback_name="rollout_function",
         set_path=lambda path: object.__setattr__(slime, "rollout_function", path),
     )
+    for attr, config_key, fallback_name in (
+        (
+            "custom_rollout_log_function",
+            "training_gym_custom_rollout_log_function_path",
+            "custom_rollout_log",
+        ),
+        (
+            "custom_eval_rollout_log_function",
+            "training_gym_custom_eval_rollout_log_function_path",
+            "custom_eval_rollout_log",
+        ),
+        (
+            "custom_megatron_before_log_prob_hook",
+            "training_gym_custom_megatron_before_log_prob_hook_path",
+            "before_log_prob_hook",
+        ),
+        (
+            "custom_megatron_before_train_step_hook",
+            "training_gym_custom_megatron_before_train_step_hook_path",
+            "before_train_step_hook",
+        ),
+    ):
+        value = getattr(slime, attr)
+        _ship_callable(
+            value if callable(value) else None,
+            fallback_name=fallback_name,
+            set_path=_set_extra_config_path(config_key),
+        )
+        if callable(value):
+            object.__setattr__(slime, attr, None)
 
     if slime.custom_rm_function is not None:
         object.__setattr__(slime, "custom_rm_function", None)
@@ -517,11 +579,11 @@ def build_slime_app(
 
     # ── Volumes ──────────────────────────────────────────────────────────────
     hf_cache_volume = Volume.from_name("huggingface-cache", create_if_missing=True)
-    data_volume = Volume.from_name(f"{app_name}-data", create_if_missing=True)
+    data_volume = Volume.from_name(f"{volume_prefix}-data", create_if_missing=True)
     checkpoints_volume_name = (
         checkpoint.checkpoints_volume_name
         if checkpoint is not None and checkpoint.checkpoints_volume_name
-        else f"{app_name}-checkpoints"
+        else f"{volume_prefix}-checkpoints"
     )
     checkpoints_mount_path = (
         checkpoint.checkpoints_mount_path.rstrip("/") or "/"
@@ -531,12 +593,14 @@ def build_slime_app(
     checkpoints_volume = Volume.from_name(
         checkpoints_volume_name, create_if_missing=True
     )
+    metadata_volume = Volume.from_name("training-gym-metadata", create_if_missing=True)
     if checkpoint is not None and checkpoint.path and not model.model_path:
         model.model_path = checkpoint.path
     all_volumes: dict[str | PurePosixPath, Any] = {
         str(HF_CACHE_PATH): hf_cache_volume,
         str(DATA_PATH): data_volume,
         checkpoints_mount_path: checkpoints_volume,
+        "/metadata": metadata_volume,
     }
 
     # ── App ──────────────────────────────────────────────────────────────────
@@ -563,12 +627,31 @@ def build_slime_app(
         serialized=True,
         name="download",
     )
-    def download():
+    def download(
+        training_run_id: str = "",
+        framework_status_url: str = "",
+        framework_status_token: str = "",
+    ):
+        from modal_training_gym.common.status_reporter import (
+            enqueue_framework_status,
+            flush as flush_status_reporter,
+        )
+
+        if training_run_id:
+            enqueue_framework_status(
+                training_run_id,
+                SlimeStatus.DOWNLOAD_MODEL.value,
+                url=framework_status_url or None,
+                token=framework_status_token or None,
+                is_active=True,
+            )
         hf_cache_volume.reload()
         checkpoints_volume.reload()
         model.download()
         hf_cache_volume.commit()
         checkpoints_volume.commit()
+        if training_run_id:
+            flush_status_reporter(timeout_seconds=2.0)
 
     @app.function(
         image=image,
@@ -608,8 +691,25 @@ def build_slime_app(
         name="convert_checkpoint",
     )
     @clustered_if(convert_nnodes > 1, convert_nnodes, gpu_type=slime.gpu_type)
-    def convert_checkpoint():
+    def convert_checkpoint(
+        training_run_id: str = "",
+        framework_status_url: str = "",
+        framework_status_token: str = "",
+    ):
         from huggingface_hub import snapshot_download
+        from modal_training_gym.common.status_reporter import (
+            enqueue_framework_status,
+            flush as flush_status_reporter,
+        )
+
+        if training_run_id:
+            enqueue_framework_status(
+                training_run_id,
+                SlimeStatus.CONVERT_MODEL.value,
+                url=framework_status_url or None,
+                token=framework_status_token or None,
+                is_active=True,
+            )
 
         # Bridge mode loads the HF weights directly into Megatron via AutoBridge at train time
         # (slime's _load_checkpoint_hf), so there is no offline HF→torch_dist conversion to run.
@@ -618,6 +718,8 @@ def build_slime_app(
             print(
                 "Bridge mode — HF weights loaded directly via AutoBridge; no conversion needed."
             )
+            if training_run_id:
+                flush_status_reporter(timeout_seconds=2.0)
             return
 
         hf_cache_volume.reload()
@@ -676,6 +778,14 @@ def build_slime_app(
                             f"config metadata — reconverting to ensure "
                             f"compatibility."
                         )
+                if node_rank == 0:
+                    print(f"Using existing torch_dist checkpoint at {save_path}.")
+                if training_run_id:
+                    flush_status_reporter(timeout_seconds=2.0)
+                return
+
+            if node_rank == 0:
+                import shutil
 
                 if stale:
                     if node_rank == 0:
@@ -751,6 +861,7 @@ def build_slime_app(
             )
 
         env = {**os.environ, **slime.environment}
+        env.pop("NCCL_NVLS_ENABLE", None)
         if num_nodes > 1:
             env["SKIP_RELEASE_RENAME"] = "1"
         print(
@@ -771,6 +882,9 @@ def build_slime_app(
 
         if node_rank == 0:
             print(f"Saved torch_dist checkpoint to {save_path}")
+
+        if training_run_id:
+            flush_status_reporter(timeout_seconds=2.0)
 
     @app.function(
         image=image,
@@ -807,31 +921,25 @@ def build_slime_app(
                 "modal_training_gym.frameworks.slime.modal_helpers.convert_torch_dist_to_hf not found"
             )
 
-        _add_missing = bool(
-            getattr(
-                getattr(model, "architecture", None),
-                "export_merge_from_origin_hf",
-                False,
-            )
-        )
         cmd = (
             f"python {convert_script} "
             f"--input-dir {shlex.quote(input_dir)} "
             f"--output-dir {shlex.quote(output_dir)} "
             f"--origin-hf-dir {shlex.quote(hf_path)} "
-            f"--force" + (" --add-missing-from-origin-hf" if _add_missing else "")
+            f"--force"
         )
         print(f"Converting: {cmd}")
         subprocess.run(["bash", "-c", cmd], check=True)
         checkpoints_volume.commit()
         print(f"Saved HF checkpoint to {output_dir}")
 
-    # Use Modal's clustered scheduler for multi-node runs AND for single-node
-    # runs on RDMA-capable GPUs.  The `rdma=True` flag enables GPU interconnect
-    # optimisations (e.g. NVLink/NVSwitch peer paths) that significantly speed
-    # up NCCL collectives used during weight sync — even within a single node.
+    # Use Modal's clustered scheduler with RDMA when using a full node (8+ GPUs)
+    # on RDMA-capable hardware, or for any multi-node run.  The `rdma=True` flag
+    # provides CAP_IPC_LOCK and NVSwitch device access that slime's colocated
+    # weight sync (UpdateWeightFromTensor) needs for fast CUDA IPC transfers.
     _multi_node = slime.total_nodes > 1
-    _use_clustered = _multi_node or _supports_rdma(slime.gpu_type)
+    _full_node = slime.actor_num_gpus_per_node >= 8
+    _use_clustered = _multi_node or (_full_node and _supports_rdma(slime.gpu_type))
 
     train_secrets: list[Secret] = []
     if slime.wandb is not None:
@@ -870,9 +978,20 @@ def build_slime_app(
     async def train(
         modal_app_id: str = "",
         modal_app_url: str = "",
+        framework_status_url: str = "",
+        framework_status_token: str = "",
     ):
         modal_app_id = modal_app_id or os.environ.get("MODAL_APP_ID", "")
         modal_app_url = modal_app_url or modal_app_dashboard_url(modal_app_id)
+
+        # Make the dashboard URL visible to both the launcher's own
+        # status_reporter and (via runtime_env below) the slime worker
+        # process. The toml file lives on the user's local machine and isn't
+        # accessible inside this container, so the URL has to be passed in.
+        if framework_status_url:
+            os.environ["TRAINING_GYM_FRAMEWORK_STATUS_URL"] = framework_status_url
+        if framework_status_token:
+            os.environ["TRAINING_GYM_FRAMEWORK_STATUS_TOKEN"] = framework_status_token
 
         await asyncio.gather(
             hf_cache_volume.reload.aio(),
@@ -893,13 +1012,25 @@ def build_slime_app(
             await cluster.wait_forever()
             return
 
-        created_at = int(time.time())
+        # Fail fast on W&B access before any GPU work, not as a recurring CommError
+        # mid-training.
+        wandb_entity = ""
+        if slime.wandb is not None:
+            wandb_entity = _preflight_wandb(slime.wandb)
+
+        wandb_run_id = training_run_id[:8] if slime.wandb else ""
+
         print(f"Training run id: {training_run_id}")
         config_summary: dict = {
             "model": {"model_name": model.model_name} if model else {},
             "recipe": _serialize_slime_params(slime, dataset=dataset, model=model),
             "wandb": (
-                {"project": slime.wandb.project, "group": slime.wandb.group}
+                {
+                    "project": slime.wandb.project,
+                    "group": slime.wandb.group,
+                    "entity": wandb_entity,
+                    "run_id": wandb_run_id,
+                }
                 if slime.wandb
                 else {}
             ),
@@ -910,26 +1041,61 @@ def build_slime_app(
             "lr": slime.lr,
             "global_batch_size": slime.global_batch_size,
         }
-        run_record = TrainingRun(
-            training_run_id=training_run_id,
-            modal_app_id=modal_app_id,
-            modal_app_url=modal_app_url or modal_app_dashboard_url(modal_app_id),
-            framework=Framework.SLIME,
-            config=config_summary,
-            framework_status=SlimeStatus.INITIALIZING,
-            created_at=created_at,
-            started_at=created_at,
-        )
+        # The local TrainConfig.train() driver creates the initial TrainingRun
+        # record before invoking download/convert_checkpoint so those phases
+        # are visible in the dashboard. Reuse it; fall back to a fresh record
+        # if someone invokes train() directly (e.g. older callers).
+        try:
+            run_record = await TrainingRun.from_id_async(training_run_id)
+            run_record.modal_app_id = modal_app_id
+            run_record.modal_app_url = modal_app_url or modal_app_dashboard_url(
+                modal_app_id
+            )
+            run_record.config = config_summary
+            run_record.framework_status = SlimeStatus.INITIALIZING
+        except KeyError:
+            created_at = int(time.time())
+            run_record = TrainingRun(
+                training_run_id=training_run_id,
+                modal_app_id=modal_app_id,
+                modal_app_url=modal_app_url or modal_app_dashboard_url(modal_app_id),
+                framework=Framework.SLIME,
+                config=config_summary,
+                framework_status=SlimeStatus.INITIALIZING,
+                created_at=created_at,
+                started_at=created_at,
+            )
+        if not framework_status_token:
+            framework_status_token = _secrets.token_urlsafe(32)
         await run_record.save_async()
+        await vol_put_async(
+            MetadataStore.FRAMEWORK_STATUS_TOKENS,
+            training_run_id,
+            {"token": framework_status_token},
+        )
         print(f"TrainingRun recorded: {training_run_id}")
 
-        async def _set_framework_status(status: SlimeStatus) -> None:
+        # In-flight status updates are fire-and-forget via the dashboard's
+        # /api/framework-status endpoint so the training thread doesn't pay
+        # the ~300ms volume-write latency on each transition. Terminal state
+        # (COMPLETED/FAILED/STOPPED) still goes through run_record.save_async
+        # below to guarantee delivery before the container exits.
+        from modal_training_gym.common.status_reporter import (
+            enqueue_framework_status,
+        )
+
+        def _set_framework_status(status: SlimeStatus) -> None:
             run_record.framework_status = status
-            await run_record.save_async()
+            enqueue_framework_status(
+                training_run_id, status.value, token=framework_status_token
+            )
+
+        async def _set_framework_status_async(status: SlimeStatus) -> None:
+            _set_framework_status(status)
 
         try:
             if model:
-                await _set_framework_status(SlimeStatus.DOWNLOAD_MODEL)
+                await _set_framework_status_async(SlimeStatus.DOWNLOAD_MODEL)
                 cache_dir = (
                     HF_CACHE_PATH
                     / "hub"
@@ -943,7 +1109,7 @@ def build_slime_app(
                 await hf_cache_volume.commit.aio()
 
             if dataset:
-                await _set_framework_status(SlimeStatus.PREPARE_DATASET)
+                await _set_framework_status_async(SlimeStatus.PREPARE_DATASET)
                 prompt_data, eval_paths = SlimeRecipe._resolve_data_paths(dataset)
                 needs_prepare = not os.path.exists(prompt_data)
                 if dataset.always_prepare and os.path.exists(prompt_data):
@@ -962,7 +1128,7 @@ def build_slime_app(
                     if os.path.exists(ep):
                         dataset.validate_prepared(ep)
 
-            await _set_framework_status(SlimeStatus.CONVERT_MODEL)
+            await _set_framework_status_async(SlimeStatus.CONVERT_MODEL)
             prepare_slime_config(slime, model, tempfile.mkdtemp())
 
             if wandb_key := os.environ.get("WANDB_API_KEY", ""):
@@ -1023,11 +1189,43 @@ def build_slime_app(
                 object.__setattr__(slime, "save", original_save)
                 object.__setattr__(slime, "load", original_load)
                 object.__setattr__(slime, "ref_load", original_ref_load)
+
+            phase_report_url = (
+                os.environ.get("SLIME_PHASE_REPORT_URL")
+                or os.environ.get("TRAINING_GYM_FRAMEWORK_STATUS_URL")
+                or framework_status_url
+                or ""
+            )
+            if not phase_report_url:
+                print(
+                    "WARNING: no dashboard URL passed to train() and no "
+                    "SLIME_PHASE_REPORT_URL/TRAINING_GYM_FRAMEWORK_STATUS_URL "
+                    "set inside the container. Phase reporting is disabled "
+                    "for this run."
+                )
+
+            wandb_env = {}
+            if wandb_run_id:
+                wandb_env["WANDB_RUN_ID"] = wandb_run_id
+
             runtime_env = {
                 "env_vars": {
                     "no_proxy": f"127.0.0.1,{cluster.head_addr}",
                     "MASTER_ADDR": cluster.head_addr,
+                    "TRAINING_GYM_TRAINING_RUN_ID": training_run_id,
+                    "TRAINING_GYM_APP_NAME": app_name,
+                    "TRAINING_GYM_TOTAL_STEPS": str(slime.num_rollout),
+                    "TRAINING_GYM_RESPONSE_PARSER_PATH": _response_parser_path(model),
+                    "TRAINING_GYM_CAPTURE_TRACE": (
+                        "1" if getattr(slime, "capture_trace", False) else ""
+                    ),
+                    "TRAINING_GYM_TRACE_SAMPLE_LIMIT": str(
+                        getattr(slime, "trace_sample_limit", 16)
+                    ),
+                    "SLIME_PHASE_REPORT_URL": phase_report_url,
+                    **wandb_env,
                     **slime.environment,
+                    "SLIME_PHASE_REPORT_TOKEN": framework_status_token,
                 }
             }
 
@@ -1037,19 +1235,22 @@ def build_slime_app(
             )
             print(f"Command: {cmd}, runtime_env: {runtime_env}")
 
-            await _set_framework_status(SlimeStatus.TRAINING)
+            await _set_framework_status_async(SlimeStatus.ROLLOUT_INITIALIZING)
             async with cluster.forward_dashboard() as tunnel:
                 print(f"Ray dashboard: {tunnel.url}")
                 await cluster.submit_and_tail(cmd, runtime_env=runtime_env)
 
             result_kwargs = {
                 "app_name": app_name,
-                "framework": "slime",
+                "framework": Framework.SLIME,
                 "training_run_id": training_run_id,
                 "checkpoint_dir": save_root,
                 "model_config": model,
                 "checkpoints_volume_name": checkpoints_volume_name,
                 "checkpoints_mount_path": checkpoints_mount_path,
+                "wandb_project": slime.wandb.project if slime.wandb else "",
+                "wandb_entity": wandb_entity,
+                "wandb_training_run_id": wandb_run_id,
             }
             accepted_fields = set(inspect.signature(TrainResult).parameters)
             result = TrainResult(

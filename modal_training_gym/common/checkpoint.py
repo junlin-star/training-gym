@@ -221,7 +221,6 @@ def convert_checkpoint_to_hf(
         image = image.run_commands(
             f"echo {encode_patch(_patch_name, _SLIME_PATCHES)} | base64 -d | python3",
         )
-    add_missing_from_origin = bool(getattr(arch, "export_merge_from_origin_hf", False))
     conversion_app = App("training-gym-checkpoint-convert")
     gpu_spec = _conversion_gpu_spec(checkpoint, recipe)
 
@@ -241,7 +240,6 @@ def convert_checkpoint_to_hf(
         input_dir: str,
         output_dir: str,
         model_ref: str,
-        add_missing_from_origin: bool = False,
     ) -> str:
         import importlib.util
         import shlex
@@ -271,7 +269,6 @@ def convert_checkpoint_to_hf(
             f"--output-dir {shlex.quote(output_dir)} "
             f"--origin-hf-dir {shlex.quote(hf_path)} "
             f"--force"
-            + (" --add-missing-from-origin-hf" if add_missing_from_origin else "")
         )
         print(f"Converting checkpoint for serving: {cmd}")
         subprocess.run(["bash", "-c", cmd], check=True)
@@ -285,7 +282,6 @@ def convert_checkpoint_to_hf(
                 input_dir=checkpoint.path,
                 output_dir=output_path,
                 model_ref=model_ref,
-                add_missing_from_origin=add_missing_from_origin,
             )
 
     return Checkpoint(

@@ -136,12 +136,6 @@ class ModelArchitecture:
     # they're fixed upstream (e.g. Qwen3-ASR's bridge/processor/export shims). The
     # launcher applies these only when this model is used.
     compat_patches: list[str] | None = None
-    # When exporting a megatron checkpoint back to HF, fill any weights the
-    # converter doesn't emit from the origin HF checkpoint (slime's
-    # --add-missing-from-origin-hf). Needed for multi-tower models (e.g. Qwen3-VL)
-    # whose frozen vision tower is skipped by the converter and sourced from the
-    # base HF weights instead. Default ``False`` keeps single-tower exports strict.
-    export_merge_from_origin_hf: bool = False
     apply_layernorm_1p: bool = False
     use_gated_attention: bool = False
     attention_output_gate: bool = False
@@ -289,24 +283,94 @@ class HFModelConfiguration(ModelConfig):
     def download(self) -> None:
         from huggingface_hub import snapshot_download
 
-        kwargs: dict = {"repo_id": self.model_name}
-        if self.model_path:
-            kwargs["local_dir"] = str(self.model_path)
-        snapshot_download(**kwargs)
+        # Always download into the shared HF cache (no ``local_dir``): with
+        # huggingface_hub >= 1.0 passing ``local_dir`` writes straight to that
+        # dir and skips the cache, which leaves the weights unresolvable via
+        # ``snapshot_download(..., local_files_only=True)`` on later runs and
+        # forces a re-download. Populating the cache keeps base models
+        # reusable across runs.
+        snapshot_dir = snapshot_download(repo_id=self.model_name)
+        if self.model_path and str(self.model_path) != snapshot_dir:
+            # An explicit model_path was requested: mirror the cached snapshot
+            # into it from the local cache (no second network download).
+            import shutil
+
+            shutil.copytree(snapshot_dir, str(self.model_path), dirs_exist_ok=True)
 
 
-# ── Qwen3 family ───────────────────────────────────────────────────────
+def _split_thinking(text: str) -> tuple[str | None, str]:
+    """Split a leading ``<think>...</think>`` block off ``text``.
+
+    Returns ``(thinking, remainder)``. When no closing ``</think>`` is
+    present, ``thinking`` is ``None`` and ``remainder`` is ``text`` unchanged.
+    A stray opening ``<think>`` in the remainder is stripped.
+    """
+    if "</think>" not in text:
+        return None, text
+    head, tail = text.split("</think>", 1)
+    thinking = head.replace("<think>", "").strip() or None
+    return thinking, tail.replace("<think>", "")
+
+
+def _coerce_arg_value(raw: str) -> Any:
+    """Best-effort decode of a tool-call argument value.
+
+    Returns the JSON-decoded value when ``raw`` parses as JSON (objects,
+    arrays, numbers, booleans, null, quoted strings), otherwise the raw
+    string with surrounding whitespace stripped.
+    """
+    try:
+        return json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        return raw.strip()
+
+
+# ── Qwen family ────────────────────────────────────────────────────────
 
 _QWEN3_TOOL_CALL_RE = re.compile(r"<tool_call>\s*(.*?)\s*</tool_call>", re.DOTALL)
+# Qwen3.5/3.6 (Qwen3-Coder lineage) wire format inside <tool_call> blocks:
+#   <function=NAME>
+#   <parameter=KEY>
+#   value (may span lines)
+#   </parameter>
+#   </function>
+_QWEN3_XML_FN_RE = re.compile(
+    r"<function=([^>\n]+)>\s*(.*?)\s*(?:</function>|\Z)", re.DOTALL
+)
+_QWEN3_XML_PARAM_RE = re.compile(
+    r"<parameter=([^>\n]+)>\n?(.*?)\n?</parameter>", re.DOTALL
+)
 
 
-def parse_qwen3_response(text: str) -> ParsedResponse:
-    """Parse Qwen3-family model output into structured content.
+def _parse_json_tool_block(block: str) -> ToolCall | None:
+    """Qwen3 wire format: the ``<tool_call>`` body is one JSON object."""
+    try:
+        data = json.loads(block)
+        return ToolCall(name=data.get("name", ""), arguments=data.get("arguments", {}))
+    except (json.JSONDecodeError, KeyError, TypeError, AttributeError):
+        return None
 
-    Handles ``<think>``/``</think>`` reasoning blocks,
-    ``<|im_start|>``/``<|im_end|>`` chat-template delimiters,
-    and ``<tool_call>``/``</tool_call>`` tool invocations.
-    """
+
+def _parse_xml_tool_block(block: str) -> ToolCall | None:
+    """Qwen3.5/3.6 wire format: ``<function=NAME>`` + ``<parameter=KEY>`` pairs."""
+    fn = _QWEN3_XML_FN_RE.search(block)
+    if fn is None:
+        return None
+    # values are rendered raw by the chat template (JSON only for non-strings),
+    # so JSON-decode where possible and keep the raw string otherwise
+    args = {
+        key.strip(): _coerce_arg_value(value)
+        for key, value in _QWEN3_XML_PARAM_RE.findall(fn.group(2))
+    }
+    return ToolCall(name=fn.group(1).strip(), arguments=args)
+
+
+def _parse_qwen_chat(
+    text: str, block_parsers: tuple[Callable[[str], ToolCall | None], ...]
+) -> ParsedResponse:
+    """Shared Qwen chat scaffolding: ``<think>`` blocks, ``<|im_*|>`` delimiters,
+    and ``<tool_call>`` extraction; each block is decoded by the first
+    ``block_parser`` that accepts it."""
     text = text.replace("\r\n", "\n").replace("\r", "\n")
 
     if "<|im_start|>assistant" in text:
@@ -322,17 +386,154 @@ def parse_qwen3_response(text: str) -> ParsedResponse:
 
     tool_calls: list[ToolCall] = []
     for match in _QWEN3_TOOL_CALL_RE.finditer(text):
-        try:
-            data = json.loads(match.group(1))
-            tool_calls.append(
-                ToolCall(
-                    name=data.get("name", ""),
-                    arguments=data.get("arguments", {}),
-                )
-            )
-        except (json.JSONDecodeError, KeyError, TypeError):
-            continue
+        for block_parser in block_parsers:
+            call = block_parser(match.group(1))
+            if call is not None:
+                tool_calls.append(call)
+                break
     content = _QWEN3_TOOL_CALL_RE.sub("", text).strip()
+
+    return ParsedResponse(
+        content=content,
+        tool_calls=tool_calls,
+        thinking=thinking,
+    )
+
+
+def parse_qwen3_response(text: str) -> ParsedResponse:
+    """Parse Qwen3-family model output into structured content.
+
+    Handles ``<think>``/``</think>`` reasoning blocks,
+    ``<|im_start|>``/``<|im_end|>`` chat-template delimiters,
+    and ``<tool_call>``/``</tool_call>`` tool invocations with Qwen3's
+    JSON body (``{"name": ..., "arguments": {...}}``).
+    """
+    return _parse_qwen_chat(text, (_parse_json_tool_block,))
+
+
+def parse_qwen3_6_response(text: str) -> ParsedResponse:
+    """Parse Qwen3.5/3.6-family model output into structured content.
+
+    Same chat scaffolding as :func:`parse_qwen3_response`, but tool calls use
+    the Qwen3-Coder-lineage XML body (``<function=...><parameter=...>...``)
+    that the Qwen3.5/3.6 chat template emits. A JSON body is tolerated as a
+    fallback so format drift still parses to a real call.
+    """
+    return _parse_qwen_chat(text, (_parse_xml_tool_block, _parse_json_tool_block))
+
+
+# ── GLM family (GLM-4.5 / 4.6 / 4.7) ───────────────────────────────────
+
+# GLM emits tool calls as an XML-ish block: the function name, then alternating
+# ``<arg_key>``/``<arg_value>`` pairs. The name may sit on its own line OR run
+# straight into the first ``<arg_key>`` with no separator — the live GLM-4.7
+# server emits the inline form:
+#
+#   <tool_call>get_weather<arg_key>city</arg_key><arg_value>Paris</arg_value></tool_call>
+#
+# so the name is everything before the first ``<arg_key>`` (not just the first
+# line). This mirrors SGLang's ``glm45`` tool-call parser.
+_GLM_TOOL_CALL_RE = re.compile(r"<tool_call>\s*(.*?)\s*</tool_call>", re.DOTALL)
+_GLM_ARG_RE = re.compile(
+    r"<arg_key>\s*(.*?)\s*</arg_key>\s*<arg_value>\s*(.*?)\s*</arg_value>",
+    re.DOTALL,
+)
+
+
+def parse_glm_response(text: str) -> ParsedResponse:
+    """Parse GLM-4.5/4.6/4.7 output into structured content.
+
+    Handles ``<think>``/``</think>`` reasoning blocks, the GLM chat-template
+    turn delimiters (``<|assistant|>``, ``<|user|>``, ``<|observation|>``,
+    ``<|endoftext|>``), and ``<tool_call>`` blocks with ``<arg_key>``/
+    ``<arg_value>`` argument pairs.
+    """
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+
+    if "<|assistant|>" in text:
+        text = text.rsplit("<|assistant|>", 1)[-1]
+    # Anything past the assistant turn belongs to a following turn, not output.
+    for turn_token in ("<|user|>", "<|observation|>", "<|system|>", "<|endoftext|>"):
+        text = text.split(turn_token, 1)[0]
+
+    thinking, text = _split_thinking(text)
+
+    tool_calls: list[ToolCall] = []
+    for match in _GLM_TOOL_CALL_RE.finditer(text):
+        block = match.group(1)
+        # The function name is everything up to the first <arg_key> (GLM may or
+        # may not put it on its own line); the rest holds the arg pairs.
+        name_part, sep, rest = block.partition("<arg_key>")
+        name = name_part.strip()
+        if not name:
+            continue
+        arguments = {
+            key.strip(): _coerce_arg_value(value)
+            for key, value in _GLM_ARG_RE.findall(sep + rest)
+        }
+        tool_calls.append(ToolCall(name=name, arguments=arguments))
+    content = _GLM_TOOL_CALL_RE.sub("", text).strip()
+
+    return ParsedResponse(
+        content=content,
+        tool_calls=tool_calls,
+        thinking=thinking,
+    )
+
+
+# ── Kimi K2 family (K2.5 / K2.6) ───────────────────────────────────────
+
+# Kimi K2 wraps tool calls in a token-delimited section; each call carries an
+# id of the form ``functions.<name>:<index>`` and a JSON argument blob:
+#
+#   <|tool_calls_section_begin|>
+#   <|tool_call_begin|>functions.get_weather:0<|tool_call_argument_begin|>
+#   {"location": "Beijing"}<|tool_call_end|>
+#   <|tool_calls_section_end|>
+#
+# This mirrors SGLang's ``kimi_k2`` tool-call parser.
+_KIMI_SECTION_RE = re.compile(
+    r"<\|tool_calls_section_begin\|>(.*?)<\|tool_calls_section_end\|>",
+    re.DOTALL,
+)
+_KIMI_CALL_RE = re.compile(
+    r"<\|tool_call_begin\|>\s*(?P<id>[\w\.]+):(?P<idx>\d+)\s*"
+    r"<\|tool_call_argument_begin\|>\s*(?P<args>.*?)\s*<\|tool_call_end\|>",
+    re.DOTALL,
+)
+
+
+def parse_kimi_k2_response(text: str) -> ParsedResponse:
+    """Parse Kimi K2 (K2.5 / K2.6) output into structured content.
+
+    Handles ``<think>``/``</think>`` reasoning blocks, the Kimi chat-template
+    delimiters (``<|im_end|>``, ``<|im_start|>assistant``), and the
+    ``<|tool_calls_section_begin|>`` … ``<|tool_calls_section_end|>`` tool-call
+    section. Each tool-call id (``functions.<name>:<index>``) is reduced to its
+    bare function name.
+    """
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+
+    if "<|im_start|>assistant" in text:
+        text = text.rsplit("<|im_start|>assistant", 1)[-1]
+    text = text.replace("<|im_end|>", "")
+
+    thinking, text = _split_thinking(text)
+
+    tool_calls: list[ToolCall] = []
+    for section in _KIMI_SECTION_RE.finditer(text):
+        for call in _KIMI_CALL_RE.finditer(section.group(1)):
+            name = call.group("id").split(".")[-1].strip()
+            if not name:
+                continue
+            try:
+                arguments = json.loads(call.group("args"))
+            except (json.JSONDecodeError, ValueError):
+                arguments = {}
+            if not isinstance(arguments, dict):
+                arguments = {}
+            tool_calls.append(ToolCall(name=name, arguments=arguments))
+    content = _KIMI_SECTION_RE.sub("", text).strip()
 
     return ParsedResponse(
         content=content,

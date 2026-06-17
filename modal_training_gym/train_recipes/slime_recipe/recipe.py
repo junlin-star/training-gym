@@ -34,6 +34,8 @@ _SLIME_SKIP = {
     "wandb",
     "name",
     "app_tags",
+    "capture_trace",
+    "trace_sample_limit",
     "image_overlay",
     "local_slime",
     "memory",
@@ -42,7 +44,10 @@ _SLIME_SKIP = {
     "checkpoint",
     "custom_rm_function",
     "custom_generate_function",
+    "custom_rollout_log_function",
+    "custom_eval_rollout_log_function",
     "rollout_function",
+    "custom_megatron_before_log_prob_hook",
     "custom_megatron_before_train_step_hook",
     "sglang_request_params",
     "slime_model_script",
@@ -52,11 +57,24 @@ _SLIME_SKIP = {
     "image_run_commands",
     "image_env",
     "train_function_kwargs",
-    "disable_clustered",
 }
 
 YAML_CONFIG_FIELDS = ("eval_config", "extra_config", "sglang_config")
 JSON_CONFIG_FIELDS = ("train_env_vars", "apply_chat_template_kwargs", "multimodal_keys")
+
+_HOOK_PATH_CONFIG_KEYS = {
+    "custom_rollout_log_function": "training_gym_custom_rollout_log_function_path",
+    "custom_eval_rollout_log_function": "training_gym_custom_eval_rollout_log_function_path",
+    "custom_megatron_before_log_prob_hook": "training_gym_custom_megatron_before_log_prob_hook_path",
+    "custom_megatron_before_train_step_hook": "training_gym_custom_megatron_before_train_step_hook_path",
+}
+
+_HOOK_WRAPPER_PATHS = {
+    "custom_rollout_log_function": "modal_training_gym.frameworks.slime.phase_reporting.log_rollout_data",
+    "custom_eval_rollout_log_function": "modal_training_gym.frameworks.slime.phase_reporting.log_eval_rollout_data",
+    "custom_megatron_before_log_prob_hook": "modal_training_gym.frameworks.slime.phase_reporting.before_log_prob_hook",
+    "custom_megatron_before_train_step_hook": "modal_training_gym.frameworks.slime.phase_reporting.before_train_step_hook",
+}
 
 
 @dataclass(config=ConfigDict(extra="forbid", arbitrary_types_allowed=True))
@@ -99,12 +117,6 @@ class SlimeRecipe(BaseTrainRecipe):
     memory: int | tuple[int, int] | None = None
     cloud: str | None = None
     region: str | None = None
-    # Force-skip Modal's clustered scheduler even on a multi-node run. The launcher
-    # already auto-skips it for single-node (size==1) runs (see _clustered_if); set
-    # this to also opt a multi-node run out of the clustered reservation — e.g. to
-    # dodge the multi-container scheduling wait when you've sized the run to land on
-    # one host anyway. The function body is unchanged either way.
-    disable_clustered: bool = False
     slime_model_script: str = ""
     source_hf_checkpoint: str | None = None
     megatron_conversion_hf_checkpoint: str | None = None
@@ -112,6 +124,14 @@ class SlimeRecipe(BaseTrainRecipe):
     image_run_commands: list[str] = field(default_factory=list)
     image_env: dict[str, str] = field(default_factory=dict)
     train_function_kwargs: dict[str, Any] = field(default_factory=dict)
+
+    # ── Per-sample execution tracing (dashboard timeline) ───────────────────
+    # When True, the rollout recorder attaches slime's per-sample trace (the
+    # generate/reward/tool-call timeline) to the first `trace_sample_limit`
+    # samples of each rollout. Off by default — traces inflate payloads, so
+    # sampling keeps the added volume well under 1%. Not a slime CLI flag.
+    capture_trace: bool = False
+    trace_sample_limit: int = 16
 
     # ── Cluster and parallelism (optional) ─────────────────────────────────
     actor_num_nodes: int = 1
@@ -159,6 +179,7 @@ class SlimeRecipe(BaseTrainRecipe):
     hidden_dropout: float = 0.0
     attention_softmax_in_fp32: bool = True
     accumulate_allreduce_grads_in_fp32: bool = True
+    use_distributed_optimizer: bool = False
     recompute_granularity: str = "full"
     recompute_method: str = "uniform"
     recompute_num_layers: int = 1
@@ -177,6 +198,7 @@ class SlimeRecipe(BaseTrainRecipe):
     # ── Checkpointing (optional) ───────────────────────────────────────────
     save: str = "/checkpoints"
     load: str = ""
+    no_save_optim: bool = False
     megatron_to_hf_mode: str = ""
     use_fault_tolerance: bool = True
 
@@ -185,6 +207,18 @@ class SlimeRecipe(BaseTrainRecipe):
     # VL model's vision tower so RL only updates the language backbone.
     freeze_params_name_list: list[str] | None = None
 
+    # ── Weight sync (megatron trainer → sglang rollout engines) ──────────
+    # Default matches slime's own default. ``delta`` mode pin-snapshots the
+    # last broadcast on CPU and ships only byte-level changes, which is
+    # ~5-10× faster than ``full`` for large models where weights barely
+    # move per rollout (e.g. 35B-class MoE). Pair with
+    # ``update_weight_transport="disk"`` if the trainer and rollout engines
+    # share a filesystem.
+    update_weight_mode: str = "full"
+    update_weight_transport: str = "nccl"
+    update_weight_encoding: str = "indices"
+    update_weight_disk_dir: str = ""
+
     # ── Reward model ─────────────────────────────────────────────────────────
     rm_type: str | None = None
 
@@ -192,7 +226,10 @@ class SlimeRecipe(BaseTrainRecipe):
     # See https://github.com/THUDM/slime/blob/0988f0f4a0ab55d1bb3ce6285a597d912144fa80/docs/en/get_started/customization.md#1-rollout-function---rollout-function-path
     custom_rm_function: Callable | None = None
     custom_generate_function: Callable | None = None
+    custom_rollout_log_function: Callable | str | None = None
+    custom_eval_rollout_log_function: Callable | str | None = None
     rollout_function: Callable | str | None = None
+    custom_megatron_before_log_prob_hook: Callable | str | None = None
     custom_megatron_before_train_step_hook: Callable | str | None = None
 
     # ── SGLang rollout engine ──────────────────────────────────────────────
@@ -231,15 +268,32 @@ class SlimeRecipe(BaseTrainRecipe):
                 mod = "__pending__"
         return f"{mod}.{name}"
 
+    @staticmethod
+    def _path_or_callable_path(value: Callable | str | None) -> str | None:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            return value
+        return SlimeRecipe._callable_path(value)
+
     @model_validator(mode="after")
     def _resolve_callable_paths(self) -> "SlimeRecipe":
+        cfg = dict(self.extra_config) if isinstance(self.extra_config, dict) else {}
         if self.custom_generate_function is not None:
-            cfg = dict(self.extra_config or {})
             if not cfg.get("custom_generate_function_path"):
                 cfg["custom_generate_function_path"] = self._callable_path(
                     self.custom_generate_function
                 )
-                object.__setattr__(self, "extra_config", cfg)
+        for field_name, config_key in _HOOK_PATH_CONFIG_KEYS.items():
+            value = getattr(self, field_name)
+            if value is None or cfg.get(config_key):
+                continue
+            if isinstance(value, str):
+                cfg[config_key] = value
+            else:
+                cfg[config_key] = self._callable_path(value)
+        if cfg != (self.extra_config or {}):
+            object.__setattr__(self, "extra_config", cfg)
         return self
 
     # ── Container → slime flag converters ────────────────────────────────────
@@ -413,12 +467,18 @@ class SlimeRecipe(BaseTrainRecipe):
         out = {k: v for k, v in fields.items() if k not in _SLIME_SKIP}
         if "extra_config" in out:
             out["custom_config_path"] = out.pop("extra_config")
-        rf = fields.get("rollout_function")
-        if isinstance(rf, str) and rf:
-            out["rollout_function_path"] = rf
-        hook = fields.get("custom_megatron_before_train_step_hook")
-        if isinstance(hook, str) and hook:
-            out["custom_megatron_before_train_step_hook_path"] = hook
+        for src, dst in {
+            "rollout_function": "rollout_function_path",
+            "custom_rollout_log_function": "custom_rollout_log_function_path",
+            "custom_eval_rollout_log_function": "custom_eval_rollout_log_function_path",
+            "custom_megatron_before_log_prob_hook": "custom_megatron_before_log_prob_hook_path",
+            "custom_megatron_before_train_step_hook": "custom_megatron_before_train_step_hook_path",
+        }.items():
+            if src in _HOOK_WRAPPER_PATHS:
+                out[dst] = _HOOK_WRAPPER_PATHS[src]
+                continue
+            if path := self._path_or_callable_path(fields.get(src)):
+                out[dst] = path
         return out
 
     # ── Public API ────────────────────────────────────────────────────────────
@@ -492,6 +552,9 @@ class SlimeRecipe(BaseTrainRecipe):
         from modal_training_gym.train_recipes.slime_recipe.qwen3_4b import (
             Qwen3_4b_Recipe,
         )
+        from modal_training_gym.train_recipes.slime_recipe.qwen3_6_27b import (
+            Qwen3_6_27b_Recipe,
+        )
         from modal_training_gym.train_recipes.slime_recipe.qwen3_6_35b import (
             Qwen3_6_35b_Recipe,
         )
@@ -518,6 +581,8 @@ class SlimeRecipe(BaseTrainRecipe):
             return Qwen3_14b_Recipe()
         if model_config.model_name == "Qwen/Qwen3-32B":
             return Qwen3_32b_Recipe()
+        if model_config.model_name == "Qwen/Qwen3.6-27B":
+            return Qwen3_6_27b_Recipe()
         if model_config.model_name == "Qwen/Qwen3.6-35B-A3B":
             return Qwen3_6_35b_Recipe()
         return None

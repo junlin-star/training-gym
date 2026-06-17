@@ -53,7 +53,7 @@ class MilesConfig(BaseTrainRecipe):
 
     recipe_type: RecipeType = RecipeType.MILES
 
-    docker_image: str = "radixark/miles:dev-202605291323"
+    docker_image: str = "radixark/miles:dev-202606111336"
     gpu_type: str = "H100"
     memory: tuple[int, int] | None = None
     cloud: str | None = None
