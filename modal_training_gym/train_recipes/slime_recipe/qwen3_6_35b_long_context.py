@@ -8,7 +8,7 @@ from modal_training_gym.train_recipes.slime_recipe.recipe import SlimeRecipe
 
 @dataclass(config=ConfigDict(extra="forbid", arbitrary_types_allowed=True))
 class Qwen3_6_35b_Recipe_Long_Context(SlimeRecipe):
-    """Qwen3.6-35B-A3B (MoE) on 2x8xH200 with TP2/PP2/CP1/EP2."""
+    """Qwen3.6-35B-A3B (MoE) on 2x8xH200 with TP2/PP2/CP2/EP4."""
 
     gpu_type: str = "H200"
     slime_model_script: str = "scripts/models/qwen3.5-35B-A3B.sh"
@@ -26,8 +26,8 @@ class Qwen3_6_35b_Recipe_Long_Context(SlimeRecipe):
     tensor_model_parallel_size: int = 2
     sequence_parallel: bool = True
     pipeline_model_parallel_size: int = 2
-    context_parallel_size: int = 1
-    expert_model_parallel_size: int = 2
+    context_parallel_size: int = 2
+    expert_model_parallel_size: int = 4
     expert_tensor_parallel_size: int = 1
 
     # ── Rollout ───────────────────────────────────────────────────────────
@@ -54,7 +54,6 @@ class Qwen3_6_35b_Recipe_Long_Context(SlimeRecipe):
     n_samples_per_prompt: int = 8
     lr: float = 1e-6
     max_tokens_per_gpu: int = 16384
-    calculate_per_token_loss: bool = True
     moe_token_dispatcher_type: str = "flex"
     moe_enable_deepep: bool = True
 

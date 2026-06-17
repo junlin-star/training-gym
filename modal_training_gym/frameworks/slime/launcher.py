@@ -1062,25 +1062,25 @@ def build_slime_app(
         )
         print(f"TrainingRun recorded: {training_run_id}")
 
-        # In-flight status updates are fire-and-forget via the dashboard's
-        # /api/framework-status endpoint so the training thread doesn't pay
-        # the ~300ms volume-write latency on each transition. Terminal state
-        # (COMPLETED/FAILED/STOPPED) still goes through run_record.save_async
-        # below to guarantee delivery before the container exits.
-        from modal_training_gym.common.status_reporter import (
-            enqueue_framework_status,
-        )
-
-        def _set_framework_status(status: SlimeStatus) -> None:
-            run_record.framework_status = status
-            enqueue_framework_status(
-                training_run_id, status.value, token=framework_status_token
+        try:  # Wraps all post-setup work so any failure marks the run terminal.
+            # In-flight status updates are fire-and-forget via the dashboard's
+            # /api/framework-status endpoint so the training thread doesn't pay
+            # the ~300ms volume-write latency on each transition. Terminal state
+            # (COMPLETED/FAILED/STOPPED) still goes through run_record.save_async
+            # below to guarantee delivery before the container exits.
+            from modal_training_gym.common.status_reporter import (
+                enqueue_framework_status,
             )
 
-        async def _set_framework_status_async(status: SlimeStatus) -> None:
-            _set_framework_status(status)
+            def _set_framework_status(status: SlimeStatus) -> None:
+                run_record.framework_status = status
+                enqueue_framework_status(
+                    training_run_id, status.value, token=framework_status_token
+                )
 
-        try:
+            async def _set_framework_status_async(status: SlimeStatus) -> None:
+                _set_framework_status(status)
+
             if model:
                 await _set_framework_status_async(SlimeStatus.DOWNLOAD_MODEL)
                 cache_dir = (
@@ -1260,7 +1260,10 @@ def build_slime_app(
             if run_record.completed_at is None:
                 run_record.completed_at = finished_at
             run_record.duration_seconds = max(0, finished_at - run_record.started_at)
-            await run_record.save_async()
+            try:
+                await run_record.save_async()
+            except Exception:
+                pass
 
     for tag, fn in app.registered_functions.items():
         setattr(app, tag, fn)

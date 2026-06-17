@@ -15,6 +15,15 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from modal_training_gym.common.sample import Sample
+
+
+def _safe_int(value: Any) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
 from modal_training_gym.utils.metadata import (
     MetadataStore,
     vol_get,
@@ -57,14 +66,63 @@ class TrainingRolloutResult(BaseModel):
         # `vol_list` returns them in step order without needing a sort.
         return f"{self.training_run_id}__{self.rollout_id:08d}"
 
+    @property
+    def error_summary(self) -> dict[str, Any] | None:
+        """Extract error diagnostics from Harbor/agent rollout metrics.
+
+        Returns None when there's nothing notable; otherwise a compact dict
+        with the counts a human needs to diagnose an all-zero-reward rollout
+        without digging into raw logs.
+        """
+        m = self.metrics
+        if not m:
+            return None
+
+        total_samples = (
+            _safe_int(m.get("agent/valid_sample_count"))
+            or _safe_int(m.get("agent/raw_zero_reward_sample_count"))
+            or self.total
+            or 0
+        )
+        if not total_samples:
+            return None
+
+        out: dict[str, Any] = {}
+
+        # Count samples that errored due to infra (sandbox creation, image build, etc.)
+        for key, label in (
+            ("agent/exit_status/remoteerror_sample_count", "remote_error"),
+            ("agent/response_missing_sample_count", "response_missing"),
+            ("agent/invalid_infra_sample_count", "infra_invalid"),
+            ("agent/limits_exceeded_sample_count", "limits_exceeded"),
+        ):
+            v = _safe_int(m.get(key))
+            if v:
+                out[label] = v
+
+        if not out:
+            return None
+
+        out["total_samples"] = total_samples
+        infra_errors = out.get("remote_error", 0) + out.get("infra_invalid", 0)
+        if infra_errors >= total_samples:
+            out["verdict"] = "all_infra_failure"
+        elif infra_errors > 0:
+            out["verdict"] = "partial_infra_failure"
+        return out
+
     def to_summary(self) -> dict[str, Any]:
-        return {
+        summary: dict[str, Any] = {
             "training_run_id": self.training_run_id,
             "rollout_id": self.rollout_id,
             "created_at": self.created_at,
             "total": self.total,
             "mean": self.mean,
         }
+        err = self.error_summary
+        if err:
+            summary["error_summary"] = err
+        return summary
 
     def _touch_created_at(self) -> None:
         if not self.created_at:
