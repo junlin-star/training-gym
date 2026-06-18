@@ -282,6 +282,7 @@ export async function fetchRunRollouts(trainingRunId, { signal } = {}) {
       created_at: Number(item.created_at) || 0,
       total: Number(item.total) || 0,
       mean: typeof item.mean === "number" ? item.mean : Number(item.mean) || 0,
+      error_summary: item.error_summary || null,
     }))
     .sort((a, b) => a.rollout_id - b.rollout_id);
 }

@@ -34,7 +34,7 @@ class Qwen3_6_35b_Recipe_Long_Context(SlimeRecipe):
     num_rollout: int = 1
     rollout_batch_size: int = 16
     rollout_num_gpus_per_engine: int = 4
-    rollout_max_response_len: int = 32768
+    rollout_max_response_len: int = 8192
     rollout_temperature: float = 1.0
     global_batch_size: int = 128
     sglang_mem_fraction_static: float = 0.75
@@ -43,7 +43,7 @@ class Qwen3_6_35b_Recipe_Long_Context(SlimeRecipe):
     sglang_cuda_graph_bs: list[int] | None = field(
         default_factory=lambda: [1, 2, 4, 8] + list(range(16, 257, 8))
     )
-    sglang_max_running_requests: int | None = 512
+    sglang_max_running_requests: int | None = 256
     sglang_speculative_algorithm: str = "EAGLE"
     sglang_speculative_num_steps: int = 3
     sglang_speculative_eagle_topk: int = 1

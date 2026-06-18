@@ -1,10 +1,11 @@
 <script>
-  import { ArrowLeft, ChevronLeft, ChevronRight, ExternalLink, Minimize2, X } from "lucide-svelte";
+  import { ArrowLeft, ChevronLeft, ChevronRight, Download, ExternalLink, Minimize2, X } from "lucide-svelte";
   import Tabs from "../components/Tabs.svelte";
   import RunSummary from "../components/RunSummary.svelte";
   import StatusPill from "../components/StatusPill.svelte";
   import TimeAgo from "../components/TimeAgo.svelte";
   import SampleTimeline from "../components/SampleTimeline.svelte";
+  import ConversationView from "../components/ConversationView.svelte";
   import { fetchRunRollouts, fetchRollout } from "../lib/api.js";
 
   let {
@@ -131,6 +132,51 @@
       e.preventDefault();
       stepSample(1);
     }
+  }
+
+  function sampleToPayload(s) {
+    return {
+      score: s.score,
+      prompt: s.prompt || null,
+      response: s.response || null,
+      thinking: s.thinking || null,
+      raw_response: s.raw_response || null,
+      raw_prompt: s.raw_prompt || null,
+      trace: s.trace || null,
+      metadata: s.metadata || null,
+    };
+  }
+
+  function downloadSampleTrajectory() {
+    if (!activeSample) return;
+    const payload = sampleToPayload(activeSample.sample);
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    const rollout = expandedRolloutId ?? 0;
+    a.download = `trajectory_r${rollout}_s${activeSample.pos}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function downloadAllTrajectories() {
+    if (!expandedRollout?.samples?.length) return;
+    const rollout = expandedRolloutId ?? 0;
+    const payload = {
+      training_run_id: runId,
+      rollout_id: rollout,
+      total: expandedRollout.samples.length,
+      mean: expandedRollout.samples.reduce((a, s) => a + (s.score || 0), 0) / expandedRollout.samples.length,
+      samples: expandedRollout.samples.map(sampleToPayload),
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `rollout_${runId}_r${rollout}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
   }
 
   async function loadRollouts(signal) {
@@ -657,10 +703,19 @@
             {#each rolloutSummaries as r (r.rollout_id)}
               <tr
                 class:expanded={expandedRolloutId === r.rollout_id}
+                class:rollout-error={r.error_summary?.verdict === "all_infra_failure"}
+                class:rollout-warn={r.error_summary?.verdict === "partial_infra_failure"}
                 onclick={() => toggleRolloutDetail(r.rollout_id)}
               >
                 <td>#{r.rollout_id}</td>
-                <td class="rollout-mean">{formatMean(r.mean)}</td>
+                <td class="rollout-mean">
+                  {formatMean(r.mean)}
+                  {#if r.error_summary?.verdict === "all_infra_failure"}
+                    <span class="rollout-error-badge" title="All samples failed due to infrastructure error">infra failure</span>
+                  {:else if r.error_summary?.verdict === "partial_infra_failure"}
+                    <span class="rollout-warn-badge" title="Some samples failed due to infrastructure error">partial failure</span>
+                  {/if}
+                </td>
                 <td>{r.total}</td>
                 <td>
                   <TimeAgo timestamp={r.created_at} showJustNow falsyRepresentation="—" />
@@ -674,7 +729,56 @@
                     {:else if !expandedRollout || !sampleDist}
                       <div class="empty">No samples recorded.</div>
                     {:else}
+                      {#if expandedRollout.metrics && Object.keys(expandedRollout.metrics).length}
+                        {@const m = expandedRollout.metrics}
+                        {@const remoteErr = Number(m["agent/exit_status/remoteerror_sample_count"]) || 0}
+                        {@const responseMissing = Number(m["agent/response_missing_sample_count"]) || 0}
+                        {@const infraInvalid = Number(m["agent/invalid_infra_sample_count"]) || 0}
+                        {@const limitsExceeded = Number(m["agent/limits_exceeded_sample_count"]) || 0}
+                        {@const totalSamples = Number(m["agent/valid_sample_count"]) || sampleDist.total || 0}
+                        {@const hasErrors = remoteErr > 0 || responseMissing > 0 || infraInvalid > 0}
+                        {#if hasErrors}
+                          <div class="rollout-diagnostics" class:diag-critical={remoteErr >= totalSamples}>
+                            <div class="diag-title">
+                              {#if remoteErr >= totalSamples}
+                                All {totalSamples} samples failed — infrastructure error
+                              {:else}
+                                {remoteErr + infraInvalid} / {totalSamples} samples hit infrastructure errors
+                              {/if}
+                            </div>
+                            <div class="diag-details">
+                              {#if remoteErr}
+                                <span class="diag-tag">RemoteError: {remoteErr}</span>
+                              {/if}
+                              {#if responseMissing}
+                                <span class="diag-tag">Response missing: {responseMissing}</span>
+                              {/if}
+                              {#if infraInvalid}
+                                <span class="diag-tag">Infra invalid: {infraInvalid}</span>
+                              {/if}
+                              {#if limitsExceeded}
+                                <span class="diag-tag">Limits exceeded: {limitsExceeded}</span>
+                              {/if}
+                            </div>
+                            {#if remoteErr >= totalSamples}
+                              <div class="diag-hint">
+                                Check the Modal app logs for sandbox/image build errors. Common cause: the environment image failed to build.
+                              </div>
+                            {/if}
+                          </div>
+                        {/if}
+                      {/if}
                       <div class="dist">
+                        <div class="dist-toolbar">
+                          <button
+                            class="download-all-btn"
+                            onclick={downloadAllTrajectories}
+                            title="Download all samples as JSON"
+                          >
+                            <Download size={13} />
+                            Download all ({sampleDist.total} samples)
+                          </button>
+                        </div>
                         <div
                           class="dist-bars"
                           role="group"
@@ -732,6 +836,14 @@
                               </span>
                               <button
                                 class="sample-nav-btn"
+                                onclick={downloadSampleTrajectory}
+                                aria-label="Download trajectory JSON"
+                                title="Download trajectory"
+                              >
+                                <Download size={14} />
+                              </button>
+                              <button
+                                class="sample-nav-btn"
                                 onclick={closeBucket}
                                 aria-label="Close sample viewer"
                               >
@@ -739,13 +851,41 @@
                               </button>
                             </div>
                           </div>
+                          {#if activeSample.sample.metadata?._metadata_type === "audio" || activeSample.sample.metadata?.audio}
+                            <div class="rollout-sample-label">audio</div>
+                            <audio
+                              class="sample-audio"
+                              controls
+                              preload="none"
+                              src={activeSample.sample.metadata.audio}
+                            ></audio>
+                          {/if}
                           {#if activeSample.sample.prompt}
                             <div class="rollout-sample-label">prompt</div>
                             <pre class="rollout-sample-text">{activeSample.sample.prompt}</pre>
                           {/if}
-                          {#if activeSample.sample.response}
-                            <div class="rollout-sample-label">response</div>
-                            <pre class="rollout-sample-text">{activeSample.sample.response}</pre>
+                          <div class="rollout-sample-label">conversation</div>
+                          <ConversationView
+                            messages={activeSample.sample.metadata?.trajectory_messages}
+                            response={activeSample.sample.response || ""}
+                            thinking={activeSample.sample.thinking || ""}
+                            evalReport={activeSample.sample.metadata?.eval_report}
+                          />
+                          {#if activeSample.sample.metadata?.reference}
+                            <div class="rollout-sample-label">reference</div>
+                            <pre class="rollout-sample-text">{activeSample.sample.metadata.reference}</pre>
+                          {/if}
+                          {#each Object.entries(activeSample.sample.metadata?.metrics ?? {}) as [name, value]}
+                            <div class="rollout-sample-label">{name}</div>
+                            <span class="rollout-sample-metric">
+                              {typeof value === "number" ? value.toFixed(3) : value}
+                            </span>
+                          {/each}
+                          {#if activeSample.sample.metadata?.exit_status}
+                            <div class="rollout-sample-label">exit status</div>
+                            <span class="rollout-sample-metric sample-exit-status" class:exit-ok={activeSample.sample.metadata.exit_status === "ok"} class:exit-err={activeSample.sample.metadata.exit_status !== "ok"}>
+                              {activeSample.sample.metadata.exit_status}
+                            </span>
                           {/if}
                           {#if activeSample.sample.trace?.length}
                             <div class="rollout-sample-label">trajectory timeline</div>
@@ -1142,6 +1282,30 @@
     margin-bottom: 16px;
   }
 
+  .dist-toolbar {
+    display: flex;
+    justify-content: flex-end;
+    margin-bottom: 6px;
+  }
+
+  .download-all-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    background: none;
+    border: 1px solid var(--border, #2f2f2f);
+    border-radius: 4px;
+    color: var(--muted);
+    font-size: 11px;
+    padding: 3px 8px;
+    cursor: pointer;
+  }
+
+  .download-all-btn:hover {
+    color: var(--text);
+    border-color: var(--border-strong, #4a4a4a);
+  }
+
   .dist-bars {
     display: flex;
     align-items: flex-end;
@@ -1273,6 +1437,20 @@
     margin-bottom: 2px;
   }
 
+  .sample-audio {
+    display: block;
+    width: 100%;
+    max-width: 400px;
+    margin: 4px 0 8px;
+    border-radius: 4px;
+  }
+
+  .rollout-sample-metric {
+    font-size: 13px;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-bright);
+  }
+
   .rollout-sample-text {
     margin: 0;
     padding: 8px;
@@ -1284,6 +1462,21 @@
     word-break: break-word;
     max-height: 240px;
     overflow: auto;
+  }
+
+  .sample-exit-status {
+    padding: 2px 8px;
+    border-radius: 3px;
+    font-size: 11px;
+    font-weight: 500;
+  }
+  .exit-ok {
+    background: rgba(74, 222, 128, 0.12);
+    color: #4ade80;
+  }
+  .exit-err {
+    background: rgba(248, 113, 113, 0.12);
+    color: #f87171;
   }
 
   .empty {
@@ -1429,5 +1622,80 @@
     border-radius: 4px;
     padding: 2px 6px;
     font-size: 12px;
+  }
+
+  /* ── Rollout error indicators ──────────────────────────────────────── */
+
+  .rollout-error td {
+    background: rgba(239, 68, 68, 0.06);
+  }
+  .rollout-warn td {
+    background: rgba(251, 191, 36, 0.06);
+  }
+
+  .rollout-error-badge,
+  .rollout-warn-badge {
+    display: inline-block;
+    font-size: 10px;
+    font-weight: 500;
+    padding: 1px 6px;
+    border-radius: 3px;
+    margin-left: 6px;
+    vertical-align: middle;
+  }
+  .rollout-error-badge {
+    background: rgba(239, 68, 68, 0.15);
+    color: #ef4444;
+    border: 1px solid rgba(239, 68, 68, 0.25);
+  }
+  .rollout-warn-badge {
+    background: rgba(251, 191, 36, 0.15);
+    color: #fbbf24;
+    border: 1px solid rgba(251, 191, 36, 0.25);
+  }
+
+  /* ── Rollout diagnostics banner ────────────────────────────────────── */
+
+  .rollout-diagnostics {
+    padding: 10px 14px;
+    border-radius: 6px;
+    margin-bottom: 12px;
+    background: rgba(251, 191, 36, 0.08);
+    border: 1px solid rgba(251, 191, 36, 0.2);
+  }
+  .rollout-diagnostics.diag-critical {
+    background: rgba(239, 68, 68, 0.08);
+    border-color: rgba(239, 68, 68, 0.2);
+  }
+
+  .diag-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: #fbbf24;
+    margin-bottom: 6px;
+  }
+  .diag-critical .diag-title {
+    color: #ef4444;
+  }
+
+  .diag-details {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 4px;
+  }
+  .diag-tag {
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 3px;
+    background: rgba(255, 255, 255, 0.06);
+    color: var(--text, #d1d1d1);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .diag-hint {
+    font-size: 11px;
+    color: var(--muted, #a3a3a3);
+    margin-top: 6px;
   }
 </style>

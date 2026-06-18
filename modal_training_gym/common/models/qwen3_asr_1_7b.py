@@ -67,6 +67,34 @@ class Qwen3_ASR_1_7B(HFModelConfiguration):
         rotary_base=1000000,  # rope_theta
     )
 
+    def download(self) -> None:
+        """Download, then add a fast ``tokenizer.json`` to the snapshot.
+
+        Qwen3-ASR ships only a slow tokenizer; SGLang's Rust ``sgl-router`` needs
+        ``tokenizer.json`` or it errors every rollout.
+        """
+        super().download()
+        self._materialize_router_tokenizer()
+
+    def _materialize_router_tokenizer(self) -> None:
+        import os
+
+        from huggingface_hub import snapshot_download
+
+        snapshot_dir = snapshot_download(repo_id=self.model_name, local_files_only=True)
+        target = os.path.join(snapshot_dir, "tokenizer.json")
+        if os.path.exists(target):
+            return
+
+        from transformers import AutoTokenizer
+
+        tokenizer = AutoTokenizer.from_pretrained(snapshot_dir)
+        backend = getattr(tokenizer, "backend_tokenizer", None)
+        if backend is None:
+            return  # no fast tokenizer to write
+        backend.save(target)
+        print(f"[training-gym] Wrote router-loadable tokenizer.json -> {target}")
+
 
 @functools.lru_cache(maxsize=None)
 def _processor(checkpoint: str) -> Any:
