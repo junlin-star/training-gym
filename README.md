@@ -88,7 +88,6 @@ rest of the cells run as-is.
 
 | Tutorial | Summary | Difficulty | Framework | Launch |
 |---|---|---|---|---|
-| [`001_qwen27b`](tutorials/singlenode/001_qwen27b/001_qwen27b.ipynb) | Train Qwen3.6-27B on DAPO-math with GRPO | Advanced | `slime` | <a href="https://modal.com/notebooks/new/https://github.com/modal-projects/training-gym/blob/main/tutorials/singlenode/001_qwen27b/001_qwen27b.ipynb" target="_blank" rel="nofollow noopener noreferrer"><img src="https://modal-cdn.com/open-in-modal.svg" alt="Open in Modal"></a> |
 | [`000_qwen35b`](tutorials/singlenode/000_qwen35b/000_qwen35b.ipynb) | Train Qwen3.6-35B-A3B on DAPO-math with GRPO | Advanced | `slime` | <a href="https://modal.com/notebooks/new/https://github.com/modal-projects/training-gym/blob/main/tutorials/singlenode/000_qwen35b/000_qwen35b.ipynb" target="_blank" rel="nofollow noopener noreferrer"><img src="https://modal-cdn.com/open-in-modal.svg" alt="Open in Modal"></a> |
 
 ### Agents
