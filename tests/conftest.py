@@ -17,6 +17,12 @@ class FakeVolume:
     ``save()`` against this — reload is only a freshness hint.
     """
 
+    class _DirEntry:
+        """Simple stand-in for Modal Volume directory entries."""
+
+        def __init__(self, path: str):
+            self.path = path
+
     def __init__(self) -> None:
         self.files: dict[str, bytes] = {}
 
@@ -33,7 +39,13 @@ class FakeVolume:
             raise FileNotFoundError(path)
         del self.files[path]
 
-    def batch_upload(self):
+    def iterdir(self, path: str):
+        """Return list of files in the given path (stub for Modal Volume.iterdir)."""
+        prefix = path.rstrip("/") + "/"
+        matching_files = [f for f in self.files.keys() if f.startswith(prefix)]
+        return [self._DirEntry(f) for f in matching_files]
+
+    def batch_upload(self, force: bool = False):
         files = self.files
 
         class _Batch:
