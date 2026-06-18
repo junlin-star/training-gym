@@ -107,6 +107,7 @@ _PATCH_ROLLOUT_STATUS_B64 = encode_patch(
     "patch_rollout_status_reporting", _SLIME_PATCHES
 )
 _PATCH_LOG_ELIDE_B64 = encode_patch("patch_log_elide", _SLIME_PATCHES)
+_PATCH_CP_LOG_ROLLOUT_B64 = encode_patch("patch_cp_log_rollout", _SLIME_PATCHES)
 
 
 def _build_slime_base_image() -> "Image":
@@ -122,6 +123,7 @@ def _build_slime_base_image() -> "Image":
             f"echo {_PATCH_QWEN3_ASR_EXPORT_B64} | base64 -d | python3",
             f"echo {_PATCH_ROLLOUT_STATUS_B64} | base64 -d | python3",
             f"echo {_PATCH_LOG_ELIDE_B64} | base64 -d | python3",
+            f"echo {_PATCH_CP_LOG_ROLLOUT_B64} | base64 -d | python3",
         )
     )
 
@@ -731,21 +733,21 @@ def build_slime_app(
         current_config = _build_conversion_config(slime, model=model)
 
         if os.path.exists(save_path):
-            if _has_torch_dist_checkpoint(save_path):
+            complete = _has_torch_dist_checkpoint(save_path)
+            stale = True
+            if complete:
                 config_path = os.path.join(save_path, _CONVERSION_CONFIG_FILE)
-                stale = False
                 if os.path.isfile(config_path):
                     try:
                         with open(config_path) as f:
                             stored_config = json.load(f)
-                        if stored_config != current_config:
-                            stale = True
-                            if node_rank == 0:
-                                print(
-                                    f"Checkpoint at {save_path} was built with "
-                                    f"different config:\n  stored: {stored_config}"
-                                    f"\n  current: {current_config}"
-                                )
+                        stale = stored_config != current_config
+                        if stale and node_rank == 0:
+                            print(
+                                f"Checkpoint at {save_path} was built with "
+                                f"different config:\n  stored: {stored_config}"
+                                f"\n  current: {current_config}"
+                            )
                     except (OSError, json.JSONDecodeError):
                         stale = True
                         if node_rank == 0:
@@ -765,41 +767,26 @@ def build_slime_app(
                             f"config metadata — reconverting to ensure "
                             f"compatibility."
                         )
-                if node_rank == 0:
-                    print(f"Using existing torch_dist checkpoint at {save_path}.")
-                if training_run_id:
-                    flush_status_reporter(timeout_seconds=2.0)
-                return
+                if not stale:
+                    if node_rank == 0:
+                        print(f"Using existing torch_dist checkpoint at {save_path}.")
+                    if training_run_id:
+                        flush_status_reporter(timeout_seconds=2.0)
+                    return
 
+            # Either incomplete (e.g. a preempted conversion) or stale: rebuild
+            # it. Rank 0 removes the directory and commits; other ranks wait for
+            # the removal to land before reconverting.
             if node_rank == 0:
                 import shutil
 
-                if stale:
-                    if node_rank == 0:
-                        print(
-                            f"Removing stale torch_dist checkpoint at "
-                            f"{save_path} (parallelism config changed)."
-                        )
-                        shutil.rmtree(save_path, ignore_errors=True)
-                        checkpoints_volume.commit()
-                    else:
-                        time.sleep(5)
-                        checkpoints_volume.reload()
-                else:
-                    if node_rank == 0:
-                        print(
-                            f"Using existing torch_dist checkpoint at "
-                            f"{save_path} (config matches)."
-                        )
-                    return
+                reason = "stale" if complete else "incomplete"
+                print(f"Removing {reason} torch_dist checkpoint at {save_path}.")
+                shutil.rmtree(save_path, ignore_errors=True)
+                checkpoints_volume.commit()
             else:
-                if node_rank == 0:
-                    print(f"Removing incomplete torch_dist checkpoint at {save_path}.")
-                    shutil.rmtree(save_path, ignore_errors=True)
-                    checkpoints_volume.commit()
-                else:
-                    time.sleep(5)
-                    checkpoints_volume.reload()
+                time.sleep(5)
+                checkpoints_volume.reload()
 
         torchrun_args = [f"--nproc-per-node={nproc_per_node}"]
         if nnodes > 1:

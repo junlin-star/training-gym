@@ -39,10 +39,24 @@ def get_checkpoint_conversion_policy(
     """Return (num_nodes, nproc_per_node, extra_args) for checkpoint conversion."""
     gpus_per_node = slime_cfg.actor_num_gpus_per_node
     actor_nodes = slime_cfg.actor_num_nodes
-    tp = slime_cfg.tensor_model_parallel_size
-    pp = getattr(slime_cfg, "pipeline_model_parallel_size", 1)
+    # torch_dist is reshard-friendly, so conversion parallelism is independent of
+    # the training layout. For MTP/EAGLE checkpoints, sharding the MTP head's
+    # duplicated embedding/output across ranks corrupts the saved sharded state
+    # dict (duplicate keys flagged in determine_global_metadata), so convert
+    # single-rank (tp=1, pp=1, world=1) and let training reshard on load.
+    tp = (
+        getattr(slime_cfg, "conversion_tensor_model_parallel_size", None)
+        or slime_cfg.tensor_model_parallel_size
+    )
+    pp = (
+        getattr(slime_cfg, "conversion_pipeline_model_parallel_size", None)
+        or getattr(slime_cfg, "pipeline_model_parallel_size", 1)
+    )
 
-    world_size = tp * pp if (tp > 1 or pp > 1) else gpus_per_node
+    if tp == 1 and pp == 1 and getattr(slime_cfg, "mtp_num_layers", 0):
+        world_size = 1
+    else:
+        world_size = tp * pp if (tp > 1 or pp > 1) else gpus_per_node
     max_world_size = actor_nodes * gpus_per_node
     if world_size > max_world_size:
         raise ValueError(

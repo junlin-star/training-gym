@@ -149,46 +149,16 @@ if _is_local():
 def _run_compact_sync() -> None:
     """Rebuild all summary stores from canonical per-item metadata."""
     from modal_training_gym.utils.metadata import (
-        vol_compact_summary_items,
         MetadataStore,
+        compact_summary_store,
     )
 
-    for summary_store, item_store, id_key, sk, rev in [
-        (
-            MetadataStore.TRAINING_RUNS_SUMMARY,
-            MetadataStore.TRAINING_RUNS,
-            "training_run_id",
-            lambda item: (
-                int(item.get("created_at", 0) or 0),
-                str(item.get("training_run_id", "")),
-            ),
-            True,
-        ),
-        (
-            MetadataStore.TRAIN_RESULTS_SUMMARY,
-            MetadataStore.TRAIN_RESULTS,
-            "training_run_id",
-            lambda item: str(item.get("training_run_id", "")),
-            True,
-        ),
-        (
-            MetadataStore.DEPLOYMENTS_SUMMARY,
-            MetadataStore.DEPLOYMENTS,
-            "deployment_id",
-            lambda item: (
-                str(item.get("deployment_config", {}).get("app_name", "")),
-                str(item.get("deployment_id", "")),
-            ),
-            True,
-        ),
-    ]:
-        vol_compact_summary_items(
-            summary_store,
-            item_store,
-            item_id_key=id_key,
-            sort_key=sk,
-            reverse=rev,
-        )
+    for summary_store in (
+        MetadataStore.TRAINING_RUNS_SUMMARY,
+        MetadataStore.TRAIN_RESULTS_SUMMARY,
+        MetadataStore.DEPLOYMENTS_SUMMARY,
+    ):
+        compact_summary_store(summary_store)
 
 
 @app.function(schedule=modal.Cron("*/30 * * * *"))
@@ -220,20 +190,23 @@ def fastapi_app():
     from modal_training_gym.utils.metadata import (
         MetadataStore,
         vol_get,
-        vol_get_summary_items,
+        vol_get_summary_items_healed,
         vol_put_summary_items,
     )
 
     web = FastAPI()
-    cache_ttl_seconds = 5.0
+    cache_ttl_seconds = 30.0
     eval_summary_store = MetadataStore.EVALS
     eval_summary_key = "summary"
     eval_summary_payload_key = "summaries"
-    cache_entries: dict[str, tuple[float, list[dict[str, Any]]]] = {
-        "runs": (0.0, []),
-        "train_results": (0.0, []),
-        "evals": (0.0, []),
-        "deployments": (0.0, []),
+    # Each entry holds (expires_at, values, loaded_at). ``loaded_at == 0.0``
+    # means "never successfully loaded", which lets the very first request block
+    # for real data instead of flashing an empty list.
+    cache_entries: dict[str, tuple[float, list[dict[str, Any]], float]] = {
+        "runs": (0.0, [], 0.0),
+        "train_results": (0.0, [], 0.0),
+        "evals": (0.0, [], 0.0),
+        "deployments": (0.0, [], 0.0),
     }
     cache_locks = {
         "runs": asyncio.Lock(),
@@ -241,24 +214,56 @@ def fastapi_app():
         "evals": asyncio.Lock(),
         "deployments": asyncio.Lock(),
     }
+    # Hold strong refs to background refresh tasks so they aren't GC'd mid-flight.
+    refresh_tasks: set[asyncio.Task] = set()
     web.mount("/assets", StaticFiles(directory=f"{STATIC_DIR}/assets"), name="assets")
+
+    async def refresh_cache(
+        key: str, loader: Callable[[], Awaitable[list[dict[str, Any]]]]
+    ) -> list[dict[str, Any]]:
+        async with cache_locks[key]:
+            now = time.monotonic()
+            expires_at, values, loaded_at = cache_entries[key]
+            if now < expires_at:
+                return values
+            try:
+                values = await loader()
+                cache_entries[key] = (now + cache_ttl_seconds, values, now)
+            except Exception:
+                # Keep serving the last known data and back off so a slow/failing
+                # loader (e.g. a heavy summary rebuild) can't be retried on every
+                # request — it must never block or break the endpoint.
+                cache_entries[key] = (now + cache_ttl_seconds, values, loaded_at)
+            return values
+
+    def invalidate_cache(key: str) -> None:
+        # Force the next read to revalidate, but keep the last values and the
+        # "loaded once" marker so it refreshes in the background instead of
+        # blocking on a cold rebuild.
+        _expires_at, values, loaded_at = cache_entries[key]
+        cache_entries[key] = (0.0, values, loaded_at)
 
     async def get_cached_list(
         key: str, loader: Callable[[], Awaitable[list[dict[str, Any]]]]
     ) -> list[dict[str, Any]]:
         now = time.monotonic()
-        expires_at, values = cache_entries[key]
+        expires_at, values, loaded_at = cache_entries[key]
         if now < expires_at:
             return values
 
-        async with cache_locks[key]:
-            now = time.monotonic()
-            expires_at, values = cache_entries[key]
-            if now < expires_at:
-                return values
-            values = await loader()
-            cache_entries[key] = (now + cache_ttl_seconds, values)
-            return values
+        # Nothing cached yet: block once on the loader so the first paint has
+        # real data rather than an empty flash.
+        if loaded_at == 0.0:
+            return await refresh_cache(key, loader)
+
+        # Stale-while-revalidate: return the last good data immediately and
+        # refresh in the background. The expensive runs rebuild then happens off
+        # the request path, so the UI is never left waiting on it.
+        if not cache_locks[key].locked():
+            task = asyncio.create_task(refresh_cache(key, loader))
+            refresh_tasks.add(task)
+            task.add_done_callback(refresh_tasks.discard)
+        return values
 
     def list_from_payload(
         payload: Any,
@@ -387,8 +392,8 @@ def fastapi_app():
     async def load_list_summary(
         summary_store: MetadataStore,
     ) -> list[dict[str, Any]]:
-        items = await run_in_threadpool(vol_get_summary_items, summary_store)
-        if items is None:
+        items = await run_in_threadpool(vol_get_summary_items_healed, summary_store)
+        if not items:
             return []
         items, changed = add_modal_app_urls(items)
         if changed:
@@ -588,7 +593,7 @@ def fastapi_app():
         metadata["framework_progress"] = progress
         run.metadata = metadata
         await run.save_async()
-        cache_entries["runs"] = (0.0, [])
+        invalidate_cache("runs")
         return JSONResponse({"status": "ok", "framework_status": status.value})
 
     # ── Training rollouts ────────────────────────────────────────────────
@@ -646,7 +651,7 @@ def fastapi_app():
         }
         run.metadata = metadata
         await run.save_async()
-        cache_entries["runs"] = (0.0, [])
+        invalidate_cache("runs")
 
         return JSONResponse(
             {"status": "ok", "rollout_id": result.rollout_id, "mean": result.mean}
