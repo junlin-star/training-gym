@@ -103,6 +103,19 @@ _PATCH_QWEN3_ASR_EXPORT_B64 = encode_patch(
     "patch_qwen3_asr_export",
     _SLIME_PATCHES / "model_specific_patches" / "qwen3_asr",
 )
+# The Qwen3-VL Megatron->HF converters: a qwen3_vl per-param mapping (language
+# stack + frozen-ViT identity passthrough) and a torch_dist->HF shim that skips
+# the frozen ViT's stacked layers. Like the ASR export above, they live in the
+# base image rather than the VL recipe because conversion runs in the recipe-less
+# deploy/eval path. Additive + idempotent, so non-VL runs are untouched.
+_PATCH_QWEN3_VL_EXPORT_B64 = encode_patch(
+    "patch_qwen3_vl_export",
+    _SLIME_PATCHES / "model_specific_patches" / "qwen3_vl",
+)
+_PATCH_QWEN3_VL_TORCH_DIST_B64 = encode_patch(
+    "patch_qwen3_vl_torch_dist",
+    _SLIME_PATCHES / "model_specific_patches" / "qwen3_vl",
+)
 _PATCH_ROLLOUT_STATUS_B64 = encode_patch(
     "patch_rollout_status_reporting", _SLIME_PATCHES
 )
@@ -120,6 +133,8 @@ def _build_slime_base_image() -> "Image":
             f"echo {_PATCH_BRIDGE_NONE_TASK_B64} | base64 -d | python3",
             f"echo {_PATCH_STOP_TOKEN_DIAG_B64} | base64 -d | python3",
             f"echo {_PATCH_QWEN3_ASR_EXPORT_B64} | base64 -d | python3",
+            f"echo {_PATCH_QWEN3_VL_EXPORT_B64} | base64 -d | python3",
+            f"echo {_PATCH_QWEN3_VL_TORCH_DIST_B64} | base64 -d | python3",
             f"echo {_PATCH_ROLLOUT_STATUS_B64} | base64 -d | python3",
             f"echo {_PATCH_LOG_ELIDE_B64} | base64 -d | python3",
         )
@@ -394,16 +409,6 @@ def build_slime_app(
     if _has_hybrid_spec:
         image = image.run_commands(
             f"echo {_PATCH_VALIDATION_B64} | base64 -d | python3",
-        )
-
-    _compat_patches = (
-        list(getattr(model.architecture, "compat_patches", None) or [])
-        if model and getattr(model, "architecture", None)
-        else []
-    )
-    for _patch_name in _compat_patches:
-        image = image.run_commands(
-            f"echo {encode_patch(_patch_name, _SLIME_PATCHES)} | base64 -d | python3",
         )
 
     def _get_custom_generate_path() -> str:

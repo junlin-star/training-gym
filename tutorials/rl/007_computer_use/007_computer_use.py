@@ -39,12 +39,6 @@
 
 import modal
 
-# ## Prerequisites
-#
-# This tutorial requires a Modal Secret named `huggingface-secret` containing your
-# `HF_TOKEN`. Create one at [modal.com/secrets](https://modal.com/secrets) if you
-# haven't already — the cell below fails fast with instructions otherwise.
-
 import re
 
 from modal_training_gym import (
@@ -111,6 +105,9 @@ class ScreenSpotDataset(MultimodalDataset):
         ds = load_dataset(self.hf_repo, split=self.hf_split)
         start = min(self.row_offset, len(ds))
         stop = min(start + self.n_rows, len(ds))
+        # Demo-scale: materializes every screenshot as an inline base64 row in
+        # memory. Fine for the ~1k ScreenSpot rows; for large corpora stream /
+        # store by reference.
         rows = []
         for row in ds.select(range(start, stop)):
             left, top, right, bottom = row["bbox"]

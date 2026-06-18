@@ -14,8 +14,9 @@ so its weights equal the base weights. The fill only adds tensors whose HF names
 not already produced by the (trained) language-stack conversion, so trained weights
 always win.
 
-Scoped to Qwen3-VL via ``architecture.compat_patches``; only the deploy/eval
-conversion image runs this tool. Idempotent. Report upstream; drop once fixed there.
+Baked into the slime base image (only the deploy/eval conversion runs this tool).
+Additive + idempotent, so non-VL runs are untouched. Report upstream; drop once
+fixed there.
 
 Run at image build:  python patch_qwen3_vl_torch_dist.py
 """

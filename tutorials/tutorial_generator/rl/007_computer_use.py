@@ -6,7 +6,7 @@ TUTORIAL_METADATA = {
     "cluster_shape": "1 × 8×H100",
     "summary": "GUI grounding with Qwen3-VL-8B — predict click coordinates from screenshots",
     "difficulty": "Advanced",
-    "order": 40,
+    "order": 45,
     "api_classes": [
         "Qwen3VL_8B",
         "Qwen3VL_Recipe",
@@ -70,17 +70,6 @@ def _run_instructions():
 @shell("%uv pip install -q git+https://github.com/modal-projects/training-gym.git@main")
 def _install():
     pass
-
-
-@markdown
-def _prereqs():
-    """
-    ## Prerequisites
-
-    This tutorial requires a Modal Secret named `huggingface-secret` containing your
-    `HF_TOKEN`. Create one at [modal.com/secrets](https://modal.com/secrets) if you
-    haven't already — the cell below fails fast with instructions otherwise.
-    """
 
 
 @code
@@ -161,6 +150,9 @@ def _dataset():
             ds = load_dataset(self.hf_repo, split=self.hf_split)
             start = min(self.row_offset, len(ds))
             stop = min(start + self.n_rows, len(ds))
+            # Demo-scale: materializes every screenshot as an inline base64 row in
+            # memory. Fine for the ~1k ScreenSpot rows; for large corpora stream /
+            # store by reference.
             rows = []
             for row in ds.select(range(start, stop)):
                 left, top, right, bottom = row["bbox"]

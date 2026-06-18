@@ -131,7 +131,6 @@ class ModelArchitecture:
     moe_aux_loss_coeff: float | None = None
     megatron_spec: list[str] | None = None
     megatron_model_type: str = ""
-    compat_patches: list[str] | None = None
     apply_layernorm_1p: bool = False
     use_gated_attention: bool = False
     attention_output_gate: bool = False

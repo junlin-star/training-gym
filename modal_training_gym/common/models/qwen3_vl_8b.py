@@ -6,11 +6,9 @@ tower (a ViT with patch size 16, depth 27) is loaded by SGLang straight from the
 HF checkpoint. The architecture below (from ``config.json`` → ``text_config``)
 drives Megatron *training*.
 
-Megatron-bridge support: AutoBridge loads/trains the full VL model natively. The
-one gap is the MB→HF *export*: slime's stock qwen3 converter can't map the vision
-tower. The ``patch_qwen3_vl_export`` shim ships a qwen3_vl MB→HF converter that
-converts the trained language backbone and identity-passes the frozen ViT
-(``vision_model.*`` → ``model.visual.*``).
+The class holds only the model's specs. Framework wiring (the slime MB→HF
+converters that map the vision tower for export) lives in the slime layer instead,
+since it's meaningless for other backends.
 """
 
 from __future__ import annotations
@@ -52,9 +50,4 @@ class Qwen3VL_8B(HFModelConfiguration):
         untie_embeddings_and_output_weights=True,
         use_rotary_position_embeddings=True,
         rotary_base=5000000,
-        # patch_qwen3_vl_export: qwen3_vl MB->HF converter that maps the language
-        # stack and identity-passes the frozen ViT. patch_qwen3_vl_torch_dist:
-        # makes the deploy/eval torch_dist->HF tool skip the frozen ViT's stacked
-        # layers and refill them from the base HF checkpoint.
-        compat_patches=["patch_qwen3_vl_export", "patch_qwen3_vl_torch_dist"],
     )

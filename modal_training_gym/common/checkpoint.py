@@ -205,22 +205,11 @@ def convert_checkpoint_to_hf(
         create_if_missing=True,
     )
     from modal_training_gym.common import hf_secrets
-    from modal_training_gym.common.patches import encode_patch
-    from modal_training_gym.frameworks.slime.launcher import (
-        _SLIME_PATCHES,
-        _build_slime_base_image,
-    )
+    from modal_training_gym.frameworks.slime.launcher import _build_slime_base_image
 
     image = _build_slime_base_image().add_local_python_source(
         "modal_training_gym", copy=True
     )
-    # Model-declared compat patches also apply on the standalone serve-time
-    # conversion image, not just training.
-    arch = getattr(model, "architecture", None)
-    for _patch_name in list(getattr(arch, "compat_patches", None) or []):
-        image = image.run_commands(
-            f"echo {encode_patch(_patch_name, _SLIME_PATCHES)} | base64 -d | python3",
-        )
     conversion_app = App("training-gym-checkpoint-convert")
     gpu_spec = _conversion_gpu_spec(checkpoint, recipe)
 
