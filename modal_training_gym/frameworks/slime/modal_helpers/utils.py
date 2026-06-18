@@ -48,9 +48,8 @@ def get_checkpoint_conversion_policy(
         getattr(slime_cfg, "conversion_tensor_model_parallel_size", None)
         or slime_cfg.tensor_model_parallel_size
     )
-    pp = (
-        getattr(slime_cfg, "conversion_pipeline_model_parallel_size", None)
-        or getattr(slime_cfg, "pipeline_model_parallel_size", 1)
+    pp = getattr(slime_cfg, "conversion_pipeline_model_parallel_size", None) or getattr(
+        slime_cfg, "pipeline_model_parallel_size", 1
     )
 
     if tp == 1 and pp == 1 and getattr(slime_cfg, "mtp_num_layers", 0):
