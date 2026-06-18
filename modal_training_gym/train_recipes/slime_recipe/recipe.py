@@ -57,6 +57,8 @@ _SLIME_SKIP = {
     "image_run_commands",
     "image_env",
     "train_function_kwargs",
+    "conversion_pipeline_model_parallel_size",
+    "conversion_tensor_model_parallel_size",
 }
 
 YAML_CONFIG_FIELDS = ("eval_config", "extra_config", "sglang_config")

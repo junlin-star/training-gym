@@ -53,6 +53,35 @@ def _stop_app(app_id: str) -> None:
         print(f"WARNING: could not auto-stop app {app_id}: {exc}")
 
 
+def _app_is_running(app_id: str) -> bool:
+    """Best-effort check whether a Modal app is still alive on the server.
+
+    A detached app outlives the client, so a dropped client-side RPC doesn't
+    mean the run died — the app keeps running and lands in
+    ``DETACHED_DISCONNECTED``, which we treat as live. Returns False on any
+    error so callers fall back to their normal failure handling.
+    """
+    try:
+        import modal
+        from modal_proto import api_pb2
+
+        live_states = {
+            api_pb2.APP_STATE_EPHEMERAL,
+            api_pb2.APP_STATE_DETACHED,
+            api_pb2.APP_STATE_DETACHED_DISCONNECTED,
+            api_pb2.APP_STATE_INITIALIZING,
+            api_pb2.APP_STATE_DEPLOYED,
+            api_pb2.APP_STATE_DERIVED,
+        }
+        with modal.Client.from_env() as client:
+            resp = client.stub.AppGetLifecycle(
+                api_pb2.AppGetLifecycleRequest(app_id=app_id)
+            )
+        return resp.lifecycle.app_state in live_states
+    except Exception:
+        return False
+
+
 def _merge_recipe(base: SlimeRecipe, overrides: SlimeRecipe) -> SlimeRecipe:
     base_fields = {f.name: getattr(base, f.name) for f in _dc.fields(base)}
 
@@ -655,10 +684,24 @@ class TrainConfig:
                             run_record = TrainingRun.from_id(training_run_id)
                         except (KeyError, Exception):
                             pass
+                        # A detached app survives client disconnect, so a
+                        # dropped RPC (laptop sleep, network blip, Ctrl-C) is
+                        # not a real failure — the container keeps training and
+                        # will write its own terminal state. Don't stamp FAILED
+                        # while the app is still alive on Modal.
+                        remote_still_running = bool(
+                            self.detach
+                            and modal_app_id
+                            and _app_is_running(modal_app_id)
+                        )
                         # Only mark FAILED if the remote hasn't already set a
                         # terminal state (it may have completed/failed on its
-                        # own while we lost the RPC connection).
-                        if run_record.status == TrainingRunStatus.RUNNING:
+                        # own while we lost the RPC connection) and the app
+                        # isn't still running detached.
+                        if (
+                            run_record.status == TrainingRunStatus.RUNNING
+                            and not remote_still_running
+                        ):
                             run_record.status = TrainingRunStatus.FAILED
                             finished_at = int(time.time())
                             run_record.ended_at = finished_at
