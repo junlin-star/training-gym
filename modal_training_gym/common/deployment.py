@@ -291,9 +291,6 @@ class ModelDeployment(BaseModel):
 
         if ensure_ready:
             self.wait_until_ready()
-        # Multimodal: when images are supplied, send OpenAI-style structured content
-        # (text + image_url parts) so vision models actually see the image. Without
-        # this the request is text-only. Plain text str preserves prior behavior.
         if images:
             content: object = [
                 {"type": "text", "text": prompt},

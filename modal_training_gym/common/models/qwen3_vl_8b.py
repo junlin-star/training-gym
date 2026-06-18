@@ -6,13 +6,11 @@ tower (a ViT with patch size 16, depth 27) is loaded by SGLang straight from the
 HF checkpoint. The architecture below (from ``config.json`` → ``text_config``)
 drives Megatron *training*.
 
-Megatron-bridge support: AutoBridge loads/trains the full VL model natively (no
-ViT shim needed — verified empirically). The one gap is the MB→HF *export*:
-slime's stock qwen3 converter can't map the vision tower. The
-``patch_qwen3_vl_export`` shim ships a qwen3_vl MB→HF converter that converts the
-trained language backbone and identity-passes the frozen ViT
-(``vision_model.*`` → ``model.visual.*``), mirroring the qwen3_asr audio-tower
-converter. Report upstream; drop once fixed there.
+Megatron-bridge support: AutoBridge loads/trains the full VL model natively. The
+one gap is the MB→HF *export*: slime's stock qwen3 converter can't map the vision
+tower. The ``patch_qwen3_vl_export`` shim ships a qwen3_vl MB→HF converter that
+converts the trained language backbone and identity-passes the frozen ViT
+(``vision_model.*`` → ``model.visual.*``).
 """
 
 from __future__ import annotations
@@ -32,9 +30,8 @@ class Qwen3VL_8B(HFModelConfiguration):
 
     model_name = "Qwen/Qwen3-VL-8B-Instruct"
 
-    # The vision encoder makes prompts much longer (image patches expand into
-    # many tokens), so padded (bshd) batches avoid the THD packing path that
-    # VL models may not support in megatron-bridge.
+    # Image patches expand prompts into many tokens; padded (bshd) batches avoid
+    # the THD packing path that VL models may not support in megatron-bridge.
     requires_bshd = True
 
     architecture = ModelArchitecture(
@@ -55,12 +52,9 @@ class Qwen3VL_8B(HFModelConfiguration):
         untie_embeddings_and_output_weights=True,
         use_rotary_position_embeddings=True,
         rotary_base=5000000,
-        # slime's stock qwen3 export can't map the vision tower; ship a qwen3_vl
-        # MB->HF converter that converts the language stack and identity-passes the
-        # frozen ViT (vision_model.* -> model.visual.*), mirroring the qwen3_asr
-        # audio-tower converter. The torch_dist patch additionally teaches the
-        # deploy/eval torch_dist->HF tool to skip the frozen ViT's stacked layers
-        # (whose depth != the LLM's num_layers) and refill them from the base HF
-        # checkpoint, since slime's converter otherwise asserts on them.
+        # patch_qwen3_vl_export: qwen3_vl MB->HF converter that maps the language
+        # stack and identity-passes the frozen ViT. patch_qwen3_vl_torch_dist:
+        # makes the deploy/eval torch_dist->HF tool skip the frozen ViT's stacked
+        # layers and refill them from the base HF checkpoint.
         compat_patches=["patch_qwen3_vl_export", "patch_qwen3_vl_torch_dist"],
     )

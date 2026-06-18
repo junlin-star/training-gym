@@ -607,9 +607,6 @@ class MultimodalDataset(DatasetConfig):
         }
 
     def load(self, split: Literal["all", "train", "eval"] = "all") -> list[DatasetRow]:
-        # ``split`` is accepted for EvalConfig.evaluate compatibility; a
-        # MultimodalDataset instance already represents a single split (callers
-        # build separate train/eval instances), so all rows are returned.
         return [self._to_row(r) for r in self.rows]
 
     def _write_jsonl(self, rows: list[dict[str, Any]], path: str) -> None:

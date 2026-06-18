@@ -2,12 +2,11 @@
 
 slime's MB->HF tool routes a model name containing "qwen3" (but not "qwen3vl") to
 convert_qwen2_to_hf, which can't map the vision tower ("Unknown parameter name:
-...vision_model..."). Add a qwen3_vl converter (mirroring the qwen3_asr one) and make
-sure it's routed before the generic qwen3 branch. The LLM is the standard Qwen3
-decoder nested under language_model.* (same QKV / gated-MLP / qk-norm splits as the
-qwen3_asr converter), and the frozen vision tower is an identity passthrough
-(megatron vision_model.* -> HF model.visual.*) — the ViT is frozen during RL (see
-Qwen3VL_Recipe), so its weights equal the base HF weights and a pure rename is exact.
+...vision_model..."). Add a qwen3_vl converter and route it before the generic
+qwen3 branch. The LLM is the standard Qwen3 decoder nested under language_model.*,
+and the frozen vision tower is an identity passthrough (megatron vision_model.* ->
+HF model.visual.*): frozen during RL, its weights equal the base HF weights, so a
+pure rename is exact.
 
 Idempotent. Run at image build:  python patch_qwen3_vl_export.py
 """
@@ -17,9 +16,8 @@ import pathlib
 _CONVERTER = r'''"""Megatron -> HF converter for Qwen3-VL (shipped into slime's megatron_to_hf).
 
 slime dispatches a bare "qwen3" name to convert_qwen2_to_hf, which can't map
-Qwen3-VL's vision tower. This mirrors the qwen3_asr converter: the LLM is the
-standard Qwen3 decoder nested under language_model.* (same QKV / gated-MLP / qk-norm
-splits), and the frozen vision tower is an identity passthrough (megatron
+Qwen3-VL's vision tower. The LLM is the standard Qwen3 decoder nested under
+language_model.*, and the frozen vision tower is an identity passthrough (megatron
 vision_model.* -> HF model.visual.*).
 """
 import re
@@ -28,8 +26,8 @@ import torch
 
 
 def convert_qwen3vl_to_hf(args, name, param):
-    # Strip the language_model. nesting so the standard megatron decoder names are
-    # exposed; emit HF names back into the VL model. namespace.
+    # Strip the language_model. nesting to expose the standard megatron decoder
+    # names; emit HF names back into the VL model.* namespace.
     if name.startswith("module.module.language_model."):
         name = "module.module." + name[len("module.module.language_model.") :]
     while name.startswith("module.module.module."):

@@ -214,8 +214,8 @@ def convert_checkpoint_to_hf(
     image = _build_slime_base_image().add_local_python_source(
         "modal_training_gym", copy=True
     )
-    # Model-declared MB->HF export shims (e.g. Qwen3-VL's vision-skip) must also
-    # apply on the standalone serve-time conversion image, not just training.
+    # Model-declared compat patches also apply on the standalone serve-time
+    # conversion image, not just training.
     arch = getattr(model, "architecture", None)
     for _patch_name in list(getattr(arch, "compat_patches", None) or []):
         image = image.run_commands(

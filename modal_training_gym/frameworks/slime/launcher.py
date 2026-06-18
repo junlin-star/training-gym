@@ -394,11 +394,6 @@ def build_slime_app(
             f"echo {_PATCH_VALIDATION_B64} | base64 -d | python3",
         )
 
-    # Model-declared compat shims for upstream gaps (e.g. Qwen3-VL's MB->HF export
-    # converter). Applied to the base image so both the conversion and training
-    # images (train_image = image, below) inherit them, and after the local mounts
-    # above so a mounted slime can't overlay them. Each patch is idempotent; gated
-    # on the model declaring it, so models without compat_patches are untouched.
     _compat_patches = (
         list(getattr(model.architecture, "compat_patches", None) or [])
         if model and getattr(model, "architecture", None)

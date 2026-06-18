@@ -27,17 +27,14 @@ class Qwen3VL_Recipe(SlimeRecipe):
       coordinate strings, not long chains of thought.
     * ``tensor_model_parallel_size=2`` — 8B model with vision encoder benefits
       from TP=2 on 8 GPUs.
-    * ``megatron_to_hf_mode="bridge"`` — load HF -> Megatron through AutoBridge
-      (which handles the VL checkpoint, incl. the ViT, with TP=2/PP=1). This skips
-      slime's standalone ``convert_hf_to_torch_dist.py`` torch_dist pre-conversion,
-      which assigns the VL model a pipeline stage (PP=2) the gym's conversion
-      launcher doesn't expect (``world_size(2) % total_model_size(4) != 0``). Same
-      reasoning as Qwen3_ASR_1_7b_Recipe.
-    * ``freeze_params_name_list=["vision_model"]`` — freeze the ViT during RL. A
-      short grounding run shouldn't perturb the pretrained visual features, and it
-      cuts memory/compute. With the tower frozen its weights equal the base HF
-      weights, so ``Qwen3VL_8B``'s export shim can identity-pass it on MB->HF
-      export (see that model's ``compat_patches``).
+    * ``megatron_to_hf_mode="bridge"`` — load HF -> Megatron through AutoBridge,
+      which handles the VL checkpoint (incl. the ViT) at TP=2/PP=1. Avoids slime's
+      ``convert_hf_to_torch_dist.py`` pre-conversion, which assigns the VL model a
+      pipeline stage the gym's conversion launcher doesn't expect.
+    * ``freeze_params_name_list=["vision_model"]`` — freeze the ViT during RL to
+      preserve the pretrained visual features and cut memory/compute. Frozen, its
+      weights match the base HF weights, so the export shim can identity-pass it on
+      MB->HF export.
     """
 
     gpu_type: str = "H100"
