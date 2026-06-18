@@ -29,6 +29,7 @@ class MetadataStore(Enum):
 SUMMARY_KEY = "summary"
 SUMMARY_ITEMS_KEY = "items"
 
+
 # Summary stores whose canonical per-item files share the summary's shape, so a
 # collapsed/stale summary can be rebuilt from the canonical files rather than
 # trusted blindly. Rollouts are intentionally excluded: their canonical files
@@ -247,7 +248,9 @@ def vol_count_items(store: MetadataStore | str) -> int:
     vol = _metadata_volume()
     _safe_reload(vol)
     try:
-        return sum(1 for e in vol.iterdir(_store_path(store)) if e.path.endswith(".json"))
+        return sum(
+            1 for e in vol.iterdir(_store_path(store)) if e.path.endswith(".json")
+        )
     except FileNotFoundError:
         return 0
 
