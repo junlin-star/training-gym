@@ -107,7 +107,6 @@ _PATCH_ROLLOUT_STATUS_B64 = encode_patch(
     "patch_rollout_status_reporting", _SLIME_PATCHES
 )
 _PATCH_LOG_ELIDE_B64 = encode_patch("patch_log_elide", _SLIME_PATCHES)
-_PATCH_CP_LOG_ROLLOUT_B64 = encode_patch("patch_cp_log_rollout", _SLIME_PATCHES)
 
 
 def _build_slime_base_image() -> "Image":
@@ -123,7 +122,6 @@ def _build_slime_base_image() -> "Image":
             f"echo {_PATCH_QWEN3_ASR_EXPORT_B64} | base64 -d | python3",
             f"echo {_PATCH_ROLLOUT_STATUS_B64} | base64 -d | python3",
             f"echo {_PATCH_LOG_ELIDE_B64} | base64 -d | python3",
-            f"echo {_PATCH_CP_LOG_ROLLOUT_B64} | base64 -d | python3",
         )
     )
 
