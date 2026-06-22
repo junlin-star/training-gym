@@ -5,7 +5,6 @@ from __future__ import annotations
 import time
 
 from modal_training_gym.common.run import TrainingRun, TrainingRunStatus
-from modal_training_gym.common.training_rollout import TrainingRolloutResult
 from modal_training_gym.utils.metadata import (
     MetadataStore,
     vol_get_summary_items,
