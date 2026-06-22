@@ -10,32 +10,7 @@ from modal_training_gym.train_recipes.slime_recipe.recipe import SlimeRecipe
 
 @dataclass(config=ConfigDict(extra="forbid", arbitrary_types_allowed=True))
 class Qwen3VL_Recipe(SlimeRecipe):
-    """Qwen3-VL-8B vision-language GRPO on 1x8xH100, colocated.
-
-    Carries the VL-specific defaults so a user only sets the reward:
-
-      recipe = Qwen3VL_Recipe(custom_rm_function=my_reward)
-
-    What's baked in and why:
-
-    * ``use_dynamic_batch_size=False`` + ``qkv_format="bshd"`` + ``micro_batch_size=1``
-      — VL models expand image patches into many tokens; padded (bshd) batches
-      avoid the THD sequence packing path which may not be supported for VL.
-    * ``sglang_mem_fraction_static=0.55`` — the frozen ViT encoder uses extra
-      memory, so we give SGLang less static KV-cache allocation.
-    * ``rollout_max_response_len=256`` — grounding predictions are short
-      coordinate strings, not long chains of thought.
-    * ``tensor_model_parallel_size=2`` — 8B model with vision encoder benefits
-      from TP=2 on 8 GPUs.
-    * ``megatron_to_hf_mode="bridge"`` — load HF -> Megatron through AutoBridge,
-      which handles the VL checkpoint (incl. the ViT) at TP=2/PP=1. Avoids slime's
-      ``convert_hf_to_torch_dist.py`` pre-conversion, which assigns the VL model a
-      pipeline stage the gym's conversion launcher doesn't expect.
-    * ``freeze_params_name_list=["vision_model"]`` — freeze the ViT during RL to
-      preserve the pretrained visual features and cut memory/compute. Frozen, its
-      weights match the base HF weights, so the export shim can identity-pass it on
-      MB->HF export.
-    """
+    """Qwen3-VL-8B vision-language GRPO on 1×8×H100, colocated."""
 
     gpu_type: str = "H100"
     colocate: bool = True
@@ -57,6 +32,8 @@ class Qwen3VL_Recipe(SlimeRecipe):
     lr: float = 1e-6
     lr_decay_style: str = "constant"
 
+    # VL image patches expand to many tokens; padded (bshd) batches avoid the
+    # THD packing path, which needs dynamic batching off + explicit micro batch.
     use_dynamic_batch_size: bool = False
     extra_config: dict | None = field(
         default_factory=lambda: {"qkv_format": "bshd", "micro_batch_size": 1}
@@ -65,8 +42,8 @@ class Qwen3VL_Recipe(SlimeRecipe):
     save_interval: int = 10
     eval_interval: int | None = None
 
-    # Load through megatron.bridge (AutoBridge) rather than slime's torch_dist
-    # conversion tool — see class docstring.
+    # AutoBridge loads the VL checkpoint (incl. ViT) at TP=2; skips slime's
+    # torch_dist pre-conversion, which mis-assigns the VL pipeline stage.
     megatron_to_hf_mode: str = "bridge"
 
     # Freeze the vision tower; RL only updates the language backbone.

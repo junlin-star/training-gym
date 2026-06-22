@@ -89,8 +89,8 @@ class ScreenSpotDataset(MultimodalDataset):
     n_rows = 800
     row_offset = 0
     always_prepare = True
-    # Collapse prompt + image into a single chat-templated string so the
-    # Qwen3-VL processor tokenizes it correctly (raw message lists crash).
+    # Collapse to one chat-templated string; the VL processor crashes on raw
+    # message lists.
     apply_chat_template = True
 
     def __init__(self, **kwargs):
@@ -105,9 +105,7 @@ class ScreenSpotDataset(MultimodalDataset):
         ds = load_dataset(self.hf_repo, split=self.hf_split)
         start = min(self.row_offset, len(ds))
         stop = min(start + self.n_rows, len(ds))
-        # Demo-scale: materializes every screenshot as an inline base64 row in
-        # memory. Fine for the ~1k ScreenSpot rows; for large corpora stream /
-        # store by reference.
+        # Demo-scale: inline base64 rows in memory; stream large corpora.
         rows = []
         for row in ds.select(range(start, stop)):
             left, top, right, bottom = row["bbox"]
@@ -204,15 +202,13 @@ async def grounding_reward(args, sample, **kwargs) -> float:
     box = _parse_bbox(label)
     left, top, right, bottom = box
 
-    # A click that lands anywhere inside the element succeeds → full reward,
-    # regardless of how far it is from the geometric center.
+    # Any click inside the element succeeds → full reward.
     outside = _distance_outside_box(pred[0], pred[1], box)
     if outside == 0.0:
         return 1.0
 
-    # Outside the box, decay over a margin scaled to the element's own size
-    # (floored so tiny targets still get a usable gradient). Reward is +1 at
-    # the edge and −1 once the click is a full element-diagonal away.
+    # Outside: decay from +1 at the edge to −1 a full diagonal away, with a
+    # floor so tiny targets keep a usable gradient.
     diag = ((right - left) ** 2 + (bottom - top) ** 2) ** 0.5
     margin = max(diag, 0.05)
     if outside >= margin:
@@ -227,8 +223,7 @@ async def grounding_reward(args, sample, **kwargs) -> float:
 def grounding_eval_fn(
     deployment: ModelDeployment, example: dict
 ) -> EvalRowResult:
-    # Drop the slime "<image>" placeholder: the eval sends the screenshot as a
-    # separate image_url part, so the marker would just be stray text here.
+    # Eval sends the screenshot as a separate image_url, so drop the marker.
     prompt = example.get("prompt", "").replace("<image>", "").strip()
     label = example.get("label", "")
     images = example.get("images", [])
