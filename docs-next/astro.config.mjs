@@ -169,9 +169,7 @@ export default defineConfig({
                 { label: 'Qwen3-1.7B', link: '/reference/models/qwen3_1_7b/' },
                 { label: 'Qwen3-4B', link: '/reference/models/qwen3_4b/' },
                 { label: 'Qwen3-8B', link: '/reference/models/qwen3_8b/' },
-                { label: 'Qwen3-14B', link: '/reference/models/qwen3_14b/' },
                 { label: 'Qwen3-30B-A3B', link: '/reference/models/qwen3_30b/' },
-                { label: 'Qwen3-32B', link: '/reference/models/qwen3_32b/' },
                 
                 { label: 'Qwen3.6-35B-A3B', link: '/reference/models/qwen3_6_35b/' },
               ],

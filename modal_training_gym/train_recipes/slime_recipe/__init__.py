@@ -19,8 +19,6 @@ __all__ = [
     "Qwen3_1_7b_Recipe",
     "Qwen3_4b_Recipe",
     "Qwen3_8b_Recipe",
-    "Qwen3_14b_Recipe",
-    "Qwen3_32b_Recipe",
     "Qwen3_6_35b_Recipe",
     "Qwen3_ASR_1_7b_Recipe",
 ]

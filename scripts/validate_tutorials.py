@@ -365,11 +365,6 @@ TUTORIAL_CLASSIFICATIONS: dict[str, dict] = {
         "type": TargetType.TRAINING,
         "markers": ["train/reward", "iter 0", "rollout"],
     },
-    "verl_qwen3_32b_gsm8k": {
-        "type": TargetType.TRAINING,
-        "markers": ["train/reward", "iter 0", "reward"],
-        "train_stage_suffix": "-- trainer.total_training_steps=1",
-    },
     "starcoder_llama2_7b": {
         "type": TargetType.TRAINING,
         "markers": ['{"loss":', "loss", "train_loss"],
