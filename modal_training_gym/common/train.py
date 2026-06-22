@@ -174,6 +174,7 @@ def _recipe_param_summary(
 
     return params
 
+
 class TrainStepStatus(Enum):
     INITIALIZING = "initializing"
     DOWNLOAD_MODEL = "download_model"
@@ -189,6 +190,7 @@ class TrainStepStatus(Enum):
     OFFLOAD_TRAIN = "offload_train"
     CHECKPOINT_SAVE = "checkpoint_save"
     TRAINING = "training"
+
 
 _STAGE_LABELS: dict[str, str] = {
     TrainStepStatus.INITIALIZING.value: "Initializing",

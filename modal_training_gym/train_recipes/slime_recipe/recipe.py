@@ -581,6 +581,4 @@ class SlimeRecipe(BaseTrainRecipe):
             return Qwen3_32b_Recipe()
         if model_config.model_name == "Qwen/Qwen3.6-35B-A3B":
             return Qwen3_6_35b_Recipe()
-        raise ValueError(
-            f"no base slime recipe for model {model_config.model_name!r}"
-        )
+        raise ValueError(f"no base slime recipe for model {model_config.model_name!r}")

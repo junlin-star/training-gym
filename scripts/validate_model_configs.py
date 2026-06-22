@@ -45,7 +45,6 @@ class TutorialResult:
         print(f"Training run status: {self.training_run_status}")
 
 
-
 class Gsm8kDataset(HuggingFaceDataset):
     hf_repo = "openai/gsm8k"
     hf_config = "main"
@@ -62,6 +61,7 @@ class Gsm8kDataset(HuggingFaceDataset):
         if self.n_rows:
             ds = ds.select(range(min(self.n_rows, len(ds))))
         return ds.map(lambda r: {"answer": r["answer"].split("####")[-1].strip()})
+
 
 def _model_config_registry() -> dict[str, type[ModelConfig]]:
     """Map normalized model names to their ModelConfig subclass.
@@ -98,6 +98,7 @@ def get_model_config_from_model_name(model_name: str) -> ModelConfig:
             f"unknown model {model_name!r}; available: {', '.join(available)}"
         )
     return config_cls()
+
 
 def run_base_training_on_slime(model_name: str, step_count: int = 1) -> TutorialResult:
     model_config = get_model_config_from_model_name(model_name)
@@ -161,6 +162,7 @@ def __main__():
         exit(1)
     print("Training run completed successfully")
     exit(0)
+
 
 if __name__ == "__main__":
     __main__()
