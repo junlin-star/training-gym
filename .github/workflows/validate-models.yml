@@ -41,6 +41,7 @@ jobs:
   validate:
     needs: list-models
     runs-on: ubuntu-latest
+    environment: modal
     strategy:
       fail-fast: false
       matrix:
