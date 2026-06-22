@@ -145,6 +145,9 @@ def _model_index() -> tuple[dict[str, frozenset[str]], frozenset[str]]:
     where ``<name>`` is the HF repo's short name (e.g. ``Qwen3-0.6B``). Both the
     model's ``ModelConfig`` subclass and its slime ``get_base_recipe`` recipe
     class gate that model, so a change to either re-validates it.
+
+    Only models with a base slime recipe are tracked — validation runs base
+    training on slime, so models without one (e.g. Kimi on miles) are skipped.
     """
     import inspect as _inspect
 
@@ -160,15 +163,14 @@ def _model_index() -> tuple[dict[str, frozenset[str]], frozenset[str]]:
         model_name = getattr(obj, "model_name", "")
         if not model_name:
             continue
-        short = model_name.rsplit("/", 1)[-1]
-        all_models.add(short)
-        class_to_models[obj.__name__].add(short)
         try:
             recipe = SlimeRecipe.get_base_recipe(obj())
         except Exception:
-            recipe = None
-        if recipe is not None:
-            class_to_models[type(recipe).__name__].add(short)
+            continue
+        short = model_name.rsplit("/", 1)[-1]
+        all_models.add(short)
+        class_to_models[obj.__name__].add(short)
+        class_to_models[type(recipe).__name__].add(short)
 
     return (
         {name: frozenset(models) for name, models in class_to_models.items()},

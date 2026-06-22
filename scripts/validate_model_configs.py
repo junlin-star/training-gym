@@ -103,10 +103,31 @@ def _model_config_registry() -> dict[str, type[ModelConfig]]:
     return registry
 
 
+def _supports_slime(model_config: ModelConfig) -> bool:
+    """Whether a model has a base slime recipe, the only thing this script runs.
+
+    Derived by attempting ``SlimeRecipe.get_base_recipe`` rather than encoding
+    framework support on the model — the recipe registry is the source of truth.
+    """
+    try:
+        SlimeRecipe.get_base_recipe(model_config)
+    except Exception:
+        return False
+    return True
+
+
 def available_model_names() -> list[str]:
-    """Sorted list of short model names (e.g. "qwen3-4b") that can be validated."""
+    """Sorted short model names (e.g. "qwen3-4b") validatable on slime.
+
+    Excludes models with no base slime recipe (e.g. Kimi on miles), since this
+    script only runs base training on slime.
+    """
     return sorted(
-        {cls.model_name.rsplit("/", 1)[-1] for cls in _model_config_registry().values()}
+        {
+            cls.model_name.rsplit("/", 1)[-1]
+            for cls in _model_config_registry().values()
+            if _supports_slime(cls())
+        }
     )
 
 
@@ -123,6 +144,11 @@ def get_model_config_from_model_name(model_name: str) -> ModelConfig:
 
 def run_base_training_on_slime(model_name: str, step_count: int = 1) -> TutorialResult:
     model_config = get_model_config_from_model_name(model_name)
+    if not _supports_slime(model_config):
+        raise ValueError(
+            f"model {model_config.model_name!r} has no base slime recipe; "
+            f"validatable models: {', '.join(available_model_names())}"
+        )
     train_recipe = SlimeRecipe.get_base_recipe(model_config)
     train_recipe.num_rollout = step_count
     train_recipe.rm_type = "deepscaler"
