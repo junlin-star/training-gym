@@ -1,6 +1,7 @@
 name: Validate Models
 
 on:
+  pull_request:
   workflow_dispatch:
     inputs:
       num_steps:
@@ -12,7 +13,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: validate-models
+  group: validate-models-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -24,6 +25,8 @@ jobs:
       UV_CACHE_DIR: /tmp/uv-cache
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:
@@ -34,12 +37,21 @@ jobs:
       - name: Sync dependencies
         run: uv sync --group dev
 
-      - name: Enumerate available models
+      - name: Determine models to validate
         id: list
-        run: echo "models=$(uv run python scripts/validate_model_configs.py list)" >> "$GITHUB_OUTPUT"
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            models=$(git diff "${{ github.event.pull_request.base.sha }}...HEAD" \
+              | uv run python scripts/diff_impact.py --models)
+          else
+            models=$(uv run python scripts/validate_model_configs.py list)
+          fi
+          echo "Selected models: $models"
+          echo "models=$models" >> "$GITHUB_OUTPUT"
 
   validate:
     needs: list-models
+    if: needs.list-models.outputs.models != '[]'
     runs-on: ubuntu-latest
     environment: modal
     strategy:
