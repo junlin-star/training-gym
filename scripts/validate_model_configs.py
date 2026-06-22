@@ -9,7 +9,8 @@ Optional args:
 import argparse
 import inspect
 import json
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
+from pathlib import Path
 
 import modal_training_gym.common.models as models
 from modal_training_gym.common.dataset import HuggingFaceDataset
@@ -32,9 +33,12 @@ class TutorialResult:
     step_count: int
     training_run_id: str
     training_run_status: TrainingRunStatus
-    # total_duration_s: float
+    total_duration_s: float
     # step_results: list[StepResult]
-    # training_run_id: str # <- format it into a url
+
+    @property
+    def succeeded(self) -> bool:
+        return self.training_run_status == TrainingRunStatus.COMPLETED
 
     def format_tutorial_result(self) -> None:
         print(f"Training run result for {self.training_run_id}")
@@ -43,6 +47,23 @@ class TutorialResult:
         print(f"Step count: {self.step_count}")
         print("Result:")
         print(f"Training run status: {self.training_run_status}")
+        print(f"Total duration (s): {self.total_duration_s}")
+
+    def to_dict(self) -> dict:
+        data = asdict(self)
+        data["training_run_status"] = self.training_run_status.value
+        data["succeeded"] = self.succeeded
+        return data
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "TutorialResult":
+        return cls(
+            base_model_name=data["base_model_name"],
+            step_count=data["step_count"],
+            training_run_id=data["training_run_id"],
+            training_run_status=TrainingRunStatus(data["training_run_status"]),
+            total_duration_s=data["total_duration_s"],
+        )
 
 
 class Gsm8kDataset(HuggingFaceDataset):
@@ -120,7 +141,34 @@ def run_base_training_on_slime(model_name: str, step_count: int = 1) -> Tutorial
         step_count=step_count,
         training_run_id=train_result.training_run_id,
         training_run_status=training_run.status,
+        total_duration_s=float(training_run.duration_seconds or 0.0),
     )
+
+
+def summarize_results(results_dir: str) -> str:
+    rows = []
+    for path in sorted(Path(results_dir).glob("*.json")):
+        result = TutorialResult.from_dict(json.loads(path.read_text()))
+        status = (
+            "✅ completed"
+            if result.succeeded
+            else f"❌ {result.training_run_status.value}"
+        )
+        rows.append(
+            f"| {result.base_model_name} | {status} "
+            f"| {result.total_duration_s:.1f}s | {result.step_count} "
+            f"| `{result.training_run_id}` |"
+        )
+
+    lines = [
+        "<!-- validate-models-comment -->",
+        "## Model Validation Results",
+        "",
+        "| Model | Status | Duration | Steps | Run |",
+        "| --- | --- | --- | --- | --- |",
+    ]
+    lines.extend(rows or ["| _no results_ | | | | |"])
+    return "\n".join(lines)
 
 
 def __main__():
@@ -145,9 +193,31 @@ def __main__():
         default=1,
         help="Number of training steps (rollouts) to run. Defaults to 1.",
     )
+    check_parser.add_argument(
+        "-o",
+        "--output",
+        help="Write the result as JSON to this file path.",
+    )
+    check_parser.add_argument(
+        "-j",
+        "--json",
+        action="store_true",
+        help="Print the result as JSON to stdout.",
+    )
 
     subparsers.add_parser(
         "list", help="Print available model names as a JSON array and exit."
+    )
+
+    summarize_parser = subparsers.add_parser(
+        "summarize",
+        help="Render a markdown table from a directory of result JSON files.",
+    )
+    summarize_parser.add_argument(
+        "-d",
+        "--results-dir",
+        required=True,
+        help="Directory containing result JSON files written by `check --output`.",
     )
 
     args = parser.parse_args()
@@ -156,9 +226,19 @@ def __main__():
         print(json.dumps(available_model_names()))
         return
 
+    if args.command == "summarize":
+        print(summarize_results(args.results_dir))
+        return
+
     tutorial_result = run_base_training_on_slime(args.model, args.num_steps)
     tutorial_result.format_tutorial_result()
-    if tutorial_result.training_run_status != TrainingRunStatus.COMPLETED:
+
+    if args.output:
+        Path(args.output).write_text(json.dumps(tutorial_result.to_dict()))
+    if args.json:
+        print(json.dumps(tutorial_result.to_dict()))
+
+    if not tutorial_result.succeeded:
         print("Training run failed")
         exit(1)
     print("Training run completed successfully")
