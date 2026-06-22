@@ -95,14 +95,14 @@ jobs:
           uv run python scripts/validate_model_configs.py check \
             --model "${{ matrix.model }}" \
             --num_steps "${{ github.event.inputs.num_steps || '1' }}" \
-            --output result.json
+            --output "${{ steps.artifact.outputs.name }}.json"
 
       - name: Upload result
-        if: always() && hashFiles('result.json') != ''
+        if: always() && hashFiles(format('{0}.json', steps.artifact.outputs.name)) != ''
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.artifact.outputs.name }}
-          path: result.json
+          path: ${{ steps.artifact.outputs.name }}.json
 
   comment:
     needs: validate
