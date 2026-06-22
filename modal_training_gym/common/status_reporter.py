@@ -7,9 +7,11 @@ the dashboard's ``/api/framework-status`` endpoint.
 
 The dashboard URL is resolved at enqueue time from:
 1. Explicit ``url`` argument
-2. ``TRAINING_GYM_FRAMEWORK_STATUS_URL`` env var
-3. ``SLIME_PHASE_REPORT_URL`` env var (same payload contract)
-4. ``~/.training-gym.toml`` via :mod:`modal_training_gym.common.config`
+2. ``TRAINING_GYM_FRAMEWORK_STATUS_URL`` env var (propagated into remote
+   containers/workers; the source of truth is ``~/.training-gym.toml`` on the
+   user's machine, which can't be read remotely)
+3. ``~/.training-gym.toml`` via :mod:`modal_training_gym.common.config`
+   (local processes only)
 
 If none of those resolve, ``enqueue`` is a no-op — training continues, just
 without dashboard updates.
@@ -34,11 +36,7 @@ _STATUS_TOKEN_ENV = "TRAINING_GYM_FRAMEWORK_STATUS_TOKEN"
 
 
 def _resolve_url() -> str:
-    url = (
-        os.environ.get("TRAINING_GYM_FRAMEWORK_STATUS_URL")
-        or os.environ.get("SLIME_PHASE_REPORT_URL")
-        or ""
-    ).strip()
+    url = os.environ.get("TRAINING_GYM_FRAMEWORK_STATUS_URL", "").strip()
     if url:
         return url
     try:

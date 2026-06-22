@@ -180,7 +180,6 @@ export default defineConfig({
               label: 'Training',
               items: [
                 { label: 'TrainConfig', link: '/reference/training/trainconfig/' },
-                { label: 'MultiTurn', link: '/reference/training/multiturn/' },
                 { label: 'SlimeRecipe', link: '/reference/training/slimerecipe/' },
                 
                 { label: 'Qwen3_6_35b_Recipe', link: '/reference/training/qwen3_6_35b_recipe/' },

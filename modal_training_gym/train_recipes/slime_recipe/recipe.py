@@ -81,7 +81,10 @@ _HOOK_WRAPPER_PATHS = {
 
 @dataclass(config=ConfigDict(extra="forbid", arbitrary_types_allowed=True))
 class SlimeRecipe(BaseTrainRecipe):
-    """Recipe dataclass for configuring slime GRPO training on Modal."""
+    """Recipe dataclass for configuring slime GRPO training on Modal.
+
+    Don't see the configuration flags that you need? You can pass them in the `extra_config` field.
+    """
 
     # ── Required: cluster and parallelism ──────────────────────────────────
     gpu_type: str

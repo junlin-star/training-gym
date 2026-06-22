@@ -31,7 +31,7 @@ class Qwen3_6_35b_Recipe_Long_Context(SlimeRecipe):
     expert_tensor_parallel_size: int = 1
 
     # ── Rollout ───────────────────────────────────────────────────────────
-    num_rollout: int = 1
+    num_rollout: int = 5
     rollout_batch_size: int = 16
     rollout_num_gpus_per_engine: int = 4
     rollout_max_response_len: int = 8192

@@ -174,22 +174,37 @@ def _recipe_param_summary(
 
     return params
 
+class TrainStepStatus(Enum):
+    INITIALIZING = "initializing"
+    DOWNLOAD_MODEL = "download_model"
+    CONVERT_MODEL = "convert_model"
+    PREPARE_DATASET = "prepare_dataset"
+    ROLLOUT_INITIALIZING = "initialize_rollouts"
+    ROLLOUT_LOGGING = "generate_rollouts"
+    EVAL_ROLLOUT_LOGGING = "evaluate_rollouts"
+    COMPUTE_LOG_PROBS = "compute_log_probs"
+    OPTIMIZER_STEP = "optimizer_step"
+    WEIGHT_SYNC = "weight_sync"
+    OFFLOAD_ROLLOUT = "offload_rollout"
+    OFFLOAD_TRAIN = "offload_train"
+    CHECKPOINT_SAVE = "checkpoint_save"
+    TRAINING = "training"
 
 _STAGE_LABELS: dict[str, str] = {
-    "initializing": "Initializing",
-    "download_model": "Downloading model",
-    "convert_model": "Converting model",
-    "prepare_dataset": "Preparing dataset",
-    "initialize_rollouts": "Initializing rollouts",
-    "generate_rollouts": "Generating rollouts",
-    "evaluate_rollouts": "Evaluating rollouts",
-    "compute_log_probs": "Computing log probs",
-    "optimizer_step": "Optimizer step",
-    "weight_sync": "Weight sync",
-    "offload_rollout": "Offload rollout",
-    "offload_train": "Offload train",
-    "checkpoint_save": "Saving checkpoint",
-    "training": "Training",
+    TrainStepStatus.INITIALIZING.value: "Initializing",
+    TrainStepStatus.DOWNLOAD_MODEL.value: "Downloading model",
+    TrainStepStatus.CONVERT_MODEL.value: "Converting model",
+    TrainStepStatus.PREPARE_DATASET.value: "Preparing dataset",
+    TrainStepStatus.ROLLOUT_INITIALIZING.value: "Initializing rollouts",
+    TrainStepStatus.ROLLOUT_LOGGING.value: "Generating rollouts",
+    TrainStepStatus.EVAL_ROLLOUT_LOGGING.value: "Evaluating rollouts",
+    TrainStepStatus.COMPUTE_LOG_PROBS.value: "Computing log probs",
+    TrainStepStatus.OPTIMIZER_STEP.value: "Optimizer step",
+    TrainStepStatus.WEIGHT_SYNC.value: "Weight sync",
+    TrainStepStatus.OFFLOAD_ROLLOUT.value: "Offload rollout",
+    TrainStepStatus.OFFLOAD_TRAIN.value: "Offload train",
+    TrainStepStatus.CHECKPOINT_SAVE.value: "Saving checkpoint",
+    TrainStepStatus.TRAINING.value: "Training",
 }
 
 
