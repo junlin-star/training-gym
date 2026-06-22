@@ -101,6 +101,40 @@ class AudioEvalRowResult(Sample):
         return data
 
 
+class ImageEvalRowResult(Sample):
+    """``Sample`` for an image eval, with the image fields lifted to
+    constructor arguments.
+
+    ``image`` (a browser-renderable data-URI / URL — e.g. the screenshot the
+    model was shown), ``reference`` (the ground truth), and ``metrics`` (a
+    ``{name: value}`` dict the eval picks itself) are folded into ``metadata``
+    under ``_metadata_type="image"`` so the evals dashboard auto-detects and
+    renders an image cell. The model output stays on ``response``; ``score``
+    remains the canonical headline number. Extra ``metadata`` is kept.
+
+    Usage:
+        ImageEvalRowResult(
+            score=1.0 if hit else 0.0, response=prediction, prompt=prompt,
+            image=screenshot_uri, reference=label, metrics={"dist": dist},
+        )
+    """
+
+    @model_validator(mode="before")
+    @classmethod
+    def _fold_image_into_metadata(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        data = dict(data)
+        metadata = dict(data.pop("metadata", None) or {})
+        metadata["_metadata_type"] = "image"
+        for key in ("image", "reference", "metrics"):
+            value = data.pop(key, None)
+            if value is not None:
+                metadata[key] = value
+        data["metadata"] = metadata
+        return data
+
+
 #: Lifecycle of an eval run. ``running`` rows are streamed in as examples
 #: complete so the dashboard shows intermediate output; ``completed`` is the
 #: terminal success state and ``failed`` marks a run that raised partway

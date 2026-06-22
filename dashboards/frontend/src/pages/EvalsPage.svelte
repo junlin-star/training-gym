@@ -887,6 +887,17 @@
                         ></audio>
                       </div>
                     {/if}
+                    {#if row.metadata?._metadata_type === "image" || row.metadata?.image}
+                      <div class="example-section">
+                        <span class="example-section-label">Image</span>
+                        <img
+                          class="example-image"
+                          src={row.metadata.image}
+                          alt="eval input"
+                          loading="lazy"
+                        />
+                      </div>
+                    {/if}
                     {#each Object.entries(row.metadata?.metrics ?? {}) as [name, value]}
                       <div class="example-section">
                         <span class="example-section-label">{name.toUpperCase()}</span>
@@ -905,9 +916,14 @@
                       {@const extraMeta = Object.fromEntries(
                         Object.entries(row.metadata).filter(
                           ([k]) =>
-                            !["_metadata_type", "audio", "reference", "metrics", "hyp"].includes(
-                              k,
-                            ),
+                            ![
+                              "_metadata_type",
+                              "audio",
+                              "image",
+                              "reference",
+                              "metrics",
+                              "hyp",
+                            ].includes(k),
                         ),
                       )}
                       {#if Object.keys(extraMeta).length}
@@ -1694,6 +1710,15 @@
     height: 36px;
     border-radius: 6px;
     filter: saturate(0.9);
+  }
+
+  .example-image {
+    display: block;
+    width: 100%;
+    max-width: 480px;
+    height: auto;
+    border-radius: 6px;
+    border: 1px solid var(--border);
   }
 
   .examples-loading,

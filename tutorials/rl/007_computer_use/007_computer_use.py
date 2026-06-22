@@ -44,7 +44,7 @@ import re
 from modal_training_gym import (
     DeploymentConfig,
     EvalConfig,
-    EvalRowResult,
+    ImageEvalRowResult,
     ModelDeployment,
     MultimodalDataset,
     Qwen3VL_8B,
@@ -219,10 +219,27 @@ async def grounding_reward(args, sample, **kwargs) -> float:
 #
 # Let's evaluate the base Qwen3-VL-8B model on our held-out set before
 # training to see how well it grounds UI elements out of the box.
+#
+# Returning an `ImageEvalRowResult` folds a thumbnail of the screenshot into the row.
+
+def _thumbnail(data_uri: str, max_dim: int = 512) -> str:
+    # Downscale the screenshot to a dashboard-sized thumbnail so the eval
+    # summary stays small (we score on the full-res image, below).
+    import base64
+    import io
+
+    from PIL import Image
+
+    _, _, b64 = data_uri.partition(",")
+    img = Image.open(io.BytesIO(base64.b64decode(b64))).convert("RGB")
+    img.thumbnail((max_dim, max_dim))
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
 
 def grounding_eval_fn(
     deployment: ModelDeployment, example: dict
-) -> EvalRowResult:
+) -> ImageEvalRowResult:
     # Eval sends the screenshot as a separate image_url, so drop the marker.
     prompt = example.get("prompt", "").replace("<image>", "").strip()
     label = example.get("label", "")
@@ -239,9 +256,11 @@ def grounding_eval_fn(
         outside = _distance_outside_box(pred[0], pred[1], box)
         inside = outside == 0.0
 
-    return EvalRowResult(
+    return ImageEvalRowResult(
         score=1.0 if inside else 0.0,
         response=response,
+        prompt=prompt,
+        image=_thumbnail(images[0]) if images else None,
         metadata={
             "inside_box": inside,
             "dist_outside": round(outside, 4),

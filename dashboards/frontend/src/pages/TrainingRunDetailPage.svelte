@@ -860,6 +860,15 @@
                               src={activeSample.sample.metadata.audio}
                             ></audio>
                           {/if}
+                          {#if activeSample.sample.metadata?._metadata_type === "image" || activeSample.sample.metadata?.image}
+                            <div class="rollout-sample-label">image</div>
+                            <img
+                              class="sample-image"
+                              src={activeSample.sample.metadata.image}
+                              alt="rollout input"
+                              loading="lazy"
+                            />
+                          {/if}
                           {#if activeSample.sample.prompt}
                             <div class="rollout-sample-label">prompt</div>
                             <pre class="rollout-sample-text">{activeSample.sample.prompt}</pre>
@@ -1443,6 +1452,16 @@
     max-width: 400px;
     margin: 4px 0 8px;
     border-radius: 4px;
+  }
+
+  .sample-image {
+    display: block;
+    width: 100%;
+    max-width: 400px;
+    height: auto;
+    margin: 4px 0 8px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
   }
 
   .rollout-sample-metric {
