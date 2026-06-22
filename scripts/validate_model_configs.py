@@ -104,6 +104,7 @@ def run_base_training_on_slime(model_name: str, step_count: int = 1) -> Tutorial
     model_config = get_model_config_from_model_name(model_name)
     train_recipe = SlimeRecipe.get_base_recipe(model_config)
     train_recipe.num_rollout = step_count
+    train_recipe.rm_type = "deepscaler"
 
     train_config = TrainConfig(
         model=model_config,
