@@ -360,7 +360,7 @@ def _next_steps():
     - **Add a `write_file` tool** using
       `sandbox.filesystem.write_text` so the agent can modify
       code.
-    - **Swap models** — try `Qwen3_32B` for harder tasks, or
+    - **Swap models** — try `Qwen3_8B` for harder tasks, or
       `Qwen3_4B` for lower cost.
     - **Snapshot the filesystem** with
       `sandbox.snapshot_filesystem()` to create a reusable

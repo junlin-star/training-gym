@@ -174,6 +174,7 @@ def _recipe_param_summary(
 
     return params
 
+
 class TrainStepStatus(Enum):
     INITIALIZING = "initializing"
     DOWNLOAD_MODEL = "download_model"
@@ -189,6 +190,7 @@ class TrainStepStatus(Enum):
     OFFLOAD_TRAIN = "offload_train"
     CHECKPOINT_SAVE = "checkpoint_save"
     TRAINING = "training"
+
 
 _STAGE_LABELS: dict[str, str] = {
     TrainStepStatus.INITIALIZING.value: "Initializing",
@@ -717,6 +719,7 @@ class TrainConfig:
                             run_record.status == TrainingRunStatus.RUNNING
                             and not remote_still_running
                         ):
+                            # TODO(joy/melody): Record the exec type also in the run record.
                             run_record.status = TrainingRunStatus.FAILED
                             finished_at = int(time.time())
                             run_record.ended_at = finished_at
