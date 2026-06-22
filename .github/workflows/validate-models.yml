@@ -1,0 +1,65 @@
+name: Validate Models
+
+on:
+  workflow_dispatch:
+    inputs:
+      num_steps:
+        description: "Number of training steps (rollouts) per model"
+        required: false
+        default: "1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: validate-models
+  cancel-in-progress: true
+
+jobs:
+  list-models:
+    runs-on: ubuntu-latest
+    outputs:
+      models: ${{ steps.list.outputs.models }}
+    env:
+      UV_CACHE_DIR: /tmp/uv-cache
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version-file: ".python-version"
+
+      - uses: astral-sh/setup-uv@v5
+
+      - name: Sync dependencies
+        run: uv sync --group dev
+
+      - name: Enumerate available models
+        id: list
+        run: echo "models=$(uv run python scripts/validate_model_configs.py list)" >> "$GITHUB_OUTPUT"
+
+  validate:
+    needs: list-models
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        model: ${{ fromJSON(needs.list-models.outputs.models) }}
+    env:
+      MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+      MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+      UV_CACHE_DIR: /tmp/uv-cache
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version-file: ".python-version"
+
+      - uses: astral-sh/setup-uv@v5
+
+      - name: Sync dependencies
+        run: uv sync --group dev
+
+      - name: Validate ${{ matrix.model }}
+        run: uv run python scripts/validate_model_configs.py check --model "${{ matrix.model }}" --num_steps "${{ github.event.inputs.num_steps || '1' }}"
