@@ -186,13 +186,6 @@ API_REFERENCE_MANIFEST = [
         "sidebar_label": "TrainConfig",
     },
     {
-        "class_name": "MultiTurn",
-        "module": "modal_training_gym.train_recipes.slime_recipe.blocks",
-        "group": "training",
-        "class_type": "config_data",
-        "sidebar_label": "MultiTurn",
-    },
-    {
         "class_name": "SlimeRecipe",
         "module": "modal_training_gym.train_recipes.slime_recipe.recipe",
         "group": "training",

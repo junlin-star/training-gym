@@ -1163,17 +1163,15 @@ def build_slime_app(
                 object.__setattr__(slime, "ref_load", original_ref_load)
 
             phase_report_url = (
-                os.environ.get("SLIME_PHASE_REPORT_URL")
-                or os.environ.get("TRAINING_GYM_FRAMEWORK_STATUS_URL")
+                os.environ.get("TRAINING_GYM_FRAMEWORK_STATUS_URL")
                 or framework_status_url
                 or ""
             )
             if not phase_report_url:
                 print(
                     "WARNING: no dashboard URL passed to train() and no "
-                    "SLIME_PHASE_REPORT_URL/TRAINING_GYM_FRAMEWORK_STATUS_URL "
-                    "set inside the container. Phase reporting is disabled "
-                    "for this run."
+                    "TRAINING_GYM_FRAMEWORK_STATUS_URL set inside the "
+                    "container. Phase reporting is disabled for this run."
                 )
 
             wandb_env = {}
@@ -1194,10 +1192,10 @@ def build_slime_app(
                     "TRAINING_GYM_TRACE_SAMPLE_LIMIT": str(
                         getattr(slime, "trace_sample_limit", 16)
                     ),
-                    "SLIME_PHASE_REPORT_URL": phase_report_url,
+                    "TRAINING_GYM_FRAMEWORK_STATUS_URL": phase_report_url,
                     **wandb_env,
                     **slime.environment,
-                    "SLIME_PHASE_REPORT_TOKEN": framework_status_token,
+                    "TRAINING_GYM_FRAMEWORK_STATUS_TOKEN": framework_status_token,
                 }
             }
 

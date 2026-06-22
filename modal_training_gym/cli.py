@@ -7,10 +7,15 @@ import sys
 
 
 def main():
+    from modal_training_gym.setup import setup, open_dashboard
+    from modal_training_gym.cleanup import cleanup
+
     parser = argparse.ArgumentParser(prog="training-gym")
     sub = parser.add_subparsers(dest="command")
 
     sub.add_parser("setup", help="Deploy the training-gym dashboard to Modal")
+
+    sub.add_parser("open", help="Open the deployed dashboard in your browser")
 
     cleanup_parser = sub.add_parser(
         "cleanup",
@@ -32,12 +37,10 @@ def main():
     args = parser.parse_args()
 
     if args.command == "setup":
-        from modal_training_gym.setup import setup
-
         setup()
+    elif args.command == "open":
+        open_dashboard()
     elif args.command == "cleanup":
-        from modal_training_gym.cleanup import cleanup
-
         cleanup(older_than_days=args.older_than_days, dry_run=args.dry_run)
     else:
         parser.print_help()

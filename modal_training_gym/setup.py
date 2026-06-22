@@ -24,6 +24,7 @@ What this does:
 """
 
 from __future__ import annotations
+import webbrowser
 
 from modal_training_gym._dashboard import (
     MODAL_CREDS_SECRET_NAME,
@@ -60,6 +61,35 @@ def setup(interactive: bool = True) -> str:
     save_dashboard_url(web_url)
     print(f"\nDashboard deployed: {web_url}")
     print(f"Saved dashboard URL to {CONFIG_PATH}")
+    return web_url
+
+
+def open_dashboard() -> str | None:
+    """Open the deployed dashboard in the default browser; return its URL.
+
+    Resolves the live URL from Modal (authoritative) and keeps the cached
+    ``~/.training-gym.toml`` value in sync, falling back to that cache if the
+    Modal lookup fails. Prints guidance and returns ``None`` when nothing is
+    deployed.
+    """
+    from modal_training_gym.common.config import get_dashboard_url, save_dashboard_url
+
+    web_url = deployed_dashboard_url()
+    if web_url:
+        if get_dashboard_url() != web_url:
+            save_dashboard_url(web_url)
+    else:
+        web_url = get_dashboard_url()
+
+    if not web_url:
+        print(
+            "No deployed training-gym dashboard found. "
+            "Run `training-gym setup` to deploy it first."
+        )
+        return None
+
+    print(f"Opening dashboard: {web_url}")
+    webbrowser.open(web_url)
     return web_url
 
 
