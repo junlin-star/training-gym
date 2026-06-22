@@ -104,8 +104,10 @@ jobs:
           path: result.json
 
   comment:
-    needs: [list-models, validate]
-    if: always() && github.event_name == 'pull_request' && needs.list-models.outputs.models != '[]'
+    needs: validate
+    if: >-
+      always() && github.event_name == 'pull_request' &&
+      (needs.validate.result == 'success' || needs.validate.result == 'failure')
     runs-on: ubuntu-latest
     permissions:
       contents: read
