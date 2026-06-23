@@ -14,6 +14,7 @@ import asyncio
 from dataclasses import dataclass
 from enum import Enum
 import inspect
+import os
 import threading
 
 from pydantic import BaseModel, ConfigDict, field_serializer, field_validator
@@ -39,6 +40,21 @@ from modal_training_gym.utils.metadata import (
 )
 
 DEPLOYMENTS_STORE_NAME = MetadataStore.DEPLOYMENTS.value
+
+
+def _modal_proxy_auth_headers() -> dict[str, str]:
+    """Headers to authenticate against Modal endpoints behind proxy auth.
+
+    Reads the Modal proxy-auth token pair (``wk-``/``ws-``) from ``MODAL_KEY`` /
+    ``MODAL_SECRET`` and returns them as ``Modal-Key`` / ``Modal-Secret`` headers.
+    Returns an empty dict when either is unset, so endpoints without proxy auth
+    are unaffected.
+    """
+    key = os.environ.get("MODAL_KEY", "").strip()
+    secret = os.environ.get("MODAL_SECRET", "").strip()
+    if key and secret:
+        return {"Modal-Key": key, "Modal-Secret": secret}
+    return {}
 
 
 @dataclass
@@ -299,6 +315,7 @@ class ModelDeployment(BaseModel):
                     f"{self.url}/v1/chat/completions",
                     json=body,
                     timeout=120,
+                    headers=_modal_proxy_auth_headers(),
                 )
                 if (
                     resp.status_code in transient_status_codes
@@ -357,7 +374,11 @@ class ModelDeployment(BaseModel):
         import requests
 
         try:
-            response = requests.get(f"{self.url}/v1/models", timeout=5)
+            response = requests.get(
+                f"{self.url}/v1/models",
+                timeout=5,
+                headers=_modal_proxy_auth_headers(),
+            )
             if response.ok and response.json().get("data"):
                 return DeploymentStatus.READY.value
         except Exception:
@@ -442,7 +463,11 @@ class ModelDeployment(BaseModel):
         try:
             while time.time() < deadline:
                 try:
-                    resp = requests.get(f"{self.url}/v1/models", timeout=10)
+                    resp = requests.get(
+                        f"{self.url}/v1/models",
+                        timeout=10,
+                        headers=_modal_proxy_auth_headers(),
+                    )
                     if resp.ok and resp.json().get("data"):
                         return
                 except requests.ConnectionError:
