@@ -64,6 +64,34 @@ def setup(interactive: bool = True) -> str:
     return web_url
 
 
+def set_password(password: str | None = None) -> None:
+    """Set or clear the dashboard password, then redeploy so it takes effect.
+
+    Pass an empty string to disable auth. When ``password`` is ``None`` we
+    prompt for it (hidden input). The deployed app reads the value from its
+    environment at startup, so we redeploy after updating the Secret.
+    """
+    from getpass import getpass
+
+    from modal_training_gym._dashboard import set_dashboard_password
+
+    if password is None:
+        password = getpass("Dashboard password (leave empty to disable auth): ").strip()
+        if password:
+            confirm = getpass("Confirm password: ").strip()
+            if confirm != password:
+                print("Passwords don't match — aborting.")
+                return
+
+    set_dashboard_password(password)
+    if password:
+        print("Dashboard password set. Redeploying so it takes effect...")
+    else:
+        print("Dashboard password cleared (open access). Redeploying...")
+
+    setup(interactive=False)
+
+
 def open_dashboard() -> str | None:
     """Open the deployed dashboard in the default browser; return its URL.
 

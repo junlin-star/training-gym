@@ -22,6 +22,9 @@
     statuses,
     statusCounts,
     activeStatuses,
+    groups,
+    groupCounts,
+    activeGroups,
     filteredRuns,
     loading,
     error,
@@ -37,6 +40,8 @@
     onToggleRecipe,
     onToggleAllRecipes,
     onToggleStatus,
+    onToggleGroup,
+    onToggleAllGroups,
   } = $props();
 
   // The drawer is now driven by the parent: it holds the run-summary while the
@@ -125,11 +130,17 @@
       {statuses}
       {statusCounts}
       {activeStatuses}
+      {groups}
+      {groupCounts}
+      {activeGroups}
+      allGroupsActive={activeGroups.size === groups.length}
       totalRuns={allRuns.length}
       bind:search
       onToggleRecipe={onToggleRecipe}
       onToggleAllRecipes={onToggleAllRecipes}
       onToggleStatus={onToggleStatus}
+      onToggleGroup={onToggleGroup}
+      onToggleAllGroups={onToggleAllGroups}
     />
   </div>
 
@@ -138,7 +149,7 @@
       <div class="table-wrap">
         <MinimalTableSkeleton
           class="runs-table"
-          columns={["Name", "Status", "Stage", "Model", "Dataset", "Recipe", "Created", "Last updated", ""]}
+          columns={["Name", "Status", "Stage", "Model", "Dataset", "Recipe", "Group", "Created", "Last updated", ""]}
           rows={8}
         />
       </div>
@@ -159,6 +170,7 @@
               <th>Model</th>
               <th>Dataset</th>
               <th>Recipe</th>
+              <th>Group</th>
               <th>Created</th>
               <th>Last updated</th>
               <th></th>
@@ -216,6 +228,15 @@
                 <td>
                   <button class="cell-open-button" onclick={() => selectRun(run.run_id)}>
                     {run.framework || "—"}
+                  </button>
+                </td>
+                <td class="group-cell" title={run.group_id || ""}>
+                  <button class="cell-open-button" onclick={() => selectRun(run.run_id)}>
+                    {#if run.group_id}
+                      <span class="group-tag">{run.group_id}</span>
+                    {:else}
+                      <span class="group-empty">—</span>
+                    {/if}
                   </button>
                 </td>
                 <td class="created-cell">
@@ -447,6 +468,30 @@
   }
 
   .stage-empty {
+    color: var(--muted);
+  }
+
+  .group-cell {
+    max-width: 12rem;
+  }
+
+  .group-tag {
+    display: inline-block;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    vertical-align: bottom;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 0.72rem;
+    font-variant-numeric: tabular-nums;
+    color: var(--accent);
+    border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+    background: color-mix(in srgb, var(--accent) 14%, transparent);
+  }
+
+  .group-empty {
     color: var(--muted);
   }
 

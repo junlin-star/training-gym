@@ -198,6 +198,7 @@ export async function fetchRuns({ signal } = {}) {
       latest_rollout: latestRollout,
       dataset_id: safeStr(run.dataset_id || ""),
       deployment_id: safeStr(run.deployment_id || ""),
+      group_id: safeStr(metadata?.group_id || ""),
       config: run.config || {},
       config_summary: extractConfigSummary(run.config),
       created_at: run.created_at || 0,

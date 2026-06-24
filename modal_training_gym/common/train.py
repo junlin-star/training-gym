@@ -340,6 +340,9 @@ class TrainConfig:
     # ``app.run()`` the driver opens — so we detach it here. Set False for an
     # attached run that Ctrl-C stops.
     detach: bool = True
+    # Set by TrainingGroup so every run in a sweep shares one id — written into
+    # the TrainingRun record so the dashboard can group variants together.
+    group_id: str | None = None
     _stable_id: str | None = _dc.field(default=None, init=False, repr=False)
 
     # ── Public API ────────────────────────────────────────────────────────────
@@ -371,6 +374,7 @@ class TrainConfig:
                 dataset=self.dataset,
                 checkpoint=self.checkpoint,
                 name=self.training_run_id,
+                group_id=self.group_id,
             )
         if recipe_type == RecipeType.SLIME:
             if not isinstance(self.recipe, SlimeRecipe):
@@ -389,6 +393,7 @@ class TrainConfig:
                 dataset=self.dataset,
                 checkpoint=self.checkpoint,
                 name=self.training_run_id,
+                group_id=self.group_id,
             )
         raise ValueError(f"Unknown recipe type: {recipe_type}")
 
@@ -514,6 +519,7 @@ class TrainConfig:
             framework_status=self._initializing_status(),
             created_at=created_at,
             started_at=created_at,
+            metadata={"group_id": self.group_id} if self.group_id else None,
         )
         try:
             run_record.save()

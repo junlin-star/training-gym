@@ -65,6 +65,7 @@ _EXPORTS = {
     "SlimeRecipe": ("modal_training_gym.train_recipes.slime_recipe", "SlimeRecipe"),
     "ToolCall": ("modal_training_gym.common.models", "ToolCall"),
     "TrainConfig": ("modal_training_gym.common.train", "TrainConfig"),
+    "TrainingGroup": ("modal_training_gym.common.training_group", "TrainingGroup"),
     "TrainResult": ("modal_training_gym.common.train_result", "TrainResult"),
     "setup": ("modal_training_gym.setup", "setup"),
     "WandbConfig": ("modal_training_gym.common.wandb", "WandbConfig"),
@@ -112,6 +113,7 @@ __all__ = [
     "setup",
     "ToolCall",
     "TrainConfig",
+    "TrainingGroup",
     "TrainResult",
     "WandbConfig",
 ]

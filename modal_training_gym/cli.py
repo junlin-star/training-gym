@@ -7,7 +7,7 @@ import sys
 
 
 def main():
-    from modal_training_gym.setup import setup, open_dashboard
+    from modal_training_gym.setup import setup, open_dashboard, set_password
     from modal_training_gym.cleanup import cleanup
 
     parser = argparse.ArgumentParser(prog="training-gym")
@@ -16,6 +16,17 @@ def main():
     sub.add_parser("setup", help="Deploy the training-gym dashboard to Modal")
 
     sub.add_parser("open", help="Open the deployed dashboard in your browser")
+
+    password_parser = sub.add_parser(
+        "set-password",
+        help="Set/clear the dashboard password (Basic Auth) and redeploy",
+    )
+    password_parser.add_argument(
+        "--password",
+        default=None,
+        metavar="PASSWORD",
+        help="Password to set (prompted securely if omitted; empty disables auth)",
+    )
 
     cleanup_parser = sub.add_parser(
         "cleanup",
@@ -40,6 +51,8 @@ def main():
         setup()
     elif args.command == "open":
         open_dashboard()
+    elif args.command == "set-password":
+        set_password(password=args.password)
     elif args.command == "cleanup":
         cleanup(older_than_days=args.older_than_days, dry_run=args.dry_run)
     else:
