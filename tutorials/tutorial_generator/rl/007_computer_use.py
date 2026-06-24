@@ -8,14 +8,18 @@ TUTORIAL_METADATA = {
     "difficulty": "Advanced",
     "order": 45,
     "api_classes": [
-        "Qwen3VL_8B",
-        "Qwen3VL_Recipe",
+        "Qwen3_VL_8B",
+        "Qwen3_VL_Recipe",
         "MultimodalDataset",
         "DeploymentConfig",
         "EvalConfig",
         "ModelDeployment",
         "TrainConfig",
+        "WandbConfig",
         "list_checkpoints",
+    ],
+    "required_modal_secrets": [
+        {"name": "wandb-secret", "key": "WANDB_API_KEY"},
     ],
 }
 
@@ -81,9 +85,10 @@ def _imports():
         ImageEvalRowResult,
         ModelDeployment,
         MultimodalDataset,
-        Qwen3VL_8B,
-        Qwen3VL_Recipe,
+        Qwen3_VL_8B,
+        Qwen3_VL_Recipe,
         TrainConfig,
+        WandbConfig,
         list_checkpoints,
     )
 
@@ -320,7 +325,12 @@ def _eval_helpers():
         label = example.get("label", "")
         images = example.get("images", [])
 
-        response = deployment.generate(prompt, images=images, ensure_ready=False)
+        # Build the OpenAI chat content: text + one image_url part per screenshot.
+        content = [
+            {"type": "text", "text": prompt},
+            *({"type": "image_url", "image_url": {"url": img}} for img in images),
+        ]
+        response = deployment.generate(content, ensure_ready=False)
 
         pred = _parse_coordinates(response)
         box = _parse_bbox(label)
@@ -347,7 +357,7 @@ def _eval_helpers():
 
 @code
 def _eval_base():
-    base_model = Qwen3VL_8B()
+    base_model = Qwen3_VL_8B()
     base_deployment = DeploymentConfig(model=base_model).serve()
     print(f"Base model URL: {base_deployment.url}")
 
@@ -377,7 +387,7 @@ def _train_intro():
     """
     ## Training
 
-    We use `Qwen3VL_Recipe` which carries VL-specific defaults:
+    We use `Qwen3_VL_Recipe` which carries VL-specific defaults:
     - **Frozen vision tower** (`freeze_params_name_list=["vision_model"]`) — RL
       only updates the language backbone. This is the standard recipe for VLM RL:
       a single sparse reward is too noisy to safely fine-tune a pretrained visual
@@ -391,6 +401,11 @@ def _train_intro():
 
     This tutorial runs 15 rollouts as a quick demo. For a more meaningful
     accuracy gain, increase `num_rollout`.
+
+    We pass `wandb=WandbConfig(project="…")` so reward/KL/length curves stream to
+    Weights & Biases — the key comes from the `wandb-secret` Modal secret. The
+    Training Gym dashboard picks up the run's project/entity/id and wires up the
+    **Open in W&B** button on the run. Drop `wandb=` to disable logging.
     """
 
 
@@ -399,7 +414,7 @@ def _train():
     training_run = TrainConfig(
         model=base_model,
         dataset=train_dataset,
-        recipe=Qwen3VL_Recipe(
+        recipe=Qwen3_VL_Recipe(
             custom_rm_function=grounding_reward,
             num_rollout=15,
             rollout_batch_size=8,
@@ -408,6 +423,7 @@ def _train():
             global_batch_size=16,
             lr=1e-6,
             save_interval=10,
+            wandb=WandbConfig(project="computer-use-grounding"),
         ),
     )
     train_result = training_run.train()
@@ -429,7 +445,7 @@ def _eval_trained():
     print(f"Checkpoint: {checkpoint.path}")
 
     trained_deployment = DeploymentConfig(
-        model=Qwen3VL_8B(),
+        model=Qwen3_VL_8B(),
         checkpoint=checkpoint,
         app_name="qwen3-vl-8b-grounding-serve",
         served_model_name="qwen3-vl-8b-grounding",

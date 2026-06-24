@@ -323,9 +323,8 @@ class ModelDeployment(BaseModel):
 
     def generate(
         self,
-        prompt: str,
+        prompt: str | list[dict],
         ensure_ready: bool = True,
-        images: list[str] | None = None,
         **kwargs,
     ) -> str:
         import time
@@ -334,19 +333,9 @@ class ModelDeployment(BaseModel):
 
         if ensure_ready:
             self.wait_until_ready()
-        if images:
-            content: object = [
-                {"type": "text", "text": prompt},
-                *(
-                    {"type": "image_url", "image_url": {"url": image}}
-                    for image in images
-                ),
-            ]
-        else:
-            content = prompt
         body = {
             "model": self.deployment_config.served_model_name,
-            "messages": [{"role": "user", "content": content}],
+            "messages": [{"role": "user", "content": prompt}],
             **kwargs,
         }
         transient_status_codes = {502, 503, 504}

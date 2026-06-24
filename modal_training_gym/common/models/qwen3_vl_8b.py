@@ -16,11 +16,11 @@ from __future__ import annotations
 from .base import HFModelConfiguration, ModelArchitecture, parse_qwen3_response
 
 
-class Qwen3VL_8B(HFModelConfiguration):
+class Qwen3_VL_8B(HFModelConfiguration):
     """Qwen3-VL-8B-Instruct (vision-language, 8B parameters) from Alibaba.
 
     Pre-configured with ``ModelArchitecture`` for the text backbone. The vision
-    tower is frozen during RL training (``Qwen3VL_Recipe.freeze_params_name_list``)
+    tower is frozen during RL training (``Qwen3_VL_Recipe.freeze_params_name_list``)
     and handled by SGLang for rollouts.
     """
 

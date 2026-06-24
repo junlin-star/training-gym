@@ -606,7 +606,7 @@ class MultimodalDataset(DatasetConfig):
             self.label_key: r["label"],
         }
 
-    def load(self, split: Literal["all", "train", "eval"] = "all") -> list[DatasetRow]:
+    def load(self) -> list[DatasetRow]:
         return [self._to_row(r) for r in self.rows]
 
     def _write_jsonl(self, rows: list[dict[str, Any]], path: str) -> None:
