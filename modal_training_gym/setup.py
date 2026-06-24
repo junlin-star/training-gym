@@ -47,6 +47,8 @@ def setup(interactive: bool = True) -> str:
     from modal_training_gym._dashboard import app, fastapi_app
     from modal_training_gym.common.config import CONFIG_PATH, save_dashboard_url
 
+    ensure_proxy_auth(interactive=interactive)
+
     if not ensure_creds_secret(interactive=interactive):
         print(
             f"WARNING: continuing without the {MODAL_CREDS_SECRET_NAME!r} "
@@ -62,6 +64,64 @@ def setup(interactive: bool = True) -> str:
     print(f"\nDashboard deployed: {web_url}")
     print(f"Saved dashboard URL to {CONFIG_PATH}")
     return web_url
+
+
+def ensure_proxy_auth(interactive: bool = True) -> bool:
+    """Prompt for and persist Modal proxy-auth tokens in ``~/.training-gym.toml``.
+
+    Served endpoints (``DeploymentConfig.serve()``) sit behind Modal proxy auth
+    and need a ``MODAL_KEY`` / ``MODAL_SECRET`` token pair. When ``interactive``
+    we ask whether the user has created a pair and, if so, read and save it.
+    Returns ``True`` when both tokens are available afterwards.
+    """
+    from getpass import getpass
+
+    from modal_training_gym.common.config import (
+        CONFIG_PATH,
+        get_proxy_auth,
+        save_proxy_auth,
+    )
+
+    key, secret = get_proxy_auth()
+    if key and secret:
+        return True
+    if not interactive:
+        return False
+
+    print(
+        "\nServed endpoints (DeploymentConfig.serve()) sit behind Modal proxy "
+        "auth, which needs a proxy-auth token pair (MODAL_KEY / MODAL_SECRET)."
+    )
+    answer = (
+        input(
+            "Have you created a proxy-auth token pair at "
+            "https://modal.com/settings/proxy-auth-tokens? [y/N] "
+        )
+        .strip()
+        .lower()
+    )
+    if answer not in ("y", "yes"):
+        print(
+            "Skipping proxy-auth setup. Create a pair at "
+            "https://modal.com/settings/proxy-auth-tokens and re-run "
+            "`training-gym setup`, or export MODAL_KEY / MODAL_SECRET yourself."
+        )
+        return False
+
+    key = input("MODAL_KEY (wk-…): ").strip()
+    secret = getpass("MODAL_SECRET (ws-…): ").strip()
+    if not (key and secret):
+        print("Both MODAL_KEY and MODAL_SECRET are required — skipping.")
+        return False
+    if not key.startswith("wk-") or not secret.startswith("ws-"):
+        print(
+            "WARNING: expected MODAL_KEY to start with 'wk-' and MODAL_SECRET "
+            "with 'ws-'. Saving anyway."
+        )
+
+    save_proxy_auth(key, secret)
+    print(f"Saved proxy-auth tokens to {CONFIG_PATH}")
+    return True
 
 
 def set_password(password: str | None = None) -> None:

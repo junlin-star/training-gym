@@ -46,8 +46,11 @@ def _run_coro(coro):
 
     ``asyncio.run`` raises when an event loop is already running (e.g. in a
     Jupyter notebook), so in that case we run the coroutine on a dedicated
-    worker thread with its own loop.
+    worker thread with its own loop. If ``coro`` is already a resolved value
+    (some Modal versions return the URL synchronously), it is returned as-is.
     """
+    if not inspect.isawaitable(coro):
+        return coro
     try:
         asyncio.get_running_loop()
     except RuntimeError:
@@ -74,9 +77,14 @@ def _modal_proxy_auth_headers() -> dict[str, str]:
 
     Reads the Modal proxy-auth token pair (``wk-``/``ws-``) from ``MODAL_KEY`` /
     ``MODAL_SECRET`` and returns them as ``Modal-Key`` / ``Modal-Secret`` headers.
-    Returns an empty dict when either is unset, so endpoints without proxy auth
-    are unaffected.
+    Falls back to the pair persisted in ``~/.training-gym.toml`` (written by
+    ``training-gym setup``) when the env vars are unset. Returns an empty dict
+    when neither source provides them, so endpoints without proxy auth are
+    unaffected.
     """
+    from modal_training_gym.common.config import load_proxy_auth
+
+    load_proxy_auth()
     key = os.environ.get("MODAL_KEY", "").strip()
     secret = os.environ.get("MODAL_SECRET", "").strip()
     if key and secret:

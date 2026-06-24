@@ -50,6 +50,52 @@ def get_dashboard_url() -> str | None:
     return None
 
 
+PROXY_AUTH_SECTION = "proxy_auth"
+
+
+def get_proxy_auth() -> tuple[str, str]:
+    """Return the ``(MODAL_KEY, MODAL_SECRET)`` pair saved under ``[proxy_auth]``.
+
+    Returns empty strings for any value that is missing or blank.
+    """
+    section = load_config().get(PROXY_AUTH_SECTION)
+    if isinstance(section, dict):
+        key = str(section.get("key") or "").strip()
+        secret = str(section.get("secret") or "").strip()
+        return key, secret
+    return "", ""
+
+
+def save_proxy_auth(key: str, secret: str) -> None:
+    """Persist the proxy-auth token pair under ``[proxy_auth]``."""
+    config = load_config()
+    config[PROXY_AUTH_SECTION] = {"key": key.strip(), "secret": secret.strip()}
+    CONFIG_PATH.write_text(_render(config))
+
+
+def load_proxy_auth() -> bool:
+    """Populate ``MODAL_KEY`` / ``MODAL_SECRET`` from ``~/.training-gym.toml``.
+
+    Dotenv-style: real environment variables always win and are never
+    overwritten; only unset ones are filled in from the saved config. Returns
+    ``True`` when both end up set in the environment.
+    """
+    have_key = bool(os.environ.get("MODAL_KEY", "").strip())
+    have_secret = bool(os.environ.get("MODAL_SECRET", "").strip())
+    if have_key and have_secret:
+        return True
+
+    key, secret = get_proxy_auth()
+    if key and not have_key:
+        os.environ["MODAL_KEY"] = key
+    if secret and not have_secret:
+        os.environ["MODAL_SECRET"] = secret
+    return bool(
+        os.environ.get("MODAL_KEY", "").strip()
+        and os.environ.get("MODAL_SECRET", "").strip()
+    )
+
+
 def get_framework_status_url() -> str | None:
     """Return the saved framework-status endpoint URL, or ``None``."""
     base = get_dashboard_url()
