@@ -106,7 +106,7 @@ __all__ = [
     "Qwen3_4B",
     "Qwen3_8B",
     "Qwen3_30B",
-    "Qwen3_6_R_1_7B",
+    "Qwen3_6_35B",
     "Qwen3_ASR_1_7b_Recipe",
     "score_in_sandbox",
     "SlimeRecipe",
