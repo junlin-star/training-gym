@@ -41,14 +41,50 @@ from modal_training_gym.utils.metadata import (
 DEPLOYMENTS_STORE_NAME = MetadataStore.DEPLOYMENTS.value
 
 
+def _run_coro(coro):
+    """Run a coroutine to completion, even from inside a running event loop.
+
+    ``asyncio.run`` raises when an event loop is already running (e.g. in a
+    Jupyter notebook), so in that case we run the coroutine on a dedicated
+    worker thread with its own loop. If ``coro`` is already a resolved value
+    (some Modal versions return the URL synchronously), it is returned as-is.
+    """
+    if not inspect.isawaitable(coro):
+        return coro
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+
+    result: dict = {}
+
+    def _worker():
+        try:
+            result["value"] = asyncio.run(coro)
+        except BaseException as exc:  # noqa: BLE001 - re-raised on caller thread
+            result["error"] = exc
+
+    thread = threading.Thread(target=_worker)
+    thread.start()
+    thread.join()
+    if "error" in result:
+        raise result["error"]
+    return result["value"]
+
+
 def _modal_proxy_auth_headers() -> dict[str, str]:
     """Headers to authenticate against Modal endpoints behind proxy auth.
 
     Reads the Modal proxy-auth token pair (``wk-``/``ws-``) from ``MODAL_KEY`` /
     ``MODAL_SECRET`` and returns them as ``Modal-Key`` / ``Modal-Secret`` headers.
-    Returns an empty dict when either is unset, so endpoints without proxy auth
-    are unaffected.
+    Falls back to the pair persisted in ``~/.training-gym.toml`` (written by
+    ``training-gym setup``) when the env vars are unset. Returns an empty dict
+    when neither source provides them, so endpoints without proxy auth are
+    unaffected.
     """
+    from modal_training_gym.common.config import load_proxy_auth
+
+    load_proxy_auth()
     key = os.environ.get("MODAL_KEY", "").strip()
     secret = os.environ.get("MODAL_SECRET", "").strip()
     if key and secret:
@@ -214,8 +250,7 @@ class DeploymentConfig:
                 raise RuntimeError(
                     f"Deployed {self.app_name!r} but could not resolve SGLang endpoint server handle."
                 )
-            urls = asyncio.run(server.get_urls())
-            url = next(iter(urls.values()), None) if urls else None
+            url = _run_coro(server.get_url())
         else:
             url = app.serve.get_web_url()
         modal_app_id = app.app_id
@@ -444,15 +479,33 @@ class ModelDeployment(BaseModel):
 
         log_thread = self._start_log_tailer()
 
+        # A freshly-deployed SGLang container legitimately reports 0 running
+        # containers for the whole cold-start window: pulling the (multi-GB)
+        # image, downloading weights, and launching the server all happen before
+        # it serves its first request. Modal allows the container `startup_timeout`
+        # to reach readiness, so the crashloop heuristic must not fire inside that
+        # window — otherwise a slow-but-healthy boot is misreported as
+        # "crashlooping". Only flag a crashloop quickly once we've actually seen a
+        # container come up and then disappear (a real restart cycle).
+        recipe = self.deployment_config.recipe
+        startup_timeout = recipe.startup_timeout if recipe is not None else 20 * 60
+        # Cap the cold-start grace at the overall deadline — otherwise it always
+        # exceeds `timeout` and the loop hits TimeoutError before the crashloop
+        # check can fire, so cold-start crashloop detection never engages.
+        cold_start_grace = min(startup_timeout, timeout)
+        restart_grace = 60
+
         deadline = time.time() + timeout
         modal_poll_interval = 20
-        zero_container_grace = 150
         zero_container_since: float | None = None
+        seen_running = False
         last_modal_poll = 0.0
+        last_probe = "no response yet"
 
         try:
             while time.time() < deadline:
                 resp = None
+                probe = last_probe
                 try:
                     resp = requests.get(
                         f"{self.url}/v1/models",
@@ -461,10 +514,15 @@ class ModelDeployment(BaseModel):
                     )
                     if resp.ok and resp.json().get("data"):
                         return
-                except requests.ConnectionError:
-                    pass
-                except Exception:
-                    pass
+                    probe = f"HTTP {resp.status_code}"
+                except requests.ConnectionError as exc:
+                    probe = f"connection error ({type(exc).__name__})"
+                except Exception as exc:
+                    probe = f"{type(exc).__name__}: {exc}"
+
+                if probe != last_probe:
+                    last_probe = probe
+                    print(f"[deployment] probe {self.url}/v1/models: {probe}")
 
                 # A 401 is an auth problem, not a cold-start (loading returns
                 # 502/503) — fail fast with a proxy-auth hint instead of polling
@@ -482,16 +540,30 @@ class ModelDeployment(BaseModel):
                             f"the deploy likely failed or was stopped. Check {self.modal_app_url} "
                             f"and {logs_hint}."
                         )
-                    if containers == 0:
+                    if containers < 0:
+                        # Transient failure querying Modal app state — ignore
+                        # this poll rather than counting it as zero containers.
+                        pass
+                    elif containers > 0:
+                        seen_running = True
+                        zero_container_since = None
+                    else:
                         if zero_container_since is None:
                             zero_container_since = now
                         elapsed = int(now - zero_container_since)
-                        if elapsed >= zero_container_grace:
+                        grace = restart_grace if seen_running else cold_start_grace
+                        if elapsed >= grace:
+                            phase = (
+                                "came up and then died"
+                                if seen_running
+                                else f"never reached a running state within {grace}s"
+                            )
                             raise RuntimeError(
                                 f"Modal app {app_name!r} has had 0 running containers for "
-                                f"~{elapsed}s. Containers are most likely crashlooping "
-                                f"on startup (OOM, missing weights, bad config, etc.). "
-                                f"Inspect logs with {logs_hint} or open {self.modal_app_url}."
+                                f"~{elapsed}s ({phase}, last probe: {last_probe}). Containers "
+                                f"are most likely crashlooping on startup (OOM, missing weights, "
+                                f"bad config, etc.). Inspect logs with {logs_hint} or open "
+                                f"{self.modal_app_url}."
                             )
 
                 time.sleep(5)
@@ -500,7 +572,7 @@ class ModelDeployment(BaseModel):
                 log_thread.join(timeout=2)
 
         raise TimeoutError(
-            f"{self.url} not ready after {timeout}s. "
+            f"{self.url} not ready after {timeout}s (last probe: {last_probe}). "
             f"Inspect logs with {logs_hint} or open {self.modal_app_url}."
         )
 

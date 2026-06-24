@@ -60,7 +60,8 @@ def _app_is_running(app_id: str) -> bool:
     error so callers fall back to their normal failure handling.
     """
     try:
-        import modal
+        from modal._utils.async_utils import synchronizer
+        from modal.client import _Client
         from modal_proto import api_pb2
 
         live_states = {
@@ -71,11 +72,21 @@ def _app_is_running(app_id: str) -> bool:
             api_pb2.APP_STATE_DEPLOYED,
             api_pb2.APP_STATE_DERIVED,
         }
-        with modal.Client.from_env() as client:
-            resp = client.stub.AppGetLifecycle(
+
+        # ``modal.Client.from_env()`` returns an already-opened singleton, so
+        # using it as a context manager re-enters ``_open()`` and trips
+        # ``assert self._stub is None``; ``client.stub`` is also the raw async
+        # stub. Drive the async RPC through Modal's synchronizer instead — the
+        # same path the ``modal app`` CLI uses to call this from sync code.
+        async def _lifecycle_state() -> int:
+            client = await _Client.from_env()
+            resp = await client.stub.AppGetLifecycle(
                 api_pb2.AppGetLifecycleRequest(app_id=app_id)
             )
-        return resp.lifecycle.app_state in live_states
+            return resp.lifecycle.app_state
+
+        state = synchronizer.create_blocking(_lifecycle_state)()
+        return state in live_states
     except Exception:
         return False
 
@@ -356,6 +367,9 @@ class TrainConfig:
     # ``app.run()`` the driver opens — so we detach it here. Set False for an
     # attached run that Ctrl-C stops.
     detach: bool = True
+    # Set by TrainingGroup so every run in a sweep shares one id — written into
+    # the TrainingRun record so the dashboard can group variants together.
+    group_id: str | None = None
     _stable_id: str | None = _dc.field(default=None, init=False, repr=False)
 
     # ── Public API ────────────────────────────────────────────────────────────
@@ -387,6 +401,7 @@ class TrainConfig:
                 dataset=self.dataset,
                 checkpoint=self.checkpoint,
                 name=self.training_run_id,
+                group_id=self.group_id,
             )
         if recipe_type == RecipeType.SLIME:
             if not isinstance(self.recipe, SlimeRecipe):
@@ -405,6 +420,7 @@ class TrainConfig:
                 dataset=self.dataset,
                 checkpoint=self.checkpoint,
                 name=self.training_run_id,
+                group_id=self.group_id,
             )
         raise ValueError(f"Unknown recipe type: {recipe_type}")
 
@@ -529,6 +545,7 @@ class TrainConfig:
             framework_status=self._initializing_status(),
             created_at=created_at,
             started_at=created_at,
+            metadata={"group_id": self.group_id} if self.group_id else None,
         )
         try:
             run_record.save()

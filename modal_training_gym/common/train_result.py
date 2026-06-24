@@ -99,6 +99,9 @@ class TrainResult:
         The ``ModelConfig`` used for training. The :attr:`model` property
         returns a copy with ``model_path`` pointing at the latest
         checkpoint, ready to serve.
+    group_id:
+        Identifier shared by every run in a :class:`TrainingGroup` sweep, or
+        empty for a standalone run. Lets eval/dashboard code group variants.
     extra:
         Free-form metadata a launcher may attach (e.g. wandb run name,
         rollout tunnel URL). Not used by the base class.
@@ -114,6 +117,9 @@ class TrainResult:
     wandb_project: str = ""
     wandb_entity: str = ""
     wandb_training_run_id: str = ""
+    # Set when this run was launched as part of a TrainingGroup sweep; shared
+    # across every variant in the group so results can be compared together.
+    group_id: str = ""
     extra: dict[str, Any] = field(default_factory=dict)
 
     # ── Persistence ────────────────────────────────────────────────────────
@@ -158,6 +164,8 @@ class TrainResult:
         parsed = dict(d)
         mc = parsed.get("model_config")
         if isinstance(mc, dict):
+            from modal_training_gym.common.models import ModelConfig
+
             parsed["model_config"] = ModelConfig(**mc)
         valid_fields = {f.name for f in fields(TrainResult)}
         unknown = {k: v for k, v in parsed.items() if k not in valid_fields}

@@ -172,6 +172,13 @@ API_REFERENCE_MANIFEST = [
         "sidebar_label": "TrainConfig",
     },
     {
+        "class_name": "TrainingGroup",
+        "module": "modal_training_gym.common.training_group",
+        "group": "training",
+        "class_type": "behavior",
+        "sidebar_label": "TrainingGroup",
+    },
+    {
         "class_name": "SlimeRecipe",
         "module": "modal_training_gym.train_recipes.slime_recipe.recipe",
         "group": "training",

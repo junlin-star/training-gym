@@ -24,10 +24,13 @@
   let search = $state("");
   let activeRecipes = $state(new Set());
   let activeStatuses = $state(new Set());
-  // Recipe/status values we've seen across loads. New ones are auto-enabled in
-  // the filters once; the user's selections are never reset by a refresh.
+  let activeGroups = $state(new Set());
+  // Recipe/status/group values we've seen across loads. New ones are
+  // auto-enabled in the filters once; the user's selections are never reset by
+  // a refresh.
   let seenRecipes = new Set();
   let seenStatuses = new Set();
+  let seenGroups = new Set();
   let activePage = $state("training");
   let activeTrainingRunId = $state(null);
   // When set (and no full detail page is open), the training list shows a
@@ -109,6 +112,12 @@
 
   function getRecipe(run) {
     return run.framework || "(untagged)";
+  }
+
+  const NO_GROUP = "(no group)";
+
+  function getGroup(run) {
+    return safeText(run.group_id || run.metadata?.group_id) || NO_GROUP;
   }
 
   function getStatus(run) {
@@ -244,8 +253,10 @@
       // current filter selection on every refresh.
       const nextRecipes = new Set(activeRecipes);
       const nextStatuses = new Set(activeStatuses);
+      const nextGroups = new Set(activeGroups);
       let recipesChanged = false;
       let statusesChanged = false;
+      let groupsChanged = false;
       for (const run of allRuns) {
         const recipe = getRecipe(run);
         if (!seenRecipes.has(recipe)) {
@@ -259,9 +270,16 @@
           nextStatuses.add(status);
           statusesChanged = true;
         }
+        const group = getGroup(run);
+        if (!seenGroups.has(group)) {
+          seenGroups.add(group);
+          nextGroups.add(group);
+          groupsChanged = true;
+        }
       }
       if (recipesChanged) activeRecipes = nextRecipes;
       if (statusesChanged) activeStatuses = nextStatuses;
+      if (groupsChanged) activeGroups = nextGroups;
     } catch (e) {
       if (isStale()) return;
       // Keep the data we already have on a transient refresh failure — only
@@ -271,6 +289,7 @@
         error = getErrorMessage(e);
         activeRecipes = new Set();
         activeStatuses = new Set();
+        activeGroups = new Set();
       }
     } finally {
       // Always retire the cold-start skeleton once any attempt settles — even a
@@ -349,6 +368,15 @@
 
   let recipes = $derived([...new Set(allRuns.map(getRecipe))].sort());
   let statuses = $derived([...new Set(allRuns.map(getStatus))].sort());
+  // Real group ids first (alphabetical), with "(no group)" pinned last so the
+  // sweep groups are what you see at the top of the filter.
+  let groups = $derived(
+    [...new Set(allRuns.map(getGroup))].sort((a, b) => {
+      if (a === NO_GROUP) return 1;
+      if (b === NO_GROUP) return -1;
+      return a.localeCompare(b);
+    }),
+  );
 
   let recipeCounts = $derived(
     allRuns.reduce((acc, run) => {
@@ -366,16 +394,26 @@
     }, {}),
   );
 
+  let groupCounts = $derived(
+    allRuns.reduce((acc, run) => {
+      const group = getGroup(run);
+      acc[group] = (acc[group] || 0) + 1;
+      return acc;
+    }, {}),
+  );
+
   let filteredRuns = $derived(
     allRuns
       .filter((run) => {
         if (!activeRecipes.has(getRecipe(run))) return false;
         if (!activeStatuses.has(getStatus(run))) return false;
+        if (!activeGroups.has(getGroup(run))) return false;
         if (search) {
           const q = search.toLowerCase();
           if (
             !includesText(run.run_id, q) &&
             !includesText(run.modal_app_id, q) &&
+            !includesText(run.group_id, q) &&
             !includesText(run.config_summary?.model_name, q) &&
             !includesText(run.train_result?.training_run_id, q) &&
             !includesText(run.train_result?.checkpoint_dir, q) &&
@@ -670,6 +708,18 @@
     activeStatuses = next;
   }
 
+  function toggleGroup(group) {
+    const next = new Set(activeGroups);
+    if (next.has(group)) next.delete(group);
+    else next.add(group);
+    activeGroups = next;
+  }
+
+  function toggleAllGroups() {
+    if (activeGroups.size === groups.length) activeGroups = new Set();
+    else activeGroups = new Set(groups);
+  }
+
   function setActivePage(page) {
     activePage = page;
     activeTrainingRunId = null;
@@ -790,6 +840,9 @@
         {statuses}
         {statusCounts}
         {activeStatuses}
+        {groups}
+        {groupCounts}
+        {activeGroups}
         {filteredRuns}
         {loading}
         {error}
@@ -805,6 +858,8 @@
         onToggleRecipe={toggleRecipe}
         onToggleAllRecipes={toggleAllRecipes}
         onToggleStatus={toggleStatus}
+        onToggleGroup={toggleGroup}
+        onToggleAllGroups={toggleAllGroups}
       />
     {:else if activePage === "deployments"}
       <DeploymentsPage

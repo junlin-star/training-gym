@@ -109,6 +109,7 @@ def build_miles_app(
     dataset: DatasetConfig,
     checkpoint: Checkpoint | None = None,
     name: str | None = None,
+    group_id: str | None = None,
 ) -> App:
     app_name = name or miles.name or f"miles-{type(miles).__name__.lstrip('_').lower()}"
     volume_prefix = miles.name or f"miles-{type(miles).__name__.lstrip('_').lower()}"
@@ -765,6 +766,7 @@ def build_miles_app(
                 "wandb_project": miles.wandb.project if miles.wandb else "",
                 "wandb_entity": wandb_entity,
                 "wandb_training_run_id": wandb_run_id,
+                "group_id": group_id or "",
             }
             accepted_fields = set(inspect.signature(TrainResult).parameters)
             result = TrainResult(
