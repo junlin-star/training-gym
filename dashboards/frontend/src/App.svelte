@@ -413,7 +413,7 @@
           if (
             !includesText(run.run_id, q) &&
             !includesText(run.modal_app_id, q) &&
-            !includesText(run.group_id, q) &&
+            !includesText(getGroup(run), q) &&
             !includesText(run.config_summary?.model_name, q) &&
             !includesText(run.train_result?.training_run_id, q) &&
             !includesText(run.train_result?.checkpoint_dir, q) &&

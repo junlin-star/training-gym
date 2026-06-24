@@ -90,6 +90,10 @@
     return `${label} ${progress.current} / ${progress.total}`;
   }
 
+  function getGroup(run) {
+    return run.group_id || run.metadata?.group_id || "";
+  }
+
   $effect(() => {
     if (drawerRunId && !allRuns.some((run) => run.run_id === drawerRunId)) {
       onCloseDrawer();
@@ -230,10 +234,10 @@
                     {run.framework || "—"}
                   </button>
                 </td>
-                <td class="group-cell" title={run.group_id || ""}>
+                <td class="group-cell" title={getGroup(run)}>
                   <button class="cell-open-button" onclick={() => selectRun(run.run_id)}>
-                    {#if run.group_id}
-                      <span class="group-tag">{run.group_id}</span>
+                    {#if getGroup(run)}
+                      <span class="group-tag">{getGroup(run)}</span>
                     {:else}
                       <span class="group-empty">—</span>
                     {/if}
