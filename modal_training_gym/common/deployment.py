@@ -41,6 +41,34 @@ from modal_training_gym.utils.metadata import (
 DEPLOYMENTS_STORE_NAME = MetadataStore.DEPLOYMENTS.value
 
 
+def _run_coro(coro):
+    """Run a coroutine to completion, even from inside a running event loop.
+
+    ``asyncio.run`` raises when an event loop is already running (e.g. in a
+    Jupyter notebook), so in that case we run the coroutine on a dedicated
+    worker thread with its own loop.
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+
+    result: dict = {}
+
+    def _worker():
+        try:
+            result["value"] = asyncio.run(coro)
+        except BaseException as exc:  # noqa: BLE001 - re-raised on caller thread
+            result["error"] = exc
+
+    thread = threading.Thread(target=_worker)
+    thread.start()
+    thread.join()
+    if "error" in result:
+        raise result["error"]
+    return result["value"]
+
+
 def _modal_proxy_auth_headers() -> dict[str, str]:
     """Headers to authenticate against Modal endpoints behind proxy auth.
 
@@ -214,7 +242,7 @@ class DeploymentConfig:
                 raise RuntimeError(
                     f"Deployed {self.app_name!r} but could not resolve SGLang endpoint server handle."
                 )
-            url = asyncio.run(server.get_url())
+            url = _run_coro(server.get_url())
         else:
             url = app.serve.get_web_url()
         modal_app_id = app.app_id
