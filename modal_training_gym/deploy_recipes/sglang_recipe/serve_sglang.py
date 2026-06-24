@@ -175,9 +175,9 @@ def build_sglang_serve_app(
         setattr(app, tag, fn)
     for tag, cls in app.registered_classes.items():
         setattr(app, tag, cls)
-    # The decorator returns the `_Server` handle (carries the URL accessor —
-    # `get_url()` on modal >=1.5.1, `get_urls()` on <=1.5.0); the entry in
-    # `registered_functions` is only its underlying Function. Bind the server
-    # itself so callers (e.g. deployment URL resolution) can resolve the URL.
+    # The decorator returns the `_Server` handle (carries `get_url()`, modal
+    # >=1.5.1); the entry in `registered_functions` is only its underlying
+    # Function. Bind the server itself so callers (e.g. deployment URL
+    # resolution) can resolve the URL.
     setattr(app, "SGLangEndpoint", SGLangEndpoint)
     return app

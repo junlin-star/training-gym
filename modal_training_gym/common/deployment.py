@@ -56,29 +56,6 @@ def _modal_proxy_auth_headers() -> dict[str, str]:
     return {}
 
 
-def _resolve_server_url(server: object) -> str | None:
-    """Resolve the public URL of a Modal ``_experimental_server`` handle.
-
-    The server handle's URL accessor was renamed across Modal client versions:
-    modal ``<= 1.5.0`` exposes ``get_urls() -> dict[region, url]``; modal
-    ``>= 1.5.1`` exposes ``get_url() -> str | None``. Support both so the same
-    code works regardless of the installed client.
-    """
-    get_url = getattr(server, "get_url", None)
-    if callable(get_url):
-        return asyncio.run(get_url())
-    get_urls = getattr(server, "get_urls", None)
-    if callable(get_urls):
-        urls = asyncio.run(get_urls())
-        return next(iter(urls.values()), None) if urls else None
-    raise RuntimeError(
-        f"Modal server handle {type(server).__name__!r} exposes neither "
-        "get_url() nor get_urls(); cannot resolve the endpoint URL. This likely "
-        "means the installed modal client is incompatible with this version of "
-        "modal-training-gym."
-    )
-
-
 def _raise_for_proxy_auth(status_code: int, url: str) -> None:
     """Turn a 401 into an actionable proxy-auth hint.
 
@@ -237,7 +214,7 @@ class DeploymentConfig:
                 raise RuntimeError(
                     f"Deployed {self.app_name!r} but could not resolve SGLang endpoint server handle."
                 )
-            url = _resolve_server_url(server)
+            url = asyncio.run(server.get_url())
         else:
             url = app.serve.get_web_url()
         modal_app_id = app.app_id
