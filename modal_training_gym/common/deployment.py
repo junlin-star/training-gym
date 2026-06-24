@@ -214,8 +214,7 @@ class DeploymentConfig:
                 raise RuntimeError(
                     f"Deployed {self.app_name!r} but could not resolve SGLang endpoint server handle."
                 )
-            urls = asyncio.run(server.get_urls())
-            url = next(iter(urls.values()), None) if urls else None
+            url = asyncio.run(server.get_url())
         else:
             url = app.serve.get_web_url()
         modal_app_id = app.app_id
