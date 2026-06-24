@@ -17,7 +17,6 @@ Then: `uv run modal run <tutorial_file>.py::train`.
 
 import asyncio
 import base64
-import dataclasses as _dc
 import inspect
 import os
 import secrets as _secrets
@@ -265,13 +264,6 @@ def _serialize_slime_params(
     return {
         key: _serialize_slime_param_value(key, value)
         for key, value in recipe._fields(dataset=dataset, model=model).items()
-    }
-
-
-def _serialize_recipe_fields(recipe: SlimeRecipe) -> dict[str, Any]:
-    return {
-        field.name: _serialize_recipe_value(getattr(recipe, field.name))
-        for field in _dc.fields(recipe)
     }
 
 
@@ -746,21 +738,21 @@ def build_slime_app(
         current_config = _build_conversion_config(slime, model=model)
 
         if os.path.exists(save_path):
-            if _has_torch_dist_checkpoint(save_path):
+            complete = _has_torch_dist_checkpoint(save_path)
+            stale = True
+            if complete:
                 config_path = os.path.join(save_path, _CONVERSION_CONFIG_FILE)
-                stale = False
                 if os.path.isfile(config_path):
                     try:
                         with open(config_path) as f:
                             stored_config = json.load(f)
-                        if stored_config != current_config:
-                            stale = True
-                            if node_rank == 0:
-                                print(
-                                    f"Checkpoint at {save_path} was built with "
-                                    f"different config:\n  stored: {stored_config}"
-                                    f"\n  current: {current_config}"
-                                )
+                        stale = stored_config != current_config
+                        if stale and node_rank == 0:
+                            print(
+                                f"Checkpoint at {save_path} was built with "
+                                f"different config:\n  stored: {stored_config}"
+                                f"\n  current: {current_config}"
+                            )
                     except (OSError, json.JSONDecodeError):
                         stale = True
                         if node_rank == 0:
@@ -780,41 +772,26 @@ def build_slime_app(
                             f"config metadata — reconverting to ensure "
                             f"compatibility."
                         )
-                if node_rank == 0:
-                    print(f"Using existing torch_dist checkpoint at {save_path}.")
-                if training_run_id:
-                    flush_status_reporter(timeout_seconds=2.0)
-                return
+                if not stale:
+                    if node_rank == 0:
+                        print(f"Using existing torch_dist checkpoint at {save_path}.")
+                    if training_run_id:
+                        flush_status_reporter(timeout_seconds=2.0)
+                    return
 
+            # Either incomplete (e.g. a preempted conversion) or stale: rebuild
+            # it. Rank 0 removes the directory and commits; other ranks wait for
+            # the removal to land before reconverting.
             if node_rank == 0:
                 import shutil
 
-                if stale:
-                    if node_rank == 0:
-                        print(
-                            f"Removing stale torch_dist checkpoint at "
-                            f"{save_path} (parallelism config changed)."
-                        )
-                        shutil.rmtree(save_path, ignore_errors=True)
-                        checkpoints_volume.commit()
-                    else:
-                        time.sleep(5)
-                        checkpoints_volume.reload()
-                else:
-                    if node_rank == 0:
-                        print(
-                            f"Using existing torch_dist checkpoint at "
-                            f"{save_path} (config matches)."
-                        )
-                    return
+                reason = "stale" if complete else "incomplete"
+                print(f"Removing {reason} torch_dist checkpoint at {save_path}.")
+                shutil.rmtree(save_path, ignore_errors=True)
+                checkpoints_volume.commit()
             else:
-                if node_rank == 0:
-                    print(f"Removing incomplete torch_dist checkpoint at {save_path}.")
-                    shutil.rmtree(save_path, ignore_errors=True)
-                    checkpoints_volume.commit()
-                else:
-                    time.sleep(5)
-                    checkpoints_volume.reload()
+                time.sleep(5)
+                checkpoints_volume.reload()
 
         torchrun_args = [f"--nproc-per-node={nproc_per_node}"]
         if nnodes > 1:
@@ -1193,17 +1170,15 @@ def build_slime_app(
                 object.__setattr__(slime, "ref_load", original_ref_load)
 
             phase_report_url = (
-                os.environ.get("SLIME_PHASE_REPORT_URL")
-                or os.environ.get("TRAINING_GYM_FRAMEWORK_STATUS_URL")
+                os.environ.get("TRAINING_GYM_FRAMEWORK_STATUS_URL")
                 or framework_status_url
                 or ""
             )
             if not phase_report_url:
                 print(
                     "WARNING: no dashboard URL passed to train() and no "
-                    "SLIME_PHASE_REPORT_URL/TRAINING_GYM_FRAMEWORK_STATUS_URL "
-                    "set inside the container. Phase reporting is disabled "
-                    "for this run."
+                    "TRAINING_GYM_FRAMEWORK_STATUS_URL set inside the "
+                    "container. Phase reporting is disabled for this run."
                 )
 
             wandb_env = {}
@@ -1224,10 +1199,10 @@ def build_slime_app(
                     "TRAINING_GYM_TRACE_SAMPLE_LIMIT": str(
                         getattr(slime, "trace_sample_limit", 16)
                     ),
-                    "SLIME_PHASE_REPORT_URL": phase_report_url,
+                    "TRAINING_GYM_FRAMEWORK_STATUS_URL": phase_report_url,
                     **wandb_env,
                     **slime.environment,
-                    "SLIME_PHASE_REPORT_TOKEN": framework_status_token,
+                    "TRAINING_GYM_FRAMEWORK_STATUS_TOKEN": framework_status_token,
                 }
             }
 

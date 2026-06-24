@@ -49,7 +49,7 @@ CUSTOM_BEFORE_TRAIN_STEP_HOOK_PATH_KEY = (
 
 
 # Internal queue entry: each item is {"_url": str, "_timeout": float, **payload}.
-# Status reports use the SLIME_PHASE_REPORT_URL with a short 1s timeout;
+# Status reports use the framework-status URL with a short 1s timeout;
 # rollout-data reports derive a /api/training-rollouts URL from the same base
 # with a longer timeout because payloads can be 100KB+.
 _REPORT_QUEUE: Queue[dict[str, Any] | None] = Queue(maxsize=512)
@@ -121,7 +121,10 @@ def _step_progress(args: Any, rollout_id: int | None = None) -> dict[str, Any]:
 
 
 def _phase_url() -> str:
-    return os.environ.get(PHASE_REPORT_URL_ENV, "").strip()
+    return (
+        os.environ.get("TRAINING_GYM_FRAMEWORK_STATUS_URL", "")
+        or os.environ.get(PHASE_REPORT_URL_ENV, "")
+    ).strip()
 
 
 def _rollout_url() -> str:
@@ -199,7 +202,11 @@ def _post(item: dict[str, Any]) -> None:
 
     body = json.dumps(item, default=str).encode("utf-8")
     headers = {"Content-Type": "application/json"}
-    if token := os.environ.get(PHASE_REPORT_TOKEN_ENV, "").strip():
+    token = (
+        os.environ.get("TRAINING_GYM_FRAMEWORK_STATUS_TOKEN", "")
+        or os.environ.get(PHASE_REPORT_TOKEN_ENV, "")
+    ).strip()
+    if token:
         headers["Authorization"] = f"Bearer {token}"
     request = Request(
         url,

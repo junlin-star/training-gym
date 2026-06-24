@@ -150,32 +150,11 @@ API_REFERENCE_MANIFEST = [
         "sidebar_label": "Qwen3-8B",
     },
     {
-        "class_name": "Qwen3_14B",
-        "module": "modal_training_gym.common.models.qwen3_14b",
-        "group": "models",
-        "class_type": "config_data",
-        "sidebar_label": "Qwen3-14B",
-    },
-    {
         "class_name": "Qwen3_30B",
         "module": "modal_training_gym.common.models.qwen3_30b",
         "group": "models",
         "class_type": "config_data",
         "sidebar_label": "Qwen3-30B-A3B",
-    },
-    {
-        "class_name": "Qwen3_32B",
-        "module": "modal_training_gym.common.models.qwen3_32b",
-        "group": "models",
-        "class_type": "config_data",
-        "sidebar_label": "Qwen3-32B",
-    },
-    {
-        "class_name": "Qwen3_6_27B",
-        "module": "modal_training_gym.common.models.qwen3_6_27b",
-        "group": "models",
-        "class_type": "config_data",
-        "sidebar_label": "Qwen3.6-27B",
     },
     {
         "class_name": "Qwen3_6_35B",
@@ -193,25 +172,11 @@ API_REFERENCE_MANIFEST = [
         "sidebar_label": "TrainConfig",
     },
     {
-        "class_name": "MultiTurn",
-        "module": "modal_training_gym.train_recipes.slime_recipe.blocks",
-        "group": "training",
-        "class_type": "config_data",
-        "sidebar_label": "MultiTurn",
-    },
-    {
         "class_name": "SlimeRecipe",
         "module": "modal_training_gym.train_recipes.slime_recipe.recipe",
         "group": "training",
         "class_type": "config_data",
         "sidebar_label": "SlimeRecipe",
-    },
-    {
-        "class_name": "Qwen3_6_27b_Recipe",
-        "module": "modal_training_gym.train_recipes.slime_recipe.qwen3_6_27b",
-        "group": "training",
-        "class_type": "config_data",
-        "sidebar_label": "Qwen3_6_27b_Recipe",
     },
     {
         "class_name": "Qwen3_6_35b_Recipe",

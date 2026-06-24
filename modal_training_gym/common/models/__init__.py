@@ -14,12 +14,10 @@ from .qwen3_0_6b import Qwen3_0_6B
 from .qwen3_1_7b import Qwen3_1_7B
 from .qwen3_4b import Qwen3_4B
 from .qwen3_8b import Qwen3_8B
-from .qwen3_14b import Qwen3_14B
 from .qwen3_30b import Qwen3_30B
-from .qwen3_32b import Qwen3_32B
 from .kimi_k2_5 import Kimi_K2_5
 from .kimi_k2_6 import Kimi_K2_6
-from .qwen3_6_27b import Qwen3_6_27B
+
 from .qwen3_6_35b import Qwen3_6_35B
 from .qwen3_asr_1_7b import Qwen3_ASR_1_7B
 from .qwen3_vl_8b import Qwen3VL_8B
@@ -34,9 +32,7 @@ __all__ = [
     "Qwen3_1_7B",
     "Qwen3_4B",
     "Qwen3_8B",
-    "Qwen3_14B",
     "Qwen3_30B",
-    "Qwen3_32B",
     "Kimi_K2_5",
     "Kimi_K2_6",
     "ToolCall",
@@ -44,7 +40,6 @@ __all__ = [
     "parse_kimi_k2_response",
     "parse_qwen3_6_response",
     "parse_qwen3_response",
-    "Qwen3_6_27B",
     "Qwen3_6_35B",
     "Qwen3_ASR_1_7B",
     "Qwen3VL_8B",

@@ -14,6 +14,7 @@ import asyncio
 from dataclasses import dataclass
 from enum import Enum
 import inspect
+import os
 import threading
 
 from pydantic import BaseModel, ConfigDict, field_serializer, field_validator
@@ -33,12 +34,54 @@ from modal.experimental import list_deployed_apps
 from modal_training_gym.utils.metadata import (
     MetadataStore,
     vol_get,
-    vol_list,
     vol_put,
     vol_upsert_summary_item,
 )
 
 DEPLOYMENTS_STORE_NAME = MetadataStore.DEPLOYMENTS.value
+
+
+def _modal_proxy_auth_headers() -> dict[str, str]:
+    """Headers to authenticate against Modal endpoints behind proxy auth.
+
+    Reads the Modal proxy-auth token pair (``wk-``/``ws-``) from ``MODAL_KEY`` /
+    ``MODAL_SECRET`` and returns them as ``Modal-Key`` / ``Modal-Secret`` headers.
+    Returns an empty dict when either is unset, so endpoints without proxy auth
+    are unaffected.
+    """
+    key = os.environ.get("MODAL_KEY", "").strip()
+    secret = os.environ.get("MODAL_SECRET", "").strip()
+    if key and secret:
+        return {"Modal-Key": key, "Modal-Secret": secret}
+    return {}
+
+
+def _raise_for_proxy_auth(status_code: int, url: str) -> None:
+    """Turn a 401 into an actionable proxy-auth hint.
+
+    Served endpoints (``DeploymentConfig.serve()``) sit behind Modal proxy auth.
+    A 401 almost always means the ``MODAL_KEY`` / ``MODAL_SECRET`` proxy-auth
+    token pair is missing from the environment (so :func:`_modal_proxy_auth_headers`
+    returned no headers) rather than a real authorization problem — surface that
+    instead of a bare ``HTTPError``/``TimeoutError``. No-op for any other status.
+    """
+    if status_code != 401:
+        return
+    sent_auth = bool(_modal_proxy_auth_headers())
+    detail = (
+        "the MODAL_KEY / MODAL_SECRET proxy-auth tokens are not set in this environment"
+        if not sent_auth
+        else "the MODAL_KEY / MODAL_SECRET tokens were sent but rejected (expired "
+        "or wrong workspace)"
+    )
+    raise RuntimeError(
+        f"401 Unauthorized from {url} — this endpoint is behind Modal proxy auth "
+        f"and {detail}. Create a proxy-auth token pair at "
+        "https://modal.com/settings/proxy-auth-tokens and export MODAL_KEY (wk-…) "
+        "and MODAL_SECRET (ws-…) in the shell that runs the eval/serve. For calls "
+        "issued from remote workers (e.g. a custom rm/reward function), also "
+        "forward the pair into the worker via a modal.Secret."
+    )
 
 
 @dataclass
@@ -315,6 +358,7 @@ class ModelDeployment(BaseModel):
                     f"{self.url}/v1/chat/completions",
                     json=body,
                     timeout=120,
+                    headers=_modal_proxy_auth_headers(),
                 )
                 if (
                     resp.status_code in transient_status_codes
@@ -327,6 +371,7 @@ class ModelDeployment(BaseModel):
                     self.wait_until_ready(timeout=120)
                     time.sleep(min(2 * attempt, 5))
                     continue
+                _raise_for_proxy_auth(resp.status_code, self.url)
                 resp.raise_for_status()
                 message = resp.json()["choices"][0]["message"]
                 content = message.get("content")
@@ -366,40 +411,6 @@ class ModelDeployment(BaseModel):
             ),
             reverse=True,
         )
-
-    @property
-    def live_status(self) -> str:
-        """Poll endpoint + Modal API to determine real-time status."""
-        import requests
-
-        try:
-            response = requests.get(f"{self.url}/v1/models", timeout=5)
-            if response.ok and response.json().get("data"):
-                return DeploymentStatus.READY.value
-        except Exception:
-            pass
-
-        try:
-            apps = list_deployed_apps()
-            if inspect.isawaitable(apps):
-                apps = asyncio.run(apps)
-            for app in apps:
-                if (
-                    app.app_id == self.modal_app_id
-                    or app.name == self.deployment_config.app_name
-                ):
-                    return DeploymentStatus.INITIALIZING.value
-        except Exception:
-            pass
-
-        return DeploymentStatus.INACTIVE.value
-
-    @classmethod
-    def list_deployments(cls) -> dict[str, "ModelDeployment"]:
-        return {
-            d["deployment_id"]: cls.model_validate(d)
-            for d in vol_list(MetadataStore.DEPLOYMENTS)
-        }
 
     def _start_log_tailer(self) -> "threading.Thread | None":
         """Spawn a daemon thread that streams deployed-app logs to stdout.
@@ -457,14 +468,25 @@ class ModelDeployment(BaseModel):
 
         try:
             while time.time() < deadline:
+                resp = None
                 try:
-                    resp = requests.get(f"{self.url}/v1/models", timeout=10)
+                    resp = requests.get(
+                        f"{self.url}/v1/models",
+                        timeout=10,
+                        headers=_modal_proxy_auth_headers(),
+                    )
                     if resp.ok and resp.json().get("data"):
                         return
                 except requests.ConnectionError:
                     pass
                 except Exception:
                     pass
+
+                # A 401 is an auth problem, not a cold-start (loading returns
+                # 502/503) — fail fast with a proxy-auth hint instead of polling
+                # to the timeout. Checked outside the try so it isn't swallowed.
+                if resp is not None:
+                    _raise_for_proxy_auth(resp.status_code, self.url)
 
                 now = time.time()
                 if now - last_modal_poll >= modal_poll_interval:

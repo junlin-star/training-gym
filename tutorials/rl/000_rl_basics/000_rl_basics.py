@@ -157,10 +157,10 @@ def _main_impl() -> None:
     # So, how does Qwen3-4B currently fare at writing haikus? We can
     # serve the base model and find out.
     #
-    # The training gym has several config classes so you can define deploymnet, training, and evaluation configurations,
+    # The training gym has several config classes so you can define deployment, training, and evaluation configurations,
     # and reuse them across different runs for parameter sweeps.
     #
-    # Let's start by initializng a `DeploymentConfig`.
+    # Let's start by initializing a `DeploymentConfig`.
     #
     # Calling `DeploymentConfig.serve()` builds and deploys a vLLM app, then
     # returns a `ModelDeployment` that contains a the concrete endpoint URL.

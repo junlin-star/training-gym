@@ -2,9 +2,7 @@ import dataclasses as _dc
 import secrets as _secrets
 import threading
 import time
-from collections.abc import Mapping, Sequence
 from enum import Enum
-from pathlib import Path
 from typing import Any
 from typing import cast
 
@@ -53,6 +51,35 @@ def _stop_app(app_id: str) -> None:
         print(f"WARNING: could not auto-stop app {app_id}: {exc}")
 
 
+def _app_is_running(app_id: str) -> bool:
+    """Best-effort check whether a Modal app is still alive on the server.
+
+    A detached app outlives the client, so a dropped client-side RPC doesn't
+    mean the run died — the app keeps running and lands in
+    ``DETACHED_DISCONNECTED``, which we treat as live. Returns False on any
+    error so callers fall back to their normal failure handling.
+    """
+    try:
+        import modal
+        from modal_proto import api_pb2
+
+        live_states = {
+            api_pb2.APP_STATE_EPHEMERAL,
+            api_pb2.APP_STATE_DETACHED,
+            api_pb2.APP_STATE_DETACHED_DISCONNECTED,
+            api_pb2.APP_STATE_INITIALIZING,
+            api_pb2.APP_STATE_DEPLOYED,
+            api_pb2.APP_STATE_DERIVED,
+        }
+        with modal.Client.from_env() as client:
+            resp = client.stub.AppGetLifecycle(
+                api_pb2.AppGetLifecycleRequest(app_id=app_id)
+            )
+        return resp.lifecycle.app_state in live_states
+    except Exception:
+        return False
+
+
 def _merge_recipe(base: SlimeRecipe, overrides: SlimeRecipe) -> SlimeRecipe:
     base_fields = {f.name: getattr(base, f.name) for f in _dc.fields(base)}
 
@@ -90,77 +117,38 @@ def _field_default(field: _dc.Field) -> Any:
     return _dc.MISSING
 
 
-def _json_safe(value: Any) -> Any:
-    if value is None or isinstance(value, str | int | float | bool):
-        return value
-    if isinstance(value, Enum):
-        return value.value
-    if isinstance(value, Path):
-        return str(value)
-    if isinstance(value, Mapping):
-        return {str(k): _json_safe(v) for k, v in value.items()}
-    if isinstance(value, Sequence) and not isinstance(value, str | bytes | bytearray):
-        return [_json_safe(v) for v in value]
-    if callable(value):
-        module = getattr(value, "__module__", "")
-        name = getattr(value, "__qualname__", getattr(value, "__name__", ""))
-        return f"{module}.{name}" if module and name else repr(value)
-    return repr(value)
-
-
-def _recipe_param_summary(
-    user_recipe: SlimeRecipe,
-    combined_recipe: SlimeRecipe,
-    base_recipe: SlimeRecipe | None,
-) -> dict[str, dict[str, Any]]:
-    params: dict[str, dict[str, Any]] = {}
-    slime_defaults = {
-        field.name: _field_default(field) for field in _dc.fields(SlimeRecipe)
-    }
-
-    for field in _dc.fields(combined_recipe):
-        name = field.name
-        value = getattr(combined_recipe, name)
-        default = slime_defaults.get(name, _field_default(field))
-        user_value = getattr(user_recipe, name, _dc.MISSING)
-        base_value = (
-            getattr(base_recipe, name, _dc.MISSING) if base_recipe else _dc.MISSING
-        )
-
-        if user_value is not _dc.MISSING and (
-            default is _dc.MISSING or user_value != default
-        ):
-            source = "user"
-        elif (
-            base_value is not _dc.MISSING
-            and default is not _dc.MISSING
-            and base_value != default
-            and value == base_value
-        ):
-            source = "preset"
-        else:
-            source = "default"
-
-        params[name] = {"value": _json_safe(value), "source": source}
-
-    return params
+class TrainStepStatus(Enum):
+    INITIALIZING = "initializing"
+    DOWNLOAD_MODEL = "download_model"
+    CONVERT_MODEL = "convert_model"
+    PREPARE_DATASET = "prepare_dataset"
+    ROLLOUT_INITIALIZING = "initialize_rollouts"
+    ROLLOUT_LOGGING = "generate_rollouts"
+    EVAL_ROLLOUT_LOGGING = "evaluate_rollouts"
+    COMPUTE_LOG_PROBS = "compute_log_probs"
+    OPTIMIZER_STEP = "optimizer_step"
+    WEIGHT_SYNC = "weight_sync"
+    OFFLOAD_ROLLOUT = "offload_rollout"
+    OFFLOAD_TRAIN = "offload_train"
+    CHECKPOINT_SAVE = "checkpoint_save"
+    TRAINING = "training"
 
 
 _STAGE_LABELS: dict[str, str] = {
-    "initializing": "Initializing",
-    "download_model": "Downloading model",
-    "convert_model": "Converting model",
-    "prepare_dataset": "Preparing dataset",
-    "initialize_rollouts": "Initializing rollouts",
-    "generate_rollouts": "Generating rollouts",
-    "evaluate_rollouts": "Evaluating rollouts",
-    "compute_log_probs": "Computing log probs",
-    "optimizer_step": "Optimizer step",
-    "weight_sync": "Weight sync",
-    "offload_rollout": "Offload rollout",
-    "offload_train": "Offload train",
-    "checkpoint_save": "Saving checkpoint",
-    "training": "Training",
+    TrainStepStatus.INITIALIZING.value: "Initializing",
+    TrainStepStatus.DOWNLOAD_MODEL.value: "Downloading model",
+    TrainStepStatus.CONVERT_MODEL.value: "Converting model",
+    TrainStepStatus.PREPARE_DATASET.value: "Preparing dataset",
+    TrainStepStatus.ROLLOUT_INITIALIZING.value: "Initializing rollouts",
+    TrainStepStatus.ROLLOUT_LOGGING.value: "Generating rollouts",
+    TrainStepStatus.EVAL_ROLLOUT_LOGGING.value: "Evaluating rollouts",
+    TrainStepStatus.COMPUTE_LOG_PROBS.value: "Computing log probs",
+    TrainStepStatus.OPTIMIZER_STEP.value: "Optimizer step",
+    TrainStepStatus.WEIGHT_SYNC.value: "Weight sync",
+    TrainStepStatus.OFFLOAD_ROLLOUT.value: "Offload rollout",
+    TrainStepStatus.OFFLOAD_TRAIN.value: "Offload train",
+    TrainStepStatus.CHECKPOINT_SAVE.value: "Saving checkpoint",
+    TrainStepStatus.TRAINING.value: "Training",
 }
 
 
@@ -404,19 +392,6 @@ class TrainConfig:
             )
         raise ValueError(f"Unknown recipe type: {recipe_type}")
 
-    def recipe_param_summary(self) -> dict[str, dict[str, Any]]:
-        if not isinstance(self.recipe, SlimeRecipe):
-            return {}
-        base_recipe = SlimeRecipe.get_base_recipe(self.model)
-        combined = (
-            _merge_recipe(base_recipe, cast(SlimeRecipe, self.recipe))
-            if base_recipe is not None
-            else cast(SlimeRecipe, self.recipe)
-        )
-        return _recipe_param_summary(
-            cast(SlimeRecipe, self.recipe), combined, base_recipe
-        )
-
     # ── Run-record helpers ─────────────────────────────────────────────────
 
     def _framework(self) -> Framework:
@@ -655,10 +630,25 @@ class TrainConfig:
                             run_record = TrainingRun.from_id(training_run_id)
                         except (KeyError, Exception):
                             pass
+                        # A detached app survives client disconnect, so a
+                        # dropped RPC (laptop sleep, network blip, Ctrl-C) is
+                        # not a real failure — the container keeps training and
+                        # will write its own terminal state. Don't stamp FAILED
+                        # while the app is still alive on Modal.
+                        remote_still_running = bool(
+                            self.detach
+                            and modal_app_id
+                            and _app_is_running(modal_app_id)
+                        )
                         # Only mark FAILED if the remote hasn't already set a
                         # terminal state (it may have completed/failed on its
-                        # own while we lost the RPC connection).
-                        if run_record.status == TrainingRunStatus.RUNNING:
+                        # own while we lost the RPC connection) and the app
+                        # isn't still running detached.
+                        if (
+                            run_record.status == TrainingRunStatus.RUNNING
+                            and not remote_still_running
+                        ):
+                            # TODO(joy/melody): Record the exec type also in the run record.
                             run_record.status = TrainingRunStatus.FAILED
                             finished_at = int(time.time())
                             run_record.ended_at = finished_at

@@ -9,8 +9,12 @@ references (log_probs, rollout_log_probs, values) as None, crashing the
 ``[torch.zeros_like(x, ...) for x in xs]`` list comprehension with
 ``TypeError: 'NoneType' object is not iterable``.
 
-This patch makes the None-xs path fall back to creating zero-KL tensors
-from ``loss_masks`` shapes.
+This patch makes the None-xs path fall back to creating zero-KL tensors sized
+to the *context-parallel-local* response chunk (via ``slice_log_prob_with_cp``).
+Sizing them to the full ``response_lengths`` instead would make GRPO advantages
+full-length while the policy ratio is CP-sharded, raising a shape mismatch in
+``compute_policy_loss`` under ``context_parallel_size > 1``. At cp_size=1 the
+slicer is a no-op, so this is behaviour-neutral there.
 
 It also makes the on-policy-distillation (OPD) KL term in
 ``apply_opd_kl_to_advantages`` NaN-safe: a per-sample ``teacher_log_probs``
@@ -41,7 +45,18 @@ new = """\
             kl = [torch.zeros_like(x, dtype=torch.float32, device=x.device) for x in xs]
         else:
             _dev = loss_masks[0].device if loss_masks else torch.cuda.current_device()
-            kl = [torch.zeros(rl, dtype=torch.float32, device=_dev) for rl in response_lengths]"""
+            from slime.backends.megatron_utils.cp_utils import slice_log_prob_with_cp as _tg_cp_slice
+            _tg_msl = rollout_data.get("max_seq_lens", None)
+            kl = [
+                _tg_cp_slice(
+                    torch.zeros(rl, dtype=torch.float32, device=_dev),
+                    tl,
+                    rl,
+                    args.qkv_format,
+                    (_tg_msl[_i] if _tg_msl is not None else None),
+                )
+                for _i, (rl, tl) in enumerate(zip(response_lengths, total_lengths))
+            ]"""
 
 if old in src:
     src = src.replace(old, new, 1)

@@ -57,6 +57,8 @@ _SLIME_SKIP = {
     "image_run_commands",
     "image_env",
     "train_function_kwargs",
+    "conversion_pipeline_model_parallel_size",
+    "conversion_tensor_model_parallel_size",
 }
 
 YAML_CONFIG_FIELDS = ("eval_config", "extra_config", "sglang_config")
@@ -79,7 +81,10 @@ _HOOK_WRAPPER_PATHS = {
 
 @dataclass(config=ConfigDict(extra="forbid", arbitrary_types_allowed=True))
 class SlimeRecipe(BaseTrainRecipe):
-    """Recipe dataclass for configuring slime GRPO training on Modal."""
+    """Recipe dataclass for configuring slime GRPO training on Modal.
+
+    Don't see the configuration flags that you need? You can pass them in the `extra_config` field.
+    """
 
     # ── Required: cluster and parallelism ──────────────────────────────────
     gpu_type: str
@@ -533,9 +538,12 @@ class SlimeRecipe(BaseTrainRecipe):
         return math.ceil(total_gpus / gpus_per_node)
 
     @classmethod
-    def get_base_recipe(cls, model_config: ModelConfig) -> "SlimeRecipe | None":
+    def get_base_recipe(cls, model_config: ModelConfig) -> "SlimeRecipe":
         from modal_training_gym.train_recipes.slime_recipe.glm_4_7 import (
             GLM_4_7_Recipe,
+        )
+        from modal_training_gym.train_recipes.slime_recipe.qwen3_0_6b import (
+            Qwen3_0_6b_Recipe,
         )
         from modal_training_gym.train_recipes.slime_recipe.qwen3_1_7b import (
             Qwen3_1_7b_Recipe,
@@ -543,18 +551,10 @@ class SlimeRecipe(BaseTrainRecipe):
         from modal_training_gym.train_recipes.slime_recipe.qwen3_8b import (
             Qwen3_8b_Recipe,
         )
-        from modal_training_gym.train_recipes.slime_recipe.qwen3_14b import (
-            Qwen3_14b_Recipe,
-        )
-        from modal_training_gym.train_recipes.slime_recipe.qwen3_32b import (
-            Qwen3_32b_Recipe,
-        )
         from modal_training_gym.train_recipes.slime_recipe.qwen3_4b import (
             Qwen3_4b_Recipe,
         )
-        from modal_training_gym.train_recipes.slime_recipe.qwen3_6_27b import (
-            Qwen3_6_27b_Recipe,
-        )
+
         from modal_training_gym.train_recipes.slime_recipe.qwen3_6_35b import (
             Qwen3_6_35b_Recipe,
         )
@@ -571,18 +571,14 @@ class SlimeRecipe(BaseTrainRecipe):
             return Qwen3_ASR_1_7b_Recipe()
         if model_config.model_name == "zai-org/GLM-4.7":
             return GLM_4_7_Recipe()
+        if model_config.model_name == "Qwen/Qwen3-0.6B":
+            return Qwen3_0_6b_Recipe()
         if model_config.model_name == "Qwen/Qwen3-1.7B":
             return Qwen3_1_7b_Recipe()
         if model_config.model_name == "Qwen/Qwen3-4B":
             return Qwen3_4b_Recipe()
         if model_config.model_name == "Qwen/Qwen3-8B":
             return Qwen3_8b_Recipe()
-        if model_config.model_name == "Qwen/Qwen3-14B":
-            return Qwen3_14b_Recipe()
-        if model_config.model_name == "Qwen/Qwen3-32B":
-            return Qwen3_32b_Recipe()
-        if model_config.model_name == "Qwen/Qwen3.6-27B":
-            return Qwen3_6_27b_Recipe()
         if model_config.model_name == "Qwen/Qwen3.6-35B-A3B":
             return Qwen3_6_35b_Recipe()
-        return None
+        raise ValueError(f"no base slime recipe for model {model_config.model_name!r}")

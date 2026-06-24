@@ -54,7 +54,6 @@ from modal_training_gym.common.framework import Framework
 from modal_training_gym.utils.metadata import (
     MetadataStore,
     vol_get,
-    vol_list,
     vol_put,
     vol_put_async,
     vol_upsert_summary_item,
@@ -133,7 +132,6 @@ class TrainResult:
         return str(item.get("training_run_id", ""))
 
     def save(self) -> None:
-        """Persist this result to the shared metadata volume."""
         payload = self._to_dict()
         vol_put(MetadataStore.TRAIN_RESULTS, self.training_run_id, payload)
         vol_upsert_summary_item(
@@ -145,7 +143,6 @@ class TrainResult:
         )
 
     async def save_async(self) -> None:
-        """Async variant of :meth:`save`. Use from inside an event loop."""
         payload = self._to_dict()
         await vol_put_async(MetadataStore.TRAIN_RESULTS, self.training_run_id, payload)
         await vol_upsert_summary_item_async(
@@ -161,8 +158,6 @@ class TrainResult:
         parsed = dict(d)
         mc = parsed.get("model_config")
         if isinstance(mc, dict):
-            from modal_training_gym.common.models import ModelConfig
-
             parsed["model_config"] = ModelConfig(**mc)
         valid_fields = {f.name for f in fields(TrainResult)}
         unknown = {k: v for k, v in parsed.items() if k not in valid_fields}
@@ -192,24 +187,11 @@ class TrainResult:
     def load(cls, training_run_id: str) -> "TrainResult":
         return cls.from_training_run_id(training_run_id)
 
-    @classmethod
-    def list_results(cls) -> list["TrainResult"]:
-        return [
-            cls(**cls._parse_model_config(r))
-            for r in vol_list(MetadataStore.TRAIN_RESULTS)
-        ]
-
     # ── Volume lookup ────────────────────────────────────────────────────
 
     def volume(self) -> "Volume":
-        from modal import Volume
-
         volume_name = self.checkpoints_volume_name or f"{self.app_name}-checkpoints"
         return Volume.from_name(volume_name, create_if_missing=True)
-
-    def dashboard_url(self) -> str:
-        """URL for browsing the checkpoints volume in the Modal dashboard."""
-        return self.volume().get_dashboard_url()
 
     @property
     def model(self) -> "ModelConfig":

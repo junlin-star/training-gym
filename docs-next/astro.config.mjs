@@ -169,10 +169,8 @@ export default defineConfig({
                 { label: 'Qwen3-1.7B', link: '/reference/models/qwen3_1_7b/' },
                 { label: 'Qwen3-4B', link: '/reference/models/qwen3_4b/' },
                 { label: 'Qwen3-8B', link: '/reference/models/qwen3_8b/' },
-                { label: 'Qwen3-14B', link: '/reference/models/qwen3_14b/' },
                 { label: 'Qwen3-30B-A3B', link: '/reference/models/qwen3_30b/' },
-                { label: 'Qwen3-32B', link: '/reference/models/qwen3_32b/' },
-                { label: 'Qwen3.6-27B', link: '/reference/models/qwen3_6_27b/' },
+                
                 { label: 'Qwen3.6-35B-A3B', link: '/reference/models/qwen3_6_35b/' },
               ],
             },
@@ -180,9 +178,8 @@ export default defineConfig({
               label: 'Training',
               items: [
                 { label: 'TrainConfig', link: '/reference/training/trainconfig/' },
-                { label: 'MultiTurn', link: '/reference/training/multiturn/' },
                 { label: 'SlimeRecipe', link: '/reference/training/slimerecipe/' },
-                { label: 'Qwen3_6_27b_Recipe', link: '/reference/training/qwen3_6_27b_recipe/' },
+                
                 { label: 'Qwen3_6_35b_Recipe', link: '/reference/training/qwen3_6_35b_recipe/' },
               ],
             },

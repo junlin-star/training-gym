@@ -81,7 +81,6 @@ Built-in subclasses:
 | Class | HF repo | Architecture populated? | Notes |
 |---|---|---|---|
 | `Qwen3_4B` | `Qwen/Qwen3-4B` | yes | slime-ready |
-| `Qwen3_32B` | `Qwen/Qwen3-32B` | no (stub) | architecture inferred from HF config in RL setups |
 | `GLM_4_7` | `zai-org/GLM-4.7` | no | architecture inferred from HF config |
 | `Llama2_7B` | `meta-llama/Llama-2-7b-hf` | no | torchrun-based workflows |
 | `Kimi_K2_5` | `moonshotai/Kimi-K2.5` | no | **overrides `download`**: snapshot + INT4->BF16 conversion via `tools/convert_kimi_int4_to_bf16.py` |

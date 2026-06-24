@@ -38,6 +38,7 @@
   // gates the cold-start skeleton.
   let refreshing = $state(false);
   let runsRequestId = 0;
+  let hasLoadedRuns = false;
   let evalsRequestId = 0;
   let deploymentsRequestId = 0;
   let hasLoadedEvals = $state(false);
@@ -229,10 +230,10 @@
     const requestId = ++runsRequestId;
     const isStale = () => requestId !== runsRequestId;
 
-    // Skeleton only on a cold load (no data yet). Refreshes keep the current
-    // rows on screen and swap them out when the new data arrives — the spinning
-    // refresh button is the only "loading" affordance.
-    if (!allRuns.length) loading = true;
+    // Skeleton only until the first response settles. Once we've completed a
+    // load attempt (success or failure), refreshes keep the current rows on
+    // screen — the spinning refresh button is the only "loading" affordance.
+    if (!hasLoadedRuns) loading = true;
     error = null;
 
     try {
@@ -271,8 +272,13 @@
         activeRecipes = new Set();
         activeStatuses = new Set();
       }
+    } finally {
+      // Always retire the cold-start skeleton once any attempt settles — even a
+      // stale one. A slow request superseded by the 5s auto-refresh must not
+      // leave `loading` pinned true forever.
+      hasLoadedRuns = true;
+      loading = false;
     }
-    if (!isStale()) loading = false;
   }
 
   async function loadEvals() {

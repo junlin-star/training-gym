@@ -26,12 +26,12 @@ class Qwen3_6_35b_Recipe_Long_Context(SlimeRecipe):
     tensor_model_parallel_size: int = 2
     sequence_parallel: bool = True
     pipeline_model_parallel_size: int = 2
-    context_parallel_size: int = 1
-    expert_model_parallel_size: int = 2
+    context_parallel_size: int = 2
+    expert_model_parallel_size: int = 4
     expert_tensor_parallel_size: int = 1
 
     # ── Rollout ───────────────────────────────────────────────────────────
-    num_rollout: int = 1
+    num_rollout: int = 5
     rollout_batch_size: int = 16
     rollout_num_gpus_per_engine: int = 4
     rollout_max_response_len: int = 8192
@@ -44,11 +44,18 @@ class Qwen3_6_35b_Recipe_Long_Context(SlimeRecipe):
         default_factory=lambda: [1, 2, 4, 8] + list(range(16, 257, 8))
     )
     sglang_max_running_requests: int | None = 256
-    sglang_speculative_algorithm: str = "EAGLE"
-    sglang_speculative_num_steps: int = 3
-    sglang_speculative_eagle_topk: int = 1
-    sglang_speculative_num_draft_tokens: int = 4
+    # EAGLE/MTP speculative decoding disabled: the base Qwen3.6-35B-A3B ships no
+    # MTP weights, and converting a randomly-initialized MTP head at any tp/pp>1
+    # corrupts the torch_dist save (duplicate keys in determine_global_metadata) —
+    # the same MTP/checkpoint incompatibility that forced GLM-4.7 to disable it.
+    sglang_speculative_algorithm: str | None = None
+    sglang_speculative_num_steps: int | None = None
+    sglang_speculative_eagle_topk: int | None = None
+    sglang_speculative_num_draft_tokens: int | None = None
     sglang_mamba_scheduler_strategy: str = "extra_buffer"
+    mtp_num_layers: int | None = None
+    enable_mtp_training: bool = False
+    mtp_loss_scaling_factor: float | None = None
 
     # ── Training ──────────────────────────────────────────────────────────
     n_samples_per_prompt: int = 8
