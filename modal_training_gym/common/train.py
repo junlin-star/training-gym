@@ -129,6 +129,20 @@ def _recipe_param_summary(
     return params
 
 
+def _resolve_slime_recipe(
+    model: ModelConfig,
+    recipe: SlimeRecipe,
+    *,
+    merge_model_recipe: bool,
+) -> tuple[SlimeRecipe, SlimeRecipe | None]:
+    if not merge_model_recipe:
+        return recipe, None
+    base_recipe = SlimeRecipe.get_base_recipe(model)
+    if base_recipe is None:
+        return recipe, None
+    return _merge_recipe(base_recipe, recipe), base_recipe
+
+
 _STAGE_LABELS: dict[str, str] = {
     "initializing": "Initializing",
     "download_model": "Downloading model",
@@ -329,6 +343,8 @@ class TrainConfig:
     model: ModelConfig
     recipe: BaseTrainRecipe
     checkpoint: Checkpoint | None = None
+    # Known-model recipes are presets by default; complete recipes can opt out.
+    merge_model_recipe: bool = True
     # Run the training app detached so it keeps running on Modal even if the
     # local client disconnects (terminal closed, laptop asleep). The CLI's
     # ``modal run --detach`` only detaches the entrypoint, not the nested
@@ -371,11 +387,11 @@ class TrainConfig:
                 raise TypeError(
                     f"Recipe type {recipe_type} requires SlimeRecipe, got {type(self.recipe).__name__}"
                 )
-            base_recipe = SlimeRecipe.get_base_recipe(self.model)
-            if base_recipe is not None:
-                combined = _merge_recipe(base_recipe, cast(SlimeRecipe, self.recipe))
-            else:
-                combined = cast(SlimeRecipe, self.recipe)
+            combined, _ = _resolve_slime_recipe(
+                self.model,
+                cast(SlimeRecipe, self.recipe),
+                merge_model_recipe=self.merge_model_recipe,
+            )
             return build_slime_app(
                 training_run_id=self.training_run_id,
                 slime=combined,
@@ -388,15 +404,13 @@ class TrainConfig:
     def recipe_param_summary(self) -> dict[str, dict[str, Any]]:
         if not isinstance(self.recipe, SlimeRecipe):
             return {}
-        base_recipe = SlimeRecipe.get_base_recipe(self.model)
-        combined = (
-            _merge_recipe(base_recipe, cast(SlimeRecipe, self.recipe))
-            if base_recipe is not None
-            else cast(SlimeRecipe, self.recipe)
+        recipe = cast(SlimeRecipe, self.recipe)
+        combined, base_recipe = _resolve_slime_recipe(
+            self.model,
+            recipe,
+            merge_model_recipe=self.merge_model_recipe,
         )
-        return _recipe_param_summary(
-            cast(SlimeRecipe, self.recipe), combined, base_recipe
-        )
+        return _recipe_param_summary(recipe, combined, base_recipe)
 
     # ── Run-record helpers ─────────────────────────────────────────────────
 
@@ -439,11 +453,10 @@ class TrainConfig:
                 _serialize_slime_params,
             )
 
-            base_recipe = SlimeRecipe.get_base_recipe(model)
-            combined = (
-                _merge_recipe(base_recipe, cast(SlimeRecipe, recipe))
-                if base_recipe is not None
-                else cast(SlimeRecipe, recipe)
+            combined, _ = _resolve_slime_recipe(
+                model,
+                cast(SlimeRecipe, recipe),
+                merge_model_recipe=self.merge_model_recipe,
             )
             summary["recipe"] = _serialize_slime_params(
                 combined, dataset=dataset, model=model

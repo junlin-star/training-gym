@@ -178,6 +178,35 @@ def test_train_config_recipe_param_summary(monkeypatch):
     assert params["weight_decay"]["source"] == "default"
 
 
+def test_train_config_can_skip_model_recipe_merge():
+    recipe = SlimeRecipe(
+        gpu_type="H100",
+        colocate=True,
+        tensor_model_parallel_size=1,
+        sequence_parallel=False,
+        rollout_num_gpus_per_engine=1,
+        num_rollout=1,
+        rollout_batch_size=16,
+        rollout_max_response_len=4096,
+        rollout_temperature=1.0,
+        save_interval=10,
+    )
+    config = TrainConfig(
+        model=_make_model("Qwen/Qwen3-4B"),
+        dataset=_make_dataset(),
+        recipe=recipe,
+        merge_model_recipe=False,
+    )
+
+    params = config.recipe_param_summary()
+    assert params["n_samples_per_prompt"] == {"value": 2, "source": "default"}
+    assert params["lr"] == {"value": 1e-6, "source": "default"}
+
+    summary = config._build_config_summary()
+    assert summary["recipe"]["n_samples_per_prompt"] == 2
+    assert summary["recipe"]["lr"] == 1e-6
+
+
 def test_serialized_recipe_fields():
     """_serialize_recipe_fields in the launcher produces JSON-safe values."""
     from modal_training_gym.frameworks.slime.launcher import _serialize_recipe_fields
