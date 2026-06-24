@@ -56,6 +56,29 @@ def _modal_proxy_auth_headers() -> dict[str, str]:
     return {}
 
 
+def _resolve_server_url(server: object) -> str | None:
+    """Resolve the public URL of a Modal ``_experimental_server`` handle.
+
+    The server handle's URL accessor was renamed across Modal client versions:
+    modal ``<= 1.5.0`` exposes ``get_urls() -> dict[region, url]``; modal
+    ``>= 1.5.1`` exposes ``get_url() -> str | None``. Support both so the same
+    code works regardless of the installed client.
+    """
+    get_url = getattr(server, "get_url", None)
+    if callable(get_url):
+        return asyncio.run(get_url())
+    get_urls = getattr(server, "get_urls", None)
+    if callable(get_urls):
+        urls = asyncio.run(get_urls())
+        return next(iter(urls.values()), None) if urls else None
+    raise RuntimeError(
+        f"Modal server handle {type(server).__name__!r} exposes neither "
+        "get_url() nor get_urls(); cannot resolve the endpoint URL. This likely "
+        "means the installed modal client is incompatible with this version of "
+        "modal-training-gym."
+    )
+
+
 def _raise_for_proxy_auth(status_code: int, url: str) -> None:
     """Turn a 401 into an actionable proxy-auth hint.
 
@@ -214,8 +237,7 @@ class DeploymentConfig:
                 raise RuntimeError(
                     f"Deployed {self.app_name!r} but could not resolve SGLang endpoint server handle."
                 )
-            urls = asyncio.run(server.get_urls())
-            url = next(iter(urls.values()), None) if urls else None
+            url = _resolve_server_url(server)
         else:
             url = app.serve.get_web_url()
         modal_app_id = app.app_id
@@ -444,10 +466,23 @@ class ModelDeployment(BaseModel):
 
         log_thread = self._start_log_tailer()
 
+        # A freshly-deployed SGLang container legitimately reports 0 running
+        # containers for the whole cold-start window: pulling the (multi-GB)
+        # image, downloading weights, and launching the server all happen before
+        # it serves its first request. Modal allows the container `startup_timeout`
+        # to reach readiness, so the crashloop heuristic must not fire inside that
+        # window — otherwise a slow-but-healthy boot is misreported as
+        # "crashlooping". Only flag a crashloop quickly once we've actually seen a
+        # container come up and then disappear (a real restart cycle).
+        recipe = self.deployment_config.recipe
+        startup_timeout = recipe.startup_timeout if recipe is not None else 20 * 60
+        cold_start_grace = startup_timeout
+        restart_grace = 60
+
         deadline = time.time() + timeout
         modal_poll_interval = 20
-        zero_container_grace = 150
         zero_container_since: float | None = None
+        seen_running = False
         last_modal_poll = 0.0
 
         try:
@@ -482,16 +517,30 @@ class ModelDeployment(BaseModel):
                             f"the deploy likely failed or was stopped. Check {self.modal_app_url} "
                             f"and {logs_hint}."
                         )
-                    if containers == 0:
+                    if containers < 0:
+                        # Transient failure querying Modal app state — ignore
+                        # this poll rather than counting it as zero containers.
+                        pass
+                    elif containers > 0:
+                        seen_running = True
+                        zero_container_since = None
+                    else:
                         if zero_container_since is None:
                             zero_container_since = now
                         elapsed = int(now - zero_container_since)
-                        if elapsed >= zero_container_grace:
+                        grace = restart_grace if seen_running else cold_start_grace
+                        if elapsed >= grace:
+                            phase = (
+                                "came up and then died"
+                                if seen_running
+                                else f"never reached a running state within {grace}s"
+                            )
                             raise RuntimeError(
                                 f"Modal app {app_name!r} has had 0 running containers for "
-                                f"~{elapsed}s. Containers are most likely crashlooping "
-                                f"on startup (OOM, missing weights, bad config, etc.). "
-                                f"Inspect logs with {logs_hint} or open {self.modal_app_url}."
+                                f"~{elapsed}s ({phase}). Containers are most likely "
+                                f"crashlooping on startup (OOM, missing weights, bad "
+                                f"config, etc.). Inspect logs with {logs_hint} or open "
+                                f"{self.modal_app_url}."
                             )
 
                 time.sleep(5)
