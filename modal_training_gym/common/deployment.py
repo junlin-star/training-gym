@@ -453,7 +453,10 @@ class ModelDeployment(BaseModel):
         # container come up and then disappear (a real restart cycle).
         recipe = self.deployment_config.recipe
         startup_timeout = recipe.startup_timeout if recipe is not None else 20 * 60
-        cold_start_grace = startup_timeout
+        # Cap the cold-start grace at the overall deadline — otherwise it always
+        # exceeds `timeout` and the loop hits TimeoutError before the crashloop
+        # check can fire, so cold-start crashloop detection never engages.
+        cold_start_grace = min(startup_timeout, timeout)
         restart_grace = 60
 
         deadline = time.time() + timeout
@@ -461,10 +464,12 @@ class ModelDeployment(BaseModel):
         zero_container_since: float | None = None
         seen_running = False
         last_modal_poll = 0.0
+        last_probe = "no response yet"
 
         try:
             while time.time() < deadline:
                 resp = None
+                probe = last_probe
                 try:
                     resp = requests.get(
                         f"{self.url}/v1/models",
@@ -473,10 +478,15 @@ class ModelDeployment(BaseModel):
                     )
                     if resp.ok and resp.json().get("data"):
                         return
-                except requests.ConnectionError:
-                    pass
-                except Exception:
-                    pass
+                    probe = f"HTTP {resp.status_code}"
+                except requests.ConnectionError as exc:
+                    probe = f"connection error ({type(exc).__name__})"
+                except Exception as exc:
+                    probe = f"{type(exc).__name__}: {exc}"
+
+                if probe != last_probe:
+                    last_probe = probe
+                    print(f"[deployment] probe {self.url}/v1/models: {probe}")
 
                 # A 401 is an auth problem, not a cold-start (loading returns
                 # 502/503) — fail fast with a proxy-auth hint instead of polling
@@ -514,9 +524,9 @@ class ModelDeployment(BaseModel):
                             )
                             raise RuntimeError(
                                 f"Modal app {app_name!r} has had 0 running containers for "
-                                f"~{elapsed}s ({phase}). Containers are most likely "
-                                f"crashlooping on startup (OOM, missing weights, bad "
-                                f"config, etc.). Inspect logs with {logs_hint} or open "
+                                f"~{elapsed}s ({phase}, last probe: {last_probe}). Containers "
+                                f"are most likely crashlooping on startup (OOM, missing weights, "
+                                f"bad config, etc.). Inspect logs with {logs_hint} or open "
                                 f"{self.modal_app_url}."
                             )
 
@@ -526,7 +536,7 @@ class ModelDeployment(BaseModel):
                 log_thread.join(timeout=2)
 
         raise TimeoutError(
-            f"{self.url} not ready after {timeout}s. "
+            f"{self.url} not ready after {timeout}s (last probe: {last_probe}). "
             f"Inspect logs with {logs_hint} or open {self.modal_app_url}."
         )
 
