@@ -60,6 +60,70 @@ class TrainingRun(BaseModel):
     def _touch(self) -> None:
         self.updated_at = int(time.time())
 
+    def start_step(self, current_step: int, started_at: int) -> int | None:
+        if current_step <= 0:
+            return None
+
+        metadata = dict(self.metadata or {})
+        progress = dict(metadata.get("framework_progress") or {})
+        step_key = str(current_step)
+        step_times = dict(metadata.get("step_times") or {})
+        step_time = step_times.get(step_key)
+        if not isinstance(step_time, dict):
+            step_time = {}
+        if not isinstance(step_time.get("started_at"), int):
+            step_time["started_at"] = started_at
+        step_times[step_key] = step_time
+        progress["current"] = current_step
+        progress["step_started_at"] = step_time["started_at"]
+        self.metadata = {
+            **metadata,
+            "framework_progress": progress,
+            "step_times": step_times,
+        }
+        return step_time["started_at"]
+
+    def finish_current_step(
+        self, ended_at: int, current_step: int | None = None
+    ) -> None:
+        metadata = dict(self.metadata or {})
+        progress = dict(metadata.get("framework_progress") or {})
+
+        if current_step is None:
+            current_step = progress.get("current")
+        if not isinstance(current_step, int):
+            return
+
+        step_key = str(current_step)
+        step_times = dict(metadata.get("step_times") or {})
+        step_time = step_times.get(step_key)
+        if not isinstance(step_time, dict):
+            return
+
+        started_at = step_time.get("started_at")
+        if not isinstance(started_at, int):
+            return
+
+        if isinstance(step_time.get("ended_at"), int):
+            return
+
+        if progress.get("current") == current_step:
+            progress.pop("step_started_at", None)
+
+        step_time.update(
+            {
+                "ended_at": ended_at,
+                "duration_s": ended_at - started_at,
+            }
+        )
+        step_times[step_key] = step_time
+
+        self.metadata = {
+            **metadata,
+            "framework_progress": progress,
+            "step_times": step_times,
+        }
+
     def save(self) -> None:
         self._touch()
         payload = self.model_dump(mode="json")

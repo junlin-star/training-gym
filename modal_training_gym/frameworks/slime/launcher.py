@@ -1040,6 +1040,7 @@ def build_slime_app(
         )
         print(f"TrainingRun recorded: {training_run_id}")
 
+        training_finished_at: int | None = None
         try:  # Wraps all post-setup work so any failure marks the run terminal.
             # In-flight status updates are fire-and-forget via the dashboard's
             # /api/framework-status endpoint so the training thread doesn't pay
@@ -1202,6 +1203,7 @@ def build_slime_app(
             async with cluster.forward_dashboard() as tunnel:
                 print(f"Ray dashboard: {tunnel.url}")
                 await cluster.submit_and_tail(cmd, runtime_env=runtime_env)
+                training_finished_at = int(time.time())
 
             result_kwargs = {
                 "app_name": app_name,
@@ -1237,6 +1239,18 @@ def build_slime_app(
             if run_record.completed_at is None:
                 run_record.completed_at = finished_at
             run_record.duration_seconds = max(0, finished_at - run_record.started_at)
+            try:
+                await metadata_volume.reload.aio()
+                persisted_run = await TrainingRun.from_id_async(training_run_id)
+                if (
+                    run_record.status == TrainingRunStatus.COMPLETED
+                    and training_finished_at is not None
+                ):
+                    persisted_run.finish_current_step(training_finished_at)
+                run_record.framework_status = persisted_run.framework_status
+                run_record.metadata = persisted_run.metadata
+            except Exception:
+                pass
             try:
                 await run_record.save_async()
             except Exception:
