@@ -66,13 +66,15 @@ def setup(interactive: bool = True) -> str:
     return web_url
 
 
-def ensure_proxy_auth(interactive: bool = True) -> bool:
+def ensure_proxy_auth(interactive: bool = True, force: bool = False) -> bool:
     """Prompt for and persist Modal proxy-auth tokens in ``~/.training-gym.toml``.
 
     Served endpoints (``DeploymentConfig.serve()``) sit behind Modal proxy auth
     and need a ``MODAL_KEY`` / ``MODAL_SECRET`` token pair. When ``interactive``
     we ask whether the user has created a pair and, if so, read and save it.
-    Returns ``True`` when both tokens are available afterwards.
+    With ``force`` we offer to replace an already-saved pair (e.g. when the old
+    one was minted in the wrong workspace). Returns ``True`` when both tokens are
+    available afterwards.
     """
     from getpass import getpass
 
@@ -83,30 +85,42 @@ def ensure_proxy_auth(interactive: bool = True) -> bool:
     )
 
     key, secret = get_proxy_auth()
-    if key and secret:
+    if key and secret and not force:
         return True
     if not interactive:
-        return False
+        return bool(key and secret)
 
-    print(
-        "\nServed endpoints (DeploymentConfig.serve()) sit behind Modal proxy "
-        "auth, which needs a proxy-auth token pair (MODAL_KEY / MODAL_SECRET)."
-    )
-    answer = (
-        input(
-            "Have you created a proxy-auth token pair at "
-            "https://modal.com/settings/proxy-auth-tokens? [y/N] "
-        )
-        .strip()
-        .lower()
-    )
-    if answer not in ("y", "yes"):
+    if key and secret:
         print(
-            "Skipping proxy-auth setup. Create a pair at "
-            "https://modal.com/settings/proxy-auth-tokens and re-run "
-            "`training-gym setup`, or export MODAL_KEY / MODAL_SECRET yourself."
+            f"\nA proxy-auth pair is already saved in {CONFIG_PATH} "
+            f"(MODAL_KEY {key[:6]}…). Proxy-auth tokens are workspace-scoped — "
+            "if endpoints return 401 the pair was likely minted in the wrong "
+            "workspace."
         )
-        return False
+        answer = input("Replace it? [y/N] ").strip().lower()
+        if answer not in ("y", "yes"):
+            return True
+    else:
+        print(
+            "\nServed endpoints (DeploymentConfig.serve()) sit behind Modal proxy "
+            "auth, which needs a proxy-auth token pair (MODAL_KEY / MODAL_SECRET)."
+        )
+        answer = (
+            input(
+                "Have you created a proxy-auth token pair at "
+                "https://modal.com/settings/proxy-auth-tokens? [y/N] "
+            )
+            .strip()
+            .lower()
+        )
+        if answer not in ("y", "yes"):
+            print(
+                "Skipping proxy-auth setup. Create a pair at "
+                "https://modal.com/settings/proxy-auth-tokens and re-run "
+                "`training-gym set-proxy-auth`, or export MODAL_KEY / "
+                "MODAL_SECRET yourself."
+            )
+            return False
 
     key = input("MODAL_KEY (wk-…): ").strip()
     secret = getpass("MODAL_SECRET (ws-…): ").strip()
@@ -121,7 +135,23 @@ def ensure_proxy_auth(interactive: bool = True) -> bool:
 
     save_proxy_auth(key, secret)
     print(f"Saved proxy-auth tokens to {CONFIG_PATH}")
+    print(
+        "\nThis token cannot access any environments by default. You must "
+        "configure which environments it is valid for before it can be used.\n"
+        "Set this at https://modal.com/settings/proxy-auth-tokens — make sure "
+        "the environment your endpoint runs in is enabled for "
+        "this token."
+    )
     return True
+
+
+def set_proxy_auth() -> bool:
+    """Interactively (re)set the saved proxy-auth token pair.
+
+    Thin wrapper over :func:`ensure_proxy_auth` with ``force=True`` so an
+    existing pair is replaced — exposed as ``training-gym set-proxy-auth``.
+    """
+    return ensure_proxy_auth(interactive=True, force=True)
 
 
 def set_password(password: str | None = None) -> None:

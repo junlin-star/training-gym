@@ -7,7 +7,12 @@ import sys
 
 
 def main():
-    from modal_training_gym.setup import setup, open_dashboard, set_password
+    from modal_training_gym.setup import (
+        setup,
+        open_dashboard,
+        set_password,
+        set_proxy_auth,
+    )
     from modal_training_gym.cleanup import cleanup
 
     parser = argparse.ArgumentParser(prog="training-gym")
@@ -16,6 +21,11 @@ def main():
     sub.add_parser("setup", help="Deploy the training-gym dashboard to Modal")
 
     sub.add_parser("open", help="Open the deployed dashboard in your browser")
+
+    sub.add_parser(
+        "set-proxy-auth",
+        help="Set/replace the Modal proxy-auth tokens (MODAL_KEY / MODAL_SECRET)",
+    )
 
     password_parser = sub.add_parser(
         "set-password",
@@ -51,6 +61,8 @@ def main():
         setup()
     elif args.command == "open":
         open_dashboard()
+    elif args.command == "set-proxy-auth":
+        set_proxy_auth()
     elif args.command == "set-password":
         set_password(password=args.password)
     elif args.command == "cleanup":
