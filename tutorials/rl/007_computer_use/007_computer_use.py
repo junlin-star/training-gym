@@ -50,7 +50,7 @@ from modal_training_gym import (
     ModelDeployment,
     MultimodalDataset,
     Qwen3_VL_8B,
-    Qwen3_VL_Recipe,
+    Qwen3_VL_8b_Recipe,
     TrainConfig,
     WandbConfig,
     list_checkpoints,
@@ -314,7 +314,7 @@ def _main_impl() -> None:
 
     # ## Training
     #
-    # We use `Qwen3_VL_Recipe` which carries VL-specific defaults:
+    # We use `Qwen3_VL_8b_Recipe` which carries VL-specific defaults:
     # - **Frozen vision tower** (`freeze_params_name_list=["vision_model"]`) — RL
     #   only updates the language backbone. This is the standard recipe for VLM RL:
     #   a single sparse reward is too noisy to safely fine-tune a pretrained visual
@@ -337,7 +337,7 @@ def _main_impl() -> None:
     training_run = TrainConfig(
         model=base_model,
         dataset=train_dataset,
-        recipe=Qwen3_VL_Recipe(
+        recipe=Qwen3_VL_8b_Recipe(
             custom_rm_function=grounding_reward,
             num_rollout=15,
             rollout_batch_size=8,

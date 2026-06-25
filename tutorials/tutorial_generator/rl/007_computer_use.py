@@ -9,7 +9,7 @@ TUTORIAL_METADATA = {
     "order": 45,
     "api_classes": [
         "Qwen3_VL_8B",
-        "Qwen3_VL_Recipe",
+        "Qwen3_VL_8b_Recipe",
         "MultimodalDataset",
         "DeploymentConfig",
         "EvalConfig",
@@ -86,7 +86,7 @@ def _imports():
         ModelDeployment,
         MultimodalDataset,
         Qwen3_VL_8B,
-        Qwen3_VL_Recipe,
+        Qwen3_VL_8b_Recipe,
         TrainConfig,
         WandbConfig,
         list_checkpoints,
@@ -387,7 +387,7 @@ def _train_intro():
     """
     ## Training
 
-    We use `Qwen3_VL_Recipe` which carries VL-specific defaults:
+    We use `Qwen3_VL_8b_Recipe` which carries VL-specific defaults:
     - **Frozen vision tower** (`freeze_params_name_list=["vision_model"]`) — RL
       only updates the language backbone. This is the standard recipe for VLM RL:
       a single sparse reward is too noisy to safely fine-tune a pretrained visual
@@ -414,7 +414,7 @@ def _train():
     training_run = TrainConfig(
         model=base_model,
         dataset=train_dataset,
-        recipe=Qwen3_VL_Recipe(
+        recipe=Qwen3_VL_8b_Recipe(
             custom_rm_function=grounding_reward,
             num_rollout=15,
             rollout_batch_size=8,
