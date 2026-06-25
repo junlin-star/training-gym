@@ -7,7 +7,6 @@ dependencies = [
     "modal==1.5.1",
     "cloudpickle",
     "datasets",
-    "pillow",
     "msgspec",
     "openai",
     "pydantic",
