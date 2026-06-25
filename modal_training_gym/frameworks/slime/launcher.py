@@ -102,6 +102,17 @@ _PATCH_QWEN3_ASR_EXPORT_B64 = encode_patch(
     "patch_qwen3_asr_export",
     _SLIME_PATCHES / "model_specific_patches" / "qwen3_asr",
 )
+# The Qwen3-VL Megatron->HF converters: a qwen3_vl per-param mapping (language
+# stack + frozen-ViT identity passthrough) and a torch_dist->HF shim that skips
+# the frozen ViT's stacked layers.
+_PATCH_QWEN3_VL_EXPORT_B64 = encode_patch(
+    "patch_qwen3_vl_export",
+    _SLIME_PATCHES / "model_specific_patches" / "qwen3_vl",
+)
+_PATCH_QWEN3_VL_TORCH_DIST_B64 = encode_patch(
+    "patch_qwen3_vl_torch_dist",
+    _SLIME_PATCHES / "model_specific_patches" / "qwen3_vl",
+)
 _PATCH_ROLLOUT_STATUS_B64 = encode_patch(
     "patch_rollout_status_reporting", _SLIME_PATCHES
 )
@@ -119,6 +130,8 @@ def _build_slime_base_image() -> "Image":
             f"echo {_PATCH_BRIDGE_NONE_TASK_B64} | base64 -d | python3",
             f"echo {_PATCH_STOP_TOKEN_DIAG_B64} | base64 -d | python3",
             f"echo {_PATCH_QWEN3_ASR_EXPORT_B64} | base64 -d | python3",
+            f"echo {_PATCH_QWEN3_VL_EXPORT_B64} | base64 -d | python3",
+            f"echo {_PATCH_QWEN3_VL_TORCH_DIST_B64} | base64 -d | python3",
             f"echo {_PATCH_ROLLOUT_STATUS_B64} | base64 -d | python3",
             f"echo {_PATCH_LOG_ELIDE_B64} | base64 -d | python3",
         )

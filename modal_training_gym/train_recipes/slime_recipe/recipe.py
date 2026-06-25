@@ -207,6 +207,11 @@ class SlimeRecipe(BaseTrainRecipe):
     megatron_to_hf_mode: str = ""
     use_fault_tolerance: bool = True
 
+    # Regex patterns of parameter names to freeze (slime's
+    # --freeze-params-name-list, matched with re.search). Used e.g. to freeze a
+    # VL model's vision tower so RL only updates the language backbone.
+    freeze_params_name_list: list[str] | None = None
+
     # ── Weight sync (megatron trainer → sglang rollout engines) ──────────
     # Default matches slime's own default. ``delta`` mode pin-snapshots the
     # last broadcast on CPU and ships only byte-level changes, which is
@@ -558,7 +563,12 @@ class SlimeRecipe(BaseTrainRecipe):
         from modal_training_gym.train_recipes.slime_recipe.qwen3_asr_1_7b import (
             Qwen3_ASR_1_7b_Recipe,
         )
+        from modal_training_gym.train_recipes.slime_recipe.qwen3_vl_8b import (
+            Qwen3_VL_8b_Recipe,
+        )
 
+        if model_config.model_name == "Qwen/Qwen3-VL-8B-Instruct":
+            return Qwen3_VL_8b_Recipe()
         if model_config.model_name == "Qwen/Qwen3-ASR-1.7B":
             return Qwen3_ASR_1_7b_Recipe()
         if model_config.model_name == "zai-org/GLM-4.7":

@@ -356,7 +356,12 @@ class ModelDeployment(BaseModel):
             "served_model_name": value.served_model_name,
         }
 
-    def generate(self, prompt: str, ensure_ready: bool = True, **kwargs) -> str:
+    def generate(
+        self,
+        prompt: str | list[dict],
+        ensure_ready: bool = True,
+        **kwargs,
+    ) -> str:
         import time
 
         import requests

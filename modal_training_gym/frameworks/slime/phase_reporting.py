@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import io
 import json
 import importlib
 import os
@@ -27,6 +29,13 @@ _TRACE_SAMPLE_LIMIT_DEFAULT = 16
 # small by sampling + dropping payload-bearing attributes.
 _TRACE_MAX_SPANS = 256
 _TRACE_ATTR_STR_MAX = 200
+# Per-sample input-image capture (image-modality runs). Screenshots are large, so
+# only the first IMAGE_SAMPLE_LIMIT_ENV samples of each rollout carry one, and each
+# is thumbnailed + size-capped before it goes on the payload.
+IMAGE_SAMPLE_LIMIT_ENV = "TRAINING_GYM_IMAGE_SAMPLE_LIMIT"
+_IMAGE_SAMPLE_LIMIT_DEFAULT = 16
+_IMAGE_MAX_DIM = 512
+_IMAGE_MAX_BYTES = 256 * 1024
 CUSTOM_ROLLOUT_LOG_FUNCTION_PATH_KEY = "training_gym_custom_rollout_log_function_path"
 CUSTOM_EVAL_ROLLOUT_LOG_FUNCTION_PATH_KEY = (
     "training_gym_custom_eval_rollout_log_function_path"
@@ -437,8 +446,122 @@ def _extract_audio_from_prompt(prompt: Any) -> str | None:
     return None
 
 
+def _image_sample_limit() -> int:
+    try:
+        n = int(os.environ.get(IMAGE_SAMPLE_LIMIT_ENV, "").strip())
+    except (TypeError, ValueError):
+        return _IMAGE_SAMPLE_LIMIT_DEFAULT
+    return max(0, n)
+
+
+def _image_to_data_uri(value: Any) -> str | None:
+    """Coerce an image reference into a browser-renderable, thumbnailed data-URI.
+
+    Handles PIL Images (how slime's ``process_vision_info`` stores them on the
+    Sample), raw bytes, and ``data:``/``http(s)`` strings. Downscales to a
+    thumbnail and skips anything that's still too big, so a full-res screenshot
+    can't blow up the rollout payload. Remote URLs pass through untouched (the
+    browser fetches them — no payload cost). Returns ``None`` on any failure.
+    """
+    if isinstance(value, str) and value.startswith(("http://", "https://")):
+        return value
+    try:
+        from PIL import Image
+
+        img: Any = None
+        if isinstance(value, str):
+            if value.startswith("data:"):
+                _, _, b64 = value.partition(",")
+                img = Image.open(io.BytesIO(base64.b64decode(b64)))
+            else:
+                img = Image.open(value)  # filesystem path
+        elif isinstance(value, (bytes, bytearray)):
+            img = Image.open(io.BytesIO(bytes(value)))
+        elif hasattr(value, "save"):  # already a PIL Image
+            img = value
+        if img is None:
+            return None
+
+        img = img.convert("RGB")
+        img.thumbnail((_IMAGE_MAX_DIM, _IMAGE_MAX_DIM))
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        data = buf.getvalue()
+        mime = "image/png"
+        if len(data) > _IMAGE_MAX_BYTES:
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG", quality=80)
+            data = buf.getvalue()
+            mime = "image/jpeg"
+        if len(data) > _IMAGE_MAX_BYTES:
+            return None
+        return f"data:{mime};base64," + base64.b64encode(data).decode("ascii")
+    except Exception:
+        # PIL missing or decode failed: pass through a small inline data-URI as-is.
+        if (
+            isinstance(value, str)
+            and value.startswith("data:")
+            and len(value) <= _IMAGE_MAX_BYTES * 2
+        ):
+            return value
+        return None
+
+
+def _extract_image_from_sample(sample: Any) -> str | None:
+    """Pull a browser-renderable input image off a slime Sample.
+
+    For image-modality runs slime's ``process_vision_info`` lifts the screenshot
+    into ``sample.multimodal_inputs['images']`` (even when ``apply_chat_template``
+    collapses the prompt to a string). Falls back to image items in a
+    conversation-list prompt. Returns ``None`` for non-image samples.
+    """
+    if isinstance(sample, dict):
+        get = sample.get
+    else:
+
+        def get(key: str, default: Any = None) -> Any:
+            return getattr(sample, key, default)
+
+    candidates: list[Any] = []
+    mm = get("multimodal_inputs", None)
+    if isinstance(mm, dict):
+        imgs = mm.get("images") or mm.get("image")
+        if imgs is not None:
+            candidates.extend(imgs if isinstance(imgs, list) else [imgs])
+
+    prompt = get("prompt", None)
+    if isinstance(prompt, list):
+        for msg in prompt:
+            content = msg.get("content") if isinstance(msg, dict) else None
+            if not isinstance(content, list):
+                continue
+            for item in content:
+                if not isinstance(item, dict):
+                    continue
+                if (
+                    item.get("type") == "image"
+                    or "image" in item
+                    or "image_url" in item
+                ):
+                    ref = item.get("image") or item.get("image_url")
+                    if isinstance(ref, dict):
+                        ref = ref.get("url")
+                    if ref is not None:
+                        candidates.append(ref)
+
+    for candidate in candidates:
+        uri = _image_to_data_uri(candidate)
+        if uri:
+            return uri
+    return None
+
+
 def _sample_to_dict(
-    sample: Any, parser: Any = None, *, include_trace: bool = False
+    sample: Any,
+    parser: Any = None,
+    *,
+    include_trace: bool = False,
+    include_image: bool = False,
 ) -> dict[str, Any]:
     """Best-effort extraction of (prompt, response, reward, metadata) from a
     slime Sample-like object. Duck-typed so we don't import slime here."""
@@ -496,6 +619,9 @@ def _sample_to_dict(
     if audio_uri := _extract_audio_from_prompt(prompt):
         metadata["_metadata_type"] = "audio"
         metadata["audio"] = audio_uri
+    elif include_image and (image_uri := _extract_image_from_sample(sample)):
+        metadata["_metadata_type"] = "image"
+        metadata["image"] = image_uri
 
     response_text = _coerce_text(response)
     out: dict[str, Any] = {
@@ -533,12 +659,18 @@ def report_rollout_samples(
     if samples is None:
         return
     parser = _response_parser()
-    # Trace only the first `trace_limit` samples (and only when enabled) so the
-    # payload stays small — the cap is what keeps volume growth well under 1%.
+    # Trace/image only the first N samples (traces also gated by an enable flag) so
+    # the payload stays small — the caps keep volume growth well under 1%.
     trace_limit = _trace_sample_limit() if _trace_enabled() else 0
+    image_limit = _image_sample_limit()
     try:
         sample_dicts = [
-            _sample_to_dict(s, parser, include_trace=(i < trace_limit))
+            _sample_to_dict(
+                s,
+                parser,
+                include_trace=(i < trace_limit),
+                include_image=(i < image_limit),
+            )
             for i, s in enumerate(samples)
         ]
     except TypeError:
