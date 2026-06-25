@@ -1,5 +1,5 @@
 # pyright: reportUndefinedVariable=false, reportMissingImports=false
-"""Tutorial source for `007_computer_use` — parsed by generate_tutorial.py."""
+"""Tutorial source for `008_computer_use` — parsed by generate_tutorial.py."""
 
 TUTORIAL_METADATA = {
     "framework": "`slime`",
@@ -58,13 +58,13 @@ def _run_instructions():
     ```
     cd training-gym
     uv sync
-    uv run python tutorials/rl/007_computer_use/007_computer_use.py
+    uv run python tutorials/rl/008_computer_use/008_computer_use.py
     ```
 
     To detach and watch it from the Modal dashboard instead:
 
     ```
-    uv run modal run -d tutorials/rl/007_computer_use/007_computer_use.py
+    uv run modal run -d tutorials/rl/008_computer_use/008_computer_use.py
     ```
     """
 
