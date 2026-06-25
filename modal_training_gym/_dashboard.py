@@ -75,6 +75,16 @@ STATIC_DIR = "/app/frontend/dist"
 # Secrets UI and is auto-created on first deploy from ~/.modal.toml.
 MODAL_CREDS_SECRET_NAME = "_training-gym-modal-creds"
 
+# Holds DASHBOARD_PASSWORD. An empty value means the dashboard is open (no
+# auth) — that's the default so existing deployments keep working untouched.
+# Set a real value via ``training-gym set-password``.
+DASHBOARD_PASSWORD_SECRET_NAME = "_training-gym-dashboard-password"
+
+# Write endpoints authenticated by their own per-run bearer token. They're
+# exempt from Basic Auth so launchers (which send ``Authorization: Bearer``)
+# keep working even when a dashboard password is set.
+PASSWORD_EXEMPT_PATHS = frozenset({"/api/framework-status", "/api/training-rollouts"})
+
 
 def _is_local() -> bool:
     """True when we're not running inside a Modal container."""
@@ -139,9 +149,49 @@ def ensure_creds_secret(interactive: bool = False) -> bool:
         return False
 
 
-# Auto-create the secret at module-load so `modal deploy dashboards/app.py`
-# works out of the box. Side effect is gated to local context so it never
-# fires inside the deployed container.
+def _password_secret_exists() -> bool:
+    """True if the operator has configured a dashboard password Secret.
+
+    Checked at deploy time (local) to decide whether to mount the Secret on
+    the ASGI function — if it was never created, the dashboard stays open.
+    """
+    try:
+        modal.Secret.from_name(DASHBOARD_PASSWORD_SECRET_NAME).hydrate()
+        return True
+    except Exception:
+        return False
+
+
+def _function_secrets() -> list[modal.Secret]:
+    """Secrets mounted on the ASGI function.
+
+    The password Secret is optional and mounted only when it exists; absent
+    it, ``DASHBOARD_PASSWORD`` is never injected and the dashboard is open.
+    """
+    secrets = [modal.Secret.from_name(MODAL_CREDS_SECRET_NAME)]
+    if _password_secret_exists():
+        secrets.append(modal.Secret.from_name(DASHBOARD_PASSWORD_SECRET_NAME))
+    return secrets
+
+
+def set_dashboard_password(password: str) -> None:
+    """Set (or clear) the dashboard password.
+
+    Creates the ``_training-gym-dashboard-password`` Secret on demand. An empty
+    string disables auth. The new value only takes effect once the dashboard app
+    is redeployed, since containers read it from the environment at startup.
+    """
+    env_values = {"DASHBOARD_PASSWORD": password}
+    modal.Secret.objects.create(
+        DASHBOARD_PASSWORD_SECRET_NAME, env_values, allow_existing=True
+    )
+    modal.Secret.from_name(DASHBOARD_PASSWORD_SECRET_NAME).update(env_values)
+
+
+# Auto-create the creds secret at module-load so `modal deploy
+# dashboards/app.py` works out of the box. Gated to local context so it never
+# fires inside the deployed container. The password secret is intentionally
+# NOT auto-created — no secret means no auth.
 if _is_local():
     ensure_creds_secret(interactive=False)
 
@@ -170,17 +220,25 @@ def compact_summaries() -> None:
 
 @app.function(
     min_containers=1,
-    secrets=[modal.Secret.from_name(MODAL_CREDS_SECRET_NAME)],
+    secrets=_function_secrets(),
 )
 @modal.asgi_app()
 def fastapi_app():
+    import base64
+    import binascii
+
     from fastapi import (
         FastAPI,
         Header,
         HTTPException,
     )  # Request imported at module scope
     from fastapi.concurrency import run_in_threadpool
-    from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+    from fastapi.responses import (
+        FileResponse,
+        JSONResponse,
+        Response,
+        StreamingResponse,
+    )
     from fastapi.staticfiles import StaticFiles
 
     from modal_training_gym.common.modal_urls import modal_app_dashboard_url
@@ -195,6 +253,33 @@ def fastapi_app():
     )
 
     web = FastAPI()
+
+    # ── Optional password protection ──────────────────────────────────────
+    # When DASHBOARD_PASSWORD is set we gate the whole app behind HTTP Basic
+    # Auth (the username is ignored). An empty value means open access.
+    dashboard_password = os.environ.get("DASHBOARD_PASSWORD", "")
+
+    def _password_ok(authorization: str | None) -> bool:
+        scheme, _, encoded = (authorization or "").partition(" ")
+        if scheme.lower() != "basic" or not encoded:
+            return False
+        try:
+            decoded = base64.b64decode(encoded).decode("utf-8")
+        except (binascii.Error, ValueError, UnicodeDecodeError):
+            return False
+        _user, _, supplied = decoded.partition(":")
+        return _secrets.compare_digest(supplied, dashboard_password)
+
+    @web.middleware("http")
+    async def require_password(request: Request, call_next):
+        if dashboard_password and request.url.path not in PASSWORD_EXEMPT_PATHS:
+            if not _password_ok(request.headers.get("Authorization")):
+                return Response(
+                    status_code=401,
+                    headers={"WWW-Authenticate": 'Basic realm="training-gym"'},
+                )
+        return await call_next(request)
+
     cache_ttl_seconds = 30.0
     eval_summary_store = MetadataStore.EVALS
     eval_summary_key = "summary"

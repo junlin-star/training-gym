@@ -3,10 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from modal_training_gym.common import ids
-from modal_training_gym.common.dataset import DatasetConfig
-from modal_training_gym.common.models import ModelConfig
+from modal_training_gym.common.dataset import DatasetConfig, HuggingFaceDataset
+from modal_training_gym.common.models import ModelConfig, Qwen3_4B
 from modal_training_gym.common.train import TrainConfig
 from modal_training_gym.train_recipes.base import BaseTrainRecipe, RecipeType
+from modal_training_gym.train_recipes.slime_recipe import SlimeRecipe
 
 
 def test_create_hash_has_word_word_hash_shape() -> None:
@@ -64,3 +65,40 @@ def test_train_config_keeps_stable_training_run_id(monkeypatch) -> None:
     assert config.training_run_id == "brisk-river-deadbeef"
     assert config.training_run_id == "brisk-river-deadbeef"
     assert calls == 1
+
+
+def test_train_config_can_skip_model_recipe_merge() -> None:
+    recipe = SlimeRecipe(
+        gpu_type="H100",
+        colocate=True,
+        tensor_model_parallel_size=1,
+        sequence_parallel=False,
+        rollout_num_gpus_per_engine=1,
+        num_rollout=1,
+        rollout_batch_size=16,
+        rollout_max_response_len=4096,
+        rollout_temperature=1.0,
+        save_interval=10,
+    )
+    dataset = HuggingFaceDataset(
+        hf_repo="some/dataset",
+        input_column="prompt",
+        output_column="answer",
+    )
+
+    merged = TrainConfig(
+        dataset=dataset,
+        model=Qwen3_4B(),
+        recipe=recipe,
+    )._build_config_summary()
+    assert merged["recipe"]["n_samples_per_prompt"] == 8
+    assert merged["recipe"]["lr"] == 5e-7
+
+    unmerged = TrainConfig(
+        dataset=dataset,
+        model=Qwen3_4B(),
+        recipe=recipe,
+        merge_model_recipe=False,
+    )._build_config_summary()
+    assert unmerged["recipe"]["n_samples_per_prompt"] == 2
+    assert unmerged["recipe"]["lr"] == 1e-6

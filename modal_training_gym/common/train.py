@@ -60,7 +60,8 @@ def _app_is_running(app_id: str) -> bool:
     error so callers fall back to their normal failure handling.
     """
     try:
-        import modal
+        from modal._utils.async_utils import synchronizer
+        from modal.client import _Client
         from modal_proto import api_pb2
 
         live_states = {
@@ -71,11 +72,21 @@ def _app_is_running(app_id: str) -> bool:
             api_pb2.APP_STATE_DEPLOYED,
             api_pb2.APP_STATE_DERIVED,
         }
-        with modal.Client.from_env() as client:
-            resp = client.stub.AppGetLifecycle(
+
+        # ``modal.Client.from_env()`` returns an already-opened singleton, so
+        # using it as a context manager re-enters ``_open()`` and trips
+        # ``assert self._stub is None``; ``client.stub`` is also the raw async
+        # stub. Drive the async RPC through Modal's synchronizer instead — the
+        # same path the ``modal app`` CLI uses to call this from sync code.
+        async def _lifecycle_state() -> int:
+            client = await _Client.from_env()
+            resp = await client.stub.AppGetLifecycle(
                 api_pb2.AppGetLifecycleRequest(app_id=app_id)
             )
-        return resp.lifecycle.app_state in live_states
+            return resp.lifecycle.app_state
+
+        state = synchronizer.create_blocking(_lifecycle_state)()
+        return state in live_states
     except Exception:
         return False
 
@@ -115,6 +126,20 @@ def _field_default(field: _dc.Field) -> Any:
     if field.default_factory is not _dc.MISSING:
         return field.default_factory()
     return _dc.MISSING
+
+
+def _resolve_slime_recipe(
+    model: ModelConfig,
+    recipe: SlimeRecipe,
+    *,
+    merge_model_recipe: bool,
+) -> SlimeRecipe:
+    if not merge_model_recipe:
+        return recipe
+    base_recipe = SlimeRecipe.get_base_recipe(model)
+    if base_recipe is None:
+        return recipe
+    return _merge_recipe(base_recipe, recipe)
 
 
 class TrainStepStatus(Enum):
@@ -334,12 +359,17 @@ class TrainConfig:
     model: ModelConfig
     recipe: BaseTrainRecipe
     checkpoint: Checkpoint | None = None
+    # Known-model recipes are presets by default; complete recipes can opt out.
+    merge_model_recipe: bool = True
     # Run the training app detached so it keeps running on Modal even if the
     # local client disconnects (terminal closed, laptop asleep). The CLI's
     # ``modal run --detach`` only detaches the entrypoint, not the nested
     # ``app.run()`` the driver opens — so we detach it here. Set False for an
     # attached run that Ctrl-C stops.
     detach: bool = True
+    # Set by TrainingGroup so every run in a sweep shares one id — written into
+    # the TrainingRun record so the dashboard can group variants together.
+    group_id: str | None = None
     _stable_id: str | None = _dc.field(default=None, init=False, repr=False)
 
     # ── Public API ────────────────────────────────────────────────────────────
@@ -371,17 +401,18 @@ class TrainConfig:
                 dataset=self.dataset,
                 checkpoint=self.checkpoint,
                 name=self.training_run_id,
+                group_id=self.group_id,
             )
         if recipe_type == RecipeType.SLIME:
             if not isinstance(self.recipe, SlimeRecipe):
                 raise TypeError(
                     f"Recipe type {recipe_type} requires SlimeRecipe, got {type(self.recipe).__name__}"
                 )
-            base_recipe = SlimeRecipe.get_base_recipe(self.model)
-            if base_recipe is not None:
-                combined = _merge_recipe(base_recipe, cast(SlimeRecipe, self.recipe))
-            else:
-                combined = cast(SlimeRecipe, self.recipe)
+            combined = _resolve_slime_recipe(
+                self.model,
+                cast(SlimeRecipe, self.recipe),
+                merge_model_recipe=self.merge_model_recipe,
+            )
             return build_slime_app(
                 training_run_id=self.training_run_id,
                 slime=combined,
@@ -389,6 +420,7 @@ class TrainConfig:
                 dataset=self.dataset,
                 checkpoint=self.checkpoint,
                 name=self.training_run_id,
+                group_id=self.group_id,
             )
         raise ValueError(f"Unknown recipe type: {recipe_type}")
 
@@ -433,11 +465,10 @@ class TrainConfig:
                 _serialize_slime_params,
             )
 
-            base_recipe = SlimeRecipe.get_base_recipe(model)
-            combined = (
-                _merge_recipe(base_recipe, cast(SlimeRecipe, recipe))
-                if base_recipe is not None
-                else cast(SlimeRecipe, recipe)
+            combined = _resolve_slime_recipe(
+                model,
+                cast(SlimeRecipe, recipe),
+                merge_model_recipe=self.merge_model_recipe,
             )
             summary["recipe"] = _serialize_slime_params(
                 combined, dataset=dataset, model=model
@@ -514,6 +545,7 @@ class TrainConfig:
             framework_status=self._initializing_status(),
             created_at=created_at,
             started_at=created_at,
+            metadata={"group_id": self.group_id} if self.group_id else None,
         )
         try:
             run_record.save()

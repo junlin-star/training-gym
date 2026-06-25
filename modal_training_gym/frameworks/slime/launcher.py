@@ -282,6 +282,7 @@ def build_slime_app(
     dataset: DatasetConfig,
     checkpoint: Checkpoint | None = None,
     name: str | None = None,
+    group_id: str | None = None,
 ) -> App:
     """Return a Modal App with `download`, `prepare_dataset`, `convert_checkpoint`, and `train` defined."""
     app_name = name or f"slime-{type(slime).__name__.lstrip('_').lower()}"
@@ -1228,6 +1229,7 @@ def build_slime_app(
                 "wandb_project": slime.wandb.project if slime.wandb else "",
                 "wandb_entity": wandb_entity,
                 "wandb_training_run_id": wandb_run_id,
+                "group_id": group_id or "",
             }
             accepted_fields = set(inspect.signature(TrainResult).parameters)
             result = TrainResult(

@@ -47,6 +47,8 @@ def setup(interactive: bool = True) -> str:
     from modal_training_gym._dashboard import app, fastapi_app
     from modal_training_gym.common.config import CONFIG_PATH, save_dashboard_url
 
+    ensure_proxy_auth(interactive=interactive)
+
     if not ensure_creds_secret(interactive=interactive):
         print(
             f"WARNING: continuing without the {MODAL_CREDS_SECRET_NAME!r} "
@@ -62,6 +64,122 @@ def setup(interactive: bool = True) -> str:
     print(f"\nDashboard deployed: {web_url}")
     print(f"Saved dashboard URL to {CONFIG_PATH}")
     return web_url
+
+
+def ensure_proxy_auth(interactive: bool = True, force: bool = False) -> bool:
+    """Prompt for and persist Modal proxy-auth tokens in ``~/.training-gym.toml``.
+
+    Served endpoints (``DeploymentConfig.serve()``) sit behind Modal proxy auth
+    and need a ``MODAL_KEY`` / ``MODAL_SECRET`` token pair. When ``interactive``
+    we ask whether the user has created a pair and, if so, read and save it.
+    With ``force`` we offer to replace an already-saved pair (e.g. when the old
+    one was minted in the wrong workspace). Returns ``True`` when both tokens are
+    available afterwards.
+    """
+    from getpass import getpass
+
+    from modal_training_gym.common.config import (
+        CONFIG_PATH,
+        get_proxy_auth,
+        save_proxy_auth,
+    )
+
+    key, secret = get_proxy_auth()
+    if key and secret and not force:
+        return True
+    if not interactive:
+        return bool(key and secret)
+
+    if key and secret:
+        print(
+            f"\nA proxy-auth pair is already saved in {CONFIG_PATH} "
+            f"(MODAL_KEY {key[:6]}…). Proxy-auth tokens are workspace-scoped — "
+            "if endpoints return 401 the pair was likely minted in the wrong "
+            "workspace."
+        )
+        answer = input("Replace it? [y/N] ").strip().lower()
+        if answer not in ("y", "yes"):
+            return True
+    else:
+        print(
+            "\nServed endpoints (DeploymentConfig.serve()) sit behind Modal proxy "
+            "auth, which needs a proxy-auth token pair (MODAL_KEY / MODAL_SECRET)."
+        )
+        answer = (
+            input(
+                "Have you created a proxy-auth token pair at "
+                "https://modal.com/settings/proxy-auth-tokens? [y/N] "
+            )
+            .strip()
+            .lower()
+        )
+        if answer not in ("y", "yes"):
+            print(
+                "Skipping proxy-auth setup. Create a pair at "
+                "https://modal.com/settings/proxy-auth-tokens and re-run "
+                "`training-gym set-proxy-auth`, or export MODAL_KEY / "
+                "MODAL_SECRET yourself."
+            )
+            return False
+
+    key = input("MODAL_KEY (wk-…): ").strip()
+    secret = getpass("MODAL_SECRET (ws-…): ").strip()
+    if not (key and secret):
+        print("Both MODAL_KEY and MODAL_SECRET are required — skipping.")
+        return False
+    if not key.startswith("wk-") or not secret.startswith("ws-"):
+        print(
+            "WARNING: expected MODAL_KEY to start with 'wk-' and MODAL_SECRET "
+            "with 'ws-'. Saving anyway."
+        )
+
+    save_proxy_auth(key, secret)
+    print(f"Saved proxy-auth tokens to {CONFIG_PATH}")
+    print(
+        "\nThis token cannot access any environments by default. You must "
+        "configure which environments it is valid for before it can be used.\n"
+        "Set this at https://modal.com/settings/proxy-auth-tokens — make sure "
+        "the environment your endpoint runs in is enabled for "
+        "this token."
+    )
+    return True
+
+
+def set_proxy_auth() -> bool:
+    """Interactively (re)set the saved proxy-auth token pair.
+
+    Thin wrapper over :func:`ensure_proxy_auth` with ``force=True`` so an
+    existing pair is replaced — exposed as ``training-gym set-proxy-auth``.
+    """
+    return ensure_proxy_auth(interactive=True, force=True)
+
+
+def set_password(password: str | None = None) -> None:
+    """Set or clear the dashboard password, then redeploy so it takes effect.
+
+    Pass an empty string to disable auth. When ``password`` is ``None`` we
+    prompt for it (hidden input). The deployed app reads the value from its
+    environment at startup, so we redeploy after updating the Secret.
+    """
+    from getpass import getpass
+
+    from modal_training_gym._dashboard import set_dashboard_password
+
+    if password is None:
+        password = getpass("Dashboard password (leave empty to disable auth): ").strip()
+        if password:
+            confirm = getpass("Confirm password: ").strip()
+            if confirm != password:
+                print("Passwords don't match — aborting.")
+                return
+
+    set_dashboard_password(password)
+    if password:
+        print("Dashboard password set. Redeploying so it takes effect...")
+    else:
+        print("Dashboard password cleared (open access). Redeploying...")
+
+    setup(interactive=False)
 
 
 def open_dashboard() -> str | None:

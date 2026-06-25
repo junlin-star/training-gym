@@ -9,11 +9,17 @@
     statuses,
     statusCounts,
     activeStatuses,
+    groups,
+    groupCounts,
+    activeGroups,
+    allGroupsActive,
     totalRuns,
     search = $bindable(),
     onToggleRecipe,
     onToggleAllRecipes,
     onToggleStatus,
+    onToggleGroup,
+    onToggleAllGroups,
   } = $props();
 
   let openMenu = $state(null);
@@ -129,6 +135,61 @@
             </span>
             <span class="item-label">{recipe}</span>
             <span class="item-count">{recipeCounts[recipe] || 0}</span>
+          </button>
+        {/each}
+      </div>
+    {/if}
+  </div>
+
+  <div class="menu-wrap">
+    <button
+      class="filter-button"
+      class:open={openMenu === "groups"}
+      onclick={(event) => {
+        event.stopPropagation();
+        toggleMenu("groups");
+      }}
+    >
+      <span class="button-icon">
+        <Filter size={12} />
+      </span>
+      <span>Group</span>
+      <span class="chevron" class:rotated={openMenu === "groups"}>
+        <ChevronDown size={12} />
+      </span>
+    </button>
+    {#if openMenu === "groups"}
+      <div class="menu">
+        <button
+          class="menu-item"
+          onclick={(event) => {
+            event.stopPropagation();
+            onToggleAllGroups();
+          }}
+        >
+          <span class="checkmark" class:checked={allGroupsActive}>
+            {#if allGroupsActive}
+              <Check size={11} />
+            {/if}
+          </span>
+          <span class="item-label">All</span>
+          <span class="item-count">{totalRuns}</span>
+        </button>
+        {#each groups as group (group)}
+          <button
+            class="menu-item"
+            onclick={(event) => {
+              event.stopPropagation();
+              onToggleGroup(group);
+            }}
+          >
+            <span class="checkmark" class:checked={activeGroups.has(group)}>
+              {#if activeGroups.has(group)}
+                <Check size={11} />
+              {/if}
+            </span>
+            <span class="item-label">{group}</span>
+            <span class="item-count">{groupCounts[group] || 0}</span>
           </button>
         {/each}
       </div>

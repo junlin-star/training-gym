@@ -55,7 +55,14 @@ def _run_instructions():
 
 
 @notebook_only
-@shell("%uv pip install -q git+https://github.com/modal-projects/training-gym.git@main")
+@shell(
+    "import importlib.util\n"
+    "\n"
+    "# Skip if modal_training_gym is already importable (e.g. a local editable\n"
+    "# checkout) so your edits keep taking effect and the env stays synced.\n"
+    "if importlib.util.find_spec('modal_training_gym') is None:\n"
+    "    %uv pip install -q git+https://github.com/modal-projects/training-gym.git@main"
+)
 def _install():
     pass
 

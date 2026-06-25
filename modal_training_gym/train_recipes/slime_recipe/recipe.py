@@ -245,6 +245,8 @@ class SlimeRecipe(BaseTrainRecipe):
     sglang_disable_custom_all_reduce: bool = False
     sglang_cuda_graph_bs: list[int] | None = None
     sglang_max_running_requests: int | None = None
+    sglang_tool_call_parser: str | None = None
+    sglang_reasoning_parser: str | None = None
 
     # ── SGLang / config overrides ───────────────────────────────────────────
     extra_config: dict | None = None
