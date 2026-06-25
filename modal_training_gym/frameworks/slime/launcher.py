@@ -104,9 +104,7 @@ _PATCH_QWEN3_ASR_EXPORT_B64 = encode_patch(
 )
 # The Qwen3-VL Megatron->HF converters: a qwen3_vl per-param mapping (language
 # stack + frozen-ViT identity passthrough) and a torch_dist->HF shim that skips
-# the frozen ViT's stacked layers. Like the ASR export above, they live in the
-# base image rather than the VL recipe because conversion runs in the recipe-less
-# deploy/eval path. Additive + idempotent, so non-VL runs are untouched.
+# the frozen ViT's stacked layers.
 _PATCH_QWEN3_VL_EXPORT_B64 = encode_patch(
     "patch_qwen3_vl_export",
     _SLIME_PATCHES / "model_specific_patches" / "qwen3_vl",
