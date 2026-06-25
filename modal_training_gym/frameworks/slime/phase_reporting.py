@@ -538,7 +538,11 @@ def _extract_image_from_sample(sample: Any) -> str | None:
             for item in content:
                 if not isinstance(item, dict):
                     continue
-                if item.get("type") == "image" or "image" in item or "image_url" in item:
+                if (
+                    item.get("type") == "image"
+                    or "image" in item
+                    or "image_url" in item
+                ):
                     ref = item.get("image") or item.get("image_url")
                     if isinstance(ref, dict):
                         ref = ref.get("url")
