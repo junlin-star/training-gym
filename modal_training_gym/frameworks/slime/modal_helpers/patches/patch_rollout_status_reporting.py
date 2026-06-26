@@ -155,13 +155,14 @@ def _patch_file(path: Path) -> None:
                         f"{indent}_tg_report_weight_sync(args)",
                     ]
                 )
-            lines.extend(
-                [
-                    f"{indent}{call}",
-                    f"{indent}# {GENERATE_ROLLOUT_MARKER}: rollout generation state",
-                    f"{indent}_tg_report_generate_rollouts(args)",
-                ]
-            )
+            lines.append(f"{indent}{call}")
+            if needs_generate_rollout:
+                lines.extend(
+                    [
+                        f"{indent}# {GENERATE_ROLLOUT_MARKER}: rollout generation state",
+                        f"{indent}_tg_report_generate_rollouts(args)",
+                    ]
+                )
             return "\n".join(lines)
 
         src, weight_sync_count = weight_sync_pattern.subn(
@@ -171,34 +172,51 @@ def _patch_file(path: Path) -> None:
     step_finish_count = 0
     if needs_step_finish:
         step_finish_pattern = re.compile(
-            r"^(?P<indent>[ \t]*)if should_run_periodic_action\(rollout_id, args\.save_interval, num_rollout_per_epoch, args\.num_rollout\):",
-            re.M,
+            r"^(?P<indent>[ \t]*)(?P<call>(?:await[ \t]+)?(?:[A-Za-z_][A-Za-z0-9_]*\.)?update_weights\(\))[ \t]*(?P<newline>\r?\n?)$"
         )
-
-        def _step_finish_replacement(match: re.Match[str]) -> str:
-            indent = match.group("indent")
-            line = match.group(0)
-            return "\n".join(
-                [
-                    f"{indent}# {STEP_FINISH_MARKER}: training step finish",
-                    f"{indent}_tg_report_step_complete(args, rollout_id)",
-                    line,
-                ]
+        lines = src.splitlines(keepends=True)
+        patched_lines = []
+        in_rollout_loop = False
+        loop_indent = ""
+        for line in lines:
+            patched_lines.append(line)
+            loop_match = re.match(
+                r"^(?P<indent>[ \t]*)for[ \t]+rollout_id[ \t]+in[ \t]+.*:",
+                line,
             )
-
-        src, step_finish_count = step_finish_pattern.subn(
-            _step_finish_replacement, src, count=1
-        )
+            if loop_match:
+                in_rollout_loop = True
+                loop_indent = loop_match.group("indent")
+                continue
+            if not in_rollout_loop or not line.strip():
+                continue
+            indent = line[: len(line) - len(line.lstrip(" \t"))]
+            if len(indent) <= len(loop_indent):
+                in_rollout_loop = False
+                continue
+            if step_finish_count != 0:
+                continue
+            step_finish_match = step_finish_pattern.match(line)
+            if step_finish_match:
+                newline = step_finish_match.group("newline") or "\n"
+                patched_lines.extend(
+                    [
+                        f"{indent}# {STEP_FINISH_MARKER}: training step finish{newline}",
+                        f"{indent}_tg_report_step_complete(args, rollout_id){newline}",
+                    ]
+                )
+                step_finish_count += 1
+        src = "".join(patched_lines)
 
     failed = []
     if needs_rollout and rollout_count != 1:
         failed.append("rollout init")
     if (needs_weight_sync or needs_generate_rollout) and weight_sync_count != 1:
         failed.append("weight sync")
+    if needs_step_finish and step_finish_count != 1:
+        failed.append("step finish")
     if needs_step_start and step_start_count == 0:
         failed.append("step start")
-    if needs_step_finish and step_finish_count == 0:
-        failed.append("step finish")
     if failed:
         print(f"WARNING: Could not patch {path.name} for: {', '.join(failed)}")
 

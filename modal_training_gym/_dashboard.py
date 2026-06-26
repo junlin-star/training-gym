@@ -250,6 +250,7 @@ def fastapi_app():
         vol_get,
         vol_get_summary_items_healed,
         vol_put_summary_items,
+        _step_times_dict,
     )
 
     web = FastAPI()
@@ -299,7 +300,6 @@ def fastapi_app():
         "evals": asyncio.Lock(),
         "deployments": asyncio.Lock(),
     }
-    framework_status_locks: dict[str, asyncio.Lock] = {}
     # Hold strong refs to background refresh tasks so they aren't GC'd mid-flight.
     refresh_tasks: set[asyncio.Task] = set()
     web.mount("/assets", StaticFiles(directory=f"{STATIC_DIR}/assets"), name="assets")
@@ -624,72 +624,73 @@ def fastapi_app():
                 detail="training_run_id and phase are required",
             )
 
-        lock = framework_status_locks.setdefault(training_run_id, asyncio.Lock())
-        async with lock:
-            try:
-                run = await run_in_threadpool(TrainingRun.from_id, training_run_id)
-            except KeyError:
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"TrainingRun {training_run_id!r} not found",
-                )
-            await _require_framework_status_token(training_run_id, authorization)
+        try:
+            run = await run_in_threadpool(TrainingRun.from_id, training_run_id)
+        except KeyError:
+            raise HTTPException(
+                status_code=404,
+                detail=f"TrainingRun {training_run_id!r} not found",
+            )
+        await _require_framework_status_token(training_run_id, authorization)
 
-            status = _resolve_framework_status(phase, str(run.framework.value))
-            if status is None:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Unsupported framework status {phase!r} for {run.framework.value}",
-                )
+        status = _resolve_framework_status(phase, str(run.framework.value))
+        if status is None:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unsupported framework status {phase!r} for {run.framework.value}",
+            )
 
-            run.framework_status = status
-            metadata = dict(run.metadata or {})
-            progress = {
-                "phase": status.value,
-                "updated_at": int(time.time()),
-            }
-            # is_active: True = stage is actually running on hardware; False =
-            # we've marked the stage but it's queuing for a GPU. Sent by the
-            # orchestration code in common/train.py (queue=False) and by the
-            # Modal function itself when its body starts executing (active=True).
-            if "is_active" in payload:
-                progress["is_active"] = bool(payload.get("is_active"))
-            for src, dst in (
-                ("progress_current", "current"),
-                ("progress_total", "total"),
-                ("progress_unit", "unit"),
-                ("rollout_id", "rollout_id"),
-                ("step_id", "step_id"),
-            ):
-                if src not in payload:
+        run.framework_status = status
+        metadata = dict(run.metadata or {})
+        progress = {
+            "phase": status.value,
+            "updated_at": int(time.time()),
+        }
+        # is_active: True = stage is actually running on hardware; False =
+        # we've marked the stage but it's queuing for a GPU. Sent by the
+        # orchestration code in common/train.py (queue=False) and by the
+        # Modal function itself when its body starts executing (active=True).
+        if "is_active" in payload:
+            progress["is_active"] = bool(payload.get("is_active"))
+        for src, dst in (
+            ("progress_current", "current"),
+            ("progress_total", "total"),
+            ("progress_unit", "unit"),
+            ("rollout_id", "rollout_id"),
+            ("step_id", "step_id"),
+        ):
+            if src not in payload:
+                continue
+            value = payload.get(src)
+            if dst in ("current", "total", "rollout_id", "step_id"):
+                value = _optional_int(value)
+                if value is None:
                     continue
-                value = payload.get(src)
-                if dst in ("current", "total", "rollout_id", "step_id"):
-                    value = _optional_int(value)
-                    if value is None:
-                        continue
-                progress[dst] = value
-            existing_progress = metadata.get("framework_progress")
-            if isinstance(existing_progress, dict):
-                # Drop the existing is_active when we get a fresh transition into
-                # a different phase — it shouldn't bleed across stage changes.
-                if existing_progress.get("phase") != progress.get("phase"):
-                    existing_progress = {
-                        k: v for k, v in existing_progress.items() if k != "is_active"
-                    }
-                progress = {**existing_progress, **progress}
-            metadata["framework_progress"] = progress
-            run.metadata = metadata
-            current_step = progress.get("current")
-            step_event = str(payload.get("step_event", "") or "").strip()
-            if isinstance(current_step, int) and current_step > 0:
-                if step_event == "start":
-                    run.start_step(current_step, int(time.time()))
-                elif step_event == "finish":
-                    run.finish_current_step(int(time.time()), current_step)
-            await run.save_async()
-            invalidate_cache("runs")
-            return JSONResponse({"status": "ok", "framework_status": status.value})
+            progress[dst] = value
+        existing_progress = metadata.get("framework_progress")
+        if isinstance(existing_progress, dict):
+            # Drop the existing is_active when we get a fresh transition into
+            # a different phase — it shouldn't bleed across stage changes.
+            if existing_progress.get("phase") != progress.get("phase"):
+                existing_progress = {
+                    k: v for k, v in existing_progress.items() if k != "is_active"
+                }
+            progress = {**existing_progress, **progress}
+        metadata["framework_progress"] = progress
+        run.metadata = metadata
+        current_step = progress.get("current")
+        step_event = str(payload.get("step_event", "") or "").strip()
+        if isinstance(current_step, int) and current_step > 0:
+            step_times = _step_times_dict()
+            if step_event == "start":
+                step_times[f"{training_run_id}:{current_step}:start"] = int(time.time())
+            elif step_event == "finish":
+                step_times[f"{training_run_id}:{current_step}:finish"] = int(
+                    time.time()
+                )
+        await run.save_async()
+        invalidate_cache("runs")
+        return JSONResponse({"status": "ok", "framework_status": status.value})
 
     # ── Training rollouts ────────────────────────────────────────────────
 

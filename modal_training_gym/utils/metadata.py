@@ -8,6 +8,7 @@ from enum import Enum
 from typing import Any, Callable
 
 METADATA_VOLUME_NAME = "training-gym-metadata"
+STEP_TIMES_DICT_NAME = "training-gym-step-times"
 
 
 class MetadataStore(Enum):
@@ -118,6 +119,12 @@ def _metadata_volume():
     import modal
 
     return modal.Volume.from_name(METADATA_VOLUME_NAME, create_if_missing=True)
+
+
+def _step_times_dict():
+    import modal
+
+    return modal.Dict.from_name(STEP_TIMES_DICT_NAME, create_if_missing=True)
 
 
 def _safe_reload(vol) -> None:

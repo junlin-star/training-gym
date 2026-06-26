@@ -19,6 +19,7 @@ from modal_training_gym.common.dataset import (
     MultimodalDataset,
 )
 from modal_training_gym.common.run import TrainingRun, TrainingRunStatus
+from modal_training_gym.common.wandb import WandbConfig
 from modal_training_gym.model import ModelConfig
 from modal_training_gym.train import TrainConfig
 from modal_training_gym.train_recipes.slime_recipe import SlimeRecipe
@@ -223,20 +224,38 @@ def get_model_config_from_model_name(model_name: str) -> ModelConfig:
     return config_cls()
 
 
-def run_base_training_on_slime(model_name: str, step_count: int = 1) -> TutorialResult:
+def run_base_training_on_slime(
+    model_name: str,
+    step_count: int = 1,
+    wandb_project: str | None = None,
+    wandb_group: str | None = None,
+    wandb_secret_name: str = "wandb-secret",
+) -> TutorialResult:
     model_config = get_model_config_from_model_name(model_name)
     if not _supports_slime(model_config):
         raise ValueError(
             f"model {model_config.model_name!r} has no base slime recipe; "
             f"validatable models: {', '.join(available_model_names())}"
         )
+    dataset = pick_dataset(model_config)
+    dataset_name = getattr(dataset, "hf_repo", type(dataset).__name__).rsplit("/", 1)[
+        -1
+    ]
+    model_short_name = model_config.model_name.rsplit("/", 1)[-1]
     train_recipe = SlimeRecipe.get_base_recipe(model_config)
     train_recipe.num_rollout = step_count
     train_recipe.rm_type = "deepscaler"
+    if wandb_project is not None:
+        train_recipe.wandb = WandbConfig(
+            project=wandb_project
+            or f"model-validation-{model_short_name}-{dataset_name}",
+            group=wandb_group or f"model-validator-{model_short_name}-{dataset_name}",
+            modal_wandb_secret_name=wandb_secret_name,
+        )
 
     train_config = TrainConfig(
         model=model_config,
-        dataset=pick_dataset(model_config),
+        dataset=dataset,
         recipe=train_recipe,
     )
 
@@ -311,6 +330,26 @@ def __main__():
         action="store_true",
         help="Print the result as JSON to stdout.",
     )
+    check_parser.add_argument(
+        "--wandb-project",
+        default="",
+        help="W&B project for validator runs. Defaults to model-validation-{model}-{dataset}.",
+    )
+    check_parser.add_argument(
+        "--wandb-group",
+        default="",
+        help="W&B group for validator runs. Defaults to model-validator-{model}-{dataset}.",
+    )
+    check_parser.add_argument(
+        "--wandb-secret-name",
+        default="wandb-secret",
+        help="Modal Secret name containing WANDB_API_KEY.",
+    )
+    check_parser.add_argument(
+        "--no-wandb",
+        action="store_true",
+        help="Disable W&B logging for this validator run.",
+    )
 
     subparsers.add_parser(
         "list", help="Print available model names as a JSON array and exit."
@@ -337,7 +376,13 @@ def __main__():
         print(summarize_results(args.results_dir))
         return
 
-    tutorial_result = run_base_training_on_slime(args.model, args.num_steps)
+    tutorial_result = run_base_training_on_slime(
+        args.model,
+        args.num_steps,
+        None if args.no_wandb else args.wandb_project,
+        args.wandb_group,
+        args.wandb_secret_name,
+    )
     tutorial_result.format_tutorial_result()
 
     if args.output:
