@@ -172,14 +172,13 @@ def _patch_file(path: Path) -> None:
     step_finish_count = 0
     if needs_step_finish:
         step_finish_pattern = re.compile(
-            r"^(?P<indent>[ \t]*)(?P<call>(?:await[ \t]+)?(?:[A-Za-z_][A-Za-z0-9_]*\.)?update_weights\(\))[ \t]*(?P<newline>\r?\n?)$"
+            r"^(?P<indent>[ \t]*)if should_run_periodic_action\(rollout_id, args\.save_interval, num_rollout_per_epoch, args\.num_rollout\):[ \t]*(?P<newline>\r?\n?)$"
         )
         lines = src.splitlines(keepends=True)
         patched_lines = []
         in_rollout_loop = False
         loop_indent = ""
         for line in lines:
-            patched_lines.append(line)
             loop_match = re.match(
                 r"^(?P<indent>[ \t]*)for[ \t]+rollout_id[ \t]+in[ \t]+.*:",
                 line,
@@ -187,25 +186,28 @@ def _patch_file(path: Path) -> None:
             if loop_match:
                 in_rollout_loop = True
                 loop_indent = loop_match.group("indent")
+                patched_lines.append(line)
                 continue
             if not in_rollout_loop or not line.strip():
+                patched_lines.append(line)
                 continue
             indent = line[: len(line) - len(line.lstrip(" \t"))]
             if len(indent) <= len(loop_indent):
                 in_rollout_loop = False
+                patched_lines.append(line)
                 continue
-            if step_finish_count != 0:
-                continue
-            step_finish_match = step_finish_pattern.match(line)
-            if step_finish_match:
-                newline = step_finish_match.group("newline") or "\n"
-                patched_lines.extend(
-                    [
-                        f"{indent}# {STEP_FINISH_MARKER}: training step finish{newline}",
-                        f"{indent}_tg_report_step_complete(args, rollout_id){newline}",
-                    ]
-                )
-                step_finish_count += 1
+            if step_finish_count == 0:
+                step_finish_match = step_finish_pattern.match(line)
+                if step_finish_match:
+                    newline = step_finish_match.group("newline") or "\n"
+                    patched_lines.extend(
+                        [
+                            f"{indent}# {STEP_FINISH_MARKER}: training step finish{newline}",
+                            f"{indent}_tg_report_step_complete(args, rollout_id){newline}",
+                        ]
+                    )
+                    step_finish_count += 1
+            patched_lines.append(line)
         src = "".join(patched_lines)
 
     failed = []

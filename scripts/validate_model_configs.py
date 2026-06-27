@@ -332,8 +332,8 @@ def __main__():
     )
     check_parser.add_argument(
         "--wandb-project",
-        default="",
-        help="W&B project for validator runs. Defaults to model-validation-{model}-{dataset}.",
+        default=None,
+        help="W&B project for validator runs. If omitted, W&B logging is disabled.",
     )
     check_parser.add_argument(
         "--wandb-group",
