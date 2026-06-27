@@ -24,6 +24,8 @@ from modal_training_gym.model import ModelConfig
 from modal_training_gym.train import TrainConfig
 from modal_training_gym.train_recipes.slime_recipe import SlimeRecipe
 
+VALIDATION_EPHEMERAL_DISK_MIB = 2_097_152
+
 # TODO(melody/joy): Add more granular result per step
 # @dataclass
 # class StepResult:
@@ -245,6 +247,10 @@ def run_base_training_on_slime(
     train_recipe = SlimeRecipe.get_base_recipe(model_config)
     train_recipe.num_rollout = step_count
     train_recipe.rm_type = "deepscaler"
+    train_recipe.train_function_kwargs = {
+        **dict(train_recipe.train_function_kwargs or {}),
+        "ephemeral_disk": VALIDATION_EPHEMERAL_DISK_MIB,
+    }
     if wandb_project is not None:
         train_recipe.wandb = WandbConfig(
             project=wandb_project
