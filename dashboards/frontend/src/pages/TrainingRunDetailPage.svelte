@@ -6,7 +6,9 @@
   import TimeAgo from "../components/TimeAgo.svelte";
   import SampleTimeline from "../components/SampleTimeline.svelte";
   import ConversationView from "../components/ConversationView.svelte";
-  import { fetchRunRollouts, fetchRollout } from "../lib/api.js";
+  import AdvantageHeatmap from "../components/AdvantageHeatmap.svelte";
+  import AdvantageSpreadChart from "../components/AdvantageSpreadChart.svelte";
+  import { fetchRunRollouts, fetchRollout, fetchRunAdvantages } from "../lib/api.js";
 
   let {
     runId,
@@ -50,6 +52,11 @@
   let expandedRolloutId = $state(null);
   let expandedRollout = $state(null);
   let expandedRolloutLoading = $state(false);
+
+  // Per-step advantage distribution summaries (one row per step, each with the
+  // step's overall stats + quantiles) — drives the advantage fan chart.
+  let advantageSteps = $state([]);
+  let hasAdvantages = $derived(advantageSteps.length > 0);
 
   // Per-step sample view: a histogram of sample scores. Clicking a bar opens
   // a single-sample viewer scoped to that bucket; ←/→ step through it.
@@ -197,6 +204,18 @@
     }
   }
 
+  async function loadAdvantages(signal) {
+    if (!runId) return;
+    try {
+      const rows = await fetchRunAdvantages(runId, { signal });
+      if (signal?.aborted) return;
+      advantageSteps = rows;
+    } catch {
+      // Advantage data is optional (only present once the slime hook has
+      // reported a step) — keep whatever we have on a transient failure.
+    }
+  }
+
   // Reset rollout state when the run changes (separate from the fetch effect
   // so flipping between the summary/rollouts tabs doesn't clear what's loaded).
   $effect(() => {
@@ -205,7 +224,28 @@
     rolloutsError = "";
     expandedRolloutId = null;
     expandedRollout = null;
+    advantageSteps = [];
     closeBucket();
+  });
+
+  // Load advantage distributions while the Summary tab is active; poll so new
+  // steps stream in on a running run.
+  $effect(() => {
+    const id = runId;
+    if (!id || activeTab !== "summary") return;
+
+    const controller = new AbortController();
+    void loadAdvantages(controller.signal);
+    const interval = window.setInterval(() => {
+      const status = String(run?.status || "").toLowerCase();
+      if (status && status !== "running") return;
+      void loadAdvantages(controller.signal);
+    }, 5000);
+
+    return () => {
+      controller.abort();
+      window.clearInterval(interval);
+    };
   });
 
   // Lazy load: only fetch rollout summaries while a tab that needs them is
@@ -625,6 +665,16 @@
                 </div>
               {/if}
             </div>
+            {#if hasAdvantages}
+              <div class="rollout-chart">
+                <div class="rollout-chart-title">Advantage spread over time</div>
+                <AdvantageSpreadChart steps={advantageSteps} />
+              </div>
+              <div class="rollout-chart">
+                <div class="rollout-chart-title">Advantage distribution over time</div>
+                <AdvantageHeatmap steps={advantageSteps} />
+              </div>
+            {/if}
             <div class="rollout-chart">
               <div class="rollout-chart-title">Score distribution</div>
               {#if scoreDist}

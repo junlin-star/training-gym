@@ -295,3 +295,35 @@ export async function fetchRollout(trainingRunId, rolloutId) {
   if (!res.ok) return null;
   return await res.json();
 }
+
+// Per-step advantage distribution summaries (one row per training step, each
+// carrying that step's overall stats + quantiles). Drives the fan chart that
+// shows how the advantage distribution shifts/spreads over training.
+export async function fetchRunAdvantages(trainingRunId, { signal } = {}) {
+  const res = await fetch(
+    `${SERVER}/runs/${encodeURIComponent(trainingRunId)}/advantages`,
+    { signal },
+  );
+  if (!res.ok) return [];
+  const data = await res.json();
+  if (!Array.isArray(data)) return [];
+  return data
+    .filter((item) => item && typeof item === "object" && item.stats)
+    .map((item) => ({
+      rollout_id: Number(item.rollout_id) || 0,
+      created_at: Number(item.created_at) || 0,
+      num_samples: Number(item.num_samples) || 0,
+      num_groups: Number(item.num_groups) || 0,
+      stats: item.stats,
+    }))
+    .sort((a, b) => a.rollout_id - b.rollout_id);
+}
+
+// One step's full per-group advantage distribution (for drill-in).
+export async function fetchRunAdvantageStep(trainingRunId, rolloutId) {
+  const res = await fetch(
+    `${SERVER}/runs/${encodeURIComponent(trainingRunId)}/advantages/${encodeURIComponent(rolloutId)}`,
+  );
+  if (!res.ok) return null;
+  return await res.json();
+}
