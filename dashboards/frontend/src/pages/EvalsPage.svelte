@@ -23,7 +23,7 @@
     error,
     evalConfigGroups,
     fetchEvalDetail,
-    getEvalStatus,
+    getEvalDisplay,
     evalConfigMeta,
     onOpenTrainingRun,
     onOpenDeployment,
@@ -412,9 +412,12 @@
     const meta = evalConfigMeta(group.config, ev);
     const linkedDeployment = findDeploymentRow(run, group);
     const depRef = deploymentRefValue(linkedDeployment);
+    const display = getEvalDisplay(ev);
     return {
       evalId: ev.eval_id || "",
-      status: getEvalStatus(ev),
+      status: display.bucket,
+      pillStatus: display.pill,
+      statusLabel: display.label,
       model: nonPlaceholderText(meta.model) || "—",
       config: nonPlaceholderText(meta.dataset) || "—",
       grading: nonPlaceholderText(meta.evalFn || meta.judge) || "—",
@@ -643,7 +646,7 @@
                           <span class="truncate-text">{baseModel}</span>
                         </td>
                         <td>
-                          <StatusPill status={run.status} />
+                          <StatusPill status={run.pillStatus} label={run.statusLabel} />
                         </td>
                         <td class="eval-score">
                           {run.status === "Failed" ? "—" : run.avgScore.toFixed(4)}
@@ -673,7 +676,7 @@
           <span class="drawer-eyebrow">Eval</span>
           <div class="drawer-title-row">
             <h2 class="drawer-title">{drawerMeta.evalId}</h2>
-            <StatusPill status={drawerMeta.status} />
+            <StatusPill status={drawerMeta.pillStatus} label={drawerMeta.statusLabel} />
           </div>
         </div>
         <div class="drawer-actions">
@@ -887,6 +890,17 @@
                         ></audio>
                       </div>
                     {/if}
+                    {#if row.metadata?._metadata_type === "image" || row.metadata?.image}
+                      <div class="example-section">
+                        <span class="example-section-label">Image</span>
+                        <img
+                          class="example-image"
+                          src={row.metadata.image}
+                          alt="eval input"
+                          loading="lazy"
+                        />
+                      </div>
+                    {/if}
                     {#each Object.entries(row.metadata?.metrics ?? {}) as [name, value]}
                       <div class="example-section">
                         <span class="example-section-label">{name.toUpperCase()}</span>
@@ -905,9 +919,14 @@
                       {@const extraMeta = Object.fromEntries(
                         Object.entries(row.metadata).filter(
                           ([k]) =>
-                            !["_metadata_type", "audio", "reference", "metrics", "hyp"].includes(
-                              k,
-                            ),
+                            ![
+                              "_metadata_type",
+                              "audio",
+                              "image",
+                              "reference",
+                              "metrics",
+                              "hyp",
+                            ].includes(k),
                         ),
                       )}
                       {#if Object.keys(extraMeta).length}
@@ -1694,6 +1713,15 @@
     height: 36px;
     border-radius: 6px;
     filter: saturate(0.9);
+  }
+
+  .example-image {
+    display: block;
+    width: 100%;
+    max-width: 480px;
+    height: auto;
+    border-radius: 6px;
+    border: 1px solid var(--border);
   }
 
   .examples-loading,

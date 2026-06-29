@@ -470,27 +470,42 @@
     return 0;
   }
 
-  function getEvalStatus(ev) {
+  // Maps a raw eval status onto a coarse filter/count bucket
+  // ("Completed" | "Pending" | "Failed"), the StatusPill color/icon variant,
+  // and a human label for the four eval phases.
+  function getEvalDisplay(ev) {
     const rawStatus = safeText(ev.status).toLowerCase();
-    if (
-      rawStatus === "completed" ||
-      rawStatus === "success" ||
-      rawStatus === "succeeded"
-    ) {
-      return "Completed";
+    if (rawStatus === "deploying_model" || rawStatus === "deploying") {
+      return { bucket: "Pending", pill: "running", label: "Deploying model" };
     }
-    if (rawStatus === "failed" || rawStatus === "error") return "Failed";
     if (
+      rawStatus === "running_eval" ||
       rawStatus === "running" ||
       rawStatus === "pending" ||
       rawStatus === "queued" ||
       rawStatus === "initializing"
     ) {
-      return "Pending";
+      return { bucket: "Pending", pill: "running", label: "Running eval" };
+    }
+    if (
+      rawStatus === "completed" ||
+      rawStatus === "success" ||
+      rawStatus === "succeeded"
+    ) {
+      return { bucket: "Completed", pill: "completed", label: "Success" };
+    }
+    if (rawStatus === "failed" || rawStatus === "error") {
+      return { bucket: "Failed", pill: "failed", label: "Failed" };
     }
     const total = ev.total ?? (Array.isArray(ev.rows) ? ev.rows.length : 0);
-    if (total > 0) return "Completed";
-    return "Pending";
+    if (total > 0) {
+      return { bucket: "Completed", pill: "completed", label: "Success" };
+    }
+    return { bucket: "Pending", pill: "running", label: "Pending" };
+  }
+
+  function getEvalStatus(ev) {
+    return getEvalDisplay(ev).bucket;
   }
 
   function normalizeConfigValue(value) {
@@ -593,11 +608,14 @@
       }
       const avgScore = evalAccuracy(ev);
       const totalRows = ev.total ?? (ev.rows || []).length;
+      const display = getEvalDisplay(ev);
       group.runs.push({
         eval: ev,
         avgScore,
         totalRows,
-        status: getEvalStatus(ev),
+        status: display.bucket,
+        pillStatus: display.pill,
+        statusLabel: display.label,
         createdAt,
       });
       group.latestCreatedAt = Math.max(group.latestCreatedAt, createdAt);
@@ -886,7 +904,7 @@
         {error}
         {evalConfigGroups}
         {fetchEvalDetail}
-        {getEvalStatus}
+        {getEvalDisplay}
         {evalConfigMeta}
         onOpenTrainingRun={openTrainingRun}
         onOpenDeployment={openDeployment}
