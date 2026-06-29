@@ -538,6 +538,34 @@
   );
   let scoreDist = $state(null);
 
+  let groupTags = $derived.by(() => {
+    const tags = run?.metadata?.group_tags;
+    if (!tags || typeof tags !== "object") return null;
+    const rawTags = Array.isArray(tags.tags) ? tags.tags : [];
+    const overrides =
+      tags.overrides && typeof tags.overrides === "object" ? tags.overrides : {};
+    const displayTags = rawTags.length
+      ? rawTags
+      : Object.entries(overrides).map(([key, value]) => ({
+          key,
+          label: key.split(".").at(-1)?.replace(/_/g, " ") || key,
+          value,
+        }));
+    return {
+      group_id: tags.group_id || run?.group_id || run?.metadata?.group_id || "",
+      axes: Array.isArray(tags.axes) ? tags.axes : Object.keys(overrides),
+      overrides,
+      tags: displayTags,
+    };
+  });
+
+  function formatTagValue(value) {
+    if (value == null) return "—";
+    if (typeof value === "number" || typeof value === "boolean") return String(value);
+    if (typeof value === "object") return JSON.stringify(value);
+    return String(value);
+  }
+
   function buildScoreDist(firstSamples, lastSamples, firstId, lastId) {
     const scores = [...firstSamples, ...lastSamples].map((s) => Number(s.score) || 0);
     if (!scores.length) return null;
@@ -642,6 +670,7 @@
       bind:active={activeTab}
       tabs={[
         { value: "summary", label: "Summary" },
+        { value: "tags", label: "Tags", count: groupTags?.tags?.length || undefined },
         { value: "rollouts", label: "Rollouts", count: rolloutSummaries.length || undefined },
         { value: "logs", label: "Logs" },
       ]}
@@ -737,6 +766,46 @@
             {fmtDuration}
           />
         </aside>
+      </div>
+    {:else if activeTab === "tags"}
+      <div class="tab-panel">
+        {#if groupTags}
+          <div class="tags-grid">
+            <section class="tags-card">
+              <h3 class="tags-title">Group</h3>
+              <div class="tags-kv">
+                <span class="tags-key">Group ID</span>
+                <span class="tags-value mono">{groupTags.group_id || "—"}</span>
+              </div>
+              <div class="tags-kv">
+                <span class="tags-key">Customized params</span>
+                <div class="tags-chip-list">
+                  {#each groupTags.axes as axis (axis)}
+                    <span class="tags-chip mono">{axis}</span>
+                  {/each}
+                </div>
+              </div>
+            </section>
+
+            <section class="tags-card">
+              <h3 class="tags-title">This run differs by</h3>
+              {#if groupTags.tags.length}
+                <div class="tag-table">
+                  {#each groupTags.tags as tag (tag.key)}
+                    <div class="tag-row">
+                      <span class="tag-key mono">{tag.key}</span>
+                      <span class="tag-value">{formatTagValue(tag.value)}</span>
+                    </div>
+                  {/each}
+                </div>
+              {:else}
+                <div class="empty">This run has no variant-specific tags.</div>
+              {/if}
+            </section>
+          </div>
+        {:else}
+          <div class="empty">This run is not part of a tagged TrainingGroup sweep.</div>
+        {/if}
       </div>
     {:else if activeTab === "rollouts"}
       <div class="tab-panel">
@@ -1186,6 +1255,87 @@
     display: flex;
     justify-content: flex-end;
     margin-bottom: 8px;
+  }
+
+  .tags-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 16px;
+  }
+
+  .tags-card {
+    border: 1px solid var(--border, #2f2f2f);
+    border-radius: 8px;
+    background: var(--color-c-gray-08, #1c1c1c);
+    padding: 16px;
+  }
+
+  .tags-title {
+    color: var(--text-bright);
+    font-size: 14px;
+    font-weight: 600;
+    margin: 0 0 12px;
+  }
+
+  .tags-kv {
+    display: grid;
+    grid-template-columns: 132px minmax(0, 1fr);
+    gap: 12px;
+    padding: 6px 0;
+    align-items: baseline;
+  }
+
+  .tags-key {
+    color: var(--muted);
+    font-size: 12px;
+  }
+
+  .tags-value,
+  .tag-value {
+    color: var(--text);
+    font-size: 13px;
+  }
+
+  .tags-chip-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .tags-chip {
+    border: 1px solid var(--border, #2f2f2f);
+    border-radius: 999px;
+    color: var(--text);
+    background: var(--color-c-gray-10, #2f2f2f);
+    padding: 3px 8px;
+    font-size: 11px;
+  }
+
+  .tag-table {
+    display: grid;
+    gap: 6px;
+  }
+
+  .tag-row {
+    display: grid;
+    grid-template-columns: minmax(160px, 1fr) minmax(120px, 0.7fr);
+    gap: 12px;
+    align-items: center;
+    border-bottom: 1px solid var(--border, #2f2f2f);
+    padding: 8px 0;
+  }
+
+  .tag-row:last-child {
+    border-bottom: 0;
+  }
+
+  .tag-key {
+    color: var(--muted);
+    font-size: 12px;
+  }
+
+  .mono {
+    font-family: var(--font-mono, monospace);
   }
 
   @media (max-width: 900px) {

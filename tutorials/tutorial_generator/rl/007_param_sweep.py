@@ -36,13 +36,15 @@ def _intro():
     combination, each with its own `training_run_id` but a shared `group_id` so
     the dashboard can show them side by side.
 
-    Two things make it safe to launch a big sweep:
+    Three things make it safe to launch a big sweep:
 
     * `get_train_configs()` returns the derived `TrainConfig`s so you can see
       *exactly* what will run before spending a single GPU-second.
     * Invalid overrides — a misspelled field, or a value of the wrong type —
       raise immediately, before any run starts. A sweep never dies three
       variants deep because of a typo.
+    * `launch()` starts every variant as a detached Modal run with
+      `TrainLaunch` handles you can inspect or wait on later.
     """
 
 
@@ -233,6 +235,8 @@ def _launch_intro():
     """
     ## 4. Launch the sweep
 
+    ### Blocking param sweep
+
     `train()` runs every variant and returns the successful `TrainResult`s.
     With `max_parallel > 1` the variants run concurrently — each is a detached,
     independent Modal app — and a single failure is recorded in
@@ -240,18 +244,46 @@ def _launch_intro():
 
     Every result carries the shared `group_id`, so you can pull the whole sweep
     back together afterwards (and the dashboard groups them automatically).
+
+
+    ### Background param sweep
+
+    `launch()` starts every variant as a detached Modal run and returns a list of
+    `TrainLaunch` handles. Each handle has the `training_run_id`, Modal app URL,
+    function-call id, and shared `group_id`.
+
+    Pass `prepare_inputs=True` to run the model/download conversion steps before
+    spawning training, matching the one-shot `TrainConfig.train()` behavior. A
+    single launch failure is recorded in `group.failures` instead of sinking the
+    rest of the sweep.
+
+    Call `launch.result()` to wait for a handle's trained `TrainResult`. If you
+    don't need the handles, `group.train(max_parallel=...)` wraps this pattern
+    and returns the successful `TrainResult`s directly.
     """
 
 
 @code
 def _launch():
-    results = group.train(max_parallel=2)
-    print(f"group {group.group_id}: {len(results)} runs completed")
-    for result in results:
-        print(f"  {result.training_run_id}  (group_id={result.group_id})")
+    launches = group.launch(prepare_inputs=True)
+    print(f"group {group.group_id}: {len(launches)} runs launched")
+    for launch in launches:
+        print(
+            f"  {launch.training_run_id}  "
+            f"app={launch.modal_app_id}  "
+            f"group_id={launch.group_id}"
+        )
     if group.failures:
         for overrides, err in group.failures:
             print(f"  FAILED {overrides}: {err}")
+
+    results = []
+    for launch in launches:
+        result = launch.result()
+        results.append(result)
+        print(f"completed {result.training_run_id}  (group_id={result.group_id})")
+
+    print(f"group {group.group_id}: {len(results)} runs completed")
 
 
 @markdown
@@ -266,6 +298,12 @@ def _outro():
       bad fields/values *before* anything launches.
     * `train(max_parallel=...)` fans the sweep out across Modal; `group.failures`
       isolates any run that didn't make it.
+    * `launch(prepare_inputs=True)` fans the sweep out across Modal and returns
+      `TrainLaunch` handles; `group.failures` isolates any run that didn't
+      launch.
+    * Use `launch.result()` to wait on a specific launched run, or
+      `train(max_parallel=...)` when you want one blocking call that returns the
+      successful `TrainResult`s.
     * Every run is tagged with the `group_id`, so the dashboard's **Group**
       filter pulls the whole sweep together for side-by-side comparison.
 
