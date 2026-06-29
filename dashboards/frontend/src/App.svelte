@@ -123,6 +123,7 @@
   function getStatus(run) {
     const rawStatus = safeText(run.status).toLowerCase();
     if (run.train_result || rawStatus === "completed") return "Completed";
+    if (rawStatus === "cancelled") return "Cancelled";
     if (rawStatus === "stopped") return "Stopped";
     if (rawStatus === "failed") return "Failed";
     if (rawStatus === "running") return "Pending";
@@ -431,9 +432,12 @@
   );
 
   let completedTotal = $derived(allRuns.filter((run) => run.train_result).length);
+  let cancelledTotal = $derived(allRuns.filter((run) => getStatus(run) === "Cancelled").length);
   let stoppedTotal = $derived(allRuns.filter((run) => getStatus(run) === "Stopped").length);
   let failedTotal = $derived(allRuns.filter((run) => getStatus(run) === "Failed").length);
-  let runningTotal = $derived(allRuns.length - completedTotal - stoppedTotal - failedTotal);
+  let runningTotal = $derived(
+    allRuns.length - completedTotal - cancelledTotal - stoppedTotal - failedTotal,
+  );
 
   let deploymentRows = $derived.by(() =>
     [...allDeployments]

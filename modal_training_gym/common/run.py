@@ -29,6 +29,7 @@ TRAINING_RUNS_STORE_NAME = MetadataStore.TRAINING_RUNS.value
 class TrainingRunStatus(Enum):
     RUNNING = "running"
     STOPPED = "stopped"
+    CANCELLED = "cancelled"
     COMPLETED = "completed"
     FAILED = "failed"
 

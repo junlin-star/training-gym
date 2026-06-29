@@ -45,10 +45,10 @@ class Qwen3_6_35b_Recipe(SlimeRecipe):
         default_factory=lambda: [1, 2, 4, 8] + list(range(16, 257, 8))
     )
     sglang_max_running_requests: int | None = 512
-    sglang_speculative_algorithm: str = "EAGLE"
-    sglang_speculative_num_steps: int = 3
-    sglang_speculative_eagle_topk: int = 1
-    sglang_speculative_num_draft_tokens: int = 4
+    sglang_speculative_algorithm: str | None = "EAGLE"
+    sglang_speculative_num_steps: int | None = 3
+    sglang_speculative_eagle_topk: int | None = 1
+    sglang_speculative_num_draft_tokens: int | None = 4
     sglang_mamba_scheduler_strategy: str = "extra_buffer"
 
     # ── Training ──────────────────────────────────────────────────────────

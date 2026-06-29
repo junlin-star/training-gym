@@ -18,7 +18,7 @@ What this does:
    normal Secrets list in the UI). Credentials are auto-resolved from
    ``MODAL_TOKEN_*`` env vars or the active profile in ``~/.modal.toml``.
 
-2. Deploys the dashboard's ASGI app.
+2. Deploys the dashboard's ASGI app and hourly orphan-run reconciler.
 3. Persists the FastAPI web URL to ``~/.training-gym.toml`` so other
    clients (e.g. the slime launcher) can find the dashboard.
 """

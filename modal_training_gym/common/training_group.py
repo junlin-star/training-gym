@@ -274,7 +274,7 @@ class TrainingGroup:
 
         def _run(overrides: dict[str, Any], cfg: TrainConfig) -> None:
             try:
-                results.append(cfg.train())
+                results.append(cfg.train(show_output=max_parallel <= 1))
             except BaseException as exc:  # noqa: BLE001 — recorded per-variant
                 if not continue_on_error:
                     raise

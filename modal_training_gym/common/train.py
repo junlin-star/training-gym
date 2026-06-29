@@ -2,6 +2,7 @@ import dataclasses as _dc
 import secrets as _secrets
 import threading
 import time
+from contextlib import nullcontext
 from enum import Enum
 from typing import Any
 from typing import cast
@@ -18,6 +19,7 @@ from modal_training_gym.common.status import (
     SlimeStatus,
 )
 from modal_training_gym.common.train_result import TrainResult
+from modal_training_gym.common.modal_lifecycle import app_is_live, stop_app
 from modal_training_gym.common.modal_urls import modal_app_dashboard_url
 from modal_training_gym.utils.metadata import MetadataStore, vol_put
 from modal_training_gym.frameworks.miles import build_miles_app
@@ -27,68 +29,6 @@ from modal_training_gym.train_recipes.miles_recipe import MilesConfig
 from modal_training_gym.train_recipes.slime_recipe import SlimeRecipe
 from pydantic import ConfigDict
 from pydantic.dataclasses import dataclass
-
-
-def _stop_app(app_id: str) -> None:
-    """Stop a detached Modal app (best effort).
-
-    Detached apps survive client disconnect, so they don't auto-stop when the
-    ``app.run()`` context exits on normal completion — we stop them explicitly.
-    Mirrors what ``modal app stop`` does. Never raises.
-    """
-    try:
-        import modal
-        from modal_proto import api_pb2
-
-        with modal.Client.from_env() as client:
-            client.stub.AppStop(
-                api_pb2.AppStopRequest(
-                    app_id=app_id,
-                    source=api_pb2.APP_STOP_SOURCE_PYTHON_CLIENT,
-                )
-            )
-    except Exception as exc:  # noqa: BLE001 — auto-stop is best-effort
-        print(f"WARNING: could not auto-stop app {app_id}: {exc}")
-
-
-def _app_is_running(app_id: str) -> bool:
-    """Best-effort check whether a Modal app is still alive on the server.
-
-    A detached app outlives the client, so a dropped client-side RPC doesn't
-    mean the run died — the app keeps running and lands in
-    ``DETACHED_DISCONNECTED``, which we treat as live. Returns False on any
-    error so callers fall back to their normal failure handling.
-    """
-    try:
-        from modal._utils.async_utils import synchronizer
-        from modal.client import _Client
-        from modal_proto import api_pb2
-
-        live_states = {
-            api_pb2.APP_STATE_EPHEMERAL,
-            api_pb2.APP_STATE_DETACHED,
-            api_pb2.APP_STATE_DETACHED_DISCONNECTED,
-            api_pb2.APP_STATE_INITIALIZING,
-            api_pb2.APP_STATE_DEPLOYED,
-            api_pb2.APP_STATE_DERIVED,
-        }
-
-        # ``modal.Client.from_env()`` returns an already-opened singleton, so
-        # using it as a context manager re-enters ``_open()`` and trips
-        # ``assert self._stub is None``; ``client.stub`` is also the raw async
-        # stub. Drive the async RPC through Modal's synchronizer instead — the
-        # same path the ``modal app`` CLI uses to call this from sync code.
-        async def _lifecycle_state() -> int:
-            client = await _Client.from_env()
-            resp = await client.stub.AppGetLifecycle(
-                api_pb2.AppGetLifecycleRequest(app_id=app_id)
-            )
-            return resp.lifecycle.app_state
-
-        state = synchronizer.create_blocking(_lifecycle_state)()
-        return state in live_states
-    except Exception:
-        return False
 
 
 def _merge_recipe(base: SlimeRecipe, overrides: SlimeRecipe) -> SlimeRecipe:
@@ -502,7 +442,7 @@ class TrainConfig:
             config_path=str(config_path),
         )
 
-    def train(self) -> TrainResult:
+    def train(self, *, show_output: bool = True) -> TrainResult:
         """Build the app, run training, and return the TrainResult."""
         import modal
 
@@ -565,7 +505,8 @@ class TrainConfig:
         app = self._build_app()
         result_dict = None
         modal_app_id = ""
-        with modal.enable_output():
+        output_context = modal.enable_output() if show_output else nullcontext()
+        with output_context:
             with app.run(detach=self.detach):
                 modal_app_id = app.app_id or ""
                 modal_app_url = modal_app_dashboard_url(modal_app_id)
@@ -668,9 +609,7 @@ class TrainConfig:
                         # will write its own terminal state. Don't stamp FAILED
                         # while the app is still alive on Modal.
                         remote_still_running = bool(
-                            self.detach
-                            and modal_app_id
-                            and _app_is_running(modal_app_id)
+                            self.detach and modal_app_id and app_is_live(modal_app_id)
                         )
                         # Only mark FAILED if the remote hasn't already set a
                         # terminal state (it may have completed/failed on its
@@ -707,7 +646,7 @@ class TrainConfig:
         # finishes. Stop it ourselves once training completed successfully; on
         # interrupt/failure we leave it up so it can be inspected.
         if self.detach and modal_app_id and result_dict is not None:
-            _stop_app(modal_app_id)
+            stop_app(modal_app_id)
         if result_dict is None:
             raise RuntimeError(
                 "Training app exited before returning a result. "

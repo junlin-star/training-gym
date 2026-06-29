@@ -1,8 +1,8 @@
 <script>
-  let { class: classOverride = "", children } = $props();
+  let { class: classOverride = "", children, ...restProps } = $props();
 </script>
 
-<table class={`minimal-table ${classOverride}`.trim()}>
+<table {...restProps} class={`minimal-table ${classOverride}`.trim()}>
   {@render children()}
 </table>
 

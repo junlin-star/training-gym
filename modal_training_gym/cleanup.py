@@ -12,56 +12,13 @@ from modal_training_gym.utils.metadata import (
     vol_remove,
 )
 
+TERMINAL_STATUSES = frozenset({TrainingRunStatus.FAILED, TrainingRunStatus.CANCELLED})
+
 
 def cleanup(*, older_than_days: int = 7, dry_run: bool = False) -> None:
     cutoff = int(time.time()) - older_than_days * 86400
-    stale_cutoff = int(time.time()) - 24 * 3600
 
-    # Mark stale "running" runs (no update in >24h) as failed — these are
-    # orphaned runs whose container was killed without a graceful shutdown.
-    raw_runs_all = vol_get_summary_items(MetadataStore.TRAINING_RUNS_SUMMARY) or []
-    stale_runs: list[TrainingRun] = []
-    for raw in raw_runs_all:
-        if not isinstance(raw, dict):
-            continue
-        if "training_run_id" not in raw and "run_id" in raw:
-            raw["training_run_id"] = raw["run_id"]
-        try:
-            r = TrainingRun.model_validate(raw)
-        except Exception:
-            continue
-        if (
-            r.status == TrainingRunStatus.RUNNING
-            and (r.updated_at or r.started_at or 0) < stale_cutoff
-        ):
-            stale_runs.append(r)
-
-    if stale_runs:
-        print(
-            f"Marking {len(stale_runs)} stale pending run(s) as failed (no update in >24h):"
-        )
-        for r in stale_runs:
-            age_h = (
-                time.time() - (r.updated_at or r.started_at or r.created_at)
-            ) / 3600
-            print(f"  {r.training_run_id}  (last update {age_h:.0f}h ago)")
-            if not dry_run:
-                r.status = TrainingRunStatus.FAILED
-                r.ended_at = r.updated_at or int(time.time())
-                if r.completed_at is None:
-                    r.completed_at = r.ended_at
-                r.duration_seconds = (
-                    max(0, r.ended_at - r.started_at) if r.started_at else None
-                )
-                try:
-                    r.save()
-                except Exception as exc:
-                    print(f"    WARNING: failed to save: {exc}")
-        if dry_run:
-            print("  (dry run — no changes made)")
-        print()
-
-    print(f"Finding failed runs older than {older_than_days} days …")
+    print(f"Finding failed/cancelled runs older than {older_than_days} days …")
 
     raw_runs = vol_get_summary_items(MetadataStore.TRAINING_RUNS_SUMMARY) or []
     runs: list[TrainingRun] = []
@@ -78,7 +35,7 @@ def cleanup(*, older_than_days: int = 7, dry_run: bool = False) -> None:
     targets = [
         r
         for r in runs
-        if r.status == TrainingRunStatus.FAILED
+        if r.status in TERMINAL_STATUSES
         and (r.created_at or r.started_at or 0) < cutoff
         and (r.created_at or r.started_at or 0) > 0
     ]
@@ -89,11 +46,11 @@ def cleanup(*, older_than_days: int = 7, dry_run: bool = False) -> None:
 
     target_ids = {r.training_run_id for r in targets}
     print(
-        f"{'Would delete' if dry_run else 'Deleting'} {len(targets)} failed run(s):\n"
+        f"{'Would delete' if dry_run else 'Deleting'} {len(targets)} terminal run(s):\n"
     )
     for r in sorted(targets, key=lambda r: r.created_at or 0):
         age_days = (time.time() - (r.created_at or r.started_at)) / 86400
-        print(f"  {r.training_run_id}  ({age_days:.0f}d ago)")
+        print(f"  {r.training_run_id}  ({age_days:.0f}d ago, {r.status.value})")
 
     if dry_run:
         print("\nDry run — no changes made. Remove --dry-run to delete.")
