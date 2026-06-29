@@ -193,6 +193,8 @@ def _post_framework_status(payload: dict[str, Any], timeout: float) -> None:
     if not url:
         return
     _post({"_url": url, "_timeout": timeout, **payload})
+
+
 def _enqueue_advantage(payload: dict[str, Any]) -> None:
     """Enqueue an advantage-distribution payload (longer timeout like rollouts)."""
     url = _advantage_url()
