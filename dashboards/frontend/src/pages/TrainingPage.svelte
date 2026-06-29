@@ -20,6 +20,7 @@
     recipes,
     recipeCounts,
     activeRecipes,
+
     statuses,
     statusCounts,
     activeStatuses,
@@ -125,6 +126,7 @@
     document.body.style.cursor = "col-resize";
     window.addEventListener("pointermove", resizeColumn);
     window.addEventListener("pointerup", stopColumnResize, { once: true });
+    window.addEventListener("pointercancel", stopColumnResize, { once: true });
   }
 
   function resizeColumn(event) {
@@ -142,6 +144,8 @@
     document.body.style.cursor = resizeState.previousCursor;
     resizeState = null;
     window.removeEventListener("pointermove", resizeColumn);
+    window.removeEventListener("pointerup", stopColumnResize);
+    window.removeEventListener("pointercancel", stopColumnResize);
   }
 
   onDestroy(() => {
@@ -612,8 +616,7 @@
   }
 
   .modal-link-cell {
-    min-width: 14rem;
-    width: auto;
+    min-width: 0;
     overflow: visible;
   }
 
