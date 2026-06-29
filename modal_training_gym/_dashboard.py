@@ -1088,6 +1088,10 @@ def fastapi_app():
         await run_in_threadpool(_run_compact_sync)
         return JSONResponse({"status": "compacted"})
 
+    @web.get("/favicon.svg", include_in_schema=False)
+    async def favicon():
+        return FileResponse(f"{STATIC_DIR}/favicon.svg", media_type="image/svg+xml")
+
     # ── SPA fallback ─────────────────────────────────────────────────────
 
     @web.get("/{full_path:path}")
