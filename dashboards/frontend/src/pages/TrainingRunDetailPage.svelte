@@ -8,6 +8,7 @@
   import ConversationView from "../components/ConversationView.svelte";
   import AdvantageHeatmap from "../components/AdvantageHeatmap.svelte";
   import AdvantageSpreadChart from "../components/AdvantageSpreadChart.svelte";
+  import ResizableTable from "../components/ResizableTable.svelte";
   import { fetchRunRollouts, fetchRollout, fetchRunAdvantages } from "../lib/api.js";
 
   let {
@@ -52,6 +53,12 @@
   let expandedRolloutId = $state(null);
   let expandedRollout = $state(null);
   let expandedRolloutLoading = $state(false);
+  const rolloutColumns = [
+    { key: "step", label: "Step", width: 160, minWidth: 96 },
+    { key: "mean", label: "Mean reward", width: 180, minWidth: 130 },
+    { key: "samples", label: "Samples", width: 120, minWidth: 96 },
+    { key: "when", label: "When", width: 160, minWidth: 110 },
+  ];
 
   // Per-step advantage distribution summaries (one row per step, each with the
   // step's overall stats + quantiles) — drives the advantage fan chart.
@@ -740,15 +747,7 @@
       {:else if !rolloutSummaries.length}
         <div class="empty">No rollouts recorded yet.</div>
       {:else}
-        <table class="rollout-table">
-          <thead>
-            <tr>
-              <th>Step</th>
-              <th>Mean reward</th>
-              <th>Samples</th>
-              <th>When</th>
-            </tr>
-          </thead>
+        <ResizableTable class="rollout-table" columns={rolloutColumns}>
           <tbody>
             {#each rolloutSummaries as r (r.rollout_id)}
               <tr
@@ -773,7 +772,7 @@
               </tr>
               {#if expandedRolloutId === r.rollout_id}
                 <tr class="rollout-detail-row">
-                  <td colspan="4">
+                  <td colspan={rolloutColumns.length}>
                     {#if expandedRolloutLoading}
                       <div class="empty">Loading samples…</div>
                     {:else if !expandedRollout || !sampleDist}
@@ -960,7 +959,7 @@
               {/if}
             {/each}
           </tbody>
-        </table>
+        </ResizableTable>
       {/if}
       </div>
     {:else if activeTab === "logs"}
@@ -1283,13 +1282,13 @@
     font-variant-numeric: tabular-nums;
   }
 
-  .rollout-table {
+  :global(table.rollout-table) {
     width: 100%;
     border-collapse: collapse;
     font-size: 13px;
   }
 
-  .rollout-table th {
+  :global(table.rollout-table th) {
     text-align: left;
     color: var(--muted);
     font-weight: 500;
@@ -1300,19 +1299,19 @@
     border-bottom: 1px solid var(--border, #2f2f2f);
   }
 
-  .rollout-table tbody tr {
+  :global(table.rollout-table tbody tr) {
     cursor: pointer;
   }
 
-  .rollout-table tbody tr:hover {
+  :global(table.rollout-table tbody tr:hover) {
     background: var(--color-c-gray-10, #2f2f2f);
   }
 
-  .rollout-table tbody tr.expanded {
+  :global(table.rollout-table tbody tr.expanded) {
     background: var(--color-c-gray-10, #2f2f2f);
   }
 
-  .rollout-table td {
+  :global(table.rollout-table td) {
     padding: 8px 10px;
     border-bottom: 1px solid var(--border, #2f2f2f);
     font-variant-numeric: tabular-nums;

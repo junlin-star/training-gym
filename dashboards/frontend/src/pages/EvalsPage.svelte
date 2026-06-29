@@ -8,8 +8,8 @@
     Search,
   } from "lucide-svelte";
   import Drawer from "../components/Drawer.svelte";
-  import MinimalTable from "../components/MinimalTable.svelte";
   import MinimalTableSkeleton from "../components/MinimalTableSkeleton.svelte";
+  import ResizableTable from "../components/ResizableTable.svelte";
   import StatusPill from "../components/StatusPill.svelte";
   import TimeAgo from "../components/TimeAgo.svelte";
 
@@ -36,6 +36,16 @@
   let datasetMenuOpen = $state(false);
   let expandedConfigIds = $state(new Set());
   let expandedInitialized = $state(false);
+  const evalColumns = [
+    { key: "name", label: "Name", width: 220, minWidth: 140 },
+    { key: "deployment", label: "Deployment", width: 180, minWidth: 120 },
+    { key: "training", label: "Training run", width: 180, minWidth: 130 },
+    { key: "model", label: "Base model", width: 210, minWidth: 140 },
+    { key: "status", label: "Status", width: 130, minWidth: 96 },
+    { key: "score", label: "Average score", width: 130, minWidth: 110 },
+    { key: "examples", label: "Examples", width: 100, minWidth: 86 },
+    { key: "created", label: "Created", width: 116, minWidth: 96 },
+  ];
 
   function safeText(value) {
     if (value && typeof value === "object" && "value" in value) return value.value;
@@ -586,29 +596,7 @@
 
             {#if expandedConfigIds.has(group.evalConfigId)}
               <div class="table-wrap">
-                <MinimalTable class="runs-table evals-runs-table">
-                  <colgroup>
-                    <col class="col-name" />
-                    <col class="col-deployment" />
-                    <col class="col-training" />
-                    <col class="col-model" />
-                    <col class="col-status" />
-                    <col class="col-score" />
-                    <col class="col-examples" />
-                    <col class="col-created" />
-                  </colgroup>
-                  <thead>
-                    <tr>
-                      <th>Name</th>
-                      <th>Deployment</th>
-                      <th>Training run</th>
-                      <th>Base model</th>
-                      <th>Status</th>
-                      <th>Average score</th>
-                      <th>Examples</th>
-                      <th>Created</th>
-                    </tr>
-                  </thead>
+                <ResizableTable class="runs-table evals-runs-table" columns={evalColumns}>
                   <tbody>
                     {#each group.visibleRuns as run, runIndex (run.eval.eval_id || `${group.evalConfigId}-${run.eval.created_at || 0}-${runIndex}`)}
                       {@const linkedDeployment = findDeploymentRow(run, group)}
@@ -658,7 +646,7 @@
                       </tr>
                     {/each}
                   </tbody>
-                </MinimalTable>
+                </ResizableTable>
               </div>
             {/if}
           </section>
@@ -1187,38 +1175,6 @@
   :global(table.runs-table) {
     width: 100%;
     min-width: 1180px;
-  }
-
-  :global(table.evals-runs-table) {
-    table-layout: fixed;
-  }
-
-  :global(table.evals-runs-table col.col-name) {
-    width: 20%;
-  }
-
-  :global(table.evals-runs-table col.col-deployment) {
-    width: 15%;
-  }
-
-  :global(table.evals-runs-table col.col-training) {
-    width: 15%;
-  }
-
-  :global(table.evals-runs-table col.col-model) {
-    width: 18%;
-  }
-
-  :global(table.evals-runs-table col.col-status) {
-    width: 12%;
-  }
-
-  :global(table.evals-runs-table col.col-score) {
-    width: 12%;
-  }
-
-  :global(table.evals-runs-table col.col-examples) {
-    width: 8%;
   }
 
   .mono {
