@@ -61,10 +61,10 @@
     { key: "model", label: "Model", width: 210, minWidth: 120 },
     { key: "dataset", label: "Dataset", width: 180, minWidth: 120 },
     { key: "recipe", label: "Recipe", width: 116, minWidth: 88 },
-    { key: "group", label: "Group", width: 150, minWidth: 96 },
-    { key: "tags", label: "Tags", width: 220, minWidth: 140 },
-    { key: "created", label: "Created", width: 116, minWidth: 96 },
-    { key: "updated", label: "Last updated", width: 132, minWidth: 110 },
+    { key: "group", label: "Group", width: 280, minWidth: 220 },
+    { key: "tags", label: "Tags", width: 520, minWidth: 360 },
+    { key: "created", label: "Created", width: 150, minWidth: 130 },
+    { key: "updated", label: "Last updated", width: 170, minWidth: 150 },
     { key: "actions", label: "", ariaLabel: "Actions", width: 236, minWidth: 180 },
   ];
 
@@ -487,20 +487,11 @@
     color: var(--muted);
   }
 
-  .group-cell {
-    max-width: 12rem;
-  }
-
-  .tags-cell {
-    max-width: 16rem;
-  }
-
   .group-tag {
     display: inline-block;
     max-width: 100%;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    white-space: normal;
+    overflow-wrap: anywhere;
     vertical-align: bottom;
     padding: 2px 8px;
     border-radius: 999px;
@@ -512,6 +503,8 @@
   }
 
   .tags-open-button {
+    overflow: visible;
+    text-overflow: clip;
     white-space: normal;
   }
 
@@ -525,9 +518,10 @@
   .tag-pill {
     display: inline-flex;
     align-items: baseline;
+    flex-wrap: wrap;
     max-width: 100%;
     min-width: 0;
-    overflow: hidden;
+    overflow-wrap: anywhere;
     padding: 2px 7px;
     border: 1px solid var(--border, #2f2f2f);
     border-radius: 999px;
@@ -540,9 +534,8 @@
 
   .tag-pill-key,
   .tag-pill-value {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    white-space: normal;
+    overflow-wrap: anywhere;
   }
 
   .tag-pill-key {
