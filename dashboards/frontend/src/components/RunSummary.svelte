@@ -2,7 +2,7 @@
   import StatusPill from "./StatusPill.svelte";
   import FrameworkStageProgress from "./FrameworkStageProgress.svelte";
   import TimeAgo from "./TimeAgo.svelte";
-  import { smoothedStageLabel } from "../lib/format.js";
+  import { formatTagValue, getGroupTags, smoothedStageLabel } from "../lib/format.js";
 
   // The run-summary block shared by the list drawer and the detail page's
   // Summary tab, so both render identical metadata: status, stage, model,
@@ -20,6 +20,36 @@
   let recipeJson = $derived.by(() =>
     Object.keys(recipe).length ? JSON.stringify(recipe, null, 2) : "",
   );
+  let groupTags = $derived(getGroupTags(run));
+  let attemptMetadata = $derived.by(() => {
+    const metadata = run?.metadata;
+    if (!metadata || typeof metadata !== "object") return null;
+    const attemptCount = Number(metadata.attempt_count) || 0;
+    const lastAttemptStartedAt = Number(metadata.last_attempt_started_at) || 0;
+    const lastAttemptStatus = String(metadata.last_attempt_status || "");
+    const resumeCheckpointPath = String(metadata.resume_checkpoint_path || "");
+    const resumeCheckpointName = String(metadata.resume_checkpoint_name || "");
+    const resumeFromIteration = Number(metadata.resume_from_iteration);
+    const resumedFromCheckpoint =
+      metadata.resumed_from_checkpoint === true || Boolean(resumeCheckpointPath);
+    if (
+      !attemptCount &&
+      !lastAttemptStartedAt &&
+      !lastAttemptStatus &&
+      !resumedFromCheckpoint
+    ) {
+      return null;
+    }
+    return {
+      attemptCount,
+      lastAttemptStartedAt,
+      lastAttemptStatus,
+      resumedFromCheckpoint,
+      resumeCheckpointPath,
+      resumeCheckpointName,
+      resumeFromIteration: Number.isFinite(resumeFromIteration) ? resumeFromIteration : null,
+    };
+  });
 
   function isSlimeRun() {
     return String(run?.framework || "").toLowerCase() === "slime";
@@ -120,6 +150,83 @@
       </div>
     </section>
 
+    {#if attemptMetadata}
+      <section class="summary-section">
+        <h3 class="summary-section-title">Retry / Resume</h3>
+        {#if attemptMetadata.attemptCount}
+          <div class="kv">
+            <span class="kv-key">Attempts</span>
+            <span class="kv-value">{attemptMetadata.attemptCount}</span>
+          </div>
+        {/if}
+        {#if attemptMetadata.lastAttemptStartedAt}
+          <div class="kv">
+            <span class="kv-key">Latest attempt</span>
+            <span class="kv-value">
+              <TimeAgo timestamp={attemptMetadata.lastAttemptStartedAt} showJustNow />
+            </span>
+          </div>
+        {/if}
+        {#if attemptMetadata.lastAttemptStatus}
+          <div class="kv">
+            <span class="kv-key">Attempt status</span>
+            <span class="kv-value">{attemptMetadata.lastAttemptStatus}</span>
+          </div>
+        {/if}
+        <div class="kv">
+          <span class="kv-key">Resumed</span>
+          <span class="kv-value">{attemptMetadata.resumedFromCheckpoint ? "yes" : "no"}</span>
+        </div>
+        {#if attemptMetadata.resumeCheckpointPath}
+          <div class="kv">
+            <span class="kv-key">Checkpoint</span>
+            <span class="kv-value kv-value-mono" title={attemptMetadata.resumeCheckpointPath}>
+              {attemptMetadata.resumeCheckpointName || attemptMetadata.resumeCheckpointPath}
+            </span>
+          </div>
+        {/if}
+        {#if attemptMetadata.resumeFromIteration !== null}
+          <div class="kv">
+            <span class="kv-key">Resume step</span>
+            <span class="kv-value">{attemptMetadata.resumeFromIteration}</span>
+          </div>
+        {/if}
+      </section>
+    {/if}
+
+    {#if groupTags}
+      <section class="summary-section">
+        <h3 class="summary-section-title">Group</h3>
+        <div class="kv">
+          <span class="kv-key">Group ID</span>
+          <span class="kv-value kv-value-mono">{groupTags.group_id || "—"}</span>
+        </div>
+        {#if groupTags.axes.length}
+          <div class="kv">
+            <span class="kv-key">Customized params</span>
+            <div class="tag-chip-list">
+              {#each groupTags.axes as axis (axis)}
+                <span class="tag-chip kv-value-mono">{axis}</span>
+              {/each}
+            </div>
+          </div>
+        {/if}
+        {#if groupTags.tags.length}
+          <div class="kv kv-block">
+            <span class="kv-key">This run differs by</span>
+            <div class="tag-table">
+              {#each groupTags.tags as tag (tag.key)}
+                <div class="tag-row">
+                  <span class="tag-key kv-value-mono">{tag.key}</span>
+                  <span class="tag-value">{formatTagValue(tag.value)}</span>
+                </div>
+              {/each}
+            </div>
+          </div>
+        {/if}
+      </section>
+    {/if}
+
     {#if isSlimeRun() && recipeJson}
       <section class="summary-section">
         <h3 class="summary-section-title">Full Slime parameters</h3>
@@ -190,6 +297,51 @@
     font-family: var(--font-mono);
     font-size: 12px;
     line-height: 16px;
+  }
+
+  .kv-block {
+    align-items: start;
+  }
+
+  .tag-chip-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    min-width: 0;
+  }
+
+  .tag-chip {
+    border: 1px solid var(--color-c-gray-10, #2f2f2f);
+    border-radius: 999px;
+    color: var(--text);
+    background: color-mix(in srgb, var(--panel-alt) 74%, black);
+    padding: 2px 8px;
+  }
+
+  .tag-table {
+    display: grid;
+    gap: 6px;
+    min-width: 0;
+  }
+
+  .tag-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) max-content;
+    gap: 8px;
+    align-items: baseline;
+    min-width: 0;
+  }
+
+  .tag-key {
+    color: var(--muted);
+    overflow-wrap: anywhere;
+  }
+
+  .tag-value {
+    color: var(--text);
+    font-size: 12px;
+    line-height: 16px;
+    overflow-wrap: anywhere;
   }
 
   .summary-empty {

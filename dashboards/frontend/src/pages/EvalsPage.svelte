@@ -596,7 +596,7 @@
 
             {#if expandedConfigIds.has(group.evalConfigId)}
               <div class="table-wrap">
-                <ResizableTable class="runs-table evals-runs-table" columns={evalColumns}>
+                <ResizableTable class="runs-table evals-runs-table" columns={evalColumns} stickyFirstColumn>
                   <tbody>
                     {#each group.visibleRuns as run, runIndex (run.eval.eval_id || `${group.evalConfigId}-${run.eval.created_at || 0}-${runIndex}`)}
                       {@const linkedDeployment = findDeploymentRow(run, group)}
@@ -1169,7 +1169,11 @@
   }
 
   .table-wrap {
-    overflow-x: auto;
+    max-width: 100%;
+    overflow: auto hidden;
+    overscroll-behavior-x: contain;
+    overscroll-behavior-y: auto;
+    -webkit-overflow-scrolling: auto;
   }
 
   :global(table.runs-table) {

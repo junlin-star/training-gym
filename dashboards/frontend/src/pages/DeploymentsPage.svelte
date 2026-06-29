@@ -376,7 +376,7 @@
       <div class="empty">No deployments recorded yet.</div>
     {:else}
       <div class="table-wrap">
-        <ResizableTable class="deployments-table" columns={deploymentColumns}>
+        <ResizableTable class="deployments-table" columns={deploymentColumns} stickyFirstColumn>
           <tbody>
             {#each filteredRows as row (row.key)}
               {@const deploymentName = row.deployment.deployment_id || deploymentLabel(row.deployment)}
@@ -728,7 +728,11 @@
   }
 
   .table-wrap {
-    overflow-x: auto;
+    max-width: 100%;
+    overflow: auto hidden;
+    overscroll-behavior-x: contain;
+    overscroll-behavior-y: auto;
+    -webkit-overflow-scrolling: auto;
   }
 
   :global(table.deployments-table) {

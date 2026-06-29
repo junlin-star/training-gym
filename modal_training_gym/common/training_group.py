@@ -142,6 +142,7 @@ class TrainingGroup:
         self.results: list[TrainResult] = []
         self.launches: list[TrainLaunch] = []
         self.failures: list[tuple[dict[str, Any], BaseException]] = []
+        self._variants: list[tuple[dict[str, Any], TrainConfig]] | None = None
 
         # Fail fast on obvious typos at construction time. get_train_configs()
         # repeats this (plus value-level validation) right before training.
@@ -201,6 +202,9 @@ class TrainingGroup:
         override dict alongside the config so callers can label/inspect which
         combination produced which run.
         """
+        if self._variants is not None:
+            return list(self._variants)
+
         self._validate_paths()
         keys = list(self.grid)
         # Cross-product of all axes; empty grid yields a single (base) variant.
@@ -211,10 +215,11 @@ class TrainingGroup:
             combos = list(itertools.product(*(self.grid[k] for k in keys)))
         else:
             combos = [()]
-        return [
+        self._variants = [
             (dict(zip(keys, combo)), self._build_variant(dict(zip(keys, combo))))
             for combo in combos
         ]
+        return list(self._variants)
 
     def get_train_configs(self) -> list[TrainConfig]:
         """Expand the grid into validated, ready-to-run ``TrainConfig``s."""

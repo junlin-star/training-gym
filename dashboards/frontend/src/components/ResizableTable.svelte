@@ -4,6 +4,7 @@
 
   let {
     columns = [],
+    stickyFirstColumn = false,
     class: classOverride = "",
     style: styleOverride = "",
     ...restProps
@@ -58,6 +59,14 @@
     window.removeEventListener("pointercancel", stopColumnResize);
   }
 
+  function stopFrozenColumnHorizontalScroll(event) {
+    if (!stickyFirstColumn || Math.abs(event.deltaX) < 4 || Math.abs(event.deltaY) > 1) return;
+    const firstColumnCell = event.target?.closest?.("th:first-child, td:first-child");
+    if (!firstColumnCell) return;
+    event.preventDefault();
+    event.stopPropagation();
+  }
+
   onDestroy(() => {
     stopColumnResize();
   });
@@ -65,7 +74,8 @@
 
 <MinimalTable
   {...restProps}
-  class={`resizable-table ${classOverride}`.trim()}
+  class={`resizable-table ${stickyFirstColumn ? "sticky-first-column" : ""} ${classOverride}`.trim()}
+  onwheel={stopFrozenColumnHorizontalScroll}
   style={`--resizable-grid-width: ${tableWidth}px; width: max(100%, var(--resizable-grid-width)); min-width: var(--resizable-grid-width); ${styleOverride}`.trim()}
 >
   <colgroup>
@@ -161,5 +171,30 @@
 
   .column-resize-handle:focus-visible {
     outline: none;
+  }
+
+  :global(table.resizable-table.sticky-first-column th:first-child),
+  :global(table.resizable-table.sticky-first-column tbody td:first-child) {
+    position: sticky;
+    left: 0;
+    background: var(--bg);
+    background-clip: padding-box;
+    border-right: 1px solid var(--color-c-gray-10, #2f2f2f);
+  }
+
+  :global(table.resizable-table.sticky-first-column th:first-child) {
+    z-index: 3;
+  }
+
+  :global(table.resizable-table.sticky-first-column tbody td:first-child) {
+    z-index: 2;
+  }
+
+  :global(table.resizable-table.sticky-first-column tbody tr:hover td:first-child) {
+    background: color-mix(in srgb, var(--text-bright) 4%, var(--bg));
+  }
+
+  :global(table.resizable-table.sticky-first-column tr.row-selected td:first-child) {
+    background: color-mix(in srgb, var(--accent) 7%, var(--bg));
   }
 </style>
