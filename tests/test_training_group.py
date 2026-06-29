@@ -9,6 +9,7 @@ import pytest
 from modal_training_gym import TrainConfig, TrainingGroup
 from modal_training_gym.common.dataset import HuggingFaceDataset
 from modal_training_gym.common.models import Qwen3_6_35B
+from modal_training_gym.common.train import TrainLaunch
 from modal_training_gym.common.training_group import TrainingGroupError
 from modal_training_gym.train_recipes.slime_recipe.qwen3_6_35b import Qwen3_6_35b_Recipe
 
@@ -139,6 +140,34 @@ def test_train_result_persists_group_id():
     assert restored.group_id == "group-abc123"
 
 
+def test_train_launch_resolves_train_result():
+    from modal_training_gym.common.framework import Framework
+    from modal_training_gym.common.train_result import TrainResult
+
+    class FakeFunctionCall:
+        def get(self, timeout=None):
+            assert timeout == 123
+            return TrainResult(
+                app_name="run-x",
+                framework=Framework.SLIME,
+                training_run_id="run-x",
+                group_id="group-abc123",
+            )._to_dict()
+
+    launch = TrainLaunch(
+        training_run_id="run-x",
+        modal_app_id="",
+        modal_app_url="",
+        function_call_id="fc-123",
+        group_id="group-abc123",
+        _function_call=FakeFunctionCall(),
+    )
+
+    result = launch.result(timeout=123, stop_app_on_success=False)
+    assert result.training_run_id == "run-x"
+    assert result.group_id == "group-abc123"
+
+
 def test_iter_variants_pairs_overrides_with_configs():
     group = TrainingGroup(base=_base(), grid={"recipe.lr": [1e-6, 5e-6]})
     variants = group.iter_variants()
@@ -147,3 +176,56 @@ def test_iter_variants_pairs_overrides_with_configs():
         {"recipe.lr": 5e-6},
     ]
     assert all(cfg.recipe.lr == ov["recipe.lr"] for ov, cfg in variants)
+
+
+def test_variant_plan_prints_run_ids_with_overrides(capsys):
+    group = TrainingGroup(base=_base(), grid={"recipe.lr": [1e-6, 5e-6]})
+    variants = group.iter_variants()
+
+    group._print_variant_plan(variants)
+
+    output = capsys.readouterr().out
+    for overrides, cfg in variants:
+        assert cfg.training_run_id in output
+        assert repr(overrides) in output
+
+
+def test_group_variants_record_tag_metadata():
+    group = TrainingGroup(
+        base=_base(),
+        name="Batch Sweep",
+        grid={
+            "recipe.rollout_batch_size": [16],
+            "recipe.lr": [1e-6],
+        },
+    )
+    overrides, cfg = group.iter_variants()[0]
+
+    assert overrides == {
+        "recipe.rollout_batch_size": 16,
+        "recipe.lr": 1e-6,
+    }
+    assert cfg.group_id == "batch-sweep"
+    assert cfg.group_overrides == overrides
+    assert cfg.group_axes == ["recipe.rollout_batch_size", "recipe.lr"]
+
+    metadata = cfg._build_run_metadata()
+    assert metadata == {
+        "group_id": "batch-sweep",
+        "group_tags": {
+            "group_id": "batch-sweep",
+            "axes": ["recipe.rollout_batch_size", "recipe.lr"],
+            "overrides": {
+                "recipe.rollout_batch_size": 16,
+                "recipe.lr": 1e-6,
+            },
+            "tags": [
+                {
+                    "key": "recipe.rollout_batch_size",
+                    "label": "rollout batch size",
+                    "value": 16,
+                },
+                {"key": "recipe.lr", "label": "lr", "value": 1e-6},
+            ],
+        },
+    }

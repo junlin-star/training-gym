@@ -48,7 +48,7 @@ import re
 import secrets
 from typing import Any
 
-from modal_training_gym.common.train import TrainConfig
+from modal_training_gym.common.train import TrainConfig, TrainLaunch
 from modal_training_gym.common.train_result import TrainResult
 
 
@@ -140,7 +140,9 @@ class TrainingGroup:
         # Results populated by train(): one TrainResult per successful variant,
         # and (overrides, exception) for each variant that raised.
         self.results: list[TrainResult] = []
+        self.launches: list[TrainLaunch] = []
         self.failures: list[tuple[dict[str, Any], BaseException]] = []
+        self._variants: list[tuple[dict[str, Any], TrainConfig]] | None = None
 
         # Fail fast on obvious typos at construction time. get_train_configs()
         # repeats this (plus value-level validation) right before training.
@@ -200,6 +202,9 @@ class TrainingGroup:
         override dict alongside the config so callers can label/inspect which
         combination produced which run.
         """
+        if self._variants is not None:
+            return list(self._variants)
+
         self._validate_paths()
         keys = list(self.grid)
         # Cross-product of all axes; empty grid yields a single (base) variant.
@@ -210,14 +215,21 @@ class TrainingGroup:
             combos = list(itertools.product(*(self.grid[k] for k in keys)))
         else:
             combos = [()]
-        return [
+        self._variants = [
             (dict(zip(keys, combo)), self._build_variant(dict(zip(keys, combo))))
             for combo in combos
         ]
+        return list(self._variants)
 
     def get_train_configs(self) -> list[TrainConfig]:
         """Expand the grid into validated, ready-to-run ``TrainConfig``s."""
         return [cfg for _, cfg in self.iter_variants()]
+
+    def _print_variant_plan(
+        self, variants: list[tuple[dict[str, Any], TrainConfig]]
+    ) -> None:
+        for overrides, cfg in variants:
+            print(f"[TrainingGroup]   {cfg.training_run_id}: {overrides!r}")
 
     def _build_variant(self, overrides: dict[str, Any]) -> TrainConfig:
         # Deep-copy the whole base so each variant owns independent model /
@@ -227,6 +239,8 @@ class TrainingGroup:
         # computes its own unique id (create_hash adds a timestamp + slug).
         object.__setattr__(cfg, "_stable_id", None)
         cfg.group_id = self.group_id
+        cfg.group_overrides = dict(overrides)
+        cfg.group_axes = list(self.grid)
         if self.merge_model_recipe is not None:
             cfg.merge_model_recipe = self.merge_model_recipe
 
@@ -272,27 +286,45 @@ class TrainingGroup:
         results: list[TrainResult] = []
         failures: list[tuple[dict[str, Any], BaseException]] = []
 
+        def _record_failure(overrides: dict[str, Any], exc: BaseException) -> None:
+            if not continue_on_error:
+                raise exc
+            failures.append((overrides, exc))
+            print(f"[TrainingGroup] variant {overrides!r} failed: {exc}")
+
         def _run(overrides: dict[str, Any], cfg: TrainConfig) -> None:
             try:
                 results.append(cfg.train(show_output=max_parallel <= 1))
             except BaseException as exc:  # noqa: BLE001 — recorded per-variant
-                if not continue_on_error:
-                    raise
-                failures.append((overrides, exc))
-                print(f"[TrainingGroup] variant {overrides!r} failed: {exc}")
+                _record_failure(overrides, exc)
 
         print(
             f"[TrainingGroup] {self.group_id}: launching {len(variants)} variant(s)"
             + (f" (max_parallel={max_parallel})" if max_parallel > 1 else "")
         )
+        self._print_variant_plan(variants)
         if max_parallel <= 1:
             for overrides, cfg in variants:
                 _run(overrides, cfg)
         else:
-            from concurrent.futures import ThreadPoolExecutor
-
-            with ThreadPoolExecutor(max_workers=max_parallel) as pool:
-                list(pool.map(lambda v: _run(v[0], v[1]), variants))
+            for i in range(0, len(variants), max_parallel):
+                batch = variants[i : i + max_parallel]
+                launched: list[tuple[dict[str, Any], TrainLaunch]] = []
+                for overrides, cfg in batch:
+                    try:
+                        launched.append(
+                            (
+                                overrides,
+                                cfg.launch(show_output=False, prepare_inputs=True),
+                            )
+                        )
+                    except BaseException as exc:  # noqa: BLE001
+                        _record_failure(overrides, exc)
+                for overrides, launch in launched:
+                    try:
+                        results.append(launch.result())
+                    except BaseException as exc:  # noqa: BLE001
+                        _record_failure(overrides, exc)
 
         self.results = results
         self.failures = failures
@@ -301,3 +333,41 @@ class TrainingGroup:
             f"{len(results)} succeeded, {len(failures)} failed"
         )
         return results
+
+    def launch(
+        self,
+        *,
+        continue_on_error: bool = True,
+        prepare_inputs: bool = False,
+    ) -> list[TrainLaunch]:
+        """Start every variant as a detached Modal call and return immediately."""
+        variants = self.iter_variants()
+        launches: list[TrainLaunch] = []
+        failures: list[tuple[dict[str, Any], BaseException]] = []
+
+        print(f"[TrainingGroup] {self.group_id}: launching {len(variants)} variant(s)")
+        self._print_variant_plan(variants)
+        for overrides, cfg in variants:
+            try:
+                launch = cfg.launch(
+                    show_output=False,
+                    prepare_inputs=prepare_inputs,
+                )
+                launches.append(launch)
+                print(
+                    f"[TrainingGroup] launched {overrides!r}: "
+                    f"{launch.training_run_id} ({launch.modal_app_id})"
+                )
+            except BaseException as exc:  # noqa: BLE001 — recorded per-variant
+                if not continue_on_error:
+                    raise
+                failures.append((overrides, exc))
+                print(f"[TrainingGroup] variant {overrides!r} launch failed: {exc}")
+
+        self.launches = launches
+        self.failures = failures
+        print(
+            f"[TrainingGroup] {self.group_id}: "
+            f"{len(launches)} launched, {len(failures)} failed"
+        )
+        return launches

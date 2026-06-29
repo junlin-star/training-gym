@@ -415,6 +415,8 @@
             !includesText(run.run_id, q) &&
             !includesText(run.modal_app_id, q) &&
             !includesText(run.group_id, q) &&
+            !includesText(run.metadata?.group_id, q) &&
+            !includesText(JSON.stringify(run.metadata?.group_tags || {}), q) &&
             !includesText(run.config_summary?.model_name, q) &&
             !includesText(run.train_result?.training_run_id, q) &&
             !includesText(run.train_result?.checkpoint_dir, q) &&
