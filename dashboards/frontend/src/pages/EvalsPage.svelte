@@ -23,7 +23,7 @@
     error,
     evalConfigGroups,
     fetchEvalDetail,
-    getEvalStatus,
+    getEvalDisplay,
     evalConfigMeta,
     onOpenTrainingRun,
     onOpenDeployment,
@@ -412,9 +412,12 @@
     const meta = evalConfigMeta(group.config, ev);
     const linkedDeployment = findDeploymentRow(run, group);
     const depRef = deploymentRefValue(linkedDeployment);
+    const display = getEvalDisplay(ev);
     return {
       evalId: ev.eval_id || "",
-      status: getEvalStatus(ev),
+      status: display.bucket,
+      pillStatus: display.pill,
+      statusLabel: display.label,
       model: nonPlaceholderText(meta.model) || "—",
       config: nonPlaceholderText(meta.dataset) || "—",
       grading: nonPlaceholderText(meta.evalFn || meta.judge) || "—",
@@ -643,7 +646,7 @@
                           <span class="truncate-text">{baseModel}</span>
                         </td>
                         <td>
-                          <StatusPill status={run.status} />
+                          <StatusPill status={run.pillStatus} label={run.statusLabel} />
                         </td>
                         <td class="eval-score">
                           {run.status === "Failed" ? "—" : run.avgScore.toFixed(4)}
@@ -673,7 +676,7 @@
           <span class="drawer-eyebrow">Eval</span>
           <div class="drawer-title-row">
             <h2 class="drawer-title">{drawerMeta.evalId}</h2>
-            <StatusPill status={drawerMeta.status} />
+            <StatusPill status={drawerMeta.pillStatus} label={drawerMeta.statusLabel} />
           </div>
         </div>
         <div class="drawer-actions">

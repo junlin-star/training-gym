@@ -116,6 +116,7 @@ _PATCH_QWEN3_VL_TORCH_DIST_B64 = encode_patch(
 _PATCH_ROLLOUT_STATUS_B64 = encode_patch(
     "patch_rollout_status_reporting", _SLIME_PATCHES
 )
+_PATCH_ADVANTAGE_DIST_B64 = encode_patch("patch_advantage_distribution", _SLIME_PATCHES)
 _PATCH_LOG_ELIDE_B64 = encode_patch("patch_log_elide", _SLIME_PATCHES)
 
 
@@ -133,6 +134,7 @@ def _build_slime_base_image() -> "Image":
             f"echo {_PATCH_QWEN3_VL_EXPORT_B64} | base64 -d | python3",
             f"echo {_PATCH_QWEN3_VL_TORCH_DIST_B64} | base64 -d | python3",
             f"echo {_PATCH_ROLLOUT_STATUS_B64} | base64 -d | python3",
+            f"echo {_PATCH_ADVANTAGE_DIST_B64} | base64 -d | python3",
             f"echo {_PATCH_LOG_ELIDE_B64} | base64 -d | python3",
         )
     )

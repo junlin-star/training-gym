@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import re
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 import datetime
 from typing import TYPE_CHECKING, Any, Callable, Literal
@@ -131,12 +131,15 @@ class ImageEvalRowResult(Sample):
         return data
 
 
-#: Lifecycle of an eval run. ``running`` rows are streamed in as examples
-#: complete so the dashboard shows intermediate output; ``completed`` is the
-#: terminal success state and ``failed`` marks a run that raised partway
-#: through. The default is ``completed`` so records written before this field
-#: existed validate as finished runs.
-EvalStatus = Literal["running", "completed", "failed"]
+#: Lifecycle of an eval run, surfaced live on the dashboard:
+#: ``deploying_model`` while the deployment cold-starts, ``running_eval`` once it
+#: is serving and rows are streaming in, ``completed`` on success, and ``failed``
+#: when a run raises partway through. ``running`` is the legacy in-progress value
+#: kept so older records still validate. The default is ``completed`` so records
+#: written before this field existed validate as finished runs.
+EvalStatus = Literal[
+    "deploying_model", "running_eval", "running", "completed", "failed"
+]
 
 
 class EvalSummary(BaseModel):
@@ -351,17 +354,11 @@ class EvalConfig:
         ensure_dashboard_deployed()
 
         self.save()
-        deployment.wait_until_ready()
 
-        def _evaluate_indexed(
-            item: tuple[int, DatasetRow],
-        ) -> tuple[int, EvalRowResult]:
-            idx, example = item
-            return idx, self.eval_fn(deployment, example)
-
-        # Persist a ``running`` record up front (and stream rows into it as
-        # they complete) so the dashboard surfaces an in-progress eval with
-        # intermediate output instead of nothing until the whole run finishes.
+        # Persist the record before waiting on the deployment so the dashboard
+        # surfaces the run while the model cold-starts (``deploying_model``),
+        # flips to ``running_eval`` once it is serving and streams rows in as
+        # they complete, then lands on ``completed``/``failed``.
         eval_id = create_hash(
             "eval",
             self.eval_config_id,
@@ -374,18 +371,38 @@ class EvalConfig:
             deployment_id=deployment.deployment_id,
             eval_config_id=self.eval_config_id,
             created_at=datetime.datetime.now(datetime.UTC),
-            status="running",
+            status="deploying_model",
             rows=[],
         )
         result.save()
 
         try:
+            deployment.wait_until_ready()
+        except Exception:
+            result.status = "failed"
+            result.save()
+            raise
+
+        result.status = "running_eval"
+        result.save()
+
+        def _evaluate_indexed(
+            item: tuple[int, DatasetRow],
+        ) -> tuple[int, EvalRowResult]:
+            idx, example = item
+            return idx, self.eval_fn(deployment, example)
+
+        # Consume results as they complete (not in submission order) so one slow
+        # row can't stall progress, partial saves, or the dashboard behind it.
+        rows_by_idx: dict[int, EvalRowResult] = {}
+        try:
             with ThreadPoolExecutor(max_workers=max_concurrency) as executor:
-                indexed_results = executor.map(
-                    _evaluate_indexed,
-                    enumerate(self.dataset.load(split="eval"), start=1),
-                )
-                for idx, row_result in indexed_results:
+                futures = [
+                    executor.submit(_evaluate_indexed, item)
+                    for item in enumerate(self.dataset.load(split="eval"), start=1)
+                ]
+                for future in as_completed(futures):
+                    idx, row_result = future.result()
                     if debug:
                         print(
                             f"Finished example {idx}: "
@@ -393,6 +410,7 @@ class EvalConfig:
                             f"score={row_result.score}",
                             flush=True,
                         )
+                    rows_by_idx[idx] = row_result
                     result.rows.append(row_result)
                     # Flush partial progress periodically rather than per row:
                     # each save rewrites the shared summary list, so throttle to
@@ -404,6 +422,9 @@ class EvalConfig:
             result.save()
             raise
 
+        # Restore dataset order for the persisted result (intermediate saves
+        # land in completion order, which is fine for the live view).
+        result.rows = [rows_by_idx[idx] for idx in sorted(rows_by_idx)]
         result.status = "completed"
         result.save()
         return result

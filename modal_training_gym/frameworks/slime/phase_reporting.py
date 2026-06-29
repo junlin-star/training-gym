@@ -57,6 +57,7 @@ _REPORTER_STARTED = False
 _REPORTER_LOCK = threading.Lock()
 _PHASE_PATH = "/api/framework-status"
 _ROLLOUT_PATH = "/api/training-rollouts"
+_ADVANTAGE_PATH = "/api/advantage-distributions"
 _PHASE_TIMEOUT_SECONDS = 1.0
 _ROLLOUT_TIMEOUT_SECONDS = 10.0
 
@@ -127,13 +128,21 @@ def _phase_url() -> str:
     ).strip()
 
 
-def _rollout_url() -> str:
+def _derive_url(path: str) -> str:
     base = _phase_url()
     if not base:
         return ""
     if base.endswith(_PHASE_PATH):
-        return base[: -len(_PHASE_PATH)] + _ROLLOUT_PATH
-    return base.rstrip("/") + _ROLLOUT_PATH
+        return base[: -len(_PHASE_PATH)] + path
+    return base.rstrip("/") + path
+
+
+def _rollout_url() -> str:
+    return _derive_url(_ROLLOUT_PATH)
+
+
+def _advantage_url() -> str:
+    return _derive_url(_ADVANTAGE_PATH)
 
 
 def _ensure_worker() -> None:
@@ -168,6 +177,19 @@ def _enqueue(payload: dict[str, Any]) -> None:
 def _enqueue_rollout(payload: dict[str, Any]) -> None:
     """Enqueue a rollout-data payload (large, longer timeout)."""
     url = _rollout_url()
+    if not url:
+        return
+    _ensure_worker()
+    item = {"_url": url, "_timeout": _ROLLOUT_TIMEOUT_SECONDS, **payload}
+    try:
+        _REPORT_QUEUE.put_nowait(item)
+    except Exception:
+        pass
+
+
+def _enqueue_advantage(payload: dict[str, Any]) -> None:
+    """Enqueue an advantage-distribution payload (longer timeout like rollouts)."""
+    url = _advantage_url()
     if not url:
         return
     _ensure_worker()
@@ -690,6 +712,161 @@ def report_rollout_samples(
     _enqueue_rollout(payload)
 
 
+def _advantage_samples_payload(
+    sample_sums: list[float],
+    sample_counts: list[float],
+    sample_indices: list[int],
+    raw_rewards: list[Any],
+    n_samples_per_prompt: int,
+) -> list[dict[str, Any]]:
+    """Build the per-sample advantage rows from masked ``(sum, count)`` pairs.
+
+    Pure (no torch / mpu) so the group-index and divide-by-count logic is
+    unit-testable. ``advantage = sum / count`` is the mask-weighted mean over
+    the sample's response tokens; ``group_index`` is the GRPO prompt group the
+    sample belongs to (``sample_index // n_samples_per_prompt``).
+    """
+    n_per = max(1, int(n_samples_per_prompt or 1))
+    out: list[dict[str, Any]] = []
+    for i in range(len(sample_sums)):
+        count = sample_counts[i] if i < len(sample_counts) else 0.0
+        advantage = (sample_sums[i] / count) if count else 0.0
+        if i < len(sample_indices) and sample_indices[i] is not None:
+            idx = int(sample_indices[i])
+        else:
+            idx = i
+        raw = raw_rewards[i] if i < len(raw_rewards) else None
+        out.append(
+            {
+                "sample_index": idx,
+                "group_index": idx // n_per,
+                "advantage": float(advantage),
+                "raw_reward": _coerce_float(raw) if raw is not None else None,
+            }
+        )
+    return out
+
+
+def report_advantage_distribution(
+    rollout_id: int,
+    args: Any,
+    rollout_data: Any,
+) -> None:
+    """Emit per-sample advantages (tagged with their GRPO group) for one step.
+
+    Injected into slime's ``log_rollout_data`` so it fires right after
+    ``compute_advantages_and_returns``. slime itself only logs the *mean*
+    advantage per step; this captures the full per-sample distribution.
+
+    Runs on every actor rank but only the TP-rank-0 / last-PP-stage ranks hold
+    the reduced advantages, and within those only CP-rank-0 posts (after a CP
+    all-reduce makes each sample's mean cover its full response). Each surviving
+    rank covers its own data-parallel shard of the step's samples; the dashboard
+    merges shards into per-group distributions.
+    """
+    if not isinstance(rollout_data, dict):
+        return
+    try:
+        import torch
+        import torch.distributed as dist
+        from megatron.core import mpu
+    except Exception:
+        return
+
+    try:
+        if not (
+            mpu.get_tensor_model_parallel_rank() == 0 and mpu.is_pipeline_last_stage()
+        ):
+            return
+    except Exception:
+        return
+
+    advantages = rollout_data.get("advantages")
+    loss_masks = rollout_data.get("loss_masks")
+    response_lengths = rollout_data.get("response_lengths")
+    total_lengths = rollout_data.get("total_lengths")
+    if not advantages or loss_masks is None:
+        return
+    if response_lengths is None or total_lengths is None:
+        return
+
+    n = len(advantages)
+    try:
+        device = advantages[0].device
+        sums = torch.zeros(n, dtype=torch.float64, device=device)
+        counts = torch.zeros(n, dtype=torch.float64, device=device)
+        cp_size = mpu.get_context_parallel_world_size()
+        cp_rank = mpu.get_context_parallel_rank()
+
+        if cp_size == 1:
+            for i in range(n):
+                adv = advantages[i].to(torch.float64)
+                mask = loss_masks[i].to(torch.float64)
+                m = min(adv.numel(), mask.numel())
+                sums[i] = (adv[:m] * mask[:m]).sum()
+                counts[i] = mask[:m].sum()
+        else:
+            from slime.backends.megatron_utils.cp_utils import (
+                get_logits_and_tokens_offset_with_cp,
+            )
+
+            for i in range(n):
+                total_len = int(total_lengths[i])
+                resp_len = int(response_lengths[i])
+                prompt_len = total_len - resp_len
+                _, _, _, toff = get_logits_and_tokens_offset_with_cp(
+                    total_len, resp_len
+                )
+                mask = loss_masks[i]
+                m0 = mask[toff[0][0] - prompt_len : toff[0][1] - prompt_len]
+                m1 = mask[toff[1][0] - prompt_len : toff[1][1] - prompt_len]
+                chunked = torch.cat([m0, m1]).to(torch.float64)
+                adv = advantages[i].to(torch.float64)
+                m = min(adv.numel(), chunked.numel())
+                sums[i] = (adv[:m] * chunked[:m]).sum()
+                counts[i] = chunked[:m].sum()
+            # Every CP rank holds a token-shard of the same samples; reduce so
+            # each sample's mean is taken over its full response.
+            cp_group = mpu.get_context_parallel_group()
+            dist.all_reduce(sums, group=cp_group)
+            dist.all_reduce(counts, group=cp_group)
+    except Exception:
+        return
+
+    if cp_rank != 0:
+        return
+
+    raw_rewards = list(rollout_data.get("raw_reward") or [])
+    sample_indices = list(rollout_data.get("sample_indices") or range(n))
+    n_per = _positive_int(_arg_value(args, "n_samples_per_prompt")) or 1
+
+    samples = _advantage_samples_payload(
+        sums.tolist(),
+        counts.tolist(),
+        sample_indices,
+        raw_rewards,
+        n_per,
+    )
+    if not samples:
+        return
+
+    try:
+        dp_rank = int(mpu.get_data_parallel_rank(with_context_parallel=False))
+    except Exception:
+        dp_rank = 0
+
+    _enqueue_advantage(
+        {
+            **_run_context(args),
+            "rollout_id": int(rollout_id),
+            "created_at": int(time.time()),
+            "dp_rank": dp_rank,
+            "n_samples_per_prompt": int(n_per),
+            "samples": samples,
+        }
+    )
+
+
 def _call_hook(path_key: str, args: Any, *hook_args: Any, **hook_kwargs: Any) -> Any:
     hook = _resolve_hook(_hook_path_from_args(args, path_key))
     if hook is None:
@@ -824,6 +1001,7 @@ def report_generate_rollouts(args: Any) -> None:
 __all__ = [
     "before_log_prob_hook",
     "before_train_step_hook",
+    "report_advantage_distribution",
     "report_generate_rollouts",
     "report_phase",
     "report_rollout_initializing",

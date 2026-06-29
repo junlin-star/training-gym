@@ -18,6 +18,12 @@ class MetadataStore(Enum):
     TRAIN_RESULTS_SUMMARY = "train-results-summary"
     TRAINING_ROLLOUTS = "training-rollouts"
     TRAINING_ROLLOUTS_SUMMARY = "training-rollouts-summary"
+    # Per-step, per-group advantage distributions. slime only logs the mean
+    # advantage per step; this store keeps the full per-sample distribution so
+    # the dashboard can render per-group spread. Written one shard file per
+    # data-parallel rank (keyed ``{run}__{rollout:08d}__dp{dp:03d}``) so
+    # concurrent DP-rank posts never race on a shared file.
+    ADVANTAGE_DISTRIBUTIONS = "advantage-distributions"
     EVAL_RESULTS = "eval-results"
     EVALS = "evals"
     EVAL_SUMMARIES = "eval-summaries"
@@ -245,6 +251,29 @@ async def vol_list_async(store: MetadataStore | str) -> list[dict[str, Any]]:
     return results
 
 
+def vol_list_prefix(store: MetadataStore | str, prefix: str) -> list[dict[str, Any]]:
+    """Read only the items whose key (file basename) starts with ``prefix``.
+
+    Lists directory entries (cheap, no payload reads) and fetches only the
+    matching files. Used to gather the per-DP-rank shards of one
+    ``(run, rollout)`` without reading the whole store.
+    """
+    vol = _metadata_volume()
+    _safe_reload(vol)
+    results: list[dict[str, Any]] = []
+    try:
+        for entry in vol.iterdir(_store_path(store)):
+            if not entry.path.endswith(".json"):
+                continue
+            name = entry.path.rsplit("/", 1)[-1][: -len(".json")]
+            if not name.startswith(prefix):
+                continue
+            results.append(json.loads(b"".join(vol.read_file(entry.path))))
+    except FileNotFoundError:
+        return results
+    return results
+
+
 def vol_count_items(store: MetadataStore | str) -> int:
     """Count canonical ``.json`` files in a store without reading them.
 
@@ -456,6 +485,7 @@ __all__ = [
     "vol_get_async",
     "vol_list",
     "vol_list_async",
+    "vol_list_prefix",
     "vol_count_items",
     "compact_summary_store",
     "vol_get_summary_items_healed",

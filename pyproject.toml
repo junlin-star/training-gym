@@ -12,6 +12,7 @@ dependencies = [
     "pydantic",
     "fastapi",
     "randomname",
+    "transformers>=5.12.1",
 ]
 
 [build-system]

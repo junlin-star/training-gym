@@ -83,7 +83,13 @@ DASHBOARD_PASSWORD_SECRET_NAME = "_training-gym-dashboard-password"
 # Write endpoints authenticated by their own per-run bearer token. They're
 # exempt from Basic Auth so launchers (which send ``Authorization: Bearer``)
 # keep working even when a dashboard password is set.
-PASSWORD_EXEMPT_PATHS = frozenset({"/api/framework-status", "/api/training-rollouts"})
+PASSWORD_EXEMPT_PATHS = frozenset(
+    {
+        "/api/framework-status",
+        "/api/training-rollouts",
+        "/api/advantage-distributions",
+    }
+)
 
 
 def _is_local() -> bool:
@@ -241,6 +247,7 @@ def fastapi_app():
     )
     from fastapi.staticfiles import StaticFiles
 
+    from modal_training_gym.common.advantage_distribution import AdvantageDistribution
     from modal_training_gym.common.modal_urls import modal_app_dashboard_url
     from modal_training_gym.common.run import TrainingRun
     from modal_training_gym.common.status import MilesStatus, SlimeStatus
@@ -764,6 +771,79 @@ def fastapi_app():
         if isinstance(data, dict):
             _apply_parsed(data.get("samples"))
         return JSONResponse(data)
+
+    # ── Per-group advantage distributions ────────────────────────────────
+
+    @web.post("/api/advantage-distributions")
+    async def advantage_distribution(
+        payload: dict[str, Any],
+        authorization: str | None = Header(default=None),
+    ):
+        training_run_id = str(payload.get("training_run_id", "") or "").strip()
+        rollout_id_raw = payload.get("rollout_id")
+        if not training_run_id or rollout_id_raw is None:
+            raise HTTPException(
+                status_code=400,
+                detail="training_run_id and rollout_id are required",
+            )
+        try:
+            rollout_id = int(rollout_id_raw)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="rollout_id must be an integer")
+
+        samples_raw = payload.get("samples") or []
+        if not isinstance(samples_raw, list):
+            raise HTTPException(status_code=400, detail="samples must be a list")
+
+        try:
+            await run_in_threadpool(TrainingRun.from_id, training_run_id)
+        except KeyError:
+            raise HTTPException(
+                status_code=404,
+                detail=f"TrainingRun {training_run_id!r} not found",
+            )
+        await _require_framework_status_token(training_run_id, authorization)
+
+        shard = AdvantageDistribution(
+            training_run_id=training_run_id,
+            rollout_id=rollout_id,
+            dp_rank=_optional_int(payload.get("dp_rank")) or 0,
+            n_samples_per_prompt=_optional_int(payload.get("n_samples_per_prompt"))
+            or 1,
+            created_at=_optional_int(payload.get("created_at")) or int(time.time()),
+            samples=samples_raw,
+        )
+        await shard.save_async()
+        return JSONResponse(
+            {
+                "status": "ok",
+                "rollout_id": rollout_id,
+                "dp_rank": shard.dp_rank,
+                "samples": len(shard.samples),
+            }
+        )
+
+    @web.get("/api/runs/{training_run_id}/advantages")
+    async def list_run_advantages(training_run_id: str):
+        steps = await run_in_threadpool(
+            AdvantageDistribution.list_steps_for_run, training_run_id
+        )
+        return JSONResponse(steps)
+
+    @web.get("/api/runs/{training_run_id}/advantages/{rollout_id}")
+    async def get_run_advantages(training_run_id: str, rollout_id: int):
+        merged = await run_in_threadpool(
+            AdvantageDistribution.merged_for_step, training_run_id, rollout_id
+        )
+        if merged is None:
+            raise HTTPException(
+                status_code=404,
+                detail=(
+                    f"No advantage distribution for rollout {rollout_id} "
+                    f"of run {training_run_id!r}"
+                ),
+            )
+        return JSONResponse(merged)
 
     # ── Live Modal log stream (SSE, pure pass-through) ───────────────────
 
