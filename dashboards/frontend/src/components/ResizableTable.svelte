@@ -115,10 +115,10 @@
   .column-resize-handle {
     position: absolute;
     top: 0;
-    right: -5px;
+    right: -9px;
     bottom: 0;
     z-index: 1;
-    width: 10px;
+    width: 18px;
     border: 0;
     padding: 0;
     background: transparent;
@@ -126,20 +126,37 @@
   }
 
   .column-resize-handle::after {
-    content: "";
+    content: "↔";
     position: absolute;
-    top: 8px;
-    right: 4px;
-    bottom: 8px;
-    width: 1px;
+    top: 50%;
+    right: 1px;
+    display: grid;
+    place-items: center;
+    width: 16px;
+    height: 16px;
     border-radius: 999px;
-    background: transparent;
+    background: var(--color-c-gray-10, #2f2f2f);
+    color: var(--muted);
+    font-size: 11px;
+    line-height: 1;
+    opacity: 0;
+    transform: translateY(-50%);
+    transition:
+      opacity 120ms ease,
+      color 120ms ease,
+      background 120ms ease;
   }
 
   :global(table.resizable-table th:hover) .column-resize-handle::after,
   :global(table.resizable-table th.resizing) .column-resize-handle::after,
   .column-resize-handle:focus-visible::after {
-    background: var(--accent-border);
+    opacity: 1;
+  }
+
+  :global(table.resizable-table th.resizing) .column-resize-handle::after,
+  .column-resize-handle:focus-visible::after {
+    background: var(--color-c-gray-15, #3b3b3b);
+    color: var(--text-bright);
   }
 
   .column-resize-handle:focus-visible {
