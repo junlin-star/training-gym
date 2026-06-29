@@ -7,8 +7,8 @@
     Search,
   } from "lucide-svelte";
   import Drawer from "../components/Drawer.svelte";
-  import MinimalTable from "../components/MinimalTable.svelte";
   import MinimalTableSkeleton from "../components/MinimalTableSkeleton.svelte";
+  import ResizableTable from "../components/ResizableTable.svelte";
   import StatusPill from "../components/StatusPill.svelte";
   import TimeAgo from "../components/TimeAgo.svelte";
 
@@ -32,6 +32,14 @@
   let selectedDeploymentKey = $state(null);
   let relatedRunExpanded = $state(true);
   let relatedEvalsExpanded = $state(true);
+  const deploymentColumns = [
+    { key: "name", label: "Name", width: 220, minWidth: 140 },
+    { key: "training", label: "Training run name", width: 280, minWidth: 160 },
+    { key: "status", label: "Status", width: 116, minWidth: 96 },
+    { key: "model", label: "Base model", width: 220, minWidth: 140 },
+    { key: "created", label: "Created", width: 116, minWidth: 96 },
+    { key: "actions", label: "", ariaLabel: "Actions", width: 150, minWidth: 132 },
+  ];
 
   function safeText(value) {
     if (value && typeof value === "object" && "value" in value) return value.value;
@@ -331,7 +339,10 @@
         >
           <Filter size={12} />
           <span>Status</span>
-          <ChevronDown size={12} class={statusMenuOpen ? "rotated" : ""} />
+          <ChevronDown
+            size={12}
+            style={`transform: ${statusMenuOpen ? "rotate(180deg)" : "rotate(0deg)"};`}
+          />
         </button>
         {#if statusMenuOpen}
           <div class="status-menu">
@@ -365,17 +376,7 @@
       <div class="empty">No deployments recorded yet.</div>
     {:else}
       <div class="table-wrap">
-        <MinimalTable class="deployments-table">
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Training run name</th>
-              <th>Status</th>
-              <th>Base model</th>
-              <th>Created</th>
-              <th></th>
-            </tr>
-          </thead>
+        <ResizableTable class="deployments-table" columns={deploymentColumns}>
           <tbody>
             {#each filteredRows as row (row.key)}
               {@const deploymentName = row.deployment.deployment_id || deploymentLabel(row.deployment)}
@@ -440,7 +441,7 @@
               </tr>
             {/each}
           </tbody>
-        </MinimalTable>
+        </ResizableTable>
       </div>
     {/if}
     </div>
@@ -522,7 +523,10 @@
             onclick={() => (relatedRunExpanded = !relatedRunExpanded)}
           >
             <span>Related training run</span>
-            <ChevronDown size={13} class={relatedRunExpanded ? "rotated" : ""} />
+            <ChevronDown
+              size={13}
+              style={`transform: ${relatedRunExpanded ? "rotate(180deg)" : "rotate(0deg)"};`}
+            />
           </button>
           {#if relatedRunExpanded}
             <button
@@ -545,7 +549,10 @@
             onclick={() => (relatedEvalsExpanded = !relatedEvalsExpanded)}
           >
             <span>Related evals</span>
-            <ChevronDown size={13} class={relatedEvalsExpanded ? "rotated" : ""} />
+            <ChevronDown
+              size={13}
+              style={`transform: ${relatedEvalsExpanded ? "rotate(180deg)" : "rotate(0deg)"};`}
+            />
           </button>
           {#if relatedEvalsExpanded}
             <div class="eval-list">
@@ -716,10 +723,6 @@
     font-size: 0.68rem;
   }
 
-  .rotated {
-    transform: rotate(180deg);
-  }
-
   .runs-body {
     padding: 0;
   }
@@ -729,8 +732,6 @@
   }
 
   :global(table.deployments-table) {
-    width: 100%;
-    min-width: 840px;
     border: 0;
     border-radius: 0;
   }
@@ -744,15 +745,15 @@
   }
 
   .name-cell {
-    width: 24%;
+    min-width: 0;
   }
 
   .training-cell {
-    width: 30%;
+    min-width: 0;
   }
 
   .model-cell {
-    max-width: 260px;
+    max-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -788,7 +789,7 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    max-width: 280px;
+    max-width: 100%;
   }
 
   .cross-link:hover {
@@ -796,7 +797,7 @@
   }
 
   .open-link-cell {
-    width: 145px;
+    min-width: 0;
   }
 
   .open-modal-link {
@@ -1016,12 +1017,6 @@
     font-variant-numeric: tabular-nums;
   }
 
-  .related-empty {
-    margin-top: 0.46rem;
-    color: var(--muted);
-    font-size: 0.74rem;
-  }
-
   .empty {
     padding: 24px;
     color: var(--muted);
@@ -1036,8 +1031,7 @@
   }
 
   @media (max-width: 760px) {
-    .summary-row,
-    .summary-row.compact {
+    .summary-row {
       grid-template-columns: 1fr;
     }
 

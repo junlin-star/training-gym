@@ -1,11 +1,10 @@
 <script>
-  import { onDestroy } from "svelte";
   import { ExternalLink, Maximize2, PanelRightClose } from "lucide-svelte";
   import Drawer from "../components/Drawer.svelte";
   import FilterBar from "../components/FilterBar.svelte";
   import FrameworkStageProgress from "../components/FrameworkStageProgress.svelte";
-  import MinimalTable from "../components/MinimalTable.svelte";
   import MinimalTableSkeleton from "../components/MinimalTableSkeleton.svelte";
+  import ResizableTable from "../components/ResizableTable.svelte";
   import RunSummary from "../components/RunSummary.svelte";
   import StatusPill from "../components/StatusPill.svelte";
   import TimeAgo from "../components/TimeAgo.svelte";
@@ -20,6 +19,7 @@
     recipes,
     recipeCounts,
     activeRecipes,
+
     statuses,
     statusCounts,
     activeStatuses,
@@ -66,11 +66,6 @@
     { key: "updated", label: "Last updated", width: 132, minWidth: 110 },
     { key: "actions", label: "", ariaLabel: "Actions", width: 236, minWidth: 180 },
   ];
-  let columnWidths = $state(Object.fromEntries(columns.map((column) => [column.key, column.width])));
-  let resizeState = $state(null);
-  let tableWidth = $derived(
-    columns.reduce((total, column) => total + columnWidths[column.key], 0),
-  );
 
   function selectRun(runId) {
     onOpenDetail(runId);
@@ -107,46 +102,6 @@
     const label = unit.charAt(0).toUpperCase() + unit.slice(1);
     return `${label} ${progress.current} / ${progress.total}`;
   }
-
-  function startColumnResize(event, column) {
-    event.preventDefault();
-    event.stopPropagation();
-
-    resizeState = {
-      key: column.key,
-      minWidth: column.minWidth,
-      startX: event.clientX,
-      startWidth: columnWidths[column.key],
-      previousUserSelect: document.body.style.userSelect,
-      previousCursor: document.body.style.cursor,
-    };
-
-    document.body.style.userSelect = "none";
-    document.body.style.cursor = "col-resize";
-    window.addEventListener("pointermove", resizeColumn);
-    window.addEventListener("pointerup", stopColumnResize, { once: true });
-  }
-
-  function resizeColumn(event) {
-    if (!resizeState) return;
-    const nextWidth = Math.max(
-      resizeState.minWidth,
-      Math.round(resizeState.startWidth + event.clientX - resizeState.startX),
-    );
-    columnWidths = { ...columnWidths, [resizeState.key]: nextWidth };
-  }
-
-  function stopColumnResize() {
-    if (!resizeState) return;
-    document.body.style.userSelect = resizeState.previousUserSelect;
-    document.body.style.cursor = resizeState.previousCursor;
-    resizeState = null;
-    window.removeEventListener("pointermove", resizeColumn);
-  }
-
-  onDestroy(() => {
-    stopColumnResize();
-  });
 
   $effect(() => {
     if (drawerRunId && !allRuns.some((run) => run.run_id === drawerRunId)) {
@@ -219,30 +174,7 @@
       <div class="empty">No runs match the current filters.</div>
     {:else}
       <div class="table-wrap">
-        <MinimalTable
-          class="runs-table training-runs-table"
-          style={`--training-grid-width: ${tableWidth}px;`}
-        >
-          <colgroup>
-            {#each columns as column (column.key)}
-              <col style={`width: ${columnWidths[column.key]}px;`} />
-            {/each}
-          </colgroup>
-          <thead>
-            <tr>
-              {#each columns as column (column.key)}
-                <th class:resizing={resizeState?.key === column.key}>
-                  <span class="column-label">{column.label}</span>
-                  <button
-                    type="button"
-                    class="column-resize-handle"
-                    aria-label={`Resize ${column.ariaLabel || column.label} column`}
-                    onpointerdown={(event) => startColumnResize(event, column)}
-                  ></button>
-                </th>
-              {/each}
-            </tr>
-          </thead>
+        <ResizableTable class="runs-table training-runs-table" {columns}>
           <tbody>
             {#each filteredRuns as run, runIndex (`${run.run_id || "run"}-${run.created_at || 0}-${runIndex}`)}
               {@const runName = run.run_id || "—"}
@@ -348,7 +280,7 @@
               </tr>
             {/each}
           </tbody>
-        </MinimalTable>
+        </ResizableTable>
       </div>
     {/if}
   </div>
@@ -468,59 +400,6 @@
     min-width: 960px;
   }
 
-  :global(table.training-runs-table) {
-    table-layout: fixed;
-    width: max(100%, var(--training-grid-width, 960px));
-    min-width: var(--training-grid-width, 960px);
-  }
-
-  :global(table.training-runs-table th) {
-    position: relative;
-    padding-right: 22px;
-    user-select: none;
-  }
-
-  .column-label {
-    display: block;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .column-resize-handle {
-    position: absolute;
-    top: 0;
-    right: -5px;
-    bottom: 0;
-    z-index: 1;
-    width: 10px;
-    border: 0;
-    padding: 0;
-    background: transparent;
-    cursor: col-resize;
-  }
-
-  .column-resize-handle::after {
-    content: "";
-    position: absolute;
-    top: 8px;
-    right: 4px;
-    bottom: 8px;
-    width: 1px;
-    border-radius: 999px;
-    background: transparent;
-  }
-
-  :global(table.training-runs-table th:hover) .column-resize-handle::after,
-  :global(table.training-runs-table th.resizing) .column-resize-handle::after,
-  .column-resize-handle:focus-visible::after {
-    background: var(--accent-border);
-  }
-
-  .column-resize-handle:focus-visible {
-    outline: none;
-  }
-
   :global(table.runs-table tr.row-selected td) {
     background: color-mix(in srgb, var(--accent) 6%, transparent);
   }
@@ -612,8 +491,7 @@
   }
 
   .modal-link-cell {
-    min-width: 14rem;
-    width: auto;
+    min-width: 0;
     overflow: visible;
   }
 
