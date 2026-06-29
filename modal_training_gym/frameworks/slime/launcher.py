@@ -29,7 +29,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 from collections.abc import Callable
 from enum import Enum
-from modal import App, Image, Secret, Volume
+from modal import App, Dict as ModalDict, Image, Secret, Volume
 
 from modal_training_gym.common import hf_secrets
 
@@ -940,6 +940,49 @@ def build_slime_app(
         unsupported = ", ".join(sorted(train_function_kwargs))
         raise TypeError(f"Unsupported slime.train_function_kwargs keys: {unsupported}")
 
+    def write_step_times(
+        run_id: str, num_steps: int
+    ) -> dict[str, dict[str, int | None]]:
+        step_times_dict = ModalDict.from_name(
+            "training-gym-step-times", create_if_missing=True
+        )
+
+        step_times: dict[str, dict[str, int | None]] = {}
+        for current_step_num in range(1, num_steps + 1):
+            start_key = f"{run_id}:{current_step_num}:start"
+            finish_key = f"{run_id}:{current_step_num}:finish"
+
+            current_step_start_time = step_times_dict.get(start_key)
+            current_step_end_time = step_times_dict.get(finish_key)
+            if current_step_start_time is not None:
+                current_step_start_time = int(current_step_start_time)
+            if current_step_end_time is not None:
+                current_step_end_time = int(current_step_end_time)
+
+            duration = None
+            if (
+                current_step_start_time is not None
+                and current_step_end_time is not None
+            ):
+                duration = current_step_end_time - current_step_start_time
+
+            step_times[f"{current_step_num}"] = {
+                "start": current_step_start_time,
+                "end": current_step_end_time,
+                "duration_s": duration,
+            }
+
+        return step_times
+
+    def clear_step_times(run_id: str, num_steps: int) -> None:
+        step_times_dict = ModalDict.from_name(
+            "training-gym-step-times", create_if_missing=True
+        )
+
+        for current_step_num in range(1, num_steps + 1):
+            step_times_dict.pop(f"{run_id}:{current_step_num}:start", None)
+            step_times_dict.pop(f"{run_id}:{current_step_num}:finish", None)
+
     @app.function(
         image=train_image,
         gpu=gpu_spec,
@@ -1248,14 +1291,38 @@ def build_slime_app(
             raise
         finally:
             finished_at = int(time.time())
-            run_record.ended_at = finished_at
-            if run_record.completed_at is None:
-                run_record.completed_at = finished_at
-            run_record.duration_seconds = max(0, finished_at - run_record.started_at)
             try:
-                await run_record.save_async()
+                latest_run_record = await TrainingRun.from_id_async(training_run_id)
             except Exception:
-                pass
+                latest_run_record = run_record
+
+            latest_run_record.status = run_record.status
+            latest_run_record.ended_at = finished_at
+            if latest_run_record.completed_at is None:
+                latest_run_record.completed_at = finished_at
+            latest_run_record.duration_seconds = max(
+                0, finished_at - latest_run_record.started_at
+            )
+
+            step_times_read = False
+            try:
+                latest_run_record.step_times = write_step_times(
+                    training_run_id, slime.num_rollout
+                )
+                step_times_read = True
+            except Exception as exc:
+                print(f"Failed to read step times: {exc}")
+
+            try:
+                await latest_run_record.save_async()
+            except Exception as exc:
+                print(f"Failed to save run record: {exc}")
+            else:
+                if step_times_read:
+                    try:
+                        clear_step_times(training_run_id, slime.num_rollout)
+                    except Exception as exc:
+                        print(f"Failed to clear step times: {exc}")
 
     for tag, fn in app.registered_functions.items():
         setattr(app, tag, fn)

@@ -59,6 +59,7 @@ _PHASE_PATH = "/api/framework-status"
 _ROLLOUT_PATH = "/api/training-rollouts"
 _ADVANTAGE_PATH = "/api/advantage-distributions"
 _PHASE_TIMEOUT_SECONDS = 1.0
+_STEP_EVENT_TIMEOUT_SECONDS = 5.0
 _ROLLOUT_TIMEOUT_SECONDS = 10.0
 
 
@@ -185,6 +186,13 @@ def _enqueue_rollout(payload: dict[str, Any]) -> None:
         _REPORT_QUEUE.put_nowait(item)
     except Exception:
         pass
+
+
+def _post_framework_status(payload: dict[str, Any], timeout: float) -> None:
+    url = _phase_url()
+    if not url:
+        return
+    _post({"_url": url, "_timeout": timeout, **payload})
 
 
 def _enqueue_advantage(payload: dict[str, Any]) -> None:
@@ -881,10 +889,11 @@ def log_rollout_data(
     rollout_extra_metrics: Any,
     rollout_time: Any,
 ) -> bool:
+    progress = _step_progress(args, rollout_id)
     report_phase(
         SlimeStatus.ROLLOUT_LOGGING,
         args,
-        **_step_progress(args, rollout_id),
+        **progress,
         rollout_id=rollout_id,
         sample_count=len(samples) if hasattr(samples, "__len__") else None,
         metrics=rollout_extra_metrics,
@@ -984,6 +993,19 @@ def report_rollout_initializing(args: Any) -> None:
     )
 
 
+def report_step_start(args: Any, rollout_id: int | None = None) -> None:
+    _post_framework_status(
+        {
+            **_run_context(args),
+            "phase": SlimeStatus.ROLLOUT_LOGGING.value,
+            **_step_progress(args, rollout_id),
+            "rollout_id": rollout_id,
+            "step_event": "start",
+        },
+        _STEP_EVENT_TIMEOUT_SECONDS,
+    )
+
+
 def report_weight_sync(args: Any) -> None:
     report_phase(
         SlimeStatus.WEIGHT_SYNC,
@@ -998,6 +1020,21 @@ def report_generate_rollouts(args: Any) -> None:
     )
 
 
+def report_step_complete(args: Any, rollout_id: int | None = None) -> None:
+    if rollout_id is None:
+        return
+    _post_framework_status(
+        {
+            **_run_context(args),
+            "phase": SlimeStatus.WEIGHT_SYNC.value,
+            **_step_progress(args, rollout_id),
+            "rollout_id": rollout_id,
+            "step_event": "finish",
+        },
+        _STEP_EVENT_TIMEOUT_SECONDS,
+    )
+
+
 __all__ = [
     "before_log_prob_hook",
     "before_train_step_hook",
@@ -1006,6 +1043,8 @@ __all__ = [
     "report_phase",
     "report_rollout_initializing",
     "report_rollout_samples",
+    "report_step_start",
+    "report_step_complete",
     "report_weight_sync",
     "log_eval_rollout_data",
     "log_rollout_data",

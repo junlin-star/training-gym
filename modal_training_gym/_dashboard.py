@@ -271,6 +271,7 @@ def fastapi_app():
         vol_get,
         vol_get_summary_items_healed,
         vol_put_summary_items,
+        _step_times_dict,
     )
 
     web = FastAPI()
@@ -698,6 +699,16 @@ def fastapi_app():
             progress = {**existing_progress, **progress}
         metadata["framework_progress"] = progress
         run.metadata = metadata
+        current_step = progress.get("current")
+        step_event = str(payload.get("step_event", "") or "").strip()
+        if isinstance(current_step, int) and current_step > 0:
+            step_times = _step_times_dict()
+            if step_event == "start":
+                step_times[f"{training_run_id}:{current_step}:start"] = int(time.time())
+            elif step_event == "finish":
+                step_times[f"{training_run_id}:{current_step}:finish"] = int(
+                    time.time()
+                )
         await run.save_async()
         invalidate_cache("runs")
         return JSONResponse({"status": "ok", "framework_status": status.value})
