@@ -641,8 +641,8 @@ class ModelDeployment(BaseModel):
                 try:
                     resp = requests.get(
                         f"{self.url}/v1/models",
-                        timeout=10,
                         headers=_modal_proxy_auth_headers(),
+                        timeout=10,
                     )
                     if resp.ok and resp.json().get("data"):
                         return
