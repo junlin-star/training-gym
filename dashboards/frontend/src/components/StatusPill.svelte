@@ -9,6 +9,7 @@
     pending: "Pending",
     running: "Pending",
     stopped: "Stopped",
+    cancelled: "Cancelled",
     failed: "Failed",
     inactive: "Inactive",
   };
@@ -30,13 +31,14 @@
   class:status-running={normalizedStatus === "running"}
   class:status-pending={normalizedStatus === "pending"}
   class:status-stopped={normalizedStatus === "stopped"}
+  class:status-cancelled={normalizedStatus === "cancelled"}
   class:status-failed={normalizedStatus === "failed"}
   class:status-inactive={normalizedStatus === "inactive"}
   aria-label={statusLabel}
 >
   {#if normalizedStatus === "completed" || normalizedStatus === "ready"}
     <CheckCircle2 size={14} />
-  {:else if normalizedStatus === "stopped"}
+  {:else if normalizedStatus === "stopped" || normalizedStatus === "cancelled"}
     <OctagonX size={14} />
   {:else if normalizedStatus === "failed" || normalizedStatus === "inactive"}
     <CircleX size={14} />
@@ -94,7 +96,8 @@
     border-color: #2d4327;
   }
 
-  .status-stopped {
+  .status-stopped,
+  .status-cancelled {
     background: #3b2f20;
     color: #ffab5e;
     border-color: #5d442d;

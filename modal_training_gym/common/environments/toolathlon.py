@@ -61,6 +61,34 @@ TIER_A_MCPS = frozenset(
 # Terminal "done" action names the agent can emit to end an episode.
 DONE_TOOLS = frozenset({"claim_done", "local-claim_done"})
 
+# Agent-side aux tools (handled by ``dispatch_tool``, NOT exposed by the MCP
+# gateway), so ``list_tools`` can't discover them — inject them into the catalog
+# by hand so the model knows it can call them.
+LOCAL_TOOL_SCHEMAS: dict[str, dict] = {
+    "local-claim_done": {
+        "description": "Signal the task is complete. Call only once the success condition is actually satisfied.",
+        "parameters": {"type": "object", "properties": {}},
+    },
+    "local-python-execute": {
+        "description": "Run a short Python script in the task workspace and return its stdout/stderr.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "code": {"type": "string", "description": "Python source to execute."},
+                "filename": {
+                    "type": "string",
+                    "description": "Optional script filename.",
+                },
+                "timeout": {
+                    "type": "integer",
+                    "description": "Timeout in seconds (max 120).",
+                },
+            },
+            "required": ["code"],
+        },
+    },
+}
+
 
 # ── Config ────────────────────────────────────────────────────────────────
 
@@ -167,6 +195,23 @@ _LOCAL_PY_SNIPPET = (
     "except subprocess.TimeoutExpired:\n"
     "    print('__RESULT__' + json.dumps({'isError': False, "
     "'content': [f'=== EXECUTION TIMEOUT === after {timeout}s']}))\n"
+)
+
+# List the gateway's tool catalog over the MCP SSE transport. argv: gateway url.
+_LIST_TOOLS_SNIPPET = (
+    "import sys, json, asyncio\n"
+    "from mcp.client.sse import sse_client\n"
+    "from mcp import ClientSession\n"
+    "async def _main():\n"
+    "    url = sys.argv[1]\n"
+    "    async with sse_client(url) as (r, w):\n"
+    "        async with ClientSession(r, w) as s:\n"
+    "            await s.initialize()\n"
+    "            res = await s.list_tools()\n"
+    "            tools = [{'name': t.name, 'description': t.description or '', "
+    "'parameters': t.inputSchema or {}} for t in res.tools]\n"
+    "            print('__TOOLS__' + json.dumps(tools))\n"
+    "asyncio.run(_main())\n"
 )
 
 
@@ -409,6 +454,29 @@ class ToolathlonEnvironment(SandboxEnvironment):
         obs = dispatch_tool(self.sandbox, self.config, action)
         return StepResult(observation=obs, done=action.name in DONE_TOOLS)
 
+    def list_tools(self) -> dict[str, dict]:
+        """The agent's tool catalog: live gateway tools + the agent-side aux tools.
+
+        Returns ``{name: {description, parameters}}`` — the shape
+        :func:`tool_schemas_to_openai` consumes — so a live rollout can hand the
+        model the exact catalog without needing an expert trajectory.
+        """
+        proc = self.sandbox.exec(
+            self.config.pybin, "-c", _LIST_TOOLS_SNIPPET, self.config.gateway_sse_url
+        )
+        proc.wait()
+        schemas: dict[str, dict] = {}
+        for line in proc.stdout.read().splitlines():
+            if line.startswith("__TOOLS__"):
+                for tool in json.loads(line[len("__TOOLS__") :]):
+                    schemas[tool["name"]] = {
+                        "description": tool["description"],
+                        "parameters": tool["parameters"],
+                    }
+                break
+        schemas.update(LOCAL_TOOL_SCHEMAS)
+        return schemas
+
     def evaluate(self) -> EvalVerdict:
         """Score the restored workspace via Toolathlon's ``container_eval`` (exit 0 == pass).
 
@@ -475,6 +543,18 @@ class ToolathlonEnvPool(SandboxEnvironmentPool):
         self.snapshots.mount(sandbox, task_name, k)
         _start_gateway(sandbox, self.config)
         _await_gateway(sandbox, self.config, attempts=40)
+        return ToolathlonEnvironment(sandbox, self.config, task_name)
+
+    def acquire_fresh(self, task_name: str) -> ToolathlonEnvironment:
+        """A pristine (step-0) episode seeded from scratch — no snapshot catalog.
+
+        Runs Toolathlon's ``container_preprocess`` directly in a new sandbox
+        (seeds the workspace + synthesizes the eval dump_line + starts the
+        gateway), so live RL rollouts don't depend on a pre-built snapshot
+        library. Use :meth:`acquire` when starting mid-trajectory (curriculum).
+        """
+        sandbox = self.create_sandbox(timeout=60 * 30, cpu=2.0, memory=4096)
+        _seed_workspace(sandbox, self.config, f"finalpool/{task_name}")
         return ToolathlonEnvironment(sandbox, self.config, task_name)
 
 
@@ -773,9 +853,9 @@ Rules:
 - After each tool result, check whether it succeeded before continuing; do not blindly repeat a failed call with the same arguments.
 - Call `local-claim_done` only once the task's success condition is actually satisfied.
 
-Emit every tool call in exactly this format — a single <function> block wrapped in <emoji>, with one <parameter> block per argument. For example, a real call that writes a JSON file (content abbreviated with … here) looks like:
+Emit every tool call in exactly this format — a single <function> block wrapped in <tool_call>, with one <parameter> block per argument. For example, a real call that writes a JSON file (content abbreviated with … here) looks like:
 
-<emoji>
+<tool_call>
 <function=filesystem-write_file>
 <parameter=path>
 train-ticket-plan.json
@@ -784,7 +864,7 @@ train-ticket-plan.json
 {"thursday": {"train number": "G385", "departure station": "Beijing South", "arrival station": "Qufu East", …}}
 </parameter>
 </function>
-</emoji>
+</tool_call>
 
 Use the actual tool name, parameters, and full (untruncated) values required by your task; the call above is only an illustration of the wire format."""
 

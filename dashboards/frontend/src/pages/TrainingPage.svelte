@@ -1,4 +1,5 @@
 <script>
+  import { onDestroy } from "svelte";
   import { ExternalLink, Maximize2, PanelRightClose } from "lucide-svelte";
   import Drawer from "../components/Drawer.svelte";
   import FilterBar from "../components/FilterBar.svelte";
@@ -53,6 +54,23 @@
   );
 
   const drawerWidth = "min(420px, calc(100vw - 24px))";
+  const columns = [
+    { key: "name", label: "Name", width: 240, minWidth: 140 },
+    { key: "status", label: "Status", width: 116, minWidth: 96 },
+    { key: "stage", label: "Stage", width: 190, minWidth: 130 },
+    { key: "model", label: "Model", width: 210, minWidth: 120 },
+    { key: "dataset", label: "Dataset", width: 180, minWidth: 120 },
+    { key: "recipe", label: "Recipe", width: 116, minWidth: 88 },
+    { key: "group", label: "Group", width: 150, minWidth: 96 },
+    { key: "created", label: "Created", width: 116, minWidth: 96 },
+    { key: "updated", label: "Last updated", width: 132, minWidth: 110 },
+    { key: "actions", label: "", ariaLabel: "Actions", width: 236, minWidth: 180 },
+  ];
+  let columnWidths = $state(Object.fromEntries(columns.map((column) => [column.key, column.width])));
+  let resizeState = $state(null);
+  let tableWidth = $derived(
+    columns.reduce((total, column) => total + columnWidths[column.key], 0),
+  );
 
   function selectRun(runId) {
     onOpenDetail(runId);
@@ -89,6 +107,46 @@
     const label = unit.charAt(0).toUpperCase() + unit.slice(1);
     return `${label} ${progress.current} / ${progress.total}`;
   }
+
+  function startColumnResize(event, column) {
+    event.preventDefault();
+    event.stopPropagation();
+
+    resizeState = {
+      key: column.key,
+      minWidth: column.minWidth,
+      startX: event.clientX,
+      startWidth: columnWidths[column.key],
+      previousUserSelect: document.body.style.userSelect,
+      previousCursor: document.body.style.cursor,
+    };
+
+    document.body.style.userSelect = "none";
+    document.body.style.cursor = "col-resize";
+    window.addEventListener("pointermove", resizeColumn);
+    window.addEventListener("pointerup", stopColumnResize, { once: true });
+  }
+
+  function resizeColumn(event) {
+    if (!resizeState) return;
+    const nextWidth = Math.max(
+      resizeState.minWidth,
+      Math.round(resizeState.startWidth + event.clientX - resizeState.startX),
+    );
+    columnWidths = { ...columnWidths, [resizeState.key]: nextWidth };
+  }
+
+  function stopColumnResize() {
+    if (!resizeState) return;
+    document.body.style.userSelect = resizeState.previousUserSelect;
+    document.body.style.cursor = resizeState.previousCursor;
+    resizeState = null;
+    window.removeEventListener("pointermove", resizeColumn);
+  }
+
+  onDestroy(() => {
+    stopColumnResize();
+  });
 
   $effect(() => {
     if (drawerRunId && !allRuns.some((run) => run.run_id === drawerRunId)) {
@@ -161,19 +219,28 @@
       <div class="empty">No runs match the current filters.</div>
     {:else}
       <div class="table-wrap">
-        <MinimalTable class="runs-table training-runs-table">
+        <MinimalTable
+          class="runs-table training-runs-table"
+          style={`--training-grid-width: ${tableWidth}px;`}
+        >
+          <colgroup>
+            {#each columns as column (column.key)}
+              <col style={`width: ${columnWidths[column.key]}px;`} />
+            {/each}
+          </colgroup>
           <thead>
             <tr>
-              <th>Name</th>
-              <th>Status</th>
-              <th>Stage</th>
-              <th>Model</th>
-              <th>Dataset</th>
-              <th>Recipe</th>
-              <th>Group</th>
-              <th>Created</th>
-              <th>Last updated</th>
-              <th></th>
+              {#each columns as column (column.key)}
+                <th class:resizing={resizeState?.key === column.key}>
+                  <span class="column-label">{column.label}</span>
+                  <button
+                    type="button"
+                    class="column-resize-handle"
+                    aria-label={`Resize ${column.ariaLabel || column.label} column`}
+                    onpointerdown={(event) => startColumnResize(event, column)}
+                  ></button>
+                </th>
+              {/each}
             </tr>
           </thead>
           <tbody>
@@ -403,6 +470,55 @@
 
   :global(table.training-runs-table) {
     table-layout: fixed;
+    width: max(100%, var(--training-grid-width, 960px));
+    min-width: var(--training-grid-width, 960px);
+  }
+
+  :global(table.training-runs-table th) {
+    position: relative;
+    padding-right: 22px;
+    user-select: none;
+  }
+
+  .column-label {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .column-resize-handle {
+    position: absolute;
+    top: 0;
+    right: -5px;
+    bottom: 0;
+    z-index: 1;
+    width: 10px;
+    border: 0;
+    padding: 0;
+    background: transparent;
+    cursor: col-resize;
+  }
+
+  .column-resize-handle::after {
+    content: "";
+    position: absolute;
+    top: 8px;
+    right: 4px;
+    bottom: 8px;
+    width: 1px;
+    border-radius: 999px;
+    background: transparent;
+  }
+
+  :global(table.training-runs-table th:hover) .column-resize-handle::after,
+  :global(table.training-runs-table th.resizing) .column-resize-handle::after,
+  .column-resize-handle:focus-visible::after {
+    background: var(--accent-border);
+  }
+
+  .column-resize-handle:focus-visible {
+    outline: none;
   }
 
   :global(table.runs-table tr.row-selected td) {
@@ -447,19 +563,19 @@
   }
 
   .run-cell {
-    width: 24%;
+    min-width: 0;
   }
 
   .model-cell {
-    width: 20%;
+    min-width: 0;
   }
 
   .dataset-cell {
-    width: 18%;
+    min-width: 0;
   }
 
   .stage-cell {
-    width: 16%;
+    min-width: 0;
   }
 
   .created-cell,

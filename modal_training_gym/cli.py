@@ -40,14 +40,14 @@ def main():
 
     cleanup_parser = sub.add_parser(
         "cleanup",
-        help="Delete metadata for old failed runs",
+        help="Delete metadata for old failed/cancelled runs",
     )
     cleanup_parser.add_argument(
         "--older-than-days",
         type=int,
         default=7,
         metavar="DAYS",
-        help="Delete failed runs older than this many days (default: 7)",
+        help="Delete failed/cancelled runs older than this many days (default: 7)",
     )
     cleanup_parser.add_argument(
         "--dry-run",

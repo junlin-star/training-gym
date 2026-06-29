@@ -224,6 +224,20 @@ def compact_summaries() -> None:
     print("Compaction complete.")
 
 
+@app.function(schedule=modal.Cron("0 * * * *"), secrets=_function_secrets())
+def reconcile_orphan_training_runs() -> None:
+    """Hourly reconciliation of orphaned pending training runs."""
+    from modal_training_gym.common.run_reconciler import reconcile_orphan_runs
+
+    results = reconcile_orphan_runs()
+    if results:
+        print(f"Reconciled {len(results)} orphaned run(s):")
+        for result in results:
+            print(f"  {result.training_run_id}: {result.reason}")
+    else:
+        print("No orphaned runs to reconcile.")
+
+
 @app.function(
     min_containers=1,
     secrets=_function_secrets(),
