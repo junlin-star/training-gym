@@ -169,14 +169,18 @@ class TrainingGroup:
         self._validate_paths()
         keys = list(self.grid)
         combos: list[tuple[Any, ...]]
-        if keys and all(self.grid[k] for k in keys):
+        active_keys = [k for k in keys if self.grid[k]]
+        if active_keys:
             import itertools
 
-            combos = list(itertools.product(*(self.grid[k] for k in keys)))
+            combos = list(itertools.product(*(self.grid[k] for k in active_keys)))
         else:
             combos = [()]
         self._variants = [
-            (dict(zip(keys, combo)), self._build_variant(dict(zip(keys, combo))))
+            (
+                dict(zip(active_keys, combo)),
+                self._build_variant(dict(zip(active_keys, combo))),
+            )
             for combo in combos
         ]
         return list(self._variants)

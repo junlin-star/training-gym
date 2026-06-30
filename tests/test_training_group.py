@@ -105,6 +105,24 @@ def test_empty_grid_axis_yields_single_blank_variant():
     assert cfg.training_run_id
 
 
+def test_empty_grid_axis_is_ignored_when_other_axes_have_values():
+    group = TrainingGroup(
+        base=_base(),
+        grid={
+            "recipe.lr": [1e-6, 5e-6],
+            "recipe.rollout_temperature": [],
+        },
+    )
+
+    variants = group.iter_variants()
+
+    assert len(variants) == 2
+    assert [overrides for overrides, _ in variants] == [
+        {"recipe.lr": 1e-6},
+        {"recipe.lr": 5e-6},
+    ]
+
+
 def test_empty_group_variant_records_blank_group_tags():
     group = TrainingGroup(base=_base(), grid={"recipe.lr": []}, name="Blank Sweep")
     cfg = group.get_train_configs()[0]

@@ -463,6 +463,7 @@ class SlimeRecipe(BaseTrainRecipe):
         return {
             "use_wandb": True,
             "wandb_project": w.project,
+            "wandb_entity": w.entity,
             "wandb_group": w.group,
             "wandb_key": w.key,
             "disable_wandb_random_suffix": w.disable_random_suffix,

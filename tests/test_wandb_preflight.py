@@ -11,6 +11,8 @@ from modal_training_gym.common.wandb import WandbConfig, preflight_wandb
 from modal_training_gym.frameworks.slime.launcher import (
     _preflight_wandb as _slime_preflight_wandb,
 )
+from modal_training_gym.train_recipes.miles_recipe.recipe import MilesConfig
+from modal_training_gym.train_recipes.slime_recipe import SlimeRecipe
 
 _CFG = WandbConfig(project="qwen3-asr-rl", modal_wandb_secret_name="wandb-secret")
 
@@ -98,3 +100,10 @@ def test_slime_preflight_delegates_to_common(monkeypatch):
     )
     entity = _slime_preflight_wandb(_CFG)
     assert entity == "slime-team"
+
+
+def test_wandb_entity_is_forwarded_to_framework_cli_fields():
+    wandb_cfg = WandbConfig(project="qwen3-asr-rl", entity="my-team")
+
+    assert SlimeRecipe._wandb_to_fields(wandb_cfg)["wandb_entity"] == "my-team"
+    assert MilesConfig._wandb_to_fields(wandb_cfg)["wandb_entity"] == "my-team"
