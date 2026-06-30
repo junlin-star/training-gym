@@ -940,39 +940,113 @@ def build_slime_app(
         unsupported = ", ".join(sorted(train_function_kwargs))
         raise TypeError(f"Unsupported slime.train_function_kwargs keys: {unsupported}")
 
+    SUBSTEP_ORDER = [
+        SlimeStatus.EVAL_ROLLOUT_LOGGING.value,
+        SlimeStatus.ROLLOUT_LOGGING.value,
+        SlimeStatus.OFFLOAD_ROLLOUT.value,
+        SlimeStatus.COMPUTE_LOG_PROBS.value,
+        SlimeStatus.OPTIMIZER_STEP.value,
+        SlimeStatus.WEIGHT_SYNC.value,
+        SlimeStatus.CHECKPOINT_SAVE.value,
+        SlimeStatus.OFFLOAD_TRAIN.value,
+        f"{SlimeStatus.EVAL_ROLLOUT_LOGGING.value}_end",
+    ] 
+    OPTIONAL_SUBSTEPS = {
+        SlimeStatus.EVAL_ROLLOUT_LOGGING.value,
+        SlimeStatus.CHECKPOINT_SAVE.value,
+        f"{SlimeStatus.EVAL_ROLLOUT_LOGGING.value}_end",
+    }
+
     def write_step_times(
         run_id: str, num_steps: int
-    ) -> dict[str, dict[str, int | None]]:
+    ) -> tuple[
+        dict[str, dict[str, int | None]],
+        dict[str, dict[str, dict[str, int | None]]],
+    ]:
         step_times_dict = ModalDict.from_name(
             "training-gym-step-times", create_if_missing=True
         )
 
         step_times: dict[str, dict[str, int | None]] = {}
+        substep_times: dict[str, dict[str, dict[str, int | None]]] = {}
+
         for current_step_num in range(1, num_steps + 1):
             start_key = f"{run_id}:{current_step_num}:start"
             finish_key = f"{run_id}:{current_step_num}:finish"
 
-            current_step_start_time = step_times_dict.get(start_key)
-            current_step_end_time = step_times_dict.get(finish_key)
-            if current_step_start_time is not None:
-                current_step_start_time = int(current_step_start_time)
-            if current_step_end_time is not None:
-                current_step_end_time = int(current_step_end_time)
+            start_time = step_times_dict.get(start_key)
+            end_time = step_times_dict.get(finish_key)
+            if start_time is not None:
+                start_time = int(start_time)
+            if end_time is not None:
+                end_time = int(end_time)
 
             duration = None
-            if (
-                current_step_start_time is not None
-                and current_step_end_time is not None
-            ):
-                duration = current_step_end_time - current_step_start_time
+            if start_time is not None and end_time is not None:
+                duration = end_time - start_time
 
             step_times[f"{current_step_num}"] = {
-                "start": current_step_start_time,
-                "end": current_step_end_time,
+                "start": start_time,
+                "end": end_time,
                 "duration_s": duration,
             }
 
-        return step_times
+            substep_start_boundary = step_times_dict.get(
+                f"{run_id}:{current_step_num}:substep_start"
+            )
+            full_step_start_time = (
+                int(substep_start_boundary)
+                if substep_start_boundary is not None
+                else start_time
+            )
+            full_step_end_time = step_times_dict.get(
+                f"{run_id}:{current_step_num}:substep_finish"
+            )
+            if full_step_end_time is not None:
+                full_step_end_time = int(full_step_end_time)
+            else:
+                full_step_end_time = end_time
+
+            substep_times[f"{current_step_num}"] = {}
+            eval_before = SlimeStatus.EVAL_ROLLOUT_LOGGING.value
+            present: set[str] = set()
+            recorded: list[tuple[int, int, str]] = []
+            for order_idx, substep in enumerate(SUBSTEP_ORDER):
+                substep_start = step_times_dict.get(
+                    f"{run_id}:{current_step_num}:substep:{substep}"
+                )
+                if substep_start is None:
+                    continue
+                substep_start = int(substep_start)
+                if full_step_start_time is not None and substep != eval_before:
+                    substep_start = max(substep_start, full_step_start_time)
+                if full_step_end_time is not None:
+                    substep_start = min(substep_start, full_step_end_time)
+                present.add(substep)
+                recorded.append((substep_start, order_idx, substep))
+            recorded.sort()
+ 
+            for idx, (substep_start, order_idx, substep) in enumerate(recorded):
+                if idx + 1 < len(recorded):
+                    next_start, next_idx = recorded[idx + 1][0], recorded[idx + 1][1]
+                else:
+                    next_start, next_idx = full_step_end_time, len(SUBSTEP_ORDER)
+
+                gap = SUBSTEP_ORDER[order_idx + 1 : next_idx]
+                dropped_mandatory = any(
+                    s not in OPTIONAL_SUBSTEPS and s not in present for s in gap
+                )
+                if next_start is None or dropped_mandatory:
+                    substep_duration = None
+                else:
+                    substep_duration = max(next_start - substep_start, 0)
+
+                substep_times[f"{current_step_num}"][substep] = {
+                    "start": substep_start,
+                    "duration_s": substep_duration,
+                }
+
+        return step_times, substep_times
 
     def clear_step_times(run_id: str, num_steps: int) -> None:
         step_times_dict = ModalDict.from_name(
@@ -982,6 +1056,12 @@ def build_slime_app(
         for current_step_num in range(1, num_steps + 1):
             step_times_dict.pop(f"{run_id}:{current_step_num}:start", None)
             step_times_dict.pop(f"{run_id}:{current_step_num}:finish", None)
+            step_times_dict.pop(f"{run_id}:{current_step_num}:substep_start", None)
+            step_times_dict.pop(f"{run_id}:{current_step_num}:substep_finish", None)
+            for substep in SUBSTEP_ORDER:
+                step_times_dict.pop(
+                    f"{run_id}:{current_step_num}:substep:{substep}", None
+                )
 
     @app.function(
         image=train_image,
@@ -1306,9 +1386,10 @@ def build_slime_app(
 
             step_times_read = False
             try:
-                latest_run_record.step_times = write_step_times(
-                    training_run_id, slime.num_rollout
-                )
+                (
+                    latest_run_record.step_times,
+                    latest_run_record.substep_times,
+                ) = write_step_times(training_run_id, slime.num_rollout)
                 step_times_read = True
             except Exception as exc:
                 print(f"Failed to read step times: {exc}")

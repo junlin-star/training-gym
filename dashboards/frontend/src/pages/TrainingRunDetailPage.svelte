@@ -2,6 +2,7 @@
   import { ArrowLeft, ChevronLeft, ChevronRight, Download, ExternalLink, Minimize2, X } from "lucide-svelte";
   import Tabs from "../components/Tabs.svelte";
   import RunSummary from "../components/RunSummary.svelte";
+  import StepTimings from "../components/StepTimings.svelte";
   import StatusPill from "../components/StatusPill.svelte";
   import TimeAgo from "../components/TimeAgo.svelte";
   import SampleTimeline from "../components/SampleTimeline.svelte";
@@ -650,6 +651,16 @@
     {#if activeTab === "summary"}
       <div class="summary-tab">
         <div class="summary-tab-main">
+          {#if run.step_times || run.substep_times}
+            <div class="rollout-chart">
+              <div class="rollout-chart-title">Step &amp; substep timings</div>
+              <StepTimings
+                stepTimes={run.step_times}
+                substepTimes={run.substep_times}
+                {fmtDuration}
+              />
+            </div>
+          {/if}
           {#if rolloutsLoading && !rolloutSummaries.length}
             <div class="empty">Loading rollouts…</div>
           {:else if rolloutsError}

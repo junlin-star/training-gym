@@ -192,7 +192,7 @@ def _post_framework_status(payload: dict[str, Any], timeout: float) -> None:
     url = _phase_url()
     if not url:
         return
-    _post({"_url": url, "_timeout": timeout, **payload})
+    _post({"_url": url, "_timeout": timeout, "event_ts": time.time(), **payload})
 
 
 def _enqueue_advantage(payload: dict[str, Any]) -> None:
@@ -280,7 +280,9 @@ def report_phase(
     args: Any = None,
     **extra: Any,
 ) -> None:
-    _enqueue({**_run_context(args), "phase": status.value, **extra})
+    _enqueue(
+        {**_run_context(args), "phase": status.value, "event_ts": time.time(), **extra}
+    )
 
 
 def _coerce_text(value: Any) -> str:
@@ -1006,17 +1008,21 @@ def report_step_start(args: Any, rollout_id: int | None = None) -> None:
     )
 
 
-def report_weight_sync(args: Any) -> None:
+def report_weight_sync(args: Any, rollout_id: int | None = None) -> None:
     report_phase(
         SlimeStatus.WEIGHT_SYNC,
         args,
+        **_step_progress(args, rollout_id),
+        rollout_id=rollout_id,
     )
 
 
-def report_generate_rollouts(args: Any) -> None:
+def report_generate_rollouts(args: Any, rollout_id: int | None = None) -> None:
     report_phase(
         SlimeStatus.ROLLOUT_LOGGING,
         args,
+        **_step_progress(args, rollout_id),
+        rollout_id=rollout_id,
     )
 
 
@@ -1035,16 +1041,92 @@ def report_step_complete(args: Any, rollout_id: int | None = None) -> None:
     )
 
 
+def report_offload_rollout(args: Any, rollout_id: int | None = None) -> None:
+    report_phase(
+        SlimeStatus.OFFLOAD_ROLLOUT,
+        args,
+        **_step_progress(args, rollout_id),
+        rollout_id=rollout_id,
+    )
+
+
+def report_offload_train(args: Any, rollout_id: int | None = None) -> None:
+    report_phase(
+        SlimeStatus.OFFLOAD_TRAIN,
+        args,
+        **_step_progress(args, rollout_id),
+        rollout_id=rollout_id,
+    )
+
+
+def report_checkpoint_save(args: Any, rollout_id: int | None = None) -> None:
+    report_phase(
+        SlimeStatus.CHECKPOINT_SAVE,
+        args,
+        **_step_progress(args, rollout_id),
+        rollout_id=rollout_id,
+    )
+
+
+def report_substep_window_start(args: Any, rollout_id: int | None = None) -> None:
+    # Marks the substep window start, fired before the before-train eval each
+    # iteration. The step's own `start` marker is separate and unchanged.
+    report_phase(
+        SlimeStatus.ROLLOUT_LOGGING,
+        args,
+        **_step_progress(args, rollout_id),
+        rollout_id=rollout_id,
+        step_event="substep_start",
+    )
+
+
+def report_substep_finish(args: Any, rollout_id: int | None = None) -> None:
+    report_phase(
+        SlimeStatus.WEIGHT_SYNC,
+        args,
+        **_step_progress(args, rollout_id),
+        rollout_id=rollout_id,
+        step_event="substep_finish",
+    )
+
+
+def report_eval_begin(args: Any, rollout_id: int | None = None) -> None:
+    report_phase(
+        SlimeStatus.EVAL_ROLLOUT_LOGGING,
+        args,
+        **_step_progress(args, rollout_id),
+        rollout_id=rollout_id,
+        step_event="eval_begin",
+    )
+
+
+def report_eval_end(args: Any, rollout_id: int | None = None) -> None:
+    report_phase(
+        SlimeStatus.EVAL_ROLLOUT_LOGGING,
+        args,
+        **_step_progress(args, rollout_id),
+        rollout_id=rollout_id,
+        step_event="eval_end",
+    )
+
+
 __all__ = [
     "before_log_prob_hook",
     "before_train_step_hook",
     "report_advantage_distribution",
+    "report_checkpoint_save",
+    "report_eval_begin",
+    "report_eval_end",
     "report_generate_rollouts",
+    "report_offload_rollout",
+    "report_offload_train",
     "report_phase",
     "report_rollout_initializing",
     "report_rollout_samples",
     "report_step_start",
     "report_step_complete",
+    "report_substep_finish",
+    "report_substep_window_start",
     "report_weight_sync",
     "log_eval_rollout_data",
     "log_rollout_data",
