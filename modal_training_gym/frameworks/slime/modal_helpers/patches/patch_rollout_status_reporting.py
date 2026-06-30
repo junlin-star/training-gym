@@ -12,6 +12,7 @@ WEIGHT_SYNC_MARKER = "PATCHED_TRAINING_GYM_WEIGHT_SYNC_STATUS"
 STEP_START_MARKER = "PATCHED_TRAINING_GYM_STEP_START"
 STEP_FINISH_MARKER = "PATCHED_TRAINING_GYM_STEP_FINISH"
 GENERATE_ROLLOUT_MARKER = "PATCHED_TRAINING_GYM_GENERATE_ROLLOUT_STATUS"
+COMPUTE_LOG_PROBS_MARKER = "PATCHED_TRAINING_GYM_COMPUTE_LOG_PROBS_STATUS"
 OFFLOAD_ROLLOUT_MARKER = "PATCHED_TRAINING_GYM_OFFLOAD_ROLLOUT_STATUS"
 OFFLOAD_TRAIN_MARKER = "PATCHED_TRAINING_GYM_OFFLOAD_TRAIN_STATUS"
 CHECKPOINT_SAVE_MARKER = "PATCHED_TRAINING_GYM_CHECKPOINT_SAVE_STATUS"
@@ -28,6 +29,7 @@ PREAMBLE = (
     "try:\n"
     "    from modal_training_gym.frameworks.slime.phase_reporting import (\n"
     "        report_generate_rollouts as _tg_report_generate_rollouts,\n"
+    "        report_compute_log_probs as _tg_report_compute_log_probs,\n"
     "        report_rollout_initializing as _tg_report_rollout_initializing,\n"
     "        report_step_start as _tg_report_step_start,\n"
     "        report_step_complete as _tg_report_step_complete,\n"
@@ -42,6 +44,7 @@ PREAMBLE = (
     "    )\n"
     "except ImportError:\n"
     "    def _tg_report_generate_rollouts(args, rollout_id=None): pass\n"
+    "    def _tg_report_compute_log_probs(args, rollout_id=None): pass\n"
     "    def _tg_report_rollout_initializing(args): pass\n"
     "    def _tg_report_step_start(args, rollout_id=None): pass\n"
     "    def _tg_report_step_complete(args, rollout_id=None): pass\n"
@@ -69,6 +72,7 @@ def _patch_file(path: Path) -> None:
     needs_step_start = STEP_START_MARKER not in src
     needs_step_finish = STEP_FINISH_MARKER not in src
     needs_generate_rollout = GENERATE_ROLLOUT_MARKER not in src
+    needs_compute_log_probs = COMPUTE_LOG_PROBS_MARKER not in src
     needs_offload_rollout = OFFLOAD_ROLLOUT_MARKER not in src
     needs_offload_train = OFFLOAD_TRAIN_MARKER not in src
     needs_checkpoint_save = CHECKPOINT_SAVE_MARKER not in src
@@ -84,6 +88,7 @@ def _patch_file(path: Path) -> None:
         or needs_step_start
         or needs_step_finish
         or needs_generate_rollout
+        or needs_compute_log_probs
         or needs_offload_rollout
         or needs_offload_train
         or needs_checkpoint_save
@@ -107,6 +112,18 @@ def _patch_file(path: Path) -> None:
         src = src.replace(
             "except ImportError:\n",
             "except ImportError:\n    def _tg_report_generate_rollouts(args, rollout_id=None): pass\n",
+            1,
+        )
+    if "_tg_report_compute_log_probs" not in src:
+        src = src.replace(
+            "    from modal_training_gym.frameworks.slime.phase_reporting import (\n",
+            "    from modal_training_gym.frameworks.slime.phase_reporting import (\n"
+            "        report_compute_log_probs as _tg_report_compute_log_probs,\n",
+            1,
+        )
+        src = src.replace(
+            "except ImportError:\n",
+            "except ImportError:\n    def _tg_report_compute_log_probs(args, rollout_id=None): pass\n",
             1,
         )
     if "_tg_report_step_start" not in src:
@@ -255,6 +272,29 @@ def _patch_file(path: Path) -> None:
             )
 
         src, step_start_count = step_start_pattern.subn(_step_start_replacement, src)
+
+    compute_log_probs_count = 0
+    if needs_compute_log_probs:
+        # compute_log_probs runs inside actor_model.async_train() (in the train
+        # actor, which has no rollout_id), so report it from the driver loop —
+        # which knows rollout_id — right before the blocking train call.
+        compute_log_probs_pattern = re.compile(
+            r"^(?P<indent>[ \t]*)(?P<call>ray\.get\(actor_model\.async_train\(.*\))[ \t]*$",
+            re.M,
+        )
+
+        def _compute_log_probs_replacement(match: re.Match[str]) -> str:
+            indent = match.group("indent")
+            call = match.group("call")
+            return (
+                f"{indent}# {COMPUTE_LOG_PROBS_MARKER}: compute log probs state\n"
+                f"{indent}_tg_report_compute_log_probs(args, rollout_id)\n"
+                f"{indent}{call}"
+            )
+
+        src, compute_log_probs_count = compute_log_probs_pattern.subn(
+            _compute_log_probs_replacement, src
+        )
 
     offload_rollout_count = 0
     if needs_offload_rollout:
@@ -417,7 +457,7 @@ def _patch_file(path: Path) -> None:
                 lines.extend(
                     [
                         f"{indent}# {WEIGHT_SYNC_MARKER}: weight sync state",
-                        f"{indent}_tg_report_weight_sync(args, rollout_id)",
+                        f"{indent}_tg_report_weight_sync(args)",
                     ]
                 )
             lines.append(f"{indent}{call}")
@@ -425,7 +465,7 @@ def _patch_file(path: Path) -> None:
                 lines.extend(
                     [
                         f"{indent}# {GENERATE_ROLLOUT_MARKER}: rollout generation state",
-                        f"{indent}_tg_report_generate_rollouts(args, rollout_id)",
+                        f"{indent}_tg_report_generate_rollouts(args)",
                     ]
                 )
             return "\n".join(lines)
@@ -480,6 +520,8 @@ def _patch_file(path: Path) -> None:
         failed.append("rollout init")
     if (needs_weight_sync or needs_generate_rollout) and weight_sync_count != 1:
         failed.append("weight sync")
+    if needs_compute_log_probs and compute_log_probs_count < 1:
+        failed.append("compute log probs")
     if needs_step_finish and step_finish_count != 1:
         failed.append("step finish")
     if needs_step_start and step_start_count == 0:

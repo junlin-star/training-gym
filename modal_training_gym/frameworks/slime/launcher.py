@@ -950,7 +950,7 @@ def build_slime_app(
         SlimeStatus.CHECKPOINT_SAVE.value,
         SlimeStatus.OFFLOAD_TRAIN.value,
         f"{SlimeStatus.EVAL_ROLLOUT_LOGGING.value}_end",
-    ] 
+    ]
     OPTIONAL_SUBSTEPS = {
         SlimeStatus.EVAL_ROLLOUT_LOGGING.value,
         SlimeStatus.CHECKPOINT_SAVE.value,
@@ -960,15 +960,15 @@ def build_slime_app(
     def write_step_times(
         run_id: str, num_steps: int
     ) -> tuple[
-        dict[str, dict[str, int | None]],
-        dict[str, dict[str, dict[str, int | None]]],
+        dict[str, dict[str, float | None]],
+        dict[str, dict[str, dict[str, float | None]]],
     ]:
         step_times_dict = ModalDict.from_name(
             "training-gym-step-times", create_if_missing=True
         )
 
-        step_times: dict[str, dict[str, int | None]] = {}
-        substep_times: dict[str, dict[str, dict[str, int | None]]] = {}
+        step_times: dict[str, dict[str, float | None]] = {}
+        substep_times: dict[str, dict[str, dict[str, float | None]]] = {}
 
         for current_step_num in range(1, num_steps + 1):
             start_key = f"{run_id}:{current_step_num}:start"
@@ -977,13 +977,13 @@ def build_slime_app(
             start_time = step_times_dict.get(start_key)
             end_time = step_times_dict.get(finish_key)
             if start_time is not None:
-                start_time = int(start_time)
+                start_time = float(start_time)
             if end_time is not None:
-                end_time = int(end_time)
+                end_time = float(end_time)
 
             duration = None
             if start_time is not None and end_time is not None:
-                duration = end_time - start_time
+                duration = round(end_time - start_time, 2)
 
             step_times[f"{current_step_num}"] = {
                 "start": start_time,
@@ -995,7 +995,7 @@ def build_slime_app(
                 f"{run_id}:{current_step_num}:substep_start"
             )
             full_step_start_time = (
-                int(substep_start_boundary)
+                float(substep_start_boundary)
                 if substep_start_boundary is not None
                 else start_time
             )
@@ -1003,21 +1003,21 @@ def build_slime_app(
                 f"{run_id}:{current_step_num}:substep_finish"
             )
             if full_step_end_time is not None:
-                full_step_end_time = int(full_step_end_time)
+                full_step_end_time = float(full_step_end_time)
             else:
                 full_step_end_time = end_time
 
             substep_times[f"{current_step_num}"] = {}
             eval_before = SlimeStatus.EVAL_ROLLOUT_LOGGING.value
             present: set[str] = set()
-            recorded: list[tuple[int, int, str]] = []
+            recorded: list[tuple[float, int, str]] = []
             for order_idx, substep in enumerate(SUBSTEP_ORDER):
                 substep_start = step_times_dict.get(
                     f"{run_id}:{current_step_num}:substep:{substep}"
                 )
                 if substep_start is None:
                     continue
-                substep_start = int(substep_start)
+                substep_start = float(substep_start)
                 if full_step_start_time is not None and substep != eval_before:
                     substep_start = max(substep_start, full_step_start_time)
                 if full_step_end_time is not None:
@@ -1025,7 +1025,7 @@ def build_slime_app(
                 present.add(substep)
                 recorded.append((substep_start, order_idx, substep))
             recorded.sort()
- 
+
             for idx, (substep_start, order_idx, substep) in enumerate(recorded):
                 if idx + 1 < len(recorded):
                     next_start, next_idx = recorded[idx + 1][0], recorded[idx + 1][1]
@@ -1039,10 +1039,10 @@ def build_slime_app(
                 if next_start is None or dropped_mandatory:
                     substep_duration = None
                 else:
-                    substep_duration = max(next_start - substep_start, 0)
+                    substep_duration = round(max(next_start - substep_start, 0.0), 2)
 
                 substep_times[f"{current_step_num}"][substep] = {
-                    "start": substep_start,
+                    "start": round(substep_start, 3),
                     "duration_s": substep_duration,
                 }
 

@@ -946,11 +946,9 @@ def log_eval_rollout_data(
 
 
 def before_log_prob_hook(args: Any, model: Any, store_prefix: str) -> None:
-    report_phase(
-        SlimeStatus.COMPUTE_LOG_PROBS,
-        args,
-        store_prefix=store_prefix,
-    )
+    # NOTE: this hook runs in the Megatron train actor, which has no current
+    # rollout_id, so the compute_log_probs substep is reported (id-tagged) from
+    # the driver loop right before actor_model.async_train(); see the patch.
     _call_hook(
         CUSTOM_BEFORE_LOG_PROB_HOOK_PATH_KEY,
         args,
@@ -1026,6 +1024,15 @@ def report_generate_rollouts(args: Any, rollout_id: int | None = None) -> None:
     )
 
 
+def report_compute_log_probs(args: Any, rollout_id: int | None = None) -> None:
+    report_phase(
+        SlimeStatus.COMPUTE_LOG_PROBS,
+        args,
+        **_step_progress(args, rollout_id),
+        rollout_id=rollout_id,
+    )
+
+
 def report_step_complete(args: Any, rollout_id: int | None = None) -> None:
     if rollout_id is None:
         return
@@ -1069,8 +1076,6 @@ def report_checkpoint_save(args: Any, rollout_id: int | None = None) -> None:
 
 
 def report_substep_window_start(args: Any, rollout_id: int | None = None) -> None:
-    # Marks the substep window start, fired before the before-train eval each
-    # iteration. The step's own `start` marker is separate and unchanged.
     report_phase(
         SlimeStatus.ROLLOUT_LOGGING,
         args,
@@ -1115,6 +1120,7 @@ __all__ = [
     "before_train_step_hook",
     "report_advantage_distribution",
     "report_checkpoint_save",
+    "report_compute_log_probs",
     "report_eval_begin",
     "report_eval_end",
     "report_generate_rollouts",

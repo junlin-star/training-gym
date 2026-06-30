@@ -50,9 +50,9 @@ class TrainingRun(BaseModel):
     completed_at: int | None = None
     updated_at: int = 0
     duration_seconds: int | None = None
-    step_times: dict[str, dict[str, int | None]] | None = None
-    substep_times: dict[str, dict[str, dict[str, int | None]]] | None = None
-    checkpoint_save_times: dict[str, int | None] | None = None
+    step_times: dict[str, dict[str, float | None]] | None = None
+    substep_times: dict[str, dict[str, dict[str, float | None]]] | None = None
+    checkpoint_save_times: dict[str, float | None] | None = None
     metadata: dict[str, Any] | None = None
 
     def _summary_sort_key(self, item: dict[str, Any]) -> tuple[int, str]:
