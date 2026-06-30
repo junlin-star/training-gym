@@ -31,6 +31,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from modal_training_gym.common.errors import TrainingGymConfigError
 from modal_training_gym.common.models.base import ToolCall
 
 
@@ -183,7 +184,9 @@ class SandboxEnvironmentPool:
         if self._app is None:
             app_name = self.app_name
             if not app_name:
-                raise ValueError(f"{type(self).__name__}.app_name must be set")
+                raise TrainingGymConfigError(
+                    f"{type(self).__name__}.app_name must be set"
+                )
             self._app = modal.App.lookup(app_name, create_if_missing=True)
         return self._app
 

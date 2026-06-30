@@ -18,6 +18,9 @@ class WandbConfig:
 
     project : str
         W&B project name. Default ``""``.
+    entity : str
+        W&B entity/team slug. Optional; when omitted, preflight resolves the
+        default entity for the configured API key.
     group : str
         W&B group tag for organizing related runs. Default ``""``.
     exp_name : str
@@ -33,6 +36,7 @@ class WandbConfig:
     """
 
     project: str = ""
+    entity: str = ""
     group: str = ""
     exp_name: str = ""
     key: str = ""
@@ -56,10 +60,12 @@ def preflight_wandb(wandb_cfg: WandbConfig) -> str:
     import wandb
 
     project = wandb_cfg.project or "uncategorized"
+    entity = wandb_cfg.entity or os.environ.get("WANDB_ENTITY", "")
     try:
         wandb.login(key=key, verify=True, relogin=True)
         probe = wandb.init(
             project=project,
+            entity=entity or None,
             name="_preflight",
             settings=wandb.Settings(silent=True, init_timeout=60),
         )

@@ -9,6 +9,7 @@ from typing import Any
 from typing import cast
 
 from modal_training_gym.common.dataset import DatasetConfig
+from modal_training_gym.common.errors import TrainingGymConfigError
 from modal_training_gym.common.framework import Framework
 from modal_training_gym.common.ids import create_hash
 from modal_training_gym.common.models import ModelConfig
@@ -126,11 +127,15 @@ def _resolve_slime_recipe(
     merge_model_recipe: bool,
 ) -> SlimeRecipe:
     if not merge_model_recipe:
+        recipe.validate_model_parallelism(model)
         return recipe
     base_recipe = SlimeRecipe.get_base_recipe(model)
     if base_recipe is None:
+        recipe.validate_model_parallelism(model)
         return recipe
-    return _merge_recipe(base_recipe, recipe)
+    resolved = _merge_recipe(base_recipe, recipe)
+    resolved.validate_model_parallelism(model)
+    return resolved
 
 
 class TrainStepStatus(Enum):
@@ -384,7 +389,7 @@ class TrainConfig:
         recipe_type = self.recipe.recipe_type
         if recipe_type == RecipeType.MILES:
             if not isinstance(self.recipe, MilesConfig):
-                raise TypeError(
+                raise TrainingGymConfigError(
                     f"Recipe type {recipe_type} requires MilesConfig, got {type(self.recipe).__name__}"
                 )
             return build_miles_app(
@@ -398,7 +403,7 @@ class TrainConfig:
             )
         if recipe_type == RecipeType.SLIME:
             if not isinstance(self.recipe, SlimeRecipe):
-                raise TypeError(
+                raise TrainingGymConfigError(
                     f"Recipe type {recipe_type} requires SlimeRecipe, got {type(self.recipe).__name__}"
                 )
             combined = _resolve_slime_recipe(
@@ -415,7 +420,7 @@ class TrainConfig:
                 name=self.training_run_id,
                 group_id=self.group_id,
             )
-        raise ValueError(f"Unknown recipe type: {recipe_type}")
+        raise TrainingGymConfigError(f"Unknown recipe type: {recipe_type}")
 
     # ── Run-record helpers ─────────────────────────────────────────────────
 
@@ -424,14 +429,18 @@ class TrainConfig:
             return Framework.SLIME
         if isinstance(self.recipe, MilesConfig):
             return Framework.MILES
-        raise ValueError(f"Unknown recipe type: {type(self.recipe).__name__}")
+        raise TrainingGymConfigError(
+            f"Unknown recipe type: {type(self.recipe).__name__}"
+        )
 
     def _initializing_status(self) -> FrameworkStatus:
         if isinstance(self.recipe, SlimeRecipe):
             return SlimeStatus.INITIALIZING
         if isinstance(self.recipe, MilesConfig):
             return MilesStatus.INITIALIZING
-        raise ValueError(f"Unknown recipe type: {type(self.recipe).__name__}")
+        raise TrainingGymConfigError(
+            f"Unknown recipe type: {type(self.recipe).__name__}"
+        )
 
     def _build_config_summary(self) -> dict[str, Any]:
         """Framework-specific TrainingRun.config summary."""
@@ -443,7 +452,14 @@ class TrainConfig:
         summary: dict[str, Any] = {
             "model": {"model_name": model.model_name} if model else {},
             "wandb": (
-                {"project": wandb.project, "group": wandb.group} if wandb else {}
+                {
+                    "project": wandb.project,
+                    "entity": getattr(wandb, "entity", ""),
+                    "group": wandb.group,
+                    "run_id": self.training_run_id[:8],
+                }
+                if wandb
+                else {}
             ),
             "dataset": {
                 "hf_repo": getattr(dataset, "hf_repo", ""),
@@ -479,7 +495,7 @@ class TrainConfig:
         metadata: dict[str, Any] = {}
         if self.group_id:
             metadata["group_id"] = self.group_id
-        if self.group_overrides or self.group_axes:
+        if self.group_overrides is not None or self.group_axes is not None:
             overrides = dict(self.group_overrides or {})
             axes = list(self.group_axes or overrides)
             metadata["group_tags"] = {
@@ -517,6 +533,31 @@ class TrainConfig:
             config_path=str(config_path),
         )
 
+    def _resolved_recipe_for_logging(self) -> BaseTrainRecipe:
+        if isinstance(self.recipe, SlimeRecipe):
+            return _resolve_slime_recipe(
+                self.model,
+                cast(SlimeRecipe, self.recipe),
+                merge_model_recipe=self.merge_model_recipe,
+            )
+        return self.recipe
+
+    def context_plan_line(self) -> str | None:
+        recipe = self._resolved_recipe_for_logging()
+        max_tokens_per_gpu = getattr(recipe, "max_tokens_per_gpu", None)
+        if max_tokens_per_gpu is None:
+            return None
+
+        context_parallel_size = getattr(recipe, "context_parallel_size", 1) or 1
+        effective_context = max_tokens_per_gpu * context_parallel_size
+        return (
+            f"effective_train_context={effective_context:,} tokens "
+            f"(max_tokens_per_gpu={max_tokens_per_gpu:,} x cp={context_parallel_size}; "
+            f"tp={getattr(recipe, 'tensor_model_parallel_size', 'n/a')}, "
+            f"pp={getattr(recipe, 'pipeline_model_parallel_size', 'n/a')}, "
+            f"ep={getattr(recipe, 'expert_model_parallel_size', 'n/a')})"
+        )
+
     def train(self, *, show_output: bool = True) -> TrainResult:
         """Build the app, run training, and return the TrainResult."""
         launch = self.launch(show_output=show_output, prepare_inputs=True)
@@ -548,6 +589,8 @@ class TrainConfig:
         )
         if show_output:
             status_display.print_banner()
+            if context_plan_line := self.context_plan_line():
+                print(f"Training context: {context_plan_line}")
 
         created_at = int(time.time())
         run_record = TrainingRun(
