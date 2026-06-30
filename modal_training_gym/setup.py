@@ -24,7 +24,6 @@ What this does:
 """
 
 from __future__ import annotations
-import os
 import webbrowser
 
 from modal_training_gym._dashboard import (
@@ -32,11 +31,7 @@ from modal_training_gym._dashboard import (
     ensure_creds_secret,
 )
 
-# Overridable so runs can target a personal/standalone dashboard deploy (must
-# match TRAINING_GYM_DASHBOARD_APP_NAME used when deploying _dashboard.py).
-DASHBOARD_APP_NAME = os.environ.get(
-    "TRAINING_GYM_DASHBOARD_APP_NAME", "training-gym-dashboard"
-)
+DASHBOARD_APP_NAME = "training-gym-dashboard"
 DASHBOARD_WEB_FUNCTION = "fastapi_app"
 
 
