@@ -1,3 +1,4 @@
+import asyncio
 import dataclasses as _dc
 import secrets as _secrets
 import threading
@@ -8,18 +9,19 @@ from typing import Any
 from typing import cast
 
 from modal_training_gym.common.dataset import DatasetConfig
+from modal_training_gym.common.errors import TrainingGymConfigError
 from modal_training_gym.common.framework import Framework
 from modal_training_gym.common.ids import create_hash
 from modal_training_gym.common.models import ModelConfig
 from modal_training_gym.common.checkpoint import Checkpoint
-from modal_training_gym.common.run import TrainingRun, TrainingRunStatus
+from modal_training_gym.common.run import TrainingRun
 from modal_training_gym.common.status import (
     FrameworkStatus,
     MilesStatus,
     SlimeStatus,
 )
 from modal_training_gym.common.train_result import TrainResult
-from modal_training_gym.common.modal_lifecycle import app_is_live, stop_app
+from modal_training_gym.common.modal_lifecycle import stop_app
 from modal_training_gym.common.modal_urls import modal_app_dashboard_url
 from modal_training_gym.utils.metadata import MetadataStore, vol_put
 from modal_training_gym.frameworks.miles import build_miles_app
@@ -29,6 +31,56 @@ from modal_training_gym.train_recipes.miles_recipe import MilesConfig
 from modal_training_gym.train_recipes.slime_recipe import SlimeRecipe
 from pydantic import ConfigDict
 from pydantic.dataclasses import dataclass
+
+
+@_dc.dataclass(frozen=True)
+class TrainLaunch:
+    training_run_id: str
+    modal_app_id: str
+    modal_app_url: str
+    function_call_id: str
+    group_id: str | None = None
+    _function_call: Any | None = _dc.field(default=None, repr=False, compare=False)
+    _status_display: Any | None = _dc.field(default=None, repr=False, compare=False)
+
+    @property
+    def function_call(self):
+        if self._function_call is not None:
+            return self._function_call
+        import modal
+
+        return modal.FunctionCall.from_id(self.function_call_id)
+
+    def result(
+        self,
+        *,
+        timeout: float | None = None,
+        stop_app_on_success: bool = True,
+    ) -> TrainResult:
+        from modal_training_gym.common.status_reporter import (
+            flush as flush_status_reporter,
+        )
+
+        if self._status_display is not None:
+            self._status_display.start_polling(self.training_run_id)
+        try:
+            result_dict = self.function_call.get(timeout=timeout)
+        finally:
+            if self._status_display is not None:
+                self._status_display.stop_polling()
+            flush_status_reporter(timeout_seconds=2.0)
+
+        if stop_app_on_success and self.modal_app_id:
+            stop_app(self.modal_app_id)
+        result = TrainResult(**TrainResult._parse_model_config(result_dict))
+        print(f"Training complete: {result.training_run_id}")
+        return result
+
+    def __await__(self):
+        async def _wait() -> TrainResult:
+            return await asyncio.to_thread(self.result)
+
+        return _wait().__await__()
 
 
 def _merge_recipe(base: SlimeRecipe, overrides: SlimeRecipe) -> SlimeRecipe:
@@ -75,11 +127,15 @@ def _resolve_slime_recipe(
     merge_model_recipe: bool,
 ) -> SlimeRecipe:
     if not merge_model_recipe:
+        recipe.validate_model_parallelism(model)
         return recipe
     base_recipe = SlimeRecipe.get_base_recipe(model)
     if base_recipe is None:
+        recipe.validate_model_parallelism(model)
         return recipe
-    return _merge_recipe(base_recipe, recipe)
+    resolved = _merge_recipe(base_recipe, recipe)
+    resolved.validate_model_parallelism(model)
+    return resolved
 
 
 class TrainStepStatus(Enum):
@@ -310,6 +366,8 @@ class TrainConfig:
     # Set by TrainingGroup so every run in a sweep shares one id — written into
     # the TrainingRun record so the dashboard can group variants together.
     group_id: str | None = None
+    group_overrides: dict[str, Any] | None = None
+    group_axes: list[str] | None = None
     _stable_id: str | None = _dc.field(default=None, init=False, repr=False)
 
     # ── Public API ────────────────────────────────────────────────────────────
@@ -331,7 +389,7 @@ class TrainConfig:
         recipe_type = self.recipe.recipe_type
         if recipe_type == RecipeType.MILES:
             if not isinstance(self.recipe, MilesConfig):
-                raise TypeError(
+                raise TrainingGymConfigError(
                     f"Recipe type {recipe_type} requires MilesConfig, got {type(self.recipe).__name__}"
                 )
             return build_miles_app(
@@ -345,7 +403,7 @@ class TrainConfig:
             )
         if recipe_type == RecipeType.SLIME:
             if not isinstance(self.recipe, SlimeRecipe):
-                raise TypeError(
+                raise TrainingGymConfigError(
                     f"Recipe type {recipe_type} requires SlimeRecipe, got {type(self.recipe).__name__}"
                 )
             combined = _resolve_slime_recipe(
@@ -362,7 +420,7 @@ class TrainConfig:
                 name=self.training_run_id,
                 group_id=self.group_id,
             )
-        raise ValueError(f"Unknown recipe type: {recipe_type}")
+        raise TrainingGymConfigError(f"Unknown recipe type: {recipe_type}")
 
     # ── Run-record helpers ─────────────────────────────────────────────────
 
@@ -371,14 +429,18 @@ class TrainConfig:
             return Framework.SLIME
         if isinstance(self.recipe, MilesConfig):
             return Framework.MILES
-        raise ValueError(f"Unknown recipe type: {type(self.recipe).__name__}")
+        raise TrainingGymConfigError(
+            f"Unknown recipe type: {type(self.recipe).__name__}"
+        )
 
     def _initializing_status(self) -> FrameworkStatus:
         if isinstance(self.recipe, SlimeRecipe):
             return SlimeStatus.INITIALIZING
         if isinstance(self.recipe, MilesConfig):
             return MilesStatus.INITIALIZING
-        raise ValueError(f"Unknown recipe type: {type(self.recipe).__name__}")
+        raise TrainingGymConfigError(
+            f"Unknown recipe type: {type(self.recipe).__name__}"
+        )
 
     def _build_config_summary(self) -> dict[str, Any]:
         """Framework-specific TrainingRun.config summary."""
@@ -390,7 +452,14 @@ class TrainConfig:
         summary: dict[str, Any] = {
             "model": {"model_name": model.model_name} if model else {},
             "wandb": (
-                {"project": wandb.project, "group": wandb.group} if wandb else {}
+                {
+                    "project": wandb.project,
+                    "entity": getattr(wandb, "entity", ""),
+                    "group": wandb.group,
+                    "run_id": self.training_run_id[:8],
+                }
+                if wandb
+                else {}
             ),
             "dataset": {
                 "hf_repo": getattr(dataset, "hf_repo", ""),
@@ -422,6 +491,28 @@ class TrainConfig:
 
         return summary
 
+    def _build_run_metadata(self) -> dict[str, Any] | None:
+        metadata: dict[str, Any] = {}
+        if self.group_id:
+            metadata["group_id"] = self.group_id
+        if self.group_overrides is not None or self.group_axes is not None:
+            overrides = dict(self.group_overrides or {})
+            axes = list(self.group_axes or overrides)
+            metadata["group_tags"] = {
+                "group_id": self.group_id or "",
+                "axes": axes,
+                "overrides": overrides,
+                "tags": [
+                    {
+                        "key": key,
+                        "label": key.split(".")[-1].replace("_", " "),
+                        "value": value,
+                    }
+                    for key, value in overrides.items()
+                ],
+            }
+        return metadata or None
+
     def _build_status_display(
         self,
         training_run_id: str,
@@ -442,39 +533,65 @@ class TrainConfig:
             config_path=str(config_path),
         )
 
+    def _resolved_recipe_for_logging(self) -> BaseTrainRecipe:
+        if isinstance(self.recipe, SlimeRecipe):
+            return _resolve_slime_recipe(
+                self.model,
+                cast(SlimeRecipe, self.recipe),
+                merge_model_recipe=self.merge_model_recipe,
+            )
+        return self.recipe
+
+    def context_plan_line(self) -> str | None:
+        recipe = self._resolved_recipe_for_logging()
+        max_tokens_per_gpu = getattr(recipe, "max_tokens_per_gpu", None)
+        if max_tokens_per_gpu is None:
+            return None
+
+        context_parallel_size = getattr(recipe, "context_parallel_size", 1) or 1
+        effective_context = max_tokens_per_gpu * context_parallel_size
+        return (
+            f"effective_train_context={effective_context:,} tokens "
+            f"(max_tokens_per_gpu={max_tokens_per_gpu:,} x cp={context_parallel_size}; "
+            f"tp={getattr(recipe, 'tensor_model_parallel_size', 'n/a')}, "
+            f"pp={getattr(recipe, 'pipeline_model_parallel_size', 'n/a')}, "
+            f"ep={getattr(recipe, 'expert_model_parallel_size', 'n/a')})"
+        )
+
     def train(self, *, show_output: bool = True) -> TrainResult:
         """Build the app, run training, and return the TrainResult."""
+        launch = self.launch(show_output=show_output, prepare_inputs=True)
+        return launch.result(stop_app_on_success=self.detach)
+
+    def launch(
+        self,
+        *,
+        show_output: bool = True,
+        prepare_inputs: bool = False,
+    ) -> TrainLaunch:
+        """Start training in a detached Modal app and return immediately."""
         import modal
 
         from modal_training_gym.common.config import (
             CONFIG_PATH,
             get_framework_status_url,
         )
-        from modal_training_gym.common.status_reporter import (
-            enqueue_framework_status,
-            flush as flush_status_reporter,
-        )
-
+        from modal_training_gym.common.status_reporter import enqueue_framework_status
         from modal_training_gym.setup import ensure_dashboard_deployed
 
         training_run_id = self.training_run_id
-
-        # Auto-provision the observability dashboard the first time anyone
-        # runs a training job. Idempotent and best-effort — a deploy failure
-        # only costs status reporting, not the run itself.
         ensure_dashboard_deployed()
-
-        # Resolve the dashboard URL locally so we can pass it into the
-        # container — the toml lives on the user's machine, not in Modal.
         framework_status_url = get_framework_status_url() or ""
+        framework_status_token = _secrets.token_urlsafe(32)
 
         status_display = self._build_status_display(
             training_run_id, framework_status_url, CONFIG_PATH
         )
-        status_display.print_banner()
+        if show_output:
+            status_display.print_banner()
+            if context_plan_line := self.context_plan_line():
+                print(f"Training context: {context_plan_line}")
 
-        # Write the initial TrainingRun record before the app starts so the
-        # dashboard shows the run immediately (even during image build).
         created_at = int(time.time())
         run_record = TrainingRun(
             training_run_id=training_run_id,
@@ -485,14 +602,10 @@ class TrainConfig:
             framework_status=self._initializing_status(),
             created_at=created_at,
             started_at=created_at,
-            metadata={"group_id": self.group_id} if self.group_id else None,
+            metadata=self._build_run_metadata(),
         )
         try:
             run_record.save()
-        except RuntimeError:
-            pass
-        try:
-            framework_status_token = _secrets.token_urlsafe(32)
             vol_put(
                 MetadataStore.FRAMEWORK_STATUS_TOKENS,
                 training_run_id,
@@ -503,16 +616,14 @@ class TrainConfig:
         print(f"TrainingRun recorded: {training_run_id}")
 
         app = self._build_app()
-        result_dict = None
-        modal_app_id = ""
         output_context = modal.enable_output() if show_output else nullcontext()
         with output_context:
-            with app.run(detach=self.detach):
+            with app.run(detach=True):
                 modal_app_id = app.app_id or ""
                 modal_app_url = modal_app_dashboard_url(modal_app_id)
-                status_display.set_modal_app_url(modal_app_url)
+                if show_output:
+                    status_display.set_modal_app_url(modal_app_url)
 
-                # Update the record with the Modal app ID now that we have it.
                 run_record.modal_app_id = modal_app_id
                 run_record.modal_app_url = modal_app_url
                 try:
@@ -520,22 +631,12 @@ class TrainConfig:
                 except RuntimeError:
                     pass
 
-                # Mid-flight status bumps are fire-and-forget HTTP posts to
-                # the dashboard so the orchestration thread doesn't block on
-                # Modal Volume writes between download.remote() /
-                # convert.remote() calls. Also emits a one-line scrolling
-                # status update to the terminal.
-                #
-                # ``is_active=False`` marks "we've queued this stage but the
-                # GPU/container isn't running yet" — the Modal function
-                # itself flips it to True when its body actually starts
-                # (see download/convert_checkpoint in the framework
-                # launchers).
                 def _set_status(
                     status: FrameworkStatus, *, is_active: bool = True
                 ) -> None:
                     run_record.framework_status = status
-                    status_display.emit_stage(status.value)
+                    if show_output:
+                        status_display.emit_stage(status.value)
                     enqueue_framework_status(
                         training_run_id,
                         status.value,
@@ -543,15 +644,9 @@ class TrainConfig:
                         is_active=is_active,
                     )
 
-                # Bridge mode loads HF tensors directly, so the megatron→HF
-                # preconversion step (convert_checkpoint) is a no-op. For any
-                # other value of megatron_to_hf_mode — including the
-                # empty-string default (mbridge) — we always run the
-                # pre-conversion so training starts from the torch_dist
-                # layout it expects.
                 megatron_to_hf_mode = getattr(self.recipe, "megatron_to_hf_mode", "")
                 needs_conversion = megatron_to_hf_mode != "bridge"
-                try:
+                if prepare_inputs:
                     if isinstance(self.recipe, SlimeRecipe):
                         _set_status(SlimeStatus.DOWNLOAD_MODEL, is_active=False)
                         app.download.remote(
@@ -566,94 +661,38 @@ class TrainConfig:
                                 framework_status_url=framework_status_url,
                                 framework_status_token=framework_status_token,
                             )
-                    elif isinstance(self.recipe, MilesConfig):
-                        # Miles handles model download internally inside
-                        # train.remote() (_prepare_shared_inputs), so we only
-                        # spawn the standalone download container when
-                        # there's a non-bridge conversion to chain.
-                        if needs_conversion:
-                            _set_status(MilesStatus.DOWNLOAD_MODEL, is_active=False)
-                            app.download.remote(
-                                training_run_id=training_run_id,
-                                framework_status_url=framework_status_url,
-                                framework_status_token=framework_status_token,
-                            )
-                            _set_status(MilesStatus.CONVERT_MODEL, is_active=False)
-                            app.convert_checkpoint.remote(
-                                training_run_id=training_run_id,
-                                framework_status_url=framework_status_url,
-                                framework_status_token=framework_status_token,
-                            )
-                    # The remote call blocks for the whole run; poll the run
-                    # record so the terminal Stage line tracks the container's
-                    # phases instead of freezing at the last local stage.
-                    status_display.start_polling(training_run_id)
-                    result_dict = app.train.remote(
-                        modal_app_id=modal_app_id,
-                        modal_app_url=modal_app_url,
-                        framework_status_url=framework_status_url,
-                        framework_status_token=framework_status_token,
-                    )
-                except BaseException:
-                    if result_dict is None:
-                        # Re-read from the volume so we don't clobber
-                        # metadata the dashboard built up during training
-                        # (latest_rollout, framework_progress, etc.).
-                        try:
-                            run_record = TrainingRun.from_id(training_run_id)
-                        except (KeyError, Exception):
-                            pass
-                        # A detached app survives client disconnect, so a
-                        # dropped RPC (laptop sleep, network blip, Ctrl-C) is
-                        # not a real failure — the container keeps training and
-                        # will write its own terminal state. Don't stamp FAILED
-                        # while the app is still alive on Modal.
-                        remote_still_running = bool(
-                            self.detach and modal_app_id and app_is_live(modal_app_id)
+                    elif isinstance(self.recipe, MilesConfig) and needs_conversion:
+                        _set_status(MilesStatus.DOWNLOAD_MODEL, is_active=False)
+                        app.download.remote(
+                            training_run_id=training_run_id,
+                            framework_status_url=framework_status_url,
+                            framework_status_token=framework_status_token,
                         )
-                        # Only mark FAILED if the remote hasn't already set a
-                        # terminal state (it may have completed/failed on its
-                        # own while we lost the RPC connection) and the app
-                        # isn't still running detached.
-                        if (
-                            run_record.status == TrainingRunStatus.RUNNING
-                            and not remote_still_running
-                        ):
-                            # TODO(joy/melody): Record the exec type also in the run record.
-                            run_record.status = TrainingRunStatus.FAILED
-                            finished_at = int(time.time())
-                            run_record.ended_at = finished_at
-                            if run_record.completed_at is None:
-                                run_record.completed_at = finished_at
-                            run_record.duration_seconds = max(
-                                0, finished_at - run_record.started_at
-                            )
-                            # Terminal-state write is synchronous to guarantee
-                            # the failure shows up in the dashboard even if the
-                            # background reporter is still draining.
-                            try:
-                                run_record.save()
-                            except RuntimeError:
-                                pass
-                    raise
-                finally:
-                    status_display.stop_polling()
-                    # Give any in-flight status POSTs a moment to land
-                    # before the process exits.
-                    flush_status_reporter(timeout_seconds=2.0)
-        # A detached app survives client disconnect (so a closed terminal won't
-        # kill a run) — but for the same reason it won't auto-stop when the run
-        # finishes. Stop it ourselves once training completed successfully; on
-        # interrupt/failure we leave it up so it can be inspected.
-        if self.detach and modal_app_id and result_dict is not None:
-            stop_app(modal_app_id)
-        if result_dict is None:
-            raise RuntimeError(
-                "Training app exited before returning a result. "
-                "The run is detached, so it keeps running on Modal even if this "
-                "client disconnects — reattach with `modal app logs <app-id>` or "
-                "stop it with `modal app stop <app-id>`."
-            )
-        result = TrainResult(**TrainResult._parse_model_config(result_dict))
-        print(f"Training complete: {result.training_run_id}")
-        return result
+                        _set_status(MilesStatus.CONVERT_MODEL, is_active=False)
+                        app.convert_checkpoint.remote(
+                            training_run_id=training_run_id,
+                            framework_status_url=framework_status_url,
+                            framework_status_token=framework_status_token,
+                        )
+
+                function_call = app.train.spawn(
+                    modal_app_id=modal_app_id,
+                    modal_app_url=modal_app_url,
+                    framework_status_url=framework_status_url,
+                    framework_status_token=framework_status_token,
+                )
+
+        launch = TrainLaunch(
+            training_run_id=training_run_id,
+            modal_app_id=modal_app_id,
+            modal_app_url=modal_app_url,
+            function_call_id=function_call.object_id,
+            group_id=self.group_id,
+            _function_call=function_call,
+            _status_display=status_display if show_output else None,
+        )
+        print(
+            f"Launched training {launch.training_run_id}: "
+            f"app={launch.modal_app_id}, function_call={launch.function_call_id}"
+        )
+        return launch

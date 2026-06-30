@@ -24,6 +24,7 @@
   let result = $derived(run.train_result);
   let trainingRunId = $derived(result?.training_run_id || run.run_id || "");
   let modalAppUrl = $derived(run.modal_app_url || null);
+  let wandbUrl = $derived(result?.wandb_url || summary.wandb_url || "");
   let copiedTrainingRunId = $state(false);
   let copyResetTimer = null;
   let deployment = $derived(
@@ -193,10 +194,10 @@
         onclick={(event) => event.stopPropagation()}>Modal</a
       >
     {/if}
-    {#if result?.wandb_url || summary.wandb_url}
+    {#if wandbUrl}
       <a
         class="pill-link pill-wandb"
-        href={result?.wandb_url || summary.wandb_url}
+        href={wandbUrl}
         target="_blank"
         rel="noopener noreferrer"
         onclick={(event) => event.stopPropagation()}>W&B</a

@@ -77,6 +77,37 @@ export function truncateId(id) {
   return id.slice(0, 12) + "…";
 }
 
+export function getGroupTags(run) {
+  const tags = run?.metadata?.group_tags;
+  const groupId = tags?.group_id || run?.group_id || run?.metadata?.group_id || "";
+  if (!groupId && (!tags || typeof tags !== "object")) return null;
+
+  const overrides =
+    tags?.overrides && typeof tags.overrides === "object" ? tags.overrides : {};
+  const rawTags = Array.isArray(tags?.tags) ? tags.tags : [];
+  const displayTags = rawTags.length
+    ? rawTags
+    : Object.entries(overrides).map(([key, value]) => ({
+        key,
+        label: key.split(".").at(-1)?.replace(/_/g, " ") || key,
+        value,
+      }));
+
+  return {
+    group_id: groupId,
+    axes: Array.isArray(tags?.axes) ? tags.axes : Object.keys(overrides),
+    overrides,
+    tags: displayTags,
+  };
+}
+
+export function formatTagValue(value) {
+  if (value == null) return "—";
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  if (typeof value === "object") return JSON.stringify(value);
+  return String(value);
+}
+
 const STAGE_LABELS = {
   initializing: "Initializing",
   download_model: "Downloading model",

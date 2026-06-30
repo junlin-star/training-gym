@@ -1,5 +1,4 @@
 import json
-import math
 import os
 from collections.abc import Callable
 from dataclasses import field
@@ -15,7 +14,14 @@ from modal_training_gym.common.models import (
     ModelArchitecture,
     ModelConfig,
 )
+from modal_training_gym.common.errors import TrainingGymConfigError
 from modal_training_gym.common.wandb import WandbConfig
+from modal_training_gym.train_recipes.gpu_allocation import (
+    GpuAllocation,
+    validate_num_experts_divisible_by_expert_parallel_size,
+    resolve_gpu_allocation,
+    validate_megatron_actor_parallelism,
+)
 
 import modal
 
@@ -95,7 +101,7 @@ class SlimeRecipe(BaseTrainRecipe):
 
     # ── Required: rollout ──────────────────────────────────────────────────
     num_rollout: int
-    rollout_batch_size: int
+    rollout_batch_size: int  # This is rollout_tp_size
     rollout_max_response_len: int
     rollout_temperature: float
 
@@ -303,6 +309,12 @@ class SlimeRecipe(BaseTrainRecipe):
             object.__setattr__(self, "extra_config", cfg)
         return self
 
+    @model_validator(mode="after")
+    def _validate_gpu_allocation(self) -> "SlimeRecipe":
+        resolve_gpu_allocation(self)
+        validate_megatron_actor_parallelism(self)
+        return self
+
     # ── Container → slime flag converters ────────────────────────────────────
 
     @staticmethod
@@ -343,7 +355,7 @@ class SlimeRecipe(BaseTrainRecipe):
         m: "ModelConfig",
     ) -> "ModelArchitecture":
         if m.architecture is None:
-            raise ValueError(
+            raise TrainingGymConfigError(
                 "SlimeRecipe requires a ModelArchitecture on the attached "
                 "ModelConfig. Set `architecture = ModelArchitecture(...)` "
                 "on your subclass."
@@ -359,13 +371,13 @@ class SlimeRecipe(BaseTrainRecipe):
         surfaces after image build + Ray bringup. Catch it here instead.
         """
         if not ds.input_key:
-            raise ValueError(
+            raise TrainingGymConfigError(
                 f"{type(ds).__name__}.input_key is unset. Slime requires a "
                 "column name (e.g. 'messages' for chat data, 'text' for raw "
                 "prompts). Set `input_key = ...` on your DatasetConfig subclass."
             )
         if ds.label_key and ds.label_key == ds.input_key:
-            raise ValueError(
+            raise TrainingGymConfigError(
                 f"{type(ds).__name__}: input_key and label_key are both "
                 f"{ds.input_key!r}; they must name distinct columns."
             )
@@ -443,6 +455,9 @@ class SlimeRecipe(BaseTrainRecipe):
             ),
         }
 
+    def validate_model_parallelism(self, model: "ModelConfig") -> None:
+        validate_num_experts_divisible_by_expert_parallel_size(self, model)
+
     @staticmethod
     def _wandb_to_fields(w: "WandbConfig") -> dict[str, Any]:
         return {
@@ -467,8 +482,10 @@ class SlimeRecipe(BaseTrainRecipe):
             fields[f.name] = getattr(self, f.name)
         if dataset is not None:
             fields.update(self._dataset_to_fields(dataset))
-        if model is not None and not self.slime_model_script:
-            fields.update(self._model_to_fields(model))
+        if model is not None:
+            self.validate_model_parallelism(model)
+            if not self.slime_model_script:
+                fields.update(self._model_to_fields(model))
         if self.wandb is not None:
             fields.update(self._wandb_to_fields(self.wandb))
         out = {k: v for k, v in fields.items() if k not in _SLIME_SKIP}
@@ -512,32 +529,11 @@ class SlimeRecipe(BaseTrainRecipe):
 
     @property
     def total_nodes(self) -> int:
-        f = self._fields()
-        gpus_per_node = f.get("actor_num_gpus_per_node", 8)
-        actor_nodes = f.get("actor_num_nodes", 1)
-        colocate = f.get("colocate", False)
-        use_critic = f.get("use_critic", False)
-        critic_nodes = f.get("critic_num_nodes") or actor_nodes
-        critic_gpus = f.get("critic_num_gpus_per_node") or gpus_per_node
-        rollout_gpus = f.get("rollout_num_gpus")
+        return self.gpu_allocation.total_nodes
 
-        training_gpus = actor_nodes * gpus_per_node
-        if use_critic:
-            training_gpus += critic_nodes * critic_gpus
-
-        if colocate:
-            total_gpus = training_gpus
-        else:
-            rollout_gpus = rollout_gpus or (actor_nodes * gpus_per_node)
-            total_gpus = training_gpus + rollout_gpus
-
-        if total_gpus % gpus_per_node != 0:
-            raise ValueError(
-                f"total_gpus={total_gpus} is not a multiple of gpus_per_node={gpus_per_node}. "
-                f"Adjust actor_num_nodes, rollout_num_gpus, or actor_num_gpus_per_node."
-            )
-
-        return math.ceil(total_gpus / gpus_per_node)
+    @property
+    def gpu_allocation(self) -> GpuAllocation:
+        return resolve_gpu_allocation(self, warn=False)
 
     @classmethod
     def get_base_recipe(cls, model_config: ModelConfig) -> "SlimeRecipe":
@@ -583,4 +579,6 @@ class SlimeRecipe(BaseTrainRecipe):
             return Qwen3_8b_Recipe()
         if model_config.model_name == "Qwen/Qwen3.6-35B-A3B":
             return Qwen3_6_35b_Recipe()
-        raise ValueError(f"no base slime recipe for model {model_config.model_name!r}")
+        raise TrainingGymConfigError(
+            f"no base slime recipe for model {model_config.model_name!r}"
+        )

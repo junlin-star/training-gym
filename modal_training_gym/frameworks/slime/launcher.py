@@ -1334,6 +1334,7 @@ def build_slime_app(
             print(
                 f"Training {app_name} — {slime.total_nodes} node(s) × {gpu_spec}  ({mode})"
             )
+            print(slime.gpu_allocation.summary())
             print(f"Command: {cmd}, runtime_env: {runtime_env}")
 
             await _set_framework_status_async(SlimeStatus.ROLLOUT_INITIALIZING)

@@ -9,6 +9,7 @@ from pathlib import Path
 from modal_training_gym.frameworks.miles.modal_helpers.utils import (
     resolve_checkpoint_ref,
 )
+from modal_training_gym.common.errors import TrainingGymConfigError
 from modal_training_gym.train_recipes.miles_recipe.recipe import MilesConfig
 
 
@@ -187,7 +188,7 @@ class _KimiK2Recipe(MilesConfig):
 
     def post_process_model(self) -> None:
         if not self.source_hf_checkpoint:
-            raise ValueError("Kimi recipes require source_hf_checkpoint")
+            raise TrainingGymConfigError("Kimi recipes require source_hf_checkpoint")
 
         source_hf_path = Path(
             resolve_checkpoint_ref(self.source_hf_checkpoint, local_files_only=False)

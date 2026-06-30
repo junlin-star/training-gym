@@ -10,6 +10,7 @@ import time
 from modal import Volume
 from modal.exception import NotFoundError
 
+from modal_training_gym.common.errors import TrainingGymConfigError
 from modal_training_gym.common.framework import Framework
 from modal_training_gym.common.models import ModelConfig
 from modal_training_gym.common.run import TrainingRun
@@ -45,7 +46,7 @@ def list_checkpoints(training_run_id: str) -> list[Checkpoint]:
         Framework.MILES.value,
     }:
         return _list_checkpoints(result)
-    raise ValueError(f"Unsupported framework: {result.framework}")
+    raise TrainingGymConfigError(f"Unsupported framework: {result.framework}")
 
 
 def _get_slime_checkpoint_prefix() -> str:
@@ -188,14 +189,14 @@ def convert_checkpoint_to_hf(
 
     checkpoints_volume_name = checkpoint.checkpoints_volume_name
     if not checkpoints_volume_name:
-        raise ValueError(
+        raise TrainingGymConfigError(
             "Cannot convert checkpoint without checkpoints volume metadata."
         )
     checkpoints_mount_path = checkpoint.checkpoints_mount_path or "/checkpoints"
 
     model_ref = model.model_name or model.model_path
     if not model_ref:
-        raise ValueError(
+        raise TrainingGymConfigError(
             "Cannot convert a megatron checkpoint without model_name or model_path."
         )
 

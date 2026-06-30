@@ -74,4 +74,9 @@ def _patch_file(path: Path) -> None:
     print(f"Patched {path.name} with advantage-distribution reporting")
 
 
-_patch_file(Path("/root/slime/slime/backends/megatron_utils/data.py"))
+def main() -> None:
+    _patch_file(Path("/root/slime/slime/backends/megatron_utils/data.py"))
+
+
+if __name__ == "__main__":
+    main()

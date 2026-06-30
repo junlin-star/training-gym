@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any, Callable, Literal
 from pydantic import BaseModel, Field, model_validator
 
 from modal_training_gym.common.dataset import DatasetRow
+from modal_training_gym.common.errors import TrainingGymConfigError
 from modal_training_gym.common.ids import create_hash
 from modal_training_gym.utils.metadata import MetadataStore, vol_get, vol_put
 
@@ -334,7 +335,7 @@ class EvalConfig:
                     return raw
             return raw
 
-        raise ValueError(
+        raise TrainingGymConfigError(
             "EvalConfig.build_prompt() could not resolve a prompt column. "
             "Set EvalConfig.prompt_column or dataset.input_column, or include one of "
             "['prompt', 'input', 'instruction', 'question'] in dataset rows."
@@ -349,7 +350,7 @@ class EvalConfig:
         from modal_training_gym.setup import ensure_dashboard_deployed
 
         if max_concurrency < 1:
-            raise ValueError("max_concurrency must be >= 1")
+            raise TrainingGymConfigError("max_concurrency must be >= 1")
 
         ensure_dashboard_deployed()
 
@@ -494,7 +495,7 @@ def _sandbox_resource(
         return (min(default_request, value), value)
     if policy == "ignore":
         return None
-    raise ValueError(
+    raise TrainingGymConfigError(
         f"invalid resource policy {policy!r}; expected one of {RESOURCE_POLICIES}"
     )
 

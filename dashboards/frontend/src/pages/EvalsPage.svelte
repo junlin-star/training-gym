@@ -38,6 +38,7 @@
   let expandedInitialized = $state(false);
   const evalColumns = [
     { key: "name", label: "Name", width: 220, minWidth: 140 },
+    { key: "dataset", label: "Dataset", width: 180, minWidth: 120 },
     { key: "deployment", label: "Deployment", width: 180, minWidth: 120 },
     { key: "training", label: "Training run", width: 180, minWidth: 130 },
     { key: "model", label: "Base model", width: 210, minWidth: 140 },
@@ -46,6 +47,7 @@
     { key: "examples", label: "Examples", width: 100, minWidth: 86 },
     { key: "created", label: "Created", width: 116, minWidth: 96 },
   ];
+  const evalSkeletonColumns = evalColumns.map((column) => column.label);
 
   function safeText(value) {
     if (value && typeof value === "object" && "value" in value) return value.value;
@@ -553,7 +555,7 @@
       <div class="table-wrap">
         <MinimalTableSkeleton
           class="runs-table"
-          columns={["Name", "Deployment", "Training run", "Base model", "Status", "Average score", "Examples"]}
+          columns={evalSkeletonColumns}
           rows={6}
         />
       </div>
@@ -596,7 +598,7 @@
 
             {#if expandedConfigIds.has(group.evalConfigId)}
               <div class="table-wrap">
-                <ResizableTable class="runs-table evals-runs-table" columns={evalColumns}>
+                <ResizableTable class="runs-table evals-runs-table" columns={evalColumns} stickyFirstColumn>
                   <tbody>
                     {#each group.visibleRuns as run, runIndex (run.eval.eval_id || `${group.evalConfigId}-${run.eval.created_at || 0}-${runIndex}`)}
                       {@const linkedDeployment = findDeploymentRow(run, group)}
@@ -604,6 +606,7 @@
                       {@const deploymentRef = deploymentRefValue(linkedDeployment)}
                       {@const trainingRunId = linkedTrainingRunId(linkedDeployment)}
                       {@const baseModel = evalBaseModel(run, group, linkedDeployment)}
+                      {@const dataset = groupDataset(group)}
                       <tr
                         class="eval-row-clickable"
                         class:row-selected={selectedEval?.run?.eval?.eval_id === run.eval.eval_id}
@@ -614,6 +617,9 @@
                       >
                         <td class="mono name-cell" title={deploymentName}>
                           <span class="truncate-text">{deploymentName}</span>
+                        </td>
+                        <td class="dataset-cell" title={dataset}>
+                          <span class="truncate-text">{dataset}</span>
                         </td>
                         <td class="mono deployment-cell" title={deploymentRef || "—"}>
                           <span class="truncate-text">{deploymentRef || "—"}</span>
@@ -1169,7 +1175,11 @@
   }
 
   .table-wrap {
-    overflow-x: auto;
+    max-width: 100%;
+    overflow: auto hidden;
+    overscroll-behavior-x: contain;
+    overscroll-behavior-y: auto;
+    -webkit-overflow-scrolling: auto;
   }
 
   :global(table.runs-table) {
@@ -1183,7 +1193,10 @@
     font-size: 0.72rem;
   }
 
-  .name-cell .truncate-text {
+  .name-cell .truncate-text,
+  .dataset-cell .truncate-text,
+  .deployment-cell .truncate-text,
+  .base-model-cell .truncate-text {
     display: block;
     width: 100%;
     min-width: 0;
@@ -1192,17 +1205,9 @@
     white-space: nowrap;
   }
 
+  .dataset-cell,
   .deployment-cell {
     max-width: 0;
-  }
-
-  .deployment-cell .truncate-text {
-    display: block;
-    width: 100%;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
   }
 
   .training-run-cell {
@@ -1226,15 +1231,6 @@
 
   .cross-link:hover {
     color: var(--text-bright);
-  }
-
-  .base-model-cell .truncate-text {
-    display: block;
-    width: 100%;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
   }
 
   .eval-score {

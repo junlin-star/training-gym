@@ -8,7 +8,7 @@
   import RunSummary from "../components/RunSummary.svelte";
   import StatusPill from "../components/StatusPill.svelte";
   import TimeAgo from "../components/TimeAgo.svelte";
-  import { smoothedStageLabel } from "../lib/format.js";
+  import { formatTagValue, getGroupTags, smoothedStageLabel } from "../lib/format.js";
 
   let {
     allRuns,
@@ -61,9 +61,10 @@
     { key: "model", label: "Model", width: 210, minWidth: 120 },
     { key: "dataset", label: "Dataset", width: 180, minWidth: 120 },
     { key: "recipe", label: "Recipe", width: 116, minWidth: 88 },
-    { key: "group", label: "Group", width: 150, minWidth: 96 },
-    { key: "created", label: "Created", width: 116, minWidth: 96 },
-    { key: "updated", label: "Last updated", width: 132, minWidth: 110 },
+    { key: "group", label: "Group", width: 280, minWidth: 220 },
+    { key: "tags", label: "Tags", width: 520, minWidth: 360 },
+    { key: "created", label: "Created", width: 150, minWidth: 130 },
+    { key: "updated", label: "Last updated", width: 170, minWidth: 150 },
     { key: "actions", label: "", ariaLabel: "Actions", width: 236, minWidth: 180 },
   ];
 
@@ -162,7 +163,7 @@
       <div class="table-wrap">
         <MinimalTableSkeleton
           class="runs-table"
-          columns={["Name", "Status", "Stage", "Model", "Dataset", "Recipe", "Group", "Created", "Last updated", ""]}
+          columns={["Name", "Status", "Stage", "Model", "Dataset", "Recipe", "Group", "Tags", "Created", "Last updated", ""]}
           rows={8}
         />
       </div>
@@ -174,13 +175,14 @@
       <div class="empty">No runs match the current filters.</div>
     {:else}
       <div class="table-wrap">
-        <ResizableTable class="runs-table training-runs-table" {columns}>
+        <ResizableTable class="runs-table training-runs-table" {columns} stickyFirstColumn>
           <tbody>
             {#each filteredRuns as run, runIndex (`${run.run_id || "run"}-${run.created_at || 0}-${runIndex}`)}
               {@const runName = run.run_id || "—"}
               {@const status = getStatus(run)}
               {@const stageLabel = frameworkStatusLabel(run)}
               {@const progress = frameworkProgress(run)}
+              {@const groupTags = getGroupTags(run)}
               <tr class:row-selected={drawerRunId === run.run_id}>
                 <td class="run-cell">
                   <button
@@ -229,10 +231,25 @@
                     {run.framework || "—"}
                   </button>
                 </td>
-                <td class="group-cell" title={run.group_id || ""}>
+                <td class="group-cell" title={groupTags?.group_id || run.group_id || ""}>
                   <button class="cell-open-button" onclick={() => selectRun(run.run_id)}>
-                    {#if run.group_id}
-                      <span class="group-tag">{run.group_id}</span>
+                    {#if groupTags?.group_id}
+                      <span class="group-tag">{groupTags.group_id}</span>
+                    {:else}
+                      <span class="group-empty">—</span>
+                    {/if}
+                  </button>
+                </td>
+                <td class="tags-cell">
+                  <button class="cell-open-button tags-open-button" onclick={() => selectRun(run.run_id)}>
+                    {#if groupTags?.tags.length}
+                      <span class="tag-pill-list">
+                        {#each groupTags.tags as tag (tag.key)}
+                          <span class="tag-pill" title={`${tag.key}=${formatTagValue(tag.value)}`}>
+                            <span class="tag-pill-key">{tag.key}</span><span>=</span><span class="tag-pill-value">{formatTagValue(tag.value)}</span>
+                          </span>
+                        {/each}
+                      </span>
                     {:else}
                       <span class="group-empty">—</span>
                     {/if}
@@ -392,7 +409,11 @@
   }
 
   .table-wrap {
-    overflow-x: auto;
+    max-width: 100%;
+    overflow: auto hidden;
+    overscroll-behavior-x: contain;
+    overscroll-behavior-y: auto;
+    -webkit-overflow-scrolling: auto;
   }
 
   :global(table.runs-table) {
@@ -466,24 +487,59 @@
     color: var(--muted);
   }
 
-  .group-cell {
-    max-width: 12rem;
-  }
-
   .group-tag {
     display: inline-block;
     max-width: 100%;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    white-space: normal;
+    overflow-wrap: anywhere;
     vertical-align: bottom;
     padding: 2px 8px;
     border-radius: 999px;
     font-size: 0.72rem;
     font-variant-numeric: tabular-nums;
-    color: var(--accent);
-    border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
-    background: color-mix(in srgb, var(--accent) 14%, transparent);
+    color: var(--muted);
+    border: 1px solid var(--border, #2f2f2f);
+    background: color-mix(in srgb, var(--panel-alt) 70%, transparent);
+  }
+
+  .tags-open-button {
+    overflow: visible;
+    text-overflow: clip;
+    white-space: normal;
+  }
+
+  .tag-pill-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    min-width: 0;
+  }
+
+  .tag-pill {
+    display: inline-flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    max-width: 100%;
+    min-width: 0;
+    overflow-wrap: anywhere;
+    padding: 2px 7px;
+    border: 1px solid var(--border, #2f2f2f);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--panel-alt) 70%, transparent);
+    color: var(--text);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    line-height: 14px;
+  }
+
+  .tag-pill-key,
+  .tag-pill-value {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .tag-pill-key {
+    color: var(--muted);
   }
 
   .group-empty {
