@@ -66,25 +66,7 @@ def _build_image() -> modal.Image:
 
 image = _build_image()
 
-# App name is overridable so a personal/standalone instance can be deployed
-# alongside the shared "training-gym-dashboard" without clobbering it.
-app = modal.App(
-    os.environ.get("TRAINING_GYM_DASHBOARD_APP_NAME", "training-gym-dashboard"),
-    image=image,
-)
-
-# Scheduled jobs mutate shared stores. A standalone/personal deploy can disable
-# them (TRAINING_GYM_DASHBOARD_CRONS=0) to serve the UI + recorder only, without
-# duplicating cron work against shared data.
-_DASHBOARD_CRONS_ENABLED = os.environ.get("TRAINING_GYM_DASHBOARD_CRONS", "1") != "0"
-
-
-def _scheduled(schedule: Any, **kwargs: Any) -> Any:
-    """Register a Modal function, attaching ``schedule`` only when crons are enabled."""
-    if _DASHBOARD_CRONS_ENABLED:
-        return app.function(schedule=schedule, **kwargs)
-    return app.function(**kwargs)
-
+app = modal.App("training-gym-dashboard", image=image)
 
 STATIC_DIR = "/app/frontend/dist"
 
@@ -235,14 +217,14 @@ def _run_compact_sync() -> None:
         compact_summary_store(summary_store)
 
 
-@_scheduled(modal.Cron("*/30 * * * *"))
+@app.function(schedule=modal.Cron("*/30 * * * *"))
 def compact_summaries() -> None:
     """Scheduled compaction of summary stores (every 30 min)."""
     _run_compact_sync()
     print("Compaction complete.")
 
 
-@_scheduled(modal.Cron("0 * * * *"), secrets=_function_secrets())
+@app.function(schedule=modal.Cron("0 * * * *"), secrets=_function_secrets())
 def reconcile_orphan_training_runs() -> None:
     """Hourly reconciliation of orphaned pending training runs."""
     from modal_training_gym.common.run_reconciler import reconcile_orphan_runs
