@@ -19,6 +19,8 @@ import tomllib
 import uuid
 from pathlib import Path
 
+from modal_training_gym.common.errors import TrainingGymConfigError
+
 DatasetRow = dict[str, Any]
 
 
@@ -52,7 +54,7 @@ class DatasetConfig:
     def _validate(self) -> None:
         """Required-field check; subclasses call this at the end of their own ``__init__``."""
         if not self.label_key:
-            raise ValueError(
+            raise TrainingGymConfigError(
                 f"{type(self).__name__} requires `label_key` to be set. "
                 "It names the column on the materialized dataset that holds "
                 "per-sample ground-truth / reward-function input. "
@@ -110,7 +112,7 @@ class DatasetConfig:
                 with open(path) as f:
                     first = f.readline().strip()
                 if not first:
-                    raise ValueError(f"{path!r} is empty")
+                    raise TrainingGymConfigError(f"{path!r} is empty")
                 cols = set(json.loads(first).keys())
             else:
                 return
@@ -123,7 +125,7 @@ class DatasetConfig:
 
         missing = expected - cols
         if missing:
-            raise ValueError(
+            raise TrainingGymConfigError(
                 f"{type(self).__name__}.prepare() wrote {path!r} but it is "
                 f"missing required column(s) {sorted(missing)} "
                 f"(input_key={self.input_key!r}, label_key={self.label_key!r}). "
@@ -360,13 +362,13 @@ class HarborDataset(DatasetConfig):
         elif self.task_root:
             task_root = Path(self.task_root).resolve()
         else:
-            raise ValueError(
+            raise TrainingGymConfigError(
                 f"{type(self).__name__} requires dataset_name, path, or task_root"
             )
         if not task_root.exists():
             raise FileNotFoundError(f"task root does not exist: {task_root}")
         if not task_root.is_dir():
-            raise ValueError(f"task root is not a directory: {task_root}")
+            raise TrainingGymConfigError(f"task root is not a directory: {task_root}")
         return task_root
 
     def _candidate_task_dirs(self, task_root: Path) -> list[Path]:
@@ -392,7 +394,7 @@ class HarborDataset(DatasetConfig):
             rng = random.Random(self.shuffle_seed)
             rng.shuffle(task_dirs)
         if not task_dirs:
-            raise ValueError(f"No Harbor tasks found under {task_root}")
+            raise TrainingGymConfigError(f"No Harbor tasks found under {task_root}")
         if self.train_size is not None:
             max_tasks = self.train_size + (self.eval_size or 0)
             task_dirs = task_dirs[:max_tasks]
@@ -409,11 +411,11 @@ class HarborDataset(DatasetConfig):
         elif metadata_path.suffix == ".toml":
             data = tomllib.loads(metadata_path.read_text(encoding="utf-8"))
         else:
-            raise ValueError(
+            raise TrainingGymConfigError(
                 f"Unsupported label metadata file type for {metadata_path}; expected .json or .toml"
             )
         if not isinstance(data, dict):
-            raise ValueError(
+            raise TrainingGymConfigError(
                 f"Label metadata must decode to an object: {metadata_path}"
             )
         return data
@@ -578,13 +580,15 @@ class MultimodalDataset(DatasetConfig):
         for k, v in kwargs.items():
             setattr(self, k, v)
         if self.modality not in ("image", "audio", "video"):
-            raise ValueError(
+            raise TrainingGymConfigError(
                 f"modality must be one of image/audio/video, got {self.modality!r}"
             )
         if not self.media_column:
             self.media_column = f"{self.modality}s"
         if self.input_key == self.media_column or self.label_key == self.media_column:
-            raise ValueError("media_column must differ from input_key and label_key")
+            raise TrainingGymConfigError(
+                "media_column must differ from input_key and label_key"
+            )
         # The whole feature in one line: name the media column for the framework.
         self.multimodal_keys = {self.modality: self.media_column}
         self._rows = list(rows or [])

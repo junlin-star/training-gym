@@ -24,6 +24,7 @@ from modal_training_gym.common.checkpoint import (
     CheckpointType,
     convert_checkpoint_to_hf,
 )
+from modal_training_gym.common.errors import TrainingGymConfigError
 from modal_training_gym.common.ids import create_hash
 from modal_training_gym.common.models import ModelConfig
 from modal_training_gym.common.modal_urls import modal_app_dashboard_url
@@ -152,7 +153,7 @@ class DeploymentConfig:
 
         model_path = self.model.model_path or self.model.model_name
         if not model_path:
-            raise ValueError(
+            raise TrainingGymConfigError(
                 f"{type(self.model).__name__} has no model path to serve. "
                 "Set model_path or model_name."
             )
@@ -233,7 +234,9 @@ class DeploymentConfig:
                 deployment_id=deployment_id,
             )
         else:
-            raise ValueError(f"Unsupported deploy recipe: {type(recipe).__name__}")
+            raise TrainingGymConfigError(
+                f"Unsupported deploy recipe: {type(recipe).__name__}"
+            )
 
         env_name = recipe.environment_name
         strategy = recipe.deploy_strategy

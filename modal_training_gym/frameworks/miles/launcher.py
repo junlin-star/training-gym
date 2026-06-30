@@ -748,6 +748,7 @@ def build_miles_app(
             print(
                 f"Training {app_name} - {miles.total_nodes} node(s) x {gpu_spec} ({mode})"
             )
+            print(miles.gpu_allocation.summary())
             print(f"Command: {cmd}, runtime_env: {runtime_env}")
 
             await _set_framework_status(MilesStatus.TRAINING)

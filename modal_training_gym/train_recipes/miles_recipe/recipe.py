@@ -1,5 +1,4 @@
 import json
-import math
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -10,6 +9,10 @@ from modal_training_gym.common.dataset import DatasetConfig
 from modal_training_gym.common.models import ModelConfig
 from modal_training_gym.common.wandb import WandbConfig
 from modal_training_gym.train_recipes.base import BaseTrainRecipe, RecipeType
+from modal_training_gym.train_recipes.gpu_allocation import (
+    GpuAllocation,
+    resolve_gpu_allocation,
+)
 
 HF_CACHE_PATH = Path("/root/.cache/huggingface")
 DATA_PATH = Path("/data")
@@ -163,6 +166,7 @@ class MilesConfig(BaseTrainRecipe):
         self.patch_files = list(type(self).patch_files)
         for k, v in kwargs.items():
             setattr(self, k, v)
+        resolve_gpu_allocation(self)
 
     def _class_fields(self) -> dict[str, Any]:
         fields: dict[str, Any] = {}
@@ -310,31 +314,11 @@ class MilesConfig(BaseTrainRecipe):
 
     @property
     def total_nodes(self) -> int:
-        f = self._fields()
-        gpus_per_node = f.get("actor_num_gpus_per_node", 8)
-        actor_nodes = f.get("actor_num_nodes", 1)
-        colocate = f.get("colocate", False)
-        use_critic = f.get("use_critic", False)
-        critic_nodes = f.get("critic_num_nodes") or actor_nodes
-        critic_gpus = f.get("critic_num_gpus_per_node") or gpus_per_node
-        rollout_gpus = f.get("rollout_num_gpus")
+        return self.gpu_allocation.total_nodes
 
-        training_gpus = actor_nodes * gpus_per_node
-        if use_critic:
-            training_gpus += critic_nodes * critic_gpus
-
-        if colocate:
-            total_gpus = training_gpus
-        else:
-            rollout_gpus = rollout_gpus or (actor_nodes * gpus_per_node)
-            total_gpus = training_gpus + rollout_gpus
-
-        if total_gpus % gpus_per_node != 0:
-            raise ValueError(
-                f"total_gpus={total_gpus} is not a multiple of gpus_per_node={gpus_per_node}. "
-                "Adjust actor_num_nodes, rollout_num_gpus, or actor_num_gpus_per_node."
-            )
-        return math.ceil(total_gpus / gpus_per_node)
+    @property
+    def gpu_allocation(self) -> GpuAllocation:
+        return resolve_gpu_allocation(self, warn=False)
 
     def download_model(self) -> None:
         from modal_training_gym.frameworks.miles.modal_helpers.utils import (
