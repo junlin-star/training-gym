@@ -24,7 +24,29 @@ function modalAppUrl(modalAppId) {
   return `https://modal.com/id/${appId}`;
 }
 
-function extractConfigSummary(config) {
+function wandbUrl({ entity, project, runId }) {
+  const cleanEntity = safeStr(entity).trim();
+  const cleanProject = safeStr(project).trim();
+  const cleanRunId = safeStr(runId).trim();
+  if (!cleanEntity || !cleanProject) return null;
+  const base = `https://wandb.ai/${encodeURIComponent(cleanEntity)}/${encodeURIComponent(cleanProject)}`;
+  return cleanRunId ? `${base}/runs/${encodeURIComponent(cleanRunId)}` : base;
+}
+
+function wandbSummary(fields) {
+  const wandbProject = safeStr(fields.project || "");
+  const wandbEntity = safeStr(fields.entity || "");
+  const wandbRunId = safeStr(fields.runId || "");
+  return {
+    wandb_project: wandbProject,
+    wandb_group: safeStr(fields.group || ""),
+    wandb_entity: wandbEntity,
+    wandb_training_run_id: wandbRunId,
+    wandb_url: wandbUrl({ entity: wandbEntity, project: wandbProject, runId: wandbRunId }),
+  };
+}
+
+function extractConfigSummary(config, trainingRunId = "") {
   if (!config || typeof config !== "object") return {};
   const model = config.model || {};
   const preset = config.preset || {};
@@ -36,15 +58,7 @@ function extractConfigSummary(config) {
     safeStr(dataset.hf_repo) ||
     safeStr(dataset.prompt_data) ||
     safeStr(dataset.name);
-  const wandbProject = wandb.project || "";
-  const wandbEntity = wandb.entity || "";
-  const wandbRunId = wandb.run_id || "";
-  let wandb_url = null;
-  if (wandbProject && wandbEntity && wandbRunId) {
-    wandb_url = `https://wandb.ai/${wandbEntity}/${wandbProject}/runs/${wandbRunId}`;
-  } else if (wandbProject && wandbEntity) {
-    wandb_url = `https://wandb.ai/${wandbEntity}/${wandbProject}`;
-  }
+  const wandbRunId = safeStr(wandb.run_id || "") || safeStr(trainingRunId).slice(0, 8);
   return {
     model_name: safeStr(model.model_name || ""),
     gpu_type: safeStr(compute.gpu_type || ""),
@@ -52,9 +66,12 @@ function extractConfigSummary(config) {
     actor_num_gpus_per_node: compute.actor_num_gpus_per_node || 0,
     lr: config.lr || 0,
     global_batch_size: config.global_batch_size || 0,
-    wandb_project: wandbProject,
-    wandb_group: (wandb.group) || "",
-    wandb_url,
+    ...wandbSummary({
+      entity: wandb.entity,
+      project: wandb.project,
+      group: wandb.group,
+      runId: wandb.project && wandb.entity ? wandbRunId : "",
+    }),
     dataset_name: datasetName,
     dataset_prompt_data: safeStr(dataset.prompt_data || ""),
   };
@@ -91,23 +108,17 @@ function summarizeDeployment(d) {
 }
 
 function summarizeTrainResult(r) {
-  const wandbRunId = r.wandb_training_run_id || "";
-  const wandbProject = r.wandb_project || "";
-  const wandbEntity = r.wandb_entity || "";
-  let wandb_url = null;
-  if (wandbRunId && wandbProject && wandbEntity) {
-    wandb_url = `https://wandb.ai/${wandbEntity}/${wandbProject}/runs/${wandbRunId}`;
-  }
   return {
     training_run_id: r.training_run_id || "",
     app_name: r.app_name || "",
     checkpoint_dir: r.checkpoint_dir || "",
     model_name: safeStr(r.model_config?.model_name || ""),
     model_path: safeStr(r.model_config?.model_path || ""),
-    wandb_url,
-    wandb_project: wandbProject,
-    wandb_entity: wandbEntity,
-    wandb_training_run_id: wandbRunId,
+    ...wandbSummary({
+      entity: r.wandb_entity,
+      project: r.wandb_project,
+      runId: r.wandb_training_run_id,
+    }),
   };
 }
 
@@ -200,7 +211,7 @@ export async function fetchRuns({ signal } = {}) {
       deployment_id: safeStr(run.deployment_id || ""),
       group_id: safeStr(metadata?.group_id || ""),
       config: run.config || {},
-      config_summary: extractConfigSummary(run.config),
+      config_summary: extractConfigSummary(run.config, runId),
       created_at: run.created_at || 0,
       started_at: startedAt,
       ended_at: endedAt,
