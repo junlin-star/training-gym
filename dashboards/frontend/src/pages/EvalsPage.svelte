@@ -38,6 +38,7 @@
   let expandedInitialized = $state(false);
   const evalColumns = [
     { key: "name", label: "Name", width: 220, minWidth: 140 },
+    { key: "dataset", label: "Dataset", width: 180, minWidth: 120 },
     { key: "deployment", label: "Deployment", width: 180, minWidth: 120 },
     { key: "training", label: "Training run", width: 180, minWidth: 130 },
     { key: "model", label: "Base model", width: 210, minWidth: 140 },
@@ -604,6 +605,7 @@
                       {@const deploymentRef = deploymentRefValue(linkedDeployment)}
                       {@const trainingRunId = linkedTrainingRunId(linkedDeployment)}
                       {@const baseModel = evalBaseModel(run, group, linkedDeployment)}
+                      {@const dataset = groupDataset(group)}
                       <tr
                         class="eval-row-clickable"
                         class:row-selected={selectedEval?.run?.eval?.eval_id === run.eval.eval_id}
@@ -614,6 +616,9 @@
                       >
                         <td class="mono name-cell" title={deploymentName}>
                           <span class="truncate-text">{deploymentName}</span>
+                        </td>
+                        <td class="dataset-cell" title={dataset}>
+                          <span class="truncate-text">{dataset}</span>
                         </td>
                         <td class="mono deployment-cell" title={deploymentRef || "—"}>
                           <span class="truncate-text">{deploymentRef || "—"}</span>
@@ -1187,7 +1192,10 @@
     font-size: 0.72rem;
   }
 
-  .name-cell .truncate-text {
+  .name-cell .truncate-text,
+  .dataset-cell .truncate-text,
+  .deployment-cell .truncate-text,
+  .base-model-cell .truncate-text {
     display: block;
     width: 100%;
     min-width: 0;
@@ -1196,17 +1204,9 @@
     white-space: nowrap;
   }
 
+  .dataset-cell,
   .deployment-cell {
     max-width: 0;
-  }
-
-  .deployment-cell .truncate-text {
-    display: block;
-    width: 100%;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
   }
 
   .training-run-cell {
@@ -1230,15 +1230,6 @@
 
   .cross-link:hover {
     color: var(--text-bright);
-  }
-
-  .base-model-cell .truncate-text {
-    display: block;
-    width: 100%;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
   }
 
   .eval-score {

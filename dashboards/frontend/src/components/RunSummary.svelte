@@ -20,6 +20,10 @@
   let recipeJson = $derived.by(() =>
     Object.keys(recipe).length ? JSON.stringify(recipe, null, 2) : "",
   );
+  let modalAppUrl = $derived.by(() =>
+    run?.modal_app_url ||
+    (run?.modal_app_id ? `https://modal.com/id/${run.modal_app_id}` : ""),
+  );
   let groupTags = $derived(getGroupTags(run));
   let attemptMetadata = $derived.by(() => {
     const metadata = run?.metadata;
@@ -132,6 +136,20 @@
         <span class="kv-key">Recipe</span>
         <span class="kv-value">{run.framework || "—"}</span>
       </div>
+      {#if modalAppUrl}
+        <div class="kv">
+          <span class="kv-key">Modal app</span>
+          <a
+            class="kv-link kv-value-mono"
+            href={modalAppUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            title={run.modal_app_id || modalAppUrl}
+          >
+            {run.modal_app_id || modalAppUrl}
+          </a>
+        </div>
+      {/if}
       <div class="kv">
         <span class="kv-key">Duration</span>
         <span class="kv-value">{runDuration()}</span>
@@ -297,6 +315,16 @@
     font-family: var(--font-mono);
     font-size: 12px;
     line-height: 16px;
+  }
+
+  .kv-link {
+    color: var(--accent);
+    overflow-wrap: anywhere;
+    text-decoration: none;
+  }
+
+  .kv-link:hover {
+    text-decoration: underline;
   }
 
   .kv-block {

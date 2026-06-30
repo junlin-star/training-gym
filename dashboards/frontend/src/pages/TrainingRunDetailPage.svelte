@@ -36,6 +36,7 @@
   // the auto-refresh hands us a new `run` object with the same status (which
   // would otherwise tear down and rebuild the log stream, flashing the tail).
   let runStatus = $derived(String(run?.status || "").toLowerCase());
+  let wandbUrl = $derived(run?.train_result?.wandb_url || run?.config_summary?.wandb_url || "");
 
   // Active tab: "summary" | "rollouts" | "logs". Each tab loads only its own
   // data — rollout summaries for summary/rollouts, the log stream for logs.
@@ -602,10 +603,10 @@
             <span>Collapse</span>
           </button>
         {/if}
-        {#if run?.train_result?.wandb_url || run?.config_summary?.wandb_project}
+        {#if wandbUrl}
           <a
             class="header-link wandb-link"
-            href={run.train_result?.wandb_url || `https://wandb.ai/home?search=${encodeURIComponent(run.config_summary.wandb_project)}`}
+            href={wandbUrl}
             target="_blank"
             rel="noopener noreferrer"
           >
