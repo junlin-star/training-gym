@@ -47,6 +47,7 @@
     { key: "examples", label: "Examples", width: 100, minWidth: 86 },
     { key: "created", label: "Created", width: 116, minWidth: 96 },
   ];
+  const evalSkeletonColumns = evalColumns.map((column) => column.label);
 
   function safeText(value) {
     if (value && typeof value === "object" && "value" in value) return value.value;
@@ -554,7 +555,7 @@
       <div class="table-wrap">
         <MinimalTableSkeleton
           class="runs-table"
-          columns={["Name", "Deployment", "Training run", "Base model", "Status", "Average score", "Examples"]}
+          columns={evalSkeletonColumns}
           rows={6}
         />
       </div>
