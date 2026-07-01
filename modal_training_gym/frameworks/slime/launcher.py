@@ -1036,7 +1036,7 @@ def build_slime_app(
         f"{SlimeStatus.EVAL_ROLLOUT_LOGGING.value}_end",
     }
 
-    def write_step_times(
+    async def write_step_times(
         run_id: str, num_steps: int
     ) -> tuple[
         dict[str, dict[str, float | None]],
@@ -1045,8 +1045,21 @@ def build_slime_app(
         step_times_dict = ModalDict.from_name(
             "training-gym-step-times", create_if_missing=True
         )
+        keys = [
+            f"{run_id}:{step}:{suffix}"
+            for step in range(1, num_steps + 1)
+            for suffix in (
+                "start",
+                "finish",
+                "substep_start",
+                "substep_finish",
+                *(f"substep:{s}" for s in SUBSTEP_ORDER),
+            )
+        ]
+        values = await asyncio.gather(*(step_times_dict.get.aio(k) for k in keys))
+        snapshot = dict(zip(keys, values))
         return aggregate_step_times(
-            step_times_dict,
+            snapshot,
             run_id,
             num_steps,
             SUBSTEP_ORDER,
@@ -1434,7 +1447,7 @@ def build_slime_app(
                     (
                         latest_run_record.step_times,
                         latest_run_record.substep_times,
-                    ) = write_step_times(training_run_id, slime.num_rollout)
+                    ) = await write_step_times(training_run_id, slime.num_rollout)
                     step_times_read = True
                 except Exception as exc:
                     print(f"Failed to read step times: {exc}")
