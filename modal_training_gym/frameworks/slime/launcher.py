@@ -1401,7 +1401,7 @@ def build_slime_app(
             except Exception as exc:
                 print(f"Failed to save run record: {exc}")
             else:
-                if step_times_read:
+                if step_times_read or slime.async_mode:
                     try:
                         clear_step_times(training_run_id, slime.num_rollout)
                     except Exception as exc:
