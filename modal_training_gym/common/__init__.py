@@ -9,6 +9,7 @@ its ``modal.App``.
 from __future__ import annotations
 
 import os
+import re
 
 from modal_training_gym.utils.gpu import GPUType
 from modal_training_gym.common.modal_refs import (
@@ -28,6 +29,11 @@ COMMON_TRAINING_GYM_TAGS: dict[str, str] = {
     "source": "training-gym",
     "_modal_job_type": "training",
 }
+
+
+def modal_tag_value(value: object) -> str:
+    raw_name = str(value).rsplit("/", 1)[-1].lower()
+    return re.sub(r"[^A-Za-z0-9_.-]+", "-", raw_name).strip("-_.")
 
 
 def hf_secrets() -> list:
@@ -60,6 +66,7 @@ __all__ = [
     "METADATA_VOLUME_NAME",
     "MetadataStore",
     "ModalCaptureError",
+    "modal_tag_value",
     "register_modal_cloudpickle_reducers",
     "hf_secrets",
     "vol_get",

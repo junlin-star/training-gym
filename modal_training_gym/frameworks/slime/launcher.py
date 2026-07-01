@@ -29,13 +29,13 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 from collections.abc import Callable, Mapping
 from enum import Enum
-from modal import App, Dict as ModalDict, Image, Secret, Volume
+from modal import App, Dict as ModalDict, Image, Secret, Volume, Retries
 
 from modal_training_gym.common import hf_secrets
 
 import cloudpickle
 
-from modal_training_gym.common import COMMON_TRAINING_GYM_TAGS
+from modal_training_gym.common import COMMON_TRAINING_GYM_TAGS, modal_tag_value
 from modal_training_gym.common.dataset import DatasetConfig, HarborDataset
 from modal_training_gym.common.framework import (
     mount_tools_dir,
@@ -49,7 +49,18 @@ from modal_training_gym.common.ray_cluster import (
     _supports_rdma,
     clustered_if,
 )
-from modal_training_gym.common.run import TrainingRun, TrainingRunStatus
+from modal_training_gym.common.run import (
+    TrainingRun,
+    TrainingRunStatus,
+    has_torch_dist_checkpoint,
+    mark_training_attempt_finished,
+    mark_training_attempt_started,
+    record_resume_checkpoint,
+    record_wandb_attempt,
+    run_scoped_save_root,
+    torch_dist_resume_checkpoint,
+    wandb_run_id_for_attempt,
+)
 from modal_training_gym.common.wandb import WandbConfig
 from modal_training_gym.common.status import SlimeStatus
 from modal_training_gym.common.train_result import TrainResult
@@ -177,39 +188,12 @@ def _response_parser_path(model: Any) -> str:
     return f"{module}.{qualname}" if module and qualname else ""
 
 
-def _has_torch_dist_checkpoint(save_path: str) -> bool:
-    if not os.path.isdir(save_path):
-        return False
-
-    def _is_complete_checkpoint_dir(path: str) -> bool:
-        try:
-            names = os.listdir(path)
-        except OSError:
-            return False
-        return "common.pt" in names and any(name.endswith(".distcp") for name in names)
-
-    tracker_path = os.path.join(save_path, "latest_checkpointed_iteration.txt")
-    if os.path.isfile(tracker_path):
-        try:
-            with open(tracker_path) as f:
-                marker = f.read().strip()
-        except OSError:
-            marker = ""
-        if marker == "release":
-            return _is_complete_checkpoint_dir(os.path.join(save_path, "release"))
-        if marker.isdigit():
-            iter_dir = f"iter_{int(marker):07d}"
-            return _is_complete_checkpoint_dir(os.path.join(save_path, iter_dir))
-
+def _is_complete_torch_dist_checkpoint(path: str) -> bool:
     try:
-        return any(
-            entry.is_dir()
-            and (entry.name == "release" or entry.name.startswith("iter_"))
-            and _is_complete_checkpoint_dir(entry.path)
-            for entry in os.scandir(save_path)
-        )
+        names = os.listdir(path)
     except OSError:
         return False
+    return "common.pt" in names and any(name.endswith(".distcp") for name in names)
 
 
 def _serialize_recipe_value(value: Any) -> Any:
@@ -694,12 +678,13 @@ def build_slime_app(
     tags = {
         **COMMON_TRAINING_GYM_TAGS,
         "_modal_framework": "slime",
+        "_modal_model_name": modal_tag_value(model.model_name),
         **slime.app_tags,
     }
     if slime.wandb is not None:
-        tags["_modal_wandb_project"] = slime.wandb.project
+        tags["_modal_wandb_project"] = modal_tag_value(slime.wandb.project)
         if slime.wandb.group:
-            tags["_modal_wandb_group"] = slime.wandb.group
+            tags["_modal_wandb_group"] = modal_tag_value(slime.wandb.group)
     app = App(app_name, tags=tags)
     gpu_spec = f"{slime.gpu_type}:{slime.actor_num_gpus_per_node}"
 
@@ -831,7 +816,9 @@ def build_slime_app(
         current_config = _build_conversion_config(slime, model=model)
 
         if os.path.exists(save_path):
-            complete = _has_torch_dist_checkpoint(save_path)
+            complete = has_torch_dist_checkpoint(
+                save_path, is_complete=_is_complete_torch_dist_checkpoint
+            )
             stale = True
             if complete:
                 config_path = os.path.join(save_path, _CONVERSION_CONFIG_FILE)
@@ -1093,6 +1080,8 @@ def build_slime_app(
         secrets=train_secrets or None,
         ephemeral_disk=train_ephemeral_disk,
         timeout=24 * 60 * 60,
+        retries=Retries(max_retries=10, initial_delay=0.0),
+        single_use_containers=True,
         experimental_options=train_experimental_options or None,
         serialized=True,
         name="train",
@@ -1141,7 +1130,7 @@ def build_slime_app(
         if slime.wandb is not None:
             wandb_entity = _preflight_wandb(slime.wandb)
 
-        wandb_run_id = training_run_id[:8] if slime.wandb else ""
+        wandb_run_id = ""
 
         print(f"Training run id: {training_run_id}")
         config_summary: dict = {
@@ -1187,6 +1176,25 @@ def build_slime_app(
                 framework_status=SlimeStatus.INITIALIZING,
                 created_at=created_at,
                 started_at=created_at,
+            )
+        attempt_count = mark_training_attempt_started(
+            run_record, started_at=int(time.time())
+        )
+        if slime.wandb is not None:
+            wandb_run_id = wandb_run_id_for_attempt(training_run_id, attempt_count)
+            run_record.config["wandb"]["run_id"] = wandb_run_id
+            record_wandb_attempt(
+                run_record,
+                entity=wandb_entity,
+                project=slime.wandb.project,
+                group=slime.wandb.group,
+                run_id=wandb_run_id,
+                attempt_count=attempt_count,
+            )
+        if attempt_count > 1:
+            print(
+                f"WARNING: training run {training_run_id} is retrying after preemption "
+                f"or interruption (attempt {attempt_count})."
             )
         if not framework_status_token:
             framework_status_token = _secrets.token_urlsafe(32)
@@ -1263,15 +1271,11 @@ def build_slime_app(
             configured_save_root = (
                 str(slime.save).rstrip("/") if slime.save else mounted_save_root
             )
-            base_save_root = (
+            save_root = run_scoped_save_root(
                 mounted_save_root
                 if configured_save_root == recipe_default_save_root
-                else configured_save_root
-            )
-            save_root = (
-                f"{mounted_save_root}/{training_run_id}"
-                if base_save_root == mounted_save_root
-                else configured_save_root
+                else configured_save_root,
+                training_run_id,
             )
             os.makedirs(save_root, exist_ok=True)
 
@@ -1291,10 +1295,17 @@ def build_slime_app(
                     else _snap0(model.model_name, local_files_only=True)
                 )
 
-            if _has_torch_dist_checkpoint(save_root):
+            resume_checkpoint = torch_dist_resume_checkpoint(
+                save_root, is_complete=_is_complete_torch_dist_checkpoint
+            )
+            record_resume_checkpoint(run_record, resume_checkpoint)
+            await run_record.save_async()
+
+            if resume_checkpoint is not None:
                 print(
-                    f"Detected existing checkpoint in {save_root}; "
-                    "will resume training from last saved iteration."
+                    f"WARNING: detected existing checkpoint in "
+                    f"{resume_checkpoint['resume_checkpoint_path']}; "
+                    "resuming training from last saved iteration."
                 )
                 object.__setattr__(slime, "load", save_root)
             elif (
@@ -1328,6 +1339,9 @@ def build_slime_app(
             wandb_env = {}
             if wandb_run_id:
                 wandb_env["WANDB_RUN_ID"] = wandb_run_id
+                wandb_env["WANDB_RESUME"] = "allow"
+            if wandb_entity:
+                wandb_env["WANDB_ENTITY"] = wandb_entity
 
             runtime_env = {
                 "env_vars": {
@@ -1381,14 +1395,23 @@ def build_slime_app(
             )
             await result.save_async()
             run_record.status = TrainingRunStatus.COMPLETED
+            mark_training_attempt_finished(
+                run_record, status="completed", ended_at=int(time.time())
+            )
             await checkpoints_volume.commit.aio()
             print(f"TrainResult saved: {training_run_id}")
             return result._to_dict()
         except KeyboardInterrupt:
             run_record.status = TrainingRunStatus.STOPPED
+            mark_training_attempt_finished(
+                run_record, status="stopped", ended_at=int(time.time())
+            )
             raise
         except BaseException:
             run_record.status = TrainingRunStatus.FAILED
+            mark_training_attempt_finished(
+                run_record, status="failed", ended_at=int(time.time())
+            )
             raise
         finally:
             finished_at = int(time.time())

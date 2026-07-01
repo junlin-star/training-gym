@@ -8,6 +8,7 @@
   import ConversationView from "../components/ConversationView.svelte";
   import AdvantageHeatmap from "../components/AdvantageHeatmap.svelte";
   import AdvantageSpreadChart from "../components/AdvantageSpreadChart.svelte";
+  import LineChart from "../components/LineChart.svelte";
   import ResizableTable from "../components/ResizableTable.svelte";
   import { fetchRunRollouts, fetchRollout, fetchRunAdvantages } from "../lib/api.js";
 
@@ -43,6 +44,13 @@
     const project = run?.config_summary?.wandb_project || "";
     return project ? `https://wandb.ai/home?search=${encodeURIComponent(project)}` : "";
   });
+  let wandbLinks = $derived.by(() =>
+    run?.wandb_links?.length
+      ? run.wandb_links
+      : wandbUrl
+        ? [{ label: "Open in W&B", url: wandbUrl }]
+        : [],
+  );
 
   // Active tab: "summary" | "rollouts" | "logs". Each tab loads only its own
   // data — rollout summaries for summary/rollouts, the log stream for logs.
@@ -51,6 +59,21 @@
   function formatMean(value) {
     if (typeof value !== "number" || !Number.isFinite(value)) return "—";
     return value.toFixed(3);
+  }
+
+  function resumeBadge(run) {
+    const state = run?.resume_state;
+    if (!state) return "";
+    const parts = [];
+    if (state.attempt_count > 1) parts.push(`attempt ${state.attempt_count}`);
+    if (state.resumed_from_checkpoint) {
+      parts.push(
+        state.resume_from_iteration != null
+          ? `resumed @ ${state.resume_from_iteration}`
+          : "resumed",
+      );
+    }
+    return parts.join(" · ");
   }
 
   // ── Rollouts (auto-refresh while run is running) ─────────────────────
@@ -494,30 +517,6 @@
     logDropped = 0;
   }
 
-  // Build an SVG polyline path for a per-rollout-step series (x = rollout_id).
-  function _rolloutLinePath(getY) {
-    const points = rolloutSummaries.map((r) => ({
-      x: Number(r.rollout_id) || 0,
-      y: getY(r),
-    }));
-    if (!points.length) return "";
-    const xs = points.map((p) => p.x);
-    const ys = points.map((p) => p.y);
-    const xMin = Math.min(...xs);
-    const xSpan = Math.max(...xs) - xMin || 1;
-    const yMin = Math.min(...ys);
-    const ySpan = Math.max(...ys) - yMin || 1;
-    const W = 640;
-    const H = 140;
-    return points
-      .map((p, i) => {
-        const x = ((p.x - xMin) / xSpan) * W;
-        const y = H - ((p.y - yMin) / ySpan) * (H - 4) - 2;
-        return `${i === 0 ? "M" : "L"} ${x.toFixed(1)} ${y.toFixed(1)}`;
-      })
-      .join(" ");
-  }
-
   function _seriesStats(getY) {
     if (!rolloutSummaries.length) return null;
     const values = rolloutSummaries.map(getY);
@@ -528,8 +527,14 @@
     };
   }
 
-  let chartPath = $derived(_rolloutLinePath((r) => Number(r.mean) || 0));
   let chartStats = $derived(_seriesStats((r) => Number(r.mean) || 0));
+  let rewardChartData = $derived(
+    rolloutSummaries.map((r) => ({
+      x: Number(r.rollout_id) || 0,
+      y: Number(r.mean) || 0,
+      rollout_id: Number(r.rollout_id) || 0,
+    })),
+  );
 
   // Score-distribution comparison: the first rollout (step 0) vs the most
   // recent one, to see how sample scores shifted over training.
@@ -609,17 +614,17 @@
             <span>Collapse</span>
           </button>
         {/if}
-        {#if wandbUrl}
+        {#each wandbLinks as link (link.url)}
           <a
             class="header-link wandb-link"
-            href={wandbUrl}
+            href={link.url}
             target="_blank"
             rel="noopener noreferrer"
           >
-            <span>Open in W&B</span>
+            <span>{link.label}</span>
             <ExternalLink size={12} strokeWidth={2.1} />
           </a>
-        {/if}
+        {/each}
         {#if run?.modal_app_url}
           <a
             class="header-link"
@@ -642,6 +647,9 @@
     <div class="detail-title-row">
       <h1 class="detail-title" title={run.run_id}>{run.run_id}</h1>
       <StatusPill status={getStatus(run)} />
+      {#if resumeBadge(run)}
+        <span class="resume-header-badge">{resumeBadge(run)}</span>
+      {/if}
     </div>
     {/if}
 
@@ -664,22 +672,25 @@
           {:else if !rolloutSummaries.length}
             <div class="empty">No rollouts recorded yet.</div>
           {:else}
-            <div class="rollout-chart">
-              <div class="rollout-chart-title">Reward</div>
-              {#if rolloutSummaries.length >= 2}
-                <svg viewBox="0 0 640 140" preserveAspectRatio="none" aria-hidden="true">
-                  <path d={chartPath} fill="none" stroke="var(--accent)" stroke-width="1.5" />
-                </svg>
-              {/if}
-              {#if chartStats}
-                <div class="rollout-chart-meta">
-                  <span>min {formatMean(chartStats.min)}</span>
-                  <span>latest {formatMean(chartStats.latest)}</span>
-                  <span>max {formatMean(chartStats.max)}</span>
-                </div>
-              {/if}
-            </div>
-            {#if hasAdvantages}
+            {#if rolloutSummaries.length}
+              <div class="rollout-chart">
+                <LineChart
+                  title="Reward"
+                  data={rewardChartData}
+                  formatX={(row) => `rollout ${row.rollout_id}`}
+                  formatY={(value) => formatMean(value)}
+                  ariaLabel="Reward chart"
+                />
+                {#if chartStats}
+                  <div class="rollout-chart-meta">
+                    <span>min {formatMean(chartStats.min)}</span>
+                    <span>latest {formatMean(chartStats.latest)}</span>
+                    <span>max {formatMean(chartStats.max)}</span>
+                  </div>
+                {/if}
+              </div>
+            {/if}
+            {#if rolloutSummaries.length && hasAdvantages}
               <div class="rollout-chart">
                 <div class="rollout-chart-title">Advantage spread over time</div>
                 <AdvantageSpreadChart steps={advantageSteps} />
@@ -689,49 +700,51 @@
                 <AdvantageHeatmap steps={advantageSteps} />
               </div>
             {/if}
-            <div class="rollout-chart">
-              <div class="rollout-chart-title">Score distribution</div>
-              {#if scoreDist}
-                <div class="dist-legend">
-                  <span class="dist-legend-item">
-                    <span class="dist-swatch swatch-first"></span>
-                    rollout {scoreDist.firstId}
-                  </span>
-                  {#if scoreDist.firstId !== scoreDist.lastId}
+            {#if rolloutSummaries.length}
+              <div class="rollout-chart">
+                <div class="rollout-chart-title">Score distribution</div>
+                {#if scoreDist}
+                  <div class="dist-legend">
                     <span class="dist-legend-item">
-                      <span class="dist-swatch swatch-last"></span>
-                      latest (rollout {scoreDist.lastId})
+                      <span class="dist-swatch swatch-first"></span>
+                      rollout {scoreDist.firstId}
                     </span>
-                  {/if}
-                </div>
-                <div class="dist-compare">
-                  {#each scoreDist.bins as bin, i (i)}
-                    <div
-                      class="dist-compare-bin"
-                      title={`reward ${formatMean(bin.lo)}–${formatMean(bin.hi)} · rollout ${scoreDist.firstId}: ${bin.first}, latest: ${bin.last}`}
-                    >
+                    {#if scoreDist.firstId !== scoreDist.lastId}
+                      <span class="dist-legend-item">
+                        <span class="dist-swatch swatch-last"></span>
+                        latest (rollout {scoreDist.lastId})
+                      </span>
+                    {/if}
+                  </div>
+                  <div class="dist-compare">
+                    {#each scoreDist.bins as bin, i (i)}
                       <div
-                        class="dist-compare-bar swatch-first"
-                        style:height={`${(bin.first / scoreDist.max) * 100}%`}
-                      ></div>
-                      {#if scoreDist.firstId !== scoreDist.lastId}
+                        class="dist-compare-bin"
+                        title={`reward ${formatMean(bin.lo)}–${formatMean(bin.hi)} · rollout ${scoreDist.firstId}: ${bin.first}, latest: ${bin.last}`}
+                      >
                         <div
-                          class="dist-compare-bar swatch-last"
-                          style:height={`${(bin.last / scoreDist.max) * 100}%`}
+                          class="dist-compare-bar swatch-first"
+                          style:height={`${(bin.first / scoreDist.max) * 100}%`}
                         ></div>
-                      {/if}
-                    </div>
-                  {/each}
-                </div>
-                <div class="dist-axis">
-                  <span>{formatMean(scoreDist.lo)}</span>
-                  <span class="dist-axis-label">reward</span>
-                  <span>{formatMean(scoreDist.hi)}</span>
-                </div>
-              {:else}
-                <div class="empty">Loading distribution…</div>
-              {/if}
-            </div>
+                        {#if scoreDist.firstId !== scoreDist.lastId}
+                          <div
+                            class="dist-compare-bar swatch-last"
+                            style:height={`${(bin.last / scoreDist.max) * 100}%`}
+                          ></div>
+                        {/if}
+                      </div>
+                    {/each}
+                  </div>
+                  <div class="dist-axis">
+                    <span>{formatMean(scoreDist.lo)}</span>
+                    <span class="dist-axis-label">reward</span>
+                    <span>{formatMean(scoreDist.hi)}</span>
+                  </div>
+                {:else}
+                  <div class="empty">Loading distribution…</div>
+                {/if}
+              </div>
+            {/if}
           {/if}
         </div>
         <aside class="summary-tab-side">
@@ -1108,6 +1121,7 @@
   .detail-header-actions {
     display: inline-flex;
     align-items: center;
+    flex-wrap: wrap;
     gap: 8px;
   }
 
@@ -1167,6 +1181,17 @@
     margin: 0;
     overflow: hidden;
     text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .resume-header-badge {
+    border: 1px solid color-mix(in srgb, var(--yellow, #fbbf24) 42%, transparent);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--yellow, #fbbf24) 10%, transparent);
+    color: var(--yellow, #fbbf24);
+    font-size: 12px;
+    line-height: 16px;
+    padding: 2px 8px;
     white-space: nowrap;
   }
 
@@ -1271,13 +1296,6 @@
     flex: 1;
     min-height: 1px;
     border-radius: 2px 2px 0 0;
-  }
-
-  .rollout-chart svg {
-    width: 100%;
-    height: 140px;
-    background: var(--color-c-gray-08, #1c1c1c);
-    border-radius: 6px;
   }
 
   .rollout-chart-meta {

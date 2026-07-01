@@ -104,6 +104,21 @@
     return `${label} ${progress.current} / ${progress.total}`;
   }
 
+  function resumeBadge(run) {
+    const state = run?.resume_state;
+    if (!state) return "";
+    const parts = [];
+    if (state.attempt_count > 1) parts.push(`attempt ${state.attempt_count}`);
+    if (state.resumed_from_checkpoint) {
+      parts.push(
+        state.resume_from_iteration != null
+          ? `resumed @ ${state.resume_from_iteration}`
+          : "resumed",
+      );
+    }
+    return parts.join(" · ");
+  }
+
   $effect(() => {
     if (drawerRunId && !allRuns.some((run) => run.run_id === drawerRunId)) {
       onCloseDrawer();
@@ -195,7 +210,12 @@
                 </td>
                 <td>
                   <button class="cell-open-button" onclick={() => selectRun(run.run_id)}>
-                    <StatusPill status={status} />
+                    <span class="status-stack">
+                      <StatusPill status={status} />
+                      {#if resumeBadge(run)}
+                        <span class="resume-badge">{resumeBadge(run)}</span>
+                      {/if}
+                    </span>
                   </button>
                 </td>
                 <td class="stage-cell">
@@ -292,6 +312,18 @@
                         <ExternalLink class="open-modal-link-icon" size={12} strokeWidth={2.1} />
                       </span>
                     {/if}
+                    {#each run.wandb_links || [] as link (link.url)}
+                      <a
+                        class="open-modal-link open-wandb-link"
+                        href={link.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        onclick={(event) => event.stopPropagation()}
+                      >
+                        <span class="open-modal-link-label">{link.label}</span>
+                        <ExternalLink class="open-modal-link-icon" size={12} strokeWidth={2.1} />
+                      </a>
+                    {/each}
                   </div>
                 </td>
               </tr>
@@ -478,6 +510,24 @@
     min-width: 0;
   }
 
+  .status-stack {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+  }
+
+  .resume-badge {
+    border: 1px solid color-mix(in srgb, var(--yellow, #fbbf24) 42%, transparent);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--yellow, #fbbf24) 10%, transparent);
+    color: var(--yellow, #fbbf24);
+    font-size: 11px;
+    line-height: 14px;
+    padding: 1px 6px;
+    white-space: nowrap;
+  }
+
   .created-cell,
   .updated-cell {
     white-space: nowrap;
@@ -508,20 +558,25 @@
     white-space: normal;
   }
 
+  .tags-cell {
+    height: auto;
+    vertical-align: top;
+  }
+
   .tag-pill-list {
     display: flex;
     flex-wrap: wrap;
     gap: 4px;
     min-width: 0;
+    max-width: 100%;
   }
 
   .tag-pill {
     display: inline-flex;
     align-items: baseline;
-    flex-wrap: wrap;
     max-width: 100%;
     min-width: 0;
-    overflow-wrap: anywhere;
+    overflow: hidden;
     padding: 2px 7px;
     border: 1px solid var(--border, #2f2f2f);
     border-radius: 999px;
@@ -534,8 +589,10 @@
 
   .tag-pill-key,
   .tag-pill-value {
-    white-space: normal;
-    overflow-wrap: anywhere;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .tag-pill-key {
@@ -554,6 +611,7 @@
   .modal-link-wrap {
     display: flex;
     align-items: center;
+    flex-wrap: wrap;
     gap: 6px;
   }
 
@@ -608,6 +666,19 @@
 
   .open-modal-link:hover {
     border-color: var(--border-strong);
+  }
+
+  .open-wandb-link {
+    border-color: color-mix(in srgb, var(--yellow, #fbbf24) 45%, transparent);
+  }
+
+  .open-wandb-link .open-modal-link-label,
+  :global(.open-wandb-link .open-modal-link-icon) {
+    color: var(--yellow, #fbbf24);
+  }
+
+  .open-wandb-link:hover {
+    border-color: color-mix(in srgb, var(--yellow, #fbbf24) 60%, transparent);
   }
 
   .open-modal-link-disabled {
