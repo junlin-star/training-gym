@@ -66,7 +66,7 @@
 
   function formatMean(value) {
     if (typeof value !== "number" || !Number.isFinite(value)) return "—";
-    return value.toFixed(2);
+    return value.toFixed(3);
   }
 
   // Map a rollout to its step timing. Step keys are 1-indexed; rollout ids are

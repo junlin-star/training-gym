@@ -46,12 +46,12 @@
     return SUBSTEP_COLORS[name] || "var(--color-c-gray-40, #5e5e5e)";
   }
 
-  // Durations are float seconds; keep up to 2 decimals (trailing zeros trimmed).
+  // Durations are float seconds; keep up to 3 decimals (trailing zeros trimmed).
   function fmtSecs(s) {
     if (s == null) return "—";
     const n = Number(s);
     if (!Number.isFinite(n)) return "—";
-    const trim = (x) => x.toFixed(2).replace(/\.?0+$/, "");
+    const trim = (x) => x.toFixed(3).replace(/\.?0+$/, "");
     if (n >= 60) {
       const m = Math.floor(n / 60);
       return `${m}m ${trim(n - m * 60)}s`;
