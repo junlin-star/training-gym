@@ -7,6 +7,7 @@
     PanelRightClose,
     Search,
   } from "lucide-svelte";
+  import ConversationView from "../components/ConversationView.svelte";
   import Drawer from "../components/Drawer.svelte";
   import MinimalTableSkeleton from "../components/MinimalTableSkeleton.svelte";
   import ResizableTable from "../components/ResizableTable.svelte";
@@ -821,7 +822,15 @@
                         <pre class="example-section-text">{promptText}</pre>
                       </div>
                     {/if}
-                    {#if row.parsed_response}
+                    {#if row.metadata?.trajectory_messages?.length}
+                      <div class="example-section">
+                        <span class="example-section-label">Trajectory</span>
+                        <ConversationView
+                          messages={row.metadata.trajectory_messages}
+                          response={row.response || ""}
+                        />
+                      </div>
+                    {:else if row.parsed_response}
                       {#if row.parsed_response.thinking}
                         <div class="example-section">
                           <span class="example-section-label">Thinking</span>

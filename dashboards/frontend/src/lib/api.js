@@ -37,13 +37,48 @@ function wandbSummary(fields) {
   const wandbProject = safeStr(fields.project || "");
   const wandbEntity = safeStr(fields.entity || "");
   const wandbRunId = safeStr(fields.runId || "");
+  const url = wandbUrl({ entity: wandbEntity, project: wandbProject, runId: wandbRunId });
   return {
     wandb_project: wandbProject,
     wandb_group: safeStr(fields.group || ""),
     wandb_entity: wandbEntity,
     wandb_training_run_id: wandbRunId,
-    wandb_url: wandbUrl({ entity: wandbEntity, project: wandbProject, runId: wandbRunId }),
+    wandb_url: url,
+    wandb_links: url ? [{ label: "W&B", url, run_id: wandbRunId }] : [],
   };
+}
+
+function wandbLinksFromAttempts(metadata) {
+  const attempts = Array.isArray(metadata?.wandb_attempts) ? metadata.wandb_attempts : [];
+  return attempts
+    .map((attempt) => {
+      if (!attempt || typeof attempt !== "object") return null;
+      const runId = safeStr(attempt.run_id || "");
+      const attemptNumber = Number(attempt.attempt) || 0;
+      const url = wandbUrl({
+        entity: attempt.entity,
+        project: attempt.project,
+        runId,
+      });
+      if (!url) return null;
+      return {
+        label: attemptNumber > 1 ? `W&B a${attemptNumber}` : "W&B",
+        url,
+        run_id: runId,
+        attempt: attemptNumber || null,
+      };
+    })
+    .filter(Boolean);
+}
+
+function dedupeWandbLinks(links) {
+  const seen = new Set();
+  return links.filter((link) => {
+    const key = link?.url || "";
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 function extractConfigSummary(config, trainingRunId = "") {
@@ -148,6 +183,24 @@ function summarizeProgress(metadata) {
   };
 }
 
+function summarizeResumeState(metadata) {
+  if (!metadata || typeof metadata !== "object") return null;
+  const attemptCount = Number(metadata.attempt_count) || 0;
+  const resumedFromCheckpoint =
+    metadata.resumed_from_checkpoint === true || Boolean(metadata.resume_checkpoint_path);
+  if (attemptCount <= 1 && !resumedFromCheckpoint) return null;
+  return {
+    attempt_count: attemptCount,
+    resumed_from_checkpoint: resumedFromCheckpoint,
+    resume_checkpoint_name: safeStr(metadata.resume_checkpoint_name || ""),
+    resume_checkpoint_path: safeStr(metadata.resume_checkpoint_path || ""),
+    resume_from_iteration: Number.isFinite(Number(metadata.resume_from_iteration))
+      ? Number(metadata.resume_from_iteration)
+      : null,
+    last_attempt_status: safeStr(metadata.last_attempt_status || ""),
+  };
+}
+
 export async function fetchRuns({ signal } = {}) {
   const [runsRes, resultsRes] = await Promise.all([
     fetch(`${SERVER}/runs`, { signal }),
@@ -197,6 +250,13 @@ export async function fetchRuns({ signal } = {}) {
             created_at: Number(metadata.latest_rollout.created_at) || 0,
           }
         : null;
+    const configSummary = extractConfigSummary(run.config, runId);
+    const trainResultSummary = trainResult ? summarizeTrainResult(trainResult) : null;
+    const wandbLinks = dedupeWandbLinks([
+      ...wandbLinksFromAttempts(metadata),
+      ...(trainResultSummary?.wandb_links || []),
+      ...(configSummary.wandb_links || []),
+    ]);
     return {
       training_run_id: runId,
       run_id: runId,
@@ -211,7 +271,7 @@ export async function fetchRuns({ signal } = {}) {
       deployment_id: safeStr(run.deployment_id || ""),
       group_id: safeStr(metadata?.group_id || ""),
       config: run.config || {},
-      config_summary: extractConfigSummary(run.config, runId),
+      config_summary: configSummary,
       created_at: run.created_at || 0,
       started_at: startedAt,
       ended_at: endedAt,
@@ -219,8 +279,10 @@ export async function fetchRuns({ signal } = {}) {
       updated_at: updatedAt,
       duration_seconds: durationSeconds,
       metadata,
+      resume_state: summarizeResumeState(metadata),
+      wandb_links: wandbLinks,
       has_train_result: !!trainResult,
-      train_result: trainResult ? summarizeTrainResult(trainResult) : null,
+      train_result: trainResultSummary,
     };
   });
 
@@ -294,6 +356,9 @@ export async function fetchRunRollouts(trainingRunId, { signal } = {}) {
       created_at: Number(item.created_at) || 0,
       total: Number(item.total) || 0,
       mean: typeof item.mean === "number" ? item.mean : Number(item.mean) || 0,
+      rollout_time: Number.isFinite(Number(item.rollout_time))
+        ? Number(item.rollout_time)
+        : null,
       error_summary: item.error_summary || null,
     }))
     .sort((a, b) => a.rollout_id - b.rollout_id);

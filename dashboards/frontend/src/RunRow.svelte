@@ -25,6 +25,10 @@
   let trainingRunId = $derived(result?.training_run_id || run.run_id || "");
   let modalAppUrl = $derived(run.modal_app_url || null);
   let wandbUrl = $derived(result?.wandb_url || summary.wandb_url || "");
+  let wandbLinks = $derived(
+    run.wandb_links?.length ? run.wandb_links : wandbUrl ? [{ label: "W&B", url: wandbUrl }] : [],
+  );
+  let resumeState = $derived(run.resume_state);
   let copiedTrainingRunId = $state(false);
   let copyResetTimer = null;
   let deployment = $derived(
@@ -160,6 +164,12 @@
           {truncateId(result.checkpoint_dir)}
         </div>
       {/if}
+      {#if resumeState}
+        <div class="result-meta retry-meta">
+          {resumeState.attempt_count > 1 ? `attempt ${resumeState.attempt_count}` : ""}
+          {resumeState.resumed_from_checkpoint ? " resumed" : ""}
+        </div>
+      {/if}
     {:else if run.status === "stopped" || run.status === "failed"}
       <span class="result-badge result-stopped">No result</span>
     {:else}
@@ -194,15 +204,15 @@
         onclick={(event) => event.stopPropagation()}>Modal</a
       >
     {/if}
-    {#if wandbUrl}
+    {#each wandbLinks as link (link.url)}
       <a
         class="pill-link pill-wandb"
-        href={wandbUrl}
+        href={link.url}
         target="_blank"
         rel="noopener noreferrer"
-        onclick={(event) => event.stopPropagation()}>W&B</a
+        onclick={(event) => event.stopPropagation()}>{link.label}</a
       >
-    {/if}
+    {/each}
     {#if result?.checkpoint_dir}
       <span class="tag" title={result.checkpoint_dir}>
         <strong>ckpt</strong>
@@ -337,6 +347,9 @@
     margin-top: 0.18rem;
     font-size: 0.7rem;
     color: var(--muted-strong);
+  }
+  .retry-meta {
+    color: var(--yellow);
   }
   .deployment-name {
     font-weight: 500;
