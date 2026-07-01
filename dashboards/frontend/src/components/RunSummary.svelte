@@ -25,6 +25,7 @@
     (run?.modal_app_id ? `https://modal.com/id/${run.modal_app_id}` : ""),
   );
   let groupTags = $derived(getGroupTags(run));
+  let wandbLinks = $derived(run?.wandb_links || []);
   let attemptMetadata = $derived.by(() => {
     const metadata = run?.metadata;
     if (!metadata || typeof metadata !== "object") return null;
@@ -212,6 +213,25 @@
       </section>
     {/if}
 
+    {#if wandbLinks.length}
+      <section class="summary-section">
+        <h3 class="summary-section-title">W&B</h3>
+        <div class="link-chip-list">
+          {#each wandbLinks as link (link.url)}
+            <a
+              class="link-chip wandb-chip"
+              href={link.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              title={link.run_id || link.url}
+            >
+              {link.label}
+            </a>
+          {/each}
+        </div>
+      </section>
+    {/if}
+
     {#if groupTags}
       <section class="summary-section">
         <h3 class="summary-section-title">Group</h3>
@@ -344,6 +364,31 @@
     color: var(--text);
     background: color-mix(in srgb, var(--panel-alt) 74%, black);
     padding: 2px 8px;
+  }
+
+  .link-chip-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .link-chip {
+    border: 1px solid var(--color-c-gray-10, #2f2f2f);
+    border-radius: 999px;
+    color: var(--accent);
+    font-size: 12px;
+    line-height: 16px;
+    padding: 2px 8px;
+    text-decoration: none;
+  }
+
+  .link-chip:hover {
+    text-decoration: underline;
+  }
+
+  .wandb-chip {
+    border-color: color-mix(in srgb, var(--yellow, #fbbf24) 45%, transparent);
+    color: var(--yellow, #fbbf24);
   }
 
   .tag-table {

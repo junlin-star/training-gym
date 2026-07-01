@@ -704,11 +704,9 @@ def fastapi_app():
         if isinstance(current_step, int) and current_step > 0:
             step_times = _step_times_dict()
             if step_event == "start":
-                step_times[f"{training_run_id}:{current_step}:start"] = int(time.time())
+                step_times[f"{training_run_id}:{current_step}:start"] = time.time()
             elif step_event == "finish":
-                step_times[f"{training_run_id}:{current_step}:finish"] = int(
-                    time.time()
-                )
+                step_times[f"{training_run_id}:{current_step}:finish"] = time.time()
         await run.save_async()
         invalidate_cache("runs")
         return JSONResponse({"status": "ok", "framework_status": status.value})
