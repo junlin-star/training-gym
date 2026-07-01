@@ -116,6 +116,8 @@ class TrainingRolloutResult(BaseModel):
             "total": self.total,
             "mean": self.mean,
         }
+        if self.rollout_time is not None:
+            summary["rollout_time"] = self.rollout_time
         err = self.error_summary
         if err:
             summary["error_summary"] = err
