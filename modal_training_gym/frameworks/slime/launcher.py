@@ -1386,14 +1386,15 @@ def build_slime_app(
             )
 
             step_times_read = False
-            try:
-                (
-                    latest_run_record.step_times,
-                    latest_run_record.substep_times,
-                ) = write_step_times(training_run_id, slime.num_rollout)
-                step_times_read = True
-            except Exception as exc:
-                print(f"Failed to read step times: {exc}")
+            if not slime.async_mode:
+                try:
+                    (
+                        latest_run_record.step_times,
+                        latest_run_record.substep_times,
+                    ) = write_step_times(training_run_id, slime.num_rollout)
+                    step_times_read = True
+                except Exception as exc:
+                    print(f"Failed to read step times: {exc}")
 
             try:
                 await latest_run_record.save_async()
