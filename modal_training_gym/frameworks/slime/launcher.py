@@ -939,16 +939,16 @@ def build_slime_app(
     if train_function_kwargs:
         unsupported = ", ".join(sorted(train_function_kwargs))
         raise TypeError(f"Unsupported slime.train_function_kwargs keys: {unsupported}")
-
+ 
     SUBSTEP_ORDER = [
         SlimeStatus.EVAL_ROLLOUT_LOGGING.value,
         SlimeStatus.ROLLOUT_LOGGING.value,
         SlimeStatus.OFFLOAD_ROLLOUT.value,
         SlimeStatus.COMPUTE_LOG_PROBS.value,
         SlimeStatus.OPTIMIZER_STEP.value,
-        SlimeStatus.WEIGHT_SYNC.value,
         SlimeStatus.CHECKPOINT_SAVE.value,
         SlimeStatus.OFFLOAD_TRAIN.value,
+        SlimeStatus.WEIGHT_SYNC.value,
         f"{SlimeStatus.EVAL_ROLLOUT_LOGGING.value}_end",
     ]
     OPTIONAL_SUBSTEPS = {

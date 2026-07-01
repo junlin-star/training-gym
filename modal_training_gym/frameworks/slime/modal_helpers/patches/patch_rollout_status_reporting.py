@@ -417,9 +417,7 @@ def _patch_file(path: Path) -> None:
         src, eval_begin_count = eval_begin_pattern.subn(
             _eval_begin_replacement, src, count=1
         )
-
-    # Runs AFTER the substep_finish injection above: substep_finish only appends
-    # lines after the block, leaving this guard+body intact to match here.
+ 
     eval_end_count = 0
     if needs_eval_end:
         eval_end_pattern = re.compile(
@@ -442,37 +440,66 @@ def _patch_file(path: Path) -> None:
 
         src, eval_end_count = eval_end_pattern.subn(_eval_end_replacement, src, count=1)
 
-    weight_sync_count = 0
-    if needs_weight_sync or needs_generate_rollout:
-        weight_sync_pattern = re.compile(
+    generate_rollout_count = 0
+    if needs_generate_rollout:
+        generate_rollout_pattern = re.compile(
             r"^(?P<indent>[ \t]*)(?P<call>(?:await[ \t]+)?(?:[A-Za-z_][A-Za-z0-9_]*\.)?update_weights\(\))",
             re.M,
         )
 
-        def _weight_sync_replacement(match: re.Match[str]) -> str:
+        def _generate_rollout_replacement(match: re.Match[str]) -> str:
             indent = match.group("indent")
             call = match.group("call")
-            lines = []
-            if needs_weight_sync:
-                lines.extend(
-                    [
-                        f"{indent}# {WEIGHT_SYNC_MARKER}: weight sync state",
-                        f"{indent}_tg_report_weight_sync(args)",
-                    ]
-                )
-            lines.append(f"{indent}{call}")
-            if needs_generate_rollout:
-                lines.extend(
-                    [
-                        f"{indent}# {GENERATE_ROLLOUT_MARKER}: rollout generation state",
-                        f"{indent}_tg_report_generate_rollouts(args)",
-                    ]
-                )
-            return "\n".join(lines)
+            return (
+                f"{indent}{call}\n"
+                f"{indent}# {GENERATE_ROLLOUT_MARKER}: rollout generation state\n"
+                f"{indent}_tg_report_generate_rollouts(args)"
+            )
 
-        src, weight_sync_count = weight_sync_pattern.subn(
-            _weight_sync_replacement, src, count=1
+        src, generate_rollout_count = generate_rollout_pattern.subn(
+            _generate_rollout_replacement, src, count=1
         )
+ 
+    weight_sync_count = 0
+    if needs_weight_sync:
+        weight_sync_pattern = re.compile(
+            r"^(?P<indent>[ \t]*)(?:[A-Za-z_][A-Za-z0-9_]*\.)?update_weights\(\)[ \t]*(?P<newline>\r?\n?)$"
+        )
+        lines = src.splitlines(keepends=True)
+        patched_lines = []
+        in_rollout_loop = False
+        loop_indent = ""
+        for line in lines:
+            loop_match = re.match(
+                r"^(?P<indent>[ \t]*)for[ \t]+rollout_id[ \t]+in[ \t]+.*:",
+                line,
+            )
+            if loop_match:
+                in_rollout_loop = True
+                loop_indent = loop_match.group("indent")
+                patched_lines.append(line)
+                continue
+            if not in_rollout_loop or not line.strip():
+                patched_lines.append(line)
+                continue
+            indent = line[: len(line) - len(line.lstrip(" \t"))]
+            if len(indent) <= len(loop_indent):
+                in_rollout_loop = False
+                patched_lines.append(line)
+                continue
+            if weight_sync_count == 0:
+                weight_sync_match = weight_sync_pattern.match(line)
+                if weight_sync_match:
+                    newline = weight_sync_match.group("newline") or "\n"
+                    patched_lines.extend(
+                        [
+                            f"{indent}# {WEIGHT_SYNC_MARKER}: weight sync state{newline}",
+                            f"{indent}_tg_report_weight_sync(args, rollout_id){newline}",
+                        ]
+                    )
+                    weight_sync_count += 1
+            patched_lines.append(line)
+        src = "".join(patched_lines)
 
     step_finish_count = 0
     if needs_step_finish:
@@ -518,8 +545,10 @@ def _patch_file(path: Path) -> None:
     failed = []
     if needs_rollout and rollout_count != 1:
         failed.append("rollout init")
-    if (needs_weight_sync or needs_generate_rollout) and weight_sync_count != 1:
+    if needs_weight_sync and weight_sync_count != 1:
         failed.append("weight sync")
+    if needs_generate_rollout and generate_rollout_count != 1:
+        failed.append("generate rollout")
     if needs_compute_log_probs and compute_log_probs_count < 1:
         failed.append("compute log probs")
     if needs_step_finish and step_finish_count != 1:
