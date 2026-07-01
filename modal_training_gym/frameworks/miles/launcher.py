@@ -15,7 +15,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 import cloudpickle
-from modal import App, Image, Secret, Volume
+from modal import App, Image, Retries, Secret, Volume
 from modal.experimental import clustered
 
 from modal_training_gym.common import COMMON_TRAINING_GYM_TAGS, hf_secrets
@@ -30,7 +30,18 @@ from modal_training_gym.common.modal_refs import register_modal_cloudpickle_redu
 from modal_training_gym.common.modal_urls import modal_app_dashboard_url
 from modal_training_gym.common.models import ModelConfig
 from modal_training_gym.common.ray_cluster import ModalRayCluster
-from modal_training_gym.common.run import TrainingRun, TrainingRunStatus
+from modal_training_gym.common.run import (
+    TrainingRun,
+    TrainingRunStatus,
+    has_torch_dist_checkpoint,
+    mark_training_attempt_finished,
+    mark_training_attempt_started,
+    record_resume_checkpoint,
+    record_wandb_attempt,
+    run_scoped_save_root,
+    torch_dist_resume_checkpoint,
+    wandb_run_id_for_attempt,
+)
 from modal_training_gym.common.status import MilesStatus
 from modal_training_gym.common.train_result import TrainResult
 from modal_training_gym.utils.metadata import MetadataStore, vol_put_async
@@ -72,33 +83,6 @@ def _build_miles_base_image(miles: MilesConfig) -> Image:
     if miles.image_run_commands:
         image = image.run_commands(*miles.image_run_commands)
     return image
-
-
-def _has_torch_dist_checkpoint(save_path: str) -> bool:
-    if not os.path.isdir(save_path):
-        return False
-
-    tracker_path = os.path.join(save_path, "latest_checkpointed_iteration.txt")
-    if os.path.isfile(tracker_path):
-        try:
-            with open(tracker_path) as f:
-                marker = f.read().strip()
-        except OSError:
-            marker = ""
-        if marker == "release":
-            return os.path.isdir(os.path.join(save_path, "release"))
-        if marker.isdigit():
-            iter_dir = f"iter_{int(marker):07d}"
-            return os.path.isdir(os.path.join(save_path, iter_dir))
-
-    try:
-        return any(
-            entry.is_dir()
-            and (entry.name == "release" or entry.name.startswith("iter_"))
-            for entry in os.scandir(save_path)
-        )
-    except OSError:
-        return False
 
 
 def build_miles_app(
@@ -392,7 +376,7 @@ def build_miles_app(
             miles, model=model
         )
 
-        if _has_torch_dist_checkpoint(save_path):
+        if has_torch_dist_checkpoint(save_path):
             print(
                 f"Found existing torch_dist checkpoint at {save_path}; skipping conversion."
             )
@@ -479,6 +463,8 @@ def build_miles_app(
             ),
         ],
         timeout=24 * 60 * 60,
+        retries=Retries(max_retries=10, initial_delay=0.0),
+        single_use_containers=True,
         experimental_options={"efa_enabled": True} if _multi_node else {},
         serialized=True,
         name="train",
@@ -526,7 +512,7 @@ def build_miles_app(
                 from modal_training_gym.common.wandb import preflight_wandb
 
                 wandb_entity = preflight_wandb(miles.wandb)
-            wandb_run_id = training_run_id[:8] if miles.wandb else ""
+            wandb_run_id = ""
 
             print(f"Training run id: {training_run_id}")
             config_summary = {
@@ -574,6 +560,25 @@ def build_miles_app(
                     framework_status=MilesStatus.INITIALIZING,
                     created_at=created_at,
                     started_at=created_at,
+                )
+            attempt_count = mark_training_attempt_started(
+                run_record, started_at=int(time.time())
+            )
+            if miles.wandb is not None:
+                wandb_run_id = wandb_run_id_for_attempt(training_run_id, attempt_count)
+                run_record.config["wandb"]["run_id"] = wandb_run_id
+                record_wandb_attempt(
+                    run_record,
+                    entity=wandb_entity,
+                    project=miles.wandb.project,
+                    group=miles.wandb.group,
+                    run_id=wandb_run_id,
+                    attempt_count=attempt_count,
+                )
+            if attempt_count > 1:
+                print(
+                    f"WARNING: training run {training_run_id} is retrying after preemption "
+                    f"or interruption (attempt {attempt_count})."
                 )
             if not framework_status_token:
                 framework_status_token = _secrets.token_urlsafe(32)
@@ -653,6 +658,9 @@ def build_miles_app(
                 if run_record is not None:
                     finished_at = int(time.time())
                     run_record.status = TrainingRunStatus.FAILED
+                    mark_training_attempt_finished(
+                        run_record, status="failed", ended_at=finished_at
+                    )
                     run_record.ended_at = finished_at
                     run_record.completed_at = finished_at
                     run_record.duration_seconds = max(
@@ -704,25 +712,26 @@ def build_miles_app(
             configured_save_root = (
                 str(miles.save).rstrip("/") if miles.save else mounted_save_root
             )
-            base_save_root = (
+            save_root = run_scoped_save_root(
                 mounted_save_root
                 if configured_save_root == recipe_default_save_root
-                else configured_save_root
-            )
-            save_root = (
-                f"{mounted_save_root}/{training_run_id}"
-                if base_save_root == mounted_save_root
-                else configured_save_root
+                else configured_save_root,
+                training_run_id,
             )
             os.makedirs(save_root, exist_ok=True)
 
             original_save = miles.save
             original_load = miles.load
             miles.save = save_root
-            if _has_torch_dist_checkpoint(save_root):
+            resume_checkpoint = torch_dist_resume_checkpoint(save_root)
+            record_resume_checkpoint(run_record, resume_checkpoint)
+            await run_record.save_async()
+
+            if resume_checkpoint is not None:
                 print(
-                    f"Detected existing checkpoint in {save_root}; "
-                    "will resume training from last saved iteration."
+                    f"WARNING: detected existing checkpoint in "
+                    f"{resume_checkpoint['resume_checkpoint_path']}; "
+                    "resuming training from last saved iteration."
                 )
                 miles.load = save_root
             try:
@@ -734,6 +743,9 @@ def build_miles_app(
             wandb_env = {}
             if wandb_run_id:
                 wandb_env["WANDB_RUN_ID"] = wandb_run_id
+                wandb_env["WANDB_RESUME"] = "allow"
+            if wandb_entity:
+                wandb_env["WANDB_ENTITY"] = wandb_entity
 
             runtime_env = {
                 "env_vars": {
@@ -775,14 +787,23 @@ def build_miles_app(
             )
             await result.save_async()
             run_record.status = TrainingRunStatus.COMPLETED
+            mark_training_attempt_finished(
+                run_record, status="completed", ended_at=int(time.time())
+            )
             await checkpoints_volume.commit.aio()
             print(f"TrainResult saved: {training_run_id}")
             return result._to_dict()
         except KeyboardInterrupt:
             run_record.status = TrainingRunStatus.STOPPED
+            mark_training_attempt_finished(
+                run_record, status="stopped", ended_at=int(time.time())
+            )
             raise
         except BaseException:
             run_record.status = TrainingRunStatus.FAILED
+            mark_training_attempt_finished(
+                run_record, status="failed", ended_at=int(time.time())
+            )
             raise
         finally:
             finished_at = int(time.time())
