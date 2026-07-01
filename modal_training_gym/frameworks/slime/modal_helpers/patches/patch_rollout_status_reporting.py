@@ -417,7 +417,7 @@ def _patch_file(path: Path) -> None:
         src, eval_begin_count = eval_begin_pattern.subn(
             _eval_begin_replacement, src, count=1
         )
- 
+
     eval_end_count = 0
     if needs_eval_end:
         eval_end_pattern = re.compile(
@@ -459,7 +459,7 @@ def _patch_file(path: Path) -> None:
         src, generate_rollout_count = generate_rollout_pattern.subn(
             _generate_rollout_replacement, src, count=1
         )
- 
+
     weight_sync_count = 0
     if needs_weight_sync:
         weight_sync_pattern = re.compile(

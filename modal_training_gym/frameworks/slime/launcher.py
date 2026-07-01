@@ -939,7 +939,7 @@ def build_slime_app(
     if train_function_kwargs:
         unsupported = ", ".join(sorted(train_function_kwargs))
         raise TypeError(f"Unsupported slime.train_function_kwargs keys: {unsupported}")
- 
+
     SUBSTEP_ORDER = [
         SlimeStatus.EVAL_ROLLOUT_LOGGING.value,
         SlimeStatus.ROLLOUT_LOGGING.value,

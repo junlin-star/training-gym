@@ -727,7 +727,7 @@ def fastapi_app():
                     step_times[substep_key] = event_time
             elif not step_event and status.value == "evaluate_rollouts":
                 pass
-            elif step_event == "finish": 
+            elif step_event == "finish":
                 pass
             else:
                 substep_key = f"{training_run_id}:{current_step}:substep:{status.value}"
