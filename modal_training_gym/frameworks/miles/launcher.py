@@ -30,15 +30,18 @@ from modal_training_gym.common.modal_refs import register_modal_cloudpickle_redu
 from modal_training_gym.common.modal_urls import modal_app_dashboard_url
 from modal_training_gym.common.models import ModelConfig
 from modal_training_gym.common.ray_cluster import ModalRayCluster
-from modal_training_gym.common.resume import (
+from modal_training_gym.common.run import (
+    TrainingRun,
+    TrainingRunStatus,
     has_torch_dist_checkpoint,
     mark_training_attempt_finished,
     mark_training_attempt_started,
     record_resume_checkpoint,
+    record_wandb_attempt,
     run_scoped_save_root,
     torch_dist_resume_checkpoint,
+    wandb_run_id_for_attempt,
 )
-from modal_training_gym.common.run import TrainingRun, TrainingRunStatus
 from modal_training_gym.common.status import MilesStatus
 from modal_training_gym.common.train_result import TrainResult
 from modal_training_gym.utils.metadata import MetadataStore, vol_put_async
@@ -509,7 +512,7 @@ def build_miles_app(
                 from modal_training_gym.common.wandb import preflight_wandb
 
                 wandb_entity = preflight_wandb(miles.wandb)
-            wandb_run_id = training_run_id[:8] if miles.wandb else ""
+            wandb_run_id = ""
 
             print(f"Training run id: {training_run_id}")
             config_summary = {
@@ -558,7 +561,25 @@ def build_miles_app(
                     created_at=created_at,
                     started_at=created_at,
                 )
-            mark_training_attempt_started(run_record, started_at=int(time.time()))
+            attempt_count = mark_training_attempt_started(
+                run_record, started_at=int(time.time())
+            )
+            if miles.wandb is not None:
+                wandb_run_id = wandb_run_id_for_attempt(training_run_id, attempt_count)
+                run_record.config["wandb"]["run_id"] = wandb_run_id
+                record_wandb_attempt(
+                    run_record,
+                    entity=wandb_entity,
+                    project=miles.wandb.project,
+                    group=miles.wandb.group,
+                    run_id=wandb_run_id,
+                    attempt_count=attempt_count,
+                )
+            if attempt_count > 1:
+                print(
+                    f"WARNING: training run {training_run_id} is retrying after preemption "
+                    f"or interruption (attempt {attempt_count})."
+                )
             if not framework_status_token:
                 framework_status_token = _secrets.token_urlsafe(32)
             await run_record.save_async()
@@ -637,6 +658,9 @@ def build_miles_app(
                 if run_record is not None:
                     finished_at = int(time.time())
                     run_record.status = TrainingRunStatus.FAILED
+                    mark_training_attempt_finished(
+                        run_record, status="failed", ended_at=finished_at
+                    )
                     run_record.ended_at = finished_at
                     run_record.completed_at = finished_at
                     run_record.duration_seconds = max(
@@ -705,8 +729,9 @@ def build_miles_app(
 
             if resume_checkpoint is not None:
                 print(
-                    f"Detected existing checkpoint in {resume_checkpoint['resume_checkpoint_path']}; "
-                    "will resume training from last saved iteration."
+                    f"WARNING: detected existing checkpoint in "
+                    f"{resume_checkpoint['resume_checkpoint_path']}; "
+                    "resuming training from last saved iteration."
                 )
                 miles.load = save_root
             try:

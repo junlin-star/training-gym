@@ -49,15 +49,18 @@ from modal_training_gym.common.ray_cluster import (
     _supports_rdma,
     clustered_if,
 )
-from modal_training_gym.common.resume import (
+from modal_training_gym.common.run import (
+    TrainingRun,
+    TrainingRunStatus,
     has_torch_dist_checkpoint,
     mark_training_attempt_finished,
     mark_training_attempt_started,
     record_resume_checkpoint,
+    record_wandb_attempt,
     run_scoped_save_root,
     torch_dist_resume_checkpoint,
+    wandb_run_id_for_attempt,
 )
-from modal_training_gym.common.run import TrainingRun, TrainingRunStatus
 from modal_training_gym.common.wandb import WandbConfig
 from modal_training_gym.common.status import SlimeStatus
 from modal_training_gym.common.train_result import TrainResult
@@ -1035,7 +1038,7 @@ def build_slime_app(
         if slime.wandb is not None:
             wandb_entity = _preflight_wandb(slime.wandb)
 
-        wandb_run_id = training_run_id[:8] if slime.wandb else ""
+        wandb_run_id = ""
 
         print(f"Training run id: {training_run_id}")
         config_summary: dict = {
@@ -1082,7 +1085,25 @@ def build_slime_app(
                 created_at=created_at,
                 started_at=created_at,
             )
-        mark_training_attempt_started(run_record, started_at=int(time.time()))
+        attempt_count = mark_training_attempt_started(
+            run_record, started_at=int(time.time())
+        )
+        if slime.wandb is not None:
+            wandb_run_id = wandb_run_id_for_attempt(training_run_id, attempt_count)
+            run_record.config["wandb"]["run_id"] = wandb_run_id
+            record_wandb_attempt(
+                run_record,
+                entity=wandb_entity,
+                project=slime.wandb.project,
+                group=slime.wandb.group,
+                run_id=wandb_run_id,
+                attempt_count=attempt_count,
+            )
+        if attempt_count > 1:
+            print(
+                f"WARNING: training run {training_run_id} is retrying after preemption "
+                f"or interruption (attempt {attempt_count})."
+            )
         if not framework_status_token:
             framework_status_token = _secrets.token_urlsafe(32)
         await run_record.save_async()
@@ -1190,8 +1211,9 @@ def build_slime_app(
 
             if resume_checkpoint is not None:
                 print(
-                    f"Detected existing checkpoint in {resume_checkpoint['resume_checkpoint_path']}; "
-                    "will resume training from last saved iteration."
+                    f"WARNING: detected existing checkpoint in "
+                    f"{resume_checkpoint['resume_checkpoint_path']}; "
+                    "resuming training from last saved iteration."
                 )
                 object.__setattr__(slime, "load", save_root)
             elif (
