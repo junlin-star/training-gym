@@ -690,59 +690,61 @@
                 {/if}
               </div>
             {/if}
-            {#if rolloutSummaries.length && hasAdvantages}
-              <div class="rollout-chart">
-                <div class="rollout-chart-title">Advantage spread over time</div>
-                <AdvantageSpreadChart steps={advantageSteps} />
-              </div>
-              <div class="rollout-chart">
-                <div class="rollout-chart-title">Advantage distribution over time</div>
-                <AdvantageHeatmap steps={advantageSteps} />
-              </div>
-            {/if}
             {#if rolloutSummaries.length}
-              <div class="rollout-chart">
-                <div class="rollout-chart-title">Score distribution</div>
-                {#if scoreDist}
-                  <div class="dist-legend">
-                    <span class="dist-legend-item">
-                      <span class="dist-swatch swatch-first"></span>
-                      rollout {scoreDist.firstId}
-                    </span>
-                    {#if scoreDist.firstId !== scoreDist.lastId}
-                      <span class="dist-legend-item">
-                        <span class="dist-swatch swatch-last"></span>
-                        latest (rollout {scoreDist.lastId})
-                      </span>
-                    {/if}
+              <div class="chart-grid">
+                {#if hasAdvantages}
+                  <div class="rollout-chart">
+                    <div class="rollout-chart-title">Advantage spread over time</div>
+                    <AdvantageSpreadChart steps={advantageSteps} />
                   </div>
-                  <div class="dist-compare">
-                    {#each scoreDist.bins as bin, i (i)}
-                      <div
-                        class="dist-compare-bin"
-                        title={`reward ${formatMean(bin.lo)}–${formatMean(bin.hi)} · rollout ${scoreDist.firstId}: ${bin.first}, latest: ${bin.last}`}
-                      >
-                        <div
-                          class="dist-compare-bar swatch-first"
-                          style:height={`${(bin.first / scoreDist.max) * 100}%`}
-                        ></div>
-                        {#if scoreDist.firstId !== scoreDist.lastId}
-                          <div
-                            class="dist-compare-bar swatch-last"
-                            style:height={`${(bin.last / scoreDist.max) * 100}%`}
-                          ></div>
-                        {/if}
-                      </div>
-                    {/each}
+                  <div class="rollout-chart">
+                    <div class="rollout-chart-title">Advantage distribution over time</div>
+                    <AdvantageHeatmap steps={advantageSteps} />
                   </div>
-                  <div class="dist-axis">
-                    <span>{formatMean(scoreDist.lo)}</span>
-                    <span class="dist-axis-label">reward</span>
-                    <span>{formatMean(scoreDist.hi)}</span>
-                  </div>
-                {:else}
-                  <div class="empty">Loading distribution…</div>
                 {/if}
+                <div class="rollout-chart">
+                  <div class="rollout-chart-title">Score distribution</div>
+                  {#if scoreDist}
+                    <div class="dist-legend">
+                      <span class="dist-legend-item">
+                        <span class="dist-swatch swatch-first"></span>
+                        rollout {scoreDist.firstId}
+                      </span>
+                      {#if scoreDist.firstId !== scoreDist.lastId}
+                        <span class="dist-legend-item">
+                          <span class="dist-swatch swatch-last"></span>
+                          latest (rollout {scoreDist.lastId})
+                        </span>
+                      {/if}
+                    </div>
+                    <div class="dist-compare">
+                      {#each scoreDist.bins as bin, i (i)}
+                        <div
+                          class="dist-compare-bin"
+                          title={`reward ${formatMean(bin.lo)}–${formatMean(bin.hi)} · rollout ${scoreDist.firstId}: ${bin.first}, latest: ${bin.last}`}
+                        >
+                          <div
+                            class="dist-compare-bar swatch-first"
+                            style:height={`${(bin.first / scoreDist.max) * 100}%`}
+                          ></div>
+                          {#if scoreDist.firstId !== scoreDist.lastId}
+                            <div
+                              class="dist-compare-bar swatch-last"
+                              style:height={`${(bin.last / scoreDist.max) * 100}%`}
+                            ></div>
+                          {/if}
+                        </div>
+                      {/each}
+                    </div>
+                    <div class="dist-axis">
+                      <span>{formatMean(scoreDist.lo)}</span>
+                      <span class="dist-axis-label">reward</span>
+                      <span>{formatMean(scoreDist.hi)}</span>
+                    </div>
+                  {:else}
+                    <div class="empty">Loading distribution…</div>
+                  {/if}
+                </div>
               </div>
             {/if}
           {/if}
@@ -1212,6 +1214,14 @@
   .summary-tab-side {
     border-left: 1px solid var(--border, #2f2f2f);
     padding-left: 24px;
+    /* Keep the summary sections (status / retry-resume / W&B / group / full
+       slime params) in view while the charts scroll, and let the panel scroll
+       internally when it outgrows the viewport. */
+    position: sticky;
+    top: 20px;
+    max-height: calc(100vh - 40px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
   }
 
   .logs-statusbar {
@@ -1231,11 +1241,35 @@
       padding-left: 0;
       border-top: 1px solid var(--border, #2f2f2f);
       padding-top: 16px;
+      /* Stacked below the charts on mobile — flow naturally, no inner scroll. */
+      position: static;
+      max-height: none;
+      overflow-y: visible;
     }
   }
 
   .rollout-chart {
     margin-bottom: 20px;
+  }
+
+  /* Score + advantage charts share a 2-column grid on desktop, stacking on
+     mobile. Children drop their own bottom margin in favour of the grid gap. */
+  .chart-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 20px;
+    margin-bottom: 20px;
+  }
+
+  .chart-grid .rollout-chart {
+    margin-bottom: 0;
+    min-width: 0;
+  }
+
+  @media (max-width: 900px) {
+    .chart-grid {
+      grid-template-columns: 1fr;
+    }
   }
 
   .rollout-chart-title {
