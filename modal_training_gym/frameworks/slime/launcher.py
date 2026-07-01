@@ -27,7 +27,7 @@ import textwrap
 import time
 from pathlib import Path, PurePosixPath
 from typing import Any
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from enum import Enum
 from modal import App, Dict as ModalDict, Image, Secret, Volume
 
@@ -272,6 +272,98 @@ def _preflight_wandb(wandb_cfg: WandbConfig) -> str:
     from modal_training_gym.common.wandb import preflight_wandb
 
     return preflight_wandb(wandb_cfg)
+
+
+def aggregate_step_times(
+    step_times_dict: Mapping[str, Any],
+    run_id: str,
+    num_steps: int,
+    SUBSTEP_ORDER: list[str],
+    OPTIONAL_SUBSTEPS: set[str],
+) -> tuple[
+    dict[str, dict[str, float | None]],
+    dict[str, dict[str, dict[str, float | None]]],
+]:
+    step_times: dict[str, dict[str, float | None]] = {}
+    substep_times: dict[str, dict[str, dict[str, float | None]]] = {}
+
+    for current_step_num in range(1, num_steps + 1):
+        start_key = f"{run_id}:{current_step_num}:start"
+        finish_key = f"{run_id}:{current_step_num}:finish"
+
+        start_time = step_times_dict.get(start_key)
+        end_time = step_times_dict.get(finish_key)
+        if start_time is not None:
+            start_time = float(start_time)
+        if end_time is not None:
+            end_time = float(end_time)
+
+        duration = None
+        if start_time is not None and end_time is not None:
+            duration = round(end_time - start_time, 2)
+
+        step_times[f"{current_step_num}"] = {
+            "start": start_time,
+            "end": end_time,
+            "duration_s": duration,
+        }
+
+        substep_start_boundary = step_times_dict.get(
+            f"{run_id}:{current_step_num}:substep_start"
+        )
+        full_step_start_time = (
+            float(substep_start_boundary)
+            if substep_start_boundary is not None
+            else start_time
+        )
+        full_step_end_time = step_times_dict.get(
+            f"{run_id}:{current_step_num}:substep_finish"
+        )
+        if full_step_end_time is not None:
+            full_step_end_time = float(full_step_end_time)
+        else:
+            full_step_end_time = end_time
+
+        substep_times[f"{current_step_num}"] = {}
+        eval_before = SlimeStatus.EVAL_ROLLOUT_LOGGING.value
+        present: set[str] = set()
+        recorded: list[tuple[float, int, str]] = []
+        for order_idx, substep in enumerate(SUBSTEP_ORDER):
+            substep_start = step_times_dict.get(
+                f"{run_id}:{current_step_num}:substep:{substep}"
+            )
+            if substep_start is None:
+                continue
+            substep_start = float(substep_start)
+            if full_step_start_time is not None and substep != eval_before:
+                substep_start = max(substep_start, full_step_start_time)
+            if full_step_end_time is not None:
+                substep_start = min(substep_start, full_step_end_time)
+            present.add(substep)
+            recorded.append((substep_start, order_idx, substep))
+        recorded.sort()
+
+        for idx, (substep_start, order_idx, substep) in enumerate(recorded):
+            if idx + 1 < len(recorded):
+                next_start, next_idx = recorded[idx + 1][0], recorded[idx + 1][1]
+            else:
+                next_start, next_idx = full_step_end_time, len(SUBSTEP_ORDER)
+
+            gap = SUBSTEP_ORDER[order_idx + 1 : next_idx]
+            dropped_mandatory = any(
+                s not in OPTIONAL_SUBSTEPS and s not in present for s in gap
+            )
+            if next_start is None or dropped_mandatory:
+                substep_duration = None
+            else:
+                substep_duration = round(max(next_start - substep_start, 0.0), 3)
+
+            substep_times[f"{current_step_num}"][substep] = {
+                "start": round(substep_start, 3),
+                "duration_s": substep_duration,
+            }
+
+    return step_times, substep_times
 
 
 def build_slime_app(
@@ -966,102 +1058,30 @@ def build_slime_app(
         step_times_dict = ModalDict.from_name(
             "training-gym-step-times", create_if_missing=True
         )
+        return aggregate_step_times(
+            step_times_dict,
+            run_id,
+            num_steps,
+            SUBSTEP_ORDER,
+            OPTIONAL_SUBSTEPS,
+        )
 
-        step_times: dict[str, dict[str, float | None]] = {}
-        substep_times: dict[str, dict[str, dict[str, float | None]]] = {}
-
-        for current_step_num in range(1, num_steps + 1):
-            start_key = f"{run_id}:{current_step_num}:start"
-            finish_key = f"{run_id}:{current_step_num}:finish"
-
-            start_time = step_times_dict.get(start_key)
-            end_time = step_times_dict.get(finish_key)
-            if start_time is not None:
-                start_time = float(start_time)
-            if end_time is not None:
-                end_time = float(end_time)
-
-            duration = None
-            if start_time is not None and end_time is not None:
-                duration = round(end_time - start_time, 2)
-
-            step_times[f"{current_step_num}"] = {
-                "start": start_time,
-                "end": end_time,
-                "duration_s": duration,
-            }
-
-            substep_start_boundary = step_times_dict.get(
-                f"{run_id}:{current_step_num}:substep_start"
-            )
-            full_step_start_time = (
-                float(substep_start_boundary)
-                if substep_start_boundary is not None
-                else start_time
-            )
-            full_step_end_time = step_times_dict.get(
-                f"{run_id}:{current_step_num}:substep_finish"
-            )
-            if full_step_end_time is not None:
-                full_step_end_time = float(full_step_end_time)
-            else:
-                full_step_end_time = end_time
-
-            substep_times[f"{current_step_num}"] = {}
-            eval_before = SlimeStatus.EVAL_ROLLOUT_LOGGING.value
-            present: set[str] = set()
-            recorded: list[tuple[float, int, str]] = []
-            for order_idx, substep in enumerate(SUBSTEP_ORDER):
-                substep_start = step_times_dict.get(
-                    f"{run_id}:{current_step_num}:substep:{substep}"
-                )
-                if substep_start is None:
-                    continue
-                substep_start = float(substep_start)
-                if full_step_start_time is not None and substep != eval_before:
-                    substep_start = max(substep_start, full_step_start_time)
-                if full_step_end_time is not None:
-                    substep_start = min(substep_start, full_step_end_time)
-                present.add(substep)
-                recorded.append((substep_start, order_idx, substep))
-            recorded.sort()
-
-            for idx, (substep_start, order_idx, substep) in enumerate(recorded):
-                if idx + 1 < len(recorded):
-                    next_start, next_idx = recorded[idx + 1][0], recorded[idx + 1][1]
-                else:
-                    next_start, next_idx = full_step_end_time, len(SUBSTEP_ORDER)
-
-                gap = SUBSTEP_ORDER[order_idx + 1 : next_idx]
-                dropped_mandatory = any(
-                    s not in OPTIONAL_SUBSTEPS and s not in present for s in gap
-                )
-                if next_start is None or dropped_mandatory:
-                    substep_duration = None
-                else:
-                    substep_duration = round(max(next_start - substep_start, 0.0), 2)
-
-                substep_times[f"{current_step_num}"][substep] = {
-                    "start": round(substep_start, 3),
-                    "duration_s": substep_duration,
-                }
-
-        return step_times, substep_times
-
-    def clear_step_times(run_id: str, num_steps: int) -> None:
+    async def clear_step_times(run_id: str, num_steps: int) -> None:
         step_times_dict = ModalDict.from_name(
             "training-gym-step-times", create_if_missing=True
         )
-
-        for current_step_num in range(1, num_steps + 1):
-            step_times_dict.pop(f"{run_id}:{current_step_num}:start", None)
-            step_times_dict.pop(f"{run_id}:{current_step_num}:finish", None)
-            step_times_dict.pop(f"{run_id}:{current_step_num}:substep_start", None)
-            step_times_dict.pop(f"{run_id}:{current_step_num}:substep_finish", None)
-            for substep in SUBSTEP_ORDER:
-                step_times_dict.pop(
-                    f"{run_id}:{current_step_num}:substep:{substep}", None
-                )
+        keys = [
+            f"{run_id}:{step}:{suffix}"
+            for step in range(1, num_steps + 1)
+            for suffix in (
+                "start",
+                "finish",
+                "substep_start",
+                "substep_finish",
+                *(f"substep:{s}" for s in SUBSTEP_ORDER),
+            )
+        ]
+        await asyncio.gather(*(step_times_dict.pop.aio(k, None) for k in keys))
 
     @app.function(
         image=train_image,

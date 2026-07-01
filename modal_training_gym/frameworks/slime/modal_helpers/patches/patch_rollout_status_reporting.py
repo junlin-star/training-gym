@@ -442,6 +442,11 @@ def _patch_file(path: Path) -> None:
 
     generate_rollout_count = 0
     if needs_generate_rollout:
+        # This targets the pre-loop update_weights() (the initial weight push),
+        # where the loop variable rollout_id isn't in scope yet. Report against
+        # args.start_rollout_id instead — the id of the first rollout about to be
+        # generated — so progress matches the upcoming step_start rather than
+        # sending a zero-progress value that resets the dashboard step counter.
         generate_rollout_pattern = re.compile(
             r"^(?P<indent>[ \t]*)(?P<call>(?:await[ \t]+)?(?:[A-Za-z_][A-Za-z0-9_]*\.)?update_weights\(\))",
             re.M,
@@ -453,7 +458,7 @@ def _patch_file(path: Path) -> None:
             return (
                 f"{indent}{call}\n"
                 f"{indent}# {GENERATE_ROLLOUT_MARKER}: rollout generation state\n"
-                f"{indent}_tg_report_generate_rollouts(args)"
+                f"{indent}_tg_report_generate_rollouts(args, args.start_rollout_id)"
             )
 
         src, generate_rollout_count = generate_rollout_pattern.subn(

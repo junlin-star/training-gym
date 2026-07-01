@@ -265,6 +265,7 @@ def fastapi_app():
     from modal_training_gym.common.modal_urls import modal_app_dashboard_url
     from modal_training_gym.common.run import TrainingRun
     from modal_training_gym.common.status import MilesStatus, SlimeStatus
+    from modal_training_gym.common.step_timing import record_step_time_event
     from modal_training_gym.common.training_rollout import TrainingRolloutResult
     from modal_training_gym.utils.metadata import (
         MetadataStore,
@@ -702,37 +703,14 @@ def fastapi_app():
         current_step = progress.get("current")
         step_event = str(payload.get("step_event", "") or "").strip()
         if isinstance(current_step, int) and current_step > 0:
-            step_times = _step_times_dict()
-            event_time = round(float(payload.get("event_ts") or time.time()), 3)
-            if step_event == "start":
-                step_times[f"{training_run_id}:{current_step}:start"] = event_time
-            elif step_event == "finish":
-                step_times[f"{training_run_id}:{current_step}:finish"] = event_time
-            if step_event == "substep_start":
-                start_boundary_key = f"{training_run_id}:{current_step}:substep_start"
-                if step_times.get(start_boundary_key) is None:
-                    step_times[start_boundary_key] = event_time
-            elif step_event == "substep_finish":
-                finish_key = f"{training_run_id}:{current_step}:substep_finish"
-                if step_times.get(finish_key) is None:
-                    step_times[finish_key] = event_time
-            elif step_event in ("eval_begin", "eval_end"):
-                phase = (
-                    "evaluate_rollouts"
-                    if step_event == "eval_begin"
-                    else "evaluate_rollouts_end"
-                )
-                substep_key = f"{training_run_id}:{current_step}:substep:{phase}"
-                if step_times.get(substep_key) is None:
-                    step_times[substep_key] = event_time
-            elif not step_event and status.value == "evaluate_rollouts":
-                pass
-            elif step_event == "finish":
-                pass
-            else:
-                substep_key = f"{training_run_id}:{current_step}:substep:{status.value}"
-                if step_times.get(substep_key) is None:
-                    step_times[substep_key] = event_time
+            record_step_time_event(
+                _step_times_dict(),
+                training_run_id,
+                current_step,
+                status.value,
+                step_event,
+                float(payload.get("event_ts") or time.time()),
+            )
         await run.save_async()
         invalidate_cache("runs")
         return JSONResponse({"status": "ok", "framework_status": status.value})
