@@ -14,7 +14,7 @@ def record_step_time_event(
     phase: str,
     step_event: str,
     event_ts: float,
-) -> None: 
+) -> None:
     if not (isinstance(current_step, int) and current_step > 0):
         return
     event_time = round(float(event_ts), 3)
