@@ -27,7 +27,7 @@ OPTIONAL_SUBSTEPS = {EVAL_BEFORE, CHECKPOINT_SAVE, EVAL_AFTER}
 
 RUN_ID = "run-hooks"
 STEP = 1
- 
+
 EVENT_REPORTS = {
     "step_start": (ROLLOUT_LOGGING, "start"),
     "step_complete": (WEIGHT_SYNC, "finish"),
@@ -113,7 +113,7 @@ def test_substep_times_aggregation():
         for substep, entry in substep_times[str(STEP)].items()
     }
     assert durations == EXPECTED_DURATIONS
- 
+
     assert substep_times[str(STEP)][EVAL_BEFORE]["start"] == 0.5
     assert substep_times[str(STEP)][ROLLOUT_LOGGING]["start"] == 2.0
 
@@ -156,7 +156,7 @@ def test_substep_times_with_missing_substeps():
         (16.0, "eval_end"),
         (18.0, "step_complete"),
     ]
-    assert aggregate_durations(schedule_missing_substep_finish) == EXPECTED_DURATIONS 
+    assert aggregate_durations(schedule_missing_substep_finish) == EXPECTED_DURATIONS
     schedule_missing_all_finish_events = schedule_missing_substep_finish[:-1]
     assert aggregate_durations(schedule_missing_all_finish_events) == {
         **EXPECTED_DURATIONS,
@@ -164,7 +164,7 @@ def test_substep_times_with_missing_substeps():
     }
 
 
-def test_substep_times_with_missing_optional_substeps(): 
+def test_substep_times_with_missing_optional_substeps():
     schedule_missing_eval_end = [
         (0.0, "substep_window_start"),
         (0.5, "eval_begin"),
@@ -188,7 +188,7 @@ def test_substep_times_with_missing_optional_substeps():
         OFFLOAD_TRAIN: 2.0,
         WEIGHT_SYNC: 3.0,
     }
- 
+
     schedule_missing_all_optional = [
         (0.0, "substep_window_start"),
         (2.0, "step_start"),
@@ -210,7 +210,7 @@ def test_substep_times_with_missing_optional_substeps():
     }
 
 
-def test_substep_times_clamped_to_window(): 
+def test_substep_times_clamped_to_window():
     schedule = [
         (0.5, "eval_begin"),
         (2.0, "substep_window_start"),
@@ -232,11 +232,11 @@ def test_substep_times_clamped_to_window():
         SUBSTEP_ORDER,
         OPTIONAL_SUBSTEPS,
     )
- 
+
     assert step_times[str(STEP)] == {"start": 1.0, "end": 20.0, "duration_s": 19.0}
 
     entries = substep_times[str(STEP)]
-    assert entries[EVAL_BEFORE]["start"] == 0.5   
+    assert entries[EVAL_BEFORE]["start"] == 0.5
     assert entries[ROLLOUT_LOGGING]["start"] == 2.0
     assert entries[EVAL_AFTER]["start"] == 18.0
 
@@ -274,12 +274,12 @@ def test_substep_times_multiple_steps():
     assert substep_times["3"] == {}
 
 
-def test_substep_times_adverse_timings(): 
+def test_substep_times_adverse_timings():
     schedule = [
         (0.0, "substep_window_start"),
         (2.0, "step_start"),
         (4.0, "offload_rollout"),
-        (4.0, "compute_log_probs"),     
+        (4.0, "compute_log_probs"),
         (5.0, "offload_rollout"),
         (10.0, "optimizer_step"),
         (9.0, "offload_train"),
