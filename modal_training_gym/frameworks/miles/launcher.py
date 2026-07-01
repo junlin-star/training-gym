@@ -18,7 +18,11 @@ import cloudpickle
 from modal import App, Image, Retries, Secret, Volume
 from modal.experimental import clustered
 
-from modal_training_gym.common import COMMON_TRAINING_GYM_TAGS, hf_secrets
+from modal_training_gym.common import (
+    COMMON_TRAINING_GYM_TAGS,
+    hf_secrets,
+    modal_tag_value,
+)
 from modal_training_gym.common.checkpoint import Checkpoint
 from modal_training_gym.common.dataset import DatasetConfig, HarborDataset
 from modal_training_gym.common.framework import (
@@ -251,13 +255,13 @@ def build_miles_app(
     tags = {
         **COMMON_TRAINING_GYM_TAGS,
         "_modal_framework": "miles",
-        "_modal_model_name": model.model_name,
+        "_modal_model_name": modal_tag_value(model.model_name),
         **miles.app_tags,
     }
     if miles.wandb is not None:
-        tags["_modal_wandb_project"] = miles.wandb.project
+        tags["_modal_wandb_project"] = modal_tag_value(miles.wandb.project)
         if miles.wandb.group:
-            tags["_modal_wandb_group"] = miles.wandb.group
+            tags["_modal_wandb_group"] = modal_tag_value(miles.wandb.group)
 
     app = App(app_name, tags=tags)
     gpu_spec = f"{miles.gpu_type}:{miles.actor_num_gpus_per_node}"

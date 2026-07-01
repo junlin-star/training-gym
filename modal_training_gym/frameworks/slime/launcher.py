@@ -35,7 +35,7 @@ from modal_training_gym.common import hf_secrets
 
 import cloudpickle
 
-from modal_training_gym.common import COMMON_TRAINING_GYM_TAGS
+from modal_training_gym.common import COMMON_TRAINING_GYM_TAGS, modal_tag_value
 from modal_training_gym.common.dataset import DatasetConfig, HarborDataset
 from modal_training_gym.common.framework import (
     mount_tools_dir,
@@ -586,13 +586,13 @@ def build_slime_app(
     tags = {
         **COMMON_TRAINING_GYM_TAGS,
         "_modal_framework": "slime",
-        "_modal_model_name": model.model_name,
+        "_modal_model_name": modal_tag_value(model.model_name),
         **slime.app_tags,
     }
     if slime.wandb is not None:
-        tags["_modal_wandb_project"] = slime.wandb.project
+        tags["_modal_wandb_project"] = modal_tag_value(slime.wandb.project)
         if slime.wandb.group:
-            tags["_modal_wandb_group"] = slime.wandb.group
+            tags["_modal_wandb_group"] = modal_tag_value(slime.wandb.group)
     app = App(app_name, tags=tags)
     gpu_spec = f"{slime.gpu_type}:{slime.actor_num_gpus_per_node}"
 
