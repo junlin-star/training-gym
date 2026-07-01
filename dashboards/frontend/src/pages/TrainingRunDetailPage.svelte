@@ -2,7 +2,6 @@
   import { ArrowLeft, ChevronLeft, ChevronRight, Download, ExternalLink, Minimize2, X } from "lucide-svelte";
   import Tabs from "../components/Tabs.svelte";
   import RunSummary from "../components/RunSummary.svelte";
-  import StepTimings from "../components/StepTimings.svelte";
   import StatusPill from "../components/StatusPill.svelte";
   import TimeAgo from "../components/TimeAgo.svelte";
   import SampleTimeline from "../components/SampleTimeline.svelte";
@@ -51,22 +50,7 @@
 
   function formatMean(value) {
     if (typeof value !== "number" || !Number.isFinite(value)) return "—";
-    return value.toFixed(2);
-  }
-
-  // Map a rollout to its step timing. Step keys are 1-indexed; rollout ids are
-  // 0-indexed, so step N corresponds to rollout N-1 (fall back to a direct match).
-  function stepTimingForRollout(rolloutId) {
-    const st = run?.step_times || null;
-    const sub = run?.substep_times || null;
-    if (!st && !sub) return null;
-    const candidates = [String(Number(rolloutId) + 1), String(rolloutId)];
-    const key = candidates.find((k) => (st && st[k]) || (sub && sub[k]));
-    if (!key) return null;
-    return {
-      stepTimes: st && st[key] ? { [key]: st[key] } : null,
-      substepTimes: sub && sub[key] ? { [key]: sub[key] } : null,
-    };
+    return value.toFixed(3);
   }
 
   // ── Rollouts (auto-refresh while run is running) ─────────────────────
@@ -673,17 +657,6 @@
     {#if activeTab === "summary"}
       <div class="summary-tab">
         <div class="summary-tab-main">
-          {#if run.step_times || run.substep_times}
-            <div class="rollout-chart">
-              <div class="rollout-chart-title">Step &amp; substep timeline</div>
-              <StepTimings
-                stepTimes={run.step_times}
-                substepTimes={run.substep_times}
-                layout="timeline"
-                downloadName={`step_substep_times_${runId}.json`}
-              />
-            </div>
-          {/if}
           {#if rolloutsLoading && !rolloutSummaries.length}
             <div class="empty">Loading rollouts…</div>
           {:else if rolloutsError}
@@ -812,17 +785,6 @@
                     {:else if !expandedRollout || !sampleDist}
                       <div class="empty">No samples recorded.</div>
                     {:else}
-                      {@const stepTiming = stepTimingForRollout(r.rollout_id)}
-                      {#if stepTiming}
-                        <div class="rollout-chart">
-                          <div class="rollout-chart-title">Step timing</div>
-                          <StepTimings
-                            stepTimes={stepTiming.stepTimes}
-                            substepTimes={stepTiming.substepTimes}
-                            layout="rows"
-                          />
-                        </div>
-                      {/if}
                       {#if expandedRollout.metrics && Object.keys(expandedRollout.metrics).length}
                         {@const m = expandedRollout.metrics}
                         {@const remoteErr = Number(m["agent/exit_status/remoteerror_sample_count"]) || 0}

@@ -5,10 +5,7 @@ export default defineConfig({
   plugins: [svelte()],
   server: {
     proxy: {
-      "/api": {
-        target: process.env.DASHBOARD_API || "http://localhost:8000",
-        changeOrigin: true,
-      },
+      "/api": "http://localhost:8000",
     },
   },
   build: {

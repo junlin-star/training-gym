@@ -218,8 +218,6 @@ export async function fetchRuns({ signal } = {}) {
       completed_at: completedAt,
       updated_at: updatedAt,
       duration_seconds: durationSeconds,
-      step_times: run.step_times || null,
-      substep_times: run.substep_times || null,
       metadata,
       has_train_result: !!trainResult,
       train_result: trainResult ? summarizeTrainResult(trainResult) : null,
