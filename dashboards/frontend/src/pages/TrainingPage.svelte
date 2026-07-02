@@ -549,10 +549,12 @@
   }
 
   .status-stack {
-    display: inline-flex;
+    display: flex;
     flex-direction: column;
     align-items: flex-start;
     gap: 4px;
+    min-width: 0;
+    max-width: 100%;
   }
 
   .resume-badge {

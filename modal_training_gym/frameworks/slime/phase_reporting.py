@@ -36,6 +36,16 @@ IMAGE_SAMPLE_LIMIT_ENV = "TRAINING_GYM_IMAGE_SAMPLE_LIMIT"
 _IMAGE_SAMPLE_LIMIT_DEFAULT = 16
 _IMAGE_MAX_DIM = 512
 _IMAGE_MAX_BYTES = 256 * 1024
+# Per-sample multi-turn trajectory capture. The full ``trajectory_messages`` blob
+# (agent transcripts, many turns) is large, so only the first
+# TRAJECTORY_SAMPLE_LIMIT_ENV samples of each rollout carry it and each message's
+# content is length-capped — enough for the dashboard's ConversationView to render
+# the conversation without bloating the rollout payload. Without it, multi-turn
+# rollouts (e.g. toolathlon) collapse to a single flat block on the dashboard.
+TRAJECTORY_SAMPLE_LIMIT_ENV = "TRAINING_GYM_TRAJECTORY_SAMPLE_LIMIT"
+_TRAJECTORY_SAMPLE_LIMIT_DEFAULT = 16
+_TRAJECTORY_MSG_CHARS_MAX = 8000
+_TRAJECTORY_MAX_MESSAGES = 128
 CUSTOM_ROLLOUT_LOG_FUNCTION_PATH_KEY = "training_gym_custom_rollout_log_function_path"
 CUSTOM_EVAL_ROLLOUT_LOG_FUNCTION_PATH_KEY = (
     "training_gym_custom_eval_rollout_log_function_path"
@@ -484,6 +494,50 @@ def _image_sample_limit() -> int:
     return max(0, n)
 
 
+def _trajectory_sample_limit() -> int:
+    try:
+        n = int(os.environ.get(TRAJECTORY_SAMPLE_LIMIT_ENV, "").strip())
+    except (TypeError, ValueError):
+        return _TRAJECTORY_SAMPLE_LIMIT_DEFAULT
+    return max(0, n)
+
+
+def _compact_trajectory_messages(raw: Any) -> list[dict[str, Any]] | None:
+    """Coerce a Sample's ``trajectory_messages`` into a compact, size-bounded
+    list of ``{role, content}`` turns the dashboard can render. Caps the number
+    of messages and truncates each long content (head+tail with an elision
+    notice) so a single verbose episode can't blow up the rollout payload."""
+    if not isinstance(raw, list) or not raw:
+        return None
+    out: list[dict[str, Any]] = []
+    for msg in raw[:_TRAJECTORY_MAX_MESSAGES]:
+        if not isinstance(msg, dict):
+            continue
+        content = msg.get("content")
+        if not isinstance(content, str):
+            if content is None:
+                content = ""
+            else:
+                try:
+                    content = json.dumps(content)
+                except TypeError:
+                    content = str(content)
+        if len(content) > _TRAJECTORY_MSG_CHARS_MAX:
+            edge = _TRAJECTORY_MSG_CHARS_MAX // 2
+            elided = len(content) - 2 * edge
+            content = (
+                f"{content[:edge]}\n\n… {elided} chars elided …\n\n{content[-edge:]}"
+            )
+        entry: dict[str, Any] = {
+            "role": str(msg.get("role") or "unknown"),
+            "content": content,
+        }
+        if msg.get("exit_status") is not None:
+            entry["exit_status"] = msg["exit_status"]
+        out.append(entry)
+    return out or None
+
+
 def _image_to_data_uri(value: Any) -> str | None:
     """Coerce an image reference into a browser-renderable, thumbnailed data-URI.
 
@@ -592,6 +646,7 @@ def _sample_to_dict(
     *,
     include_trace: bool = False,
     include_image: bool = False,
+    include_trajectory: bool = False,
 ) -> dict[str, Any]:
     """Best-effort extraction of (prompt, response, reward, metadata) from a
     slime Sample-like object. Duck-typed so we don't import slime here."""
@@ -621,11 +676,21 @@ def _sample_to_dict(
     if isinstance(sample_meta, dict):
         for key in (
             "exit_status",
+            "eval_detail",
             "training_response_source",
             "training_assistant_turns",
         ):
             if key in sample_meta and sample_meta[key] is not None:
                 metadata[key] = sample_meta[key]
+        # Multi-turn trajectory (capped to the first N samples): lets the
+        # dashboard's ConversationView render the full agent conversation.
+        # Without it, multi-turn rollouts collapse to a single flat block.
+        if include_trajectory:
+            trajectory = _compact_trajectory_messages(
+                sample_meta.get("trajectory_messages")
+            )
+            if trajectory:
+                metadata["trajectory_messages"] = trajectory
         # Store eval_report but only the compact summary/checks, not huge blobs
         eval_report = sample_meta.get("eval_report")
         if isinstance(eval_report, dict):
@@ -693,6 +758,7 @@ def report_rollout_samples(
     # the payload stays small — the caps keep volume growth well under 1%.
     trace_limit = _trace_sample_limit() if _trace_enabled() else 0
     image_limit = _image_sample_limit()
+    trajectory_limit = _trajectory_sample_limit()
     try:
         sample_dicts = [
             _sample_to_dict(
@@ -700,6 +766,7 @@ def report_rollout_samples(
                 parser,
                 include_trace=(i < trace_limit),
                 include_image=(i < image_limit),
+                include_trajectory=(i < trajectory_limit),
             )
             for i, s in enumerate(samples)
         ]

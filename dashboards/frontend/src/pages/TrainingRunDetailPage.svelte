@@ -6,11 +6,18 @@
   import TimeAgo from "../components/TimeAgo.svelte";
   import SampleTimeline from "../components/SampleTimeline.svelte";
   import ConversationView from "../components/ConversationView.svelte";
-  import AdvantageHeatmap from "../components/AdvantageHeatmap.svelte";
+  import AdvantageViolins from "../components/AdvantageViolins.svelte";
   import AdvantageSpreadChart from "../components/AdvantageSpreadChart.svelte";
+  import ComparativeBarChart from "../components/ComparativeBarChart.svelte";
+  import ChartSkeleton from "../components/ChartSkeleton.svelte";
   import LineChart from "../components/LineChart.svelte";
   import ResizableTable from "../components/ResizableTable.svelte";
-  import { fetchRunRollouts, fetchRollout, fetchRunAdvantages } from "../lib/api.js";
+  import {
+    fetchRunRollouts,
+    fetchRollout,
+    fetchRunAdvantages,
+    fetchRunAdvantageStep,
+  } from "../lib/api.js";
 
   let {
     runId,
@@ -106,8 +113,15 @@
     const samples = expandedRollout?.samples || [];
     if (!samples.length) return null;
     const scores = samples.map((s) => Number(s.score) || 0);
-    const lo = Math.min(...scores);
-    const hi = Math.max(...scores);
+    // Loop instead of Math.min(...arr): a single rollout's per-sample array can
+    // exceed the engine's max argument count and make the spread throw a
+    // RangeError (same failure class buildDist avoids).
+    let lo = Infinity;
+    let hi = -Infinity;
+    for (const v of scores) {
+      if (v < lo) lo = v;
+      if (v > hi) hi = v;
+    }
     // When every sample scored the same, a single bucket reads clearer than a
     // lone bar pinned to one edge.
     const count = lo === hi ? 1 : BUCKET_COUNT;
@@ -550,11 +564,23 @@
   );
   let scoreDist = $state(null);
 
-  function buildScoreDist(firstSamples, lastSamples, firstId, lastId) {
-    const scores = [...firstSamples, ...lastSamples].map((s) => Number(s.score) || 0);
-    if (!scores.length) return null;
-    const lo = Math.min(...scores);
-    const hi = Math.max(...scores);
+  // Grouped-bar histogram of two value sets (first vs latest), sharing a common
+  // [lo, hi] range so the bars line up. Drives both the score and advantage
+  // before/after comparison charts.
+  function buildDist(firstValues, lastValues, firstId, lastId) {
+    if (!firstValues.length && !lastValues.length) return null;
+    // Loop instead of Math.min(...arr): advantage arrays can exceed the
+    // engine's max argument count and make the spread throw a RangeError.
+    let lo = Infinity;
+    let hi = -Infinity;
+    for (const v of firstValues) {
+      if (v < lo) lo = v;
+      if (v > hi) hi = v;
+    }
+    for (const v of lastValues) {
+      if (v < lo) lo = v;
+      if (v > hi) hi = v;
+    }
     const n = lo === hi ? 1 : 12;
     const span = hi - lo || 1;
     const bins = Array.from({ length: n }, (_, i) => ({
@@ -563,11 +589,46 @@
       first: 0,
       last: 0,
     }));
-    const idx = (s) => Math.max(0, Math.min(n - 1, Math.floor(((s - lo) / span) * n)));
-    for (const s of firstSamples) bins[idx(Number(s.score) || 0)].first += 1;
-    for (const s of lastSamples) bins[idx(Number(s.score) || 0)].last += 1;
+    const idx = (v) => Math.max(0, Math.min(n - 1, Math.floor(((v - lo) / span) * n)));
+    for (const v of firstValues) bins[idx(v)].first += 1;
+    for (const v of lastValues) bins[idx(v)].last += 1;
     const max = Math.max(1, ...bins.map((b) => Math.max(b.first, b.last)));
     return { bins, max, lo, hi, firstId, lastId };
+  }
+
+  function buildScoreDist(firstSamples, lastSamples, firstId, lastId) {
+    return buildDist(
+      firstSamples.map((s) => Number(s.score) || 0),
+      lastSamples.map((s) => Number(s.score) || 0),
+      firstId,
+      lastId,
+    );
+  }
+
+  // Adapt a buildDist result into ComparativeBarChart inputs: one category per
+  // bin (value range, shown only in the tooltip — the endpoint axis is drawn
+  // separately), and a series per rollout endpoint. The latest series is dropped
+  // when the first and latest rollout are the same one.
+  function distCategories(dist) {
+    return dist.bins.map((b) => `${formatMean(b.lo)}–${formatMean(b.hi)}`);
+  }
+
+  function distSeries(dist) {
+    const series = [
+      {
+        name: `rollout ${dist.firstId}`,
+        color: "var(--color-c-gray-40)",
+        values: dist.bins.map((b) => b.first),
+      },
+    ];
+    if (dist.firstId !== dist.lastId) {
+      series.push({
+        name: `latest (rollout ${dist.lastId})`,
+        color: "var(--accent)",
+        values: dist.bins.map((b) => b.last),
+      });
+    }
+    return series;
   }
 
   // Fetch the two rollouts' samples only when the endpoints change (a new step
@@ -590,6 +651,47 @@
         scoreDist = buildScoreDist(first?.samples || [], last?.samples || [], fId, lId);
       } catch {
         if (!cancelled) scoreDist = null;
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  });
+
+  // Advantage-distribution comparison: raw advantages of the first vs latest
+  // step, bucketed the same way as the score comparison. The merged-step
+  // payloads are large, so only refetch when the endpoint ids change.
+  let advantageDist = $state(null);
+
+  function mergedAdvantages(merged) {
+    return (merged?.groups || []).flatMap((g) =>
+      (g?.advantages || []).map((v) => Number(v) || 0),
+    );
+  }
+
+  $effect(() => {
+    if (activeTab !== "summary") return;
+    const id = runId;
+    const fId = firstRolloutId;
+    const lId = lastRolloutId;
+    if (!id || fId == null || lId == null) {
+      advantageDist = null;
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const first = await fetchRunAdvantageStep(id, fId);
+        const last = fId === lId ? first : await fetchRunAdvantageStep(id, lId);
+        if (cancelled) return;
+        advantageDist = buildDist(
+          mergedAdvantages(first),
+          mergedAdvantages(last),
+          fId,
+          lId,
+        );
+      } catch {
+        if (!cancelled) advantageDist = null;
       }
     })();
     return () => {
@@ -666,83 +768,93 @@
       <div class="summary-tab">
         <div class="summary-tab-main">
           {#if rolloutsLoading && !rolloutSummaries.length}
-            <div class="empty">Loading rollouts…</div>
+            <div class="rollout-chart">
+              <ChartSkeleton variant="line" height={140} showTitle />
+            </div>
+            <div class="rollout-chart">
+              <div class="rollout-chart-title">Score distribution</div>
+              <ChartSkeleton variant="bars" height={120} />
+            </div>
+            <div class="chart-grid">
+              <div class="rollout-chart">
+                <div class="rollout-chart-title">Advantage spread over time</div>
+                <ChartSkeleton variant="line" height={200} />
+              </div>
+              <div class="rollout-chart">
+                <div class="rollout-chart-title">Advantage distribution over time</div>
+                <ChartSkeleton variant="violins" height={210} />
+              </div>
+            </div>
           {:else if rolloutsError}
             <div class="empty">Failed to load rollouts: {rolloutsError}</div>
           {:else if !rolloutSummaries.length}
             <div class="empty">No rollouts recorded yet.</div>
           {:else}
-            {#if rolloutSummaries.length}
-              <div class="rollout-chart">
-                <LineChart
-                  title="Reward"
-                  data={rewardChartData}
-                  formatX={(row) => `rollout ${row.rollout_id}`}
-                  formatY={(value) => formatMean(value)}
-                  ariaLabel="Reward chart"
+            <div class="rollout-chart">
+              <LineChart
+                title="Reward"
+                data={rewardChartData}
+                formatX={(row) => `rollout ${row.rollout_id}`}
+                formatY={(value) => formatMean(value)}
+                ariaLabel="Reward chart"
+              />
+              {#if chartStats}
+                <div class="rollout-chart-meta">
+                  <span>min {formatMean(chartStats.min)}</span>
+                  <span>latest {formatMean(chartStats.latest)}</span>
+                  <span>max {formatMean(chartStats.max)}</span>
+                </div>
+              {/if}
+            </div>
+
+            <!-- Score distribution: second graph, above the advantage graphs. -->
+            <div class="rollout-chart">
+              <div class="rollout-chart-title">Score distribution</div>
+              {#if scoreDist}
+                <ComparativeBarChart
+                  categories={distCategories(scoreDist)}
+                  series={distSeries(scoreDist)}
+                  height={120}
+                  showCategoryLabels={false}
+                  format={(v) => `${v}`}
                 />
-                {#if chartStats}
-                  <div class="rollout-chart-meta">
-                    <span>min {formatMean(chartStats.min)}</span>
-                    <span>latest {formatMean(chartStats.latest)}</span>
-                    <span>max {formatMean(chartStats.max)}</span>
-                  </div>
-                {/if}
-              </div>
-            {/if}
-            {#if rolloutSummaries.length}
+                <div class="dist-axis">
+                  <span>{formatMean(scoreDist.lo)}</span>
+                  <span class="dist-axis-label">reward</span>
+                  <span>{formatMean(scoreDist.hi)}</span>
+                </div>
+              {:else}
+                <ChartSkeleton variant="bars" height={120} />
+              {/if}
+            </div>
+
+            {#if hasAdvantages}
               <div class="chart-grid">
-                {#if hasAdvantages}
-                  <div class="rollout-chart">
-                    <div class="rollout-chart-title">Advantage spread over time</div>
-                    <AdvantageSpreadChart steps={advantageSteps} />
-                  </div>
-                  <div class="rollout-chart">
-                    <div class="rollout-chart-title">Advantage distribution over time</div>
-                    <AdvantageHeatmap steps={advantageSteps} />
-                  </div>
-                {/if}
-                <div class="rollout-chart score-dist-chart">
-                  <div class="rollout-chart-title">Score distribution</div>
-                  {#if scoreDist}
-                    <div class="dist-legend">
-                      <span class="dist-legend-item">
-                        <span class="dist-swatch swatch-first"></span>
-                        rollout {scoreDist.firstId}
-                      </span>
-                      {#if scoreDist.firstId !== scoreDist.lastId}
-                        <span class="dist-legend-item">
-                          <span class="dist-swatch swatch-last"></span>
-                          latest (rollout {scoreDist.lastId})
-                        </span>
-                      {/if}
-                    </div>
-                    <div class="dist-compare">
-                      {#each scoreDist.bins as bin, i (i)}
-                        <div
-                          class="dist-compare-bin"
-                          title={`reward ${formatMean(bin.lo)}–${formatMean(bin.hi)} · rollout ${scoreDist.firstId}: ${bin.first}, latest: ${bin.last}`}
-                        >
-                          <div
-                            class="dist-compare-bar swatch-first"
-                            style:height={`${(bin.first / scoreDist.max) * 100}%`}
-                          ></div>
-                          {#if scoreDist.firstId !== scoreDist.lastId}
-                            <div
-                              class="dist-compare-bar swatch-last"
-                              style:height={`${(bin.last / scoreDist.max) * 100}%`}
-                            ></div>
-                          {/if}
-                        </div>
-                      {/each}
-                    </div>
+                <div class="rollout-chart">
+                  <div class="rollout-chart-title">Advantage spread over time</div>
+                  <AdvantageSpreadChart steps={advantageSteps} />
+                </div>
+                <div class="rollout-chart">
+                  <div class="rollout-chart-title">Advantage distribution over time</div>
+                  <AdvantageViolins steps={advantageSteps} />
+                </div>
+                <div class="rollout-chart">
+                  <div class="rollout-chart-title">Advantage distribution: rollout {firstRolloutId} vs latest</div>
+                  {#if advantageDist}
+                    <ComparativeBarChart
+                      categories={distCategories(advantageDist)}
+                      series={distSeries(advantageDist)}
+                      height={120}
+                      showCategoryLabels={false}
+                      format={(v) => `${v}`}
+                    />
                     <div class="dist-axis">
-                      <span>{formatMean(scoreDist.lo)}</span>
-                      <span class="dist-axis-label">reward</span>
-                      <span>{formatMean(scoreDist.hi)}</span>
+                      <span>{formatMean(advantageDist.lo)}</span>
+                      <span class="dist-axis-label">advantage</span>
+                      <span>{formatMean(advantageDist.hi)}</span>
                     </div>
                   {:else}
-                    <div class="empty">Loading distribution…</div>
+                    <ChartSkeleton variant="bars" height={120} />
                   {/if}
                 </div>
               </div>
@@ -966,6 +1078,10 @@
                             <span class="rollout-sample-metric sample-exit-status" class:exit-ok={activeSample.sample.metadata.exit_status === "ok"} class:exit-err={activeSample.sample.metadata.exit_status !== "ok"}>
                               {activeSample.sample.metadata.exit_status}
                             </span>
+                          {/if}
+                          {#if activeSample.sample.metadata?.eval_detail}
+                            <div class="rollout-sample-label">failure reason</div>
+                            <pre class="rollout-sample-text">{activeSample.sample.metadata.eval_detail}</pre>
                           {/if}
                           {#if activeSample.sample.trace?.length}
                             <div class="rollout-sample-label">trajectory timeline</div>
@@ -1263,10 +1379,6 @@
     min-width: 0;
   }
 
-  .chart-grid .score-dist-chart {
-    grid-column: 1 / -1;
-  }
-
   @media (max-width: 900px) {
     .chart-grid {
       grid-template-columns: 1fr;
@@ -1278,59 +1390,6 @@
     font-weight: 600;
     color: var(--text-bright);
     margin-bottom: 6px;
-  }
-
-  /* Score-distribution comparison (first vs latest rollout). */
-  .swatch-first {
-    background: var(--color-c-gray-40, #5e5e5e);
-  }
-
-  .swatch-last {
-    background: var(--accent);
-  }
-
-  .dist-legend {
-    display: flex;
-    gap: 16px;
-    margin-bottom: 8px;
-    font-size: 11px;
-    color: var(--muted);
-  }
-
-  .dist-legend-item {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-  }
-
-  .dist-swatch {
-    width: 10px;
-    height: 10px;
-    border-radius: 2px;
-  }
-
-  .dist-compare {
-    display: flex;
-    align-items: flex-end;
-    gap: 3px;
-    height: 120px;
-    padding-top: 8px;
-    border-bottom: 1px solid var(--border, #2f2f2f);
-  }
-
-  .dist-compare-bin {
-    flex: 1;
-    height: 100%;
-    display: flex;
-    align-items: flex-end;
-    justify-content: center;
-    gap: 2px;
-  }
-
-  .dist-compare-bar {
-    flex: 1;
-    min-height: 1px;
-    border-radius: 2px 2px 0 0;
   }
 
   .rollout-chart-meta {
