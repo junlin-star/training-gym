@@ -573,10 +573,19 @@
   // [lo, hi] range so the bars line up. Drives both the score and advantage
   // before/after comparison charts.
   function buildDist(firstValues, lastValues, firstId, lastId) {
-    const all = [...firstValues, ...lastValues];
-    if (!all.length) return null;
-    const lo = Math.min(...all);
-    const hi = Math.max(...all);
+    if (!firstValues.length && !lastValues.length) return null;
+    // Loop instead of Math.min(...arr): advantage arrays can exceed the
+    // engine's max argument count and make the spread throw a RangeError.
+    let lo = Infinity;
+    let hi = -Infinity;
+    for (const v of firstValues) {
+      if (v < lo) lo = v;
+      if (v > hi) hi = v;
+    }
+    for (const v of lastValues) {
+      if (v < lo) lo = v;
+      if (v > hi) hi = v;
+    }
     const n = lo === hi ? 1 : 12;
     const span = hi - lo || 1;
     const bins = Array.from({ length: n }, (_, i) => ({

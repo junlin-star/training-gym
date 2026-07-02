@@ -110,6 +110,12 @@
     border-color: #5b3333;
   }
 
+  /* Icons carry the status meaning, so they must never be shrunk or clipped
+     when the pill is squeezed into a narrow column — only the label truncates. */
+  .status-pill :global(svg) {
+    flex: 0 0 auto;
+  }
+
   .status-text {
     font-weight: 500;
     font-variant-numeric: tabular-nums;

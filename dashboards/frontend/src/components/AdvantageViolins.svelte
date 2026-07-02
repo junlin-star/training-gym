@@ -20,7 +20,6 @@
   const H = 210;
   const PAD = 8;
   const N_BUCKETS = 26;
-  const BAR_GAP = 0.6; // vertical gap (viewBox units) between stacked buckets
 
   function num(v, fallback = 0) {
     const n = Number(v);
@@ -29,6 +28,42 @@
 
   function fmt(v) {
     return Number.isFinite(v) ? v.toFixed(3) : "—";
+  }
+
+  // ~`count` evenly-rounded tick values spanning [lo, hi] for the value axis.
+  function niceTicks(lo, hi, count = 5) {
+    if (!(hi > lo)) return [lo];
+    const rawStep = (hi - lo) / (count - 1);
+    const mag = Math.pow(10, Math.floor(Math.log10(rawStep)));
+    const norm = rawStep / mag;
+    const step = (norm < 1.5 ? 1 : norm < 3 ? 2 : norm < 7 ? 5 : 10) * mag;
+    const ticks = [];
+    for (let v = Math.ceil(lo / step) * step; v <= hi + step * 1e-6; v += step) {
+      ticks.push(v);
+    }
+    return ticks;
+  }
+
+  // A smooth closed outline through `pts` ([x, y] loop) via a Catmull-Rom spline
+  // converted to cubic béziers. This turns the discrete bucket half-widths into a
+  // continuous, rounded violin silhouette instead of a stack of hard-edged bars.
+  function smoothClosedPath(pts) {
+    const n = pts.length;
+    if (n < 3) return "";
+    const c = (v) => v.toFixed(2);
+    let d = `M ${c(pts[0][0])} ${c(pts[0][1])} `;
+    for (let i = 0; i < n; i++) {
+      const p0 = pts[(i - 1 + n) % n];
+      const p1 = pts[i];
+      const p2 = pts[(i + 1) % n];
+      const p3 = pts[(i + 2) % n];
+      const c1x = p1[0] + (p2[0] - p0[0]) / 6;
+      const c1y = p1[1] + (p2[1] - p0[1]) / 6;
+      const c2x = p2[0] - (p3[0] - p1[0]) / 6;
+      const c2y = p2[1] - (p3[1] - p1[1]) / 6;
+      d += `C ${c(c1x)} ${c(c1y)}, ${c(c2x)} ${c(c2y)}, ${c(p2[0])} ${c(p2[1])} `;
+    }
+    return d + "Z";
   }
 
   // Inter-quantile segments and the fraction of samples each holds.
@@ -107,25 +142,23 @@
 
     const violins = perStep.map((s, i) => {
       const cx = i * colW + colW / 2;
-      const bars = s.buckets
-        .filter((b) => b.mass > 0)
-        .map((b) => {
-          const halfW = hw(b.mass);
-          const yTop = sy(b.hi);
-          const yBot = sy(b.lo);
-          return {
-            x: (cx - halfW).toFixed(2),
-            w: (halfW * 2).toFixed(2),
-            y: yTop.toFixed(2),
-            h: Math.max(yBot - yTop - BAR_GAP, 0.5).toFixed(2),
-            title: `advantage ${fmt(b.lo)} – ${fmt(b.hi)}\n${(b.mass * 100).toFixed(1)}% of samples`,
-          };
-        });
+      // Half-width at each bucket centre; the outline tapers to zero width at the
+      // value extremes so the smoothed silhouette closes into a rounded teardrop.
+      const centres = s.buckets.map((b) => ({
+        y: sy((b.lo + b.hi) / 2),
+        hw: hw(b.mass),
+      }));
+      const outline = [
+        [cx, sy(yHi)], // top centre
+        ...[...centres].reverse().map((cP) => [cx + cP.hw, cP.y]), // right edge, high→low
+        [cx, sy(yLo)], // bottom centre
+        ...centres.map((cP) => [cx - cP.hw, cP.y]), // left edge, low→high
+      ];
       // Median tick spans the bucket that contains p50.
       const medBucket = s.buckets.find((b, bi) => s.p50 >= b.lo && (s.p50 < b.hi || bi === s.buckets.length - 1));
       const medHW = hw(medBucket ? medBucket.mass : 0);
       return {
-        bars,
+        path: smoothClosedPath(outline),
         cx: cx.toFixed(2),
         medY: sy(s.p50).toFixed(2),
         medX1: (cx - Math.max(medHW, 3)).toFixed(2),
@@ -139,6 +172,7 @@
       violins,
       yLo,
       yHi,
+      ticks: niceTicks(yLo, yHi, 5).map((val) => ({ val, y: sy(val).toFixed(2) })),
       zeroY: yLo <= 0 && yHi >= 0 ? sy(0) : null,
       firstX: pts[0].x,
       lastX: pts[pts.length - 1].x,
@@ -152,61 +186,96 @@
     if (labels && labels[i] != null) return labels[i];
     return `step ${v.x}`;
   }
+
+  // Cursor readout: map the pointer's vertical position back to an advantage
+  // value so hovering anywhere in the plot shows the score at that height.
+  let hover = $state(null);
+
+  function onPlotMove(e) {
+    if (!model) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    if (!rect.height || !rect.width) return;
+    const top = Math.max(0, Math.min(rect.height, e.clientY - rect.top));
+    const left = Math.max(0, Math.min(rect.width, e.clientX - rect.left));
+    const pv = (top / rect.height) * H; // px → viewBox units
+    const frac = (H - PAD - pv) / (H - 2 * PAD);
+    const value = model.yLo + frac * (model.yHi - model.yLo);
+    hover = {
+      top,
+      left,
+      value: Math.max(model.yLo, Math.min(model.yHi, value)),
+    };
+  }
+
+  function onPlotLeave() {
+    hover = null;
+  }
 </script>
 
 {#if model}
   <div class="violin-legend">
-    <span class="violin-legend-item"><span class="vsw fill"></span>bucket density</span>
+    <span class="violin-legend-item"><span class="vsw fill"></span>sample density</span>
     <span class="violin-legend-item"><span class="vsw median"></span>median</span>
   </div>
-  <svg viewBox="0 0 {W} {H}" preserveAspectRatio="none" aria-hidden="true">
-    {#if model.zeroY != null}
-      <line
-        x1="0"
-        x2={W}
-        y1={model.zeroY}
-        y2={model.zeroY}
-        stroke="#fff"
-        stroke-width="0.75"
-        stroke-opacity="0.35"
-        stroke-dasharray="4 4"
-      />
-    {/if}
-    {#each model.violins as v (v.x)}
-      {#each v.bars as b, bi (bi)}
-        <rect class="bucket" x={b.x} y={b.y} width={b.w} height={b.h}>
-          <title>{b.title}</title>
-        </rect>
-      {/each}
-      <line
-        x1={v.medX1}
-        x2={v.medX2}
-        y1={v.medY}
-        y2={v.medY}
-        stroke="#fff"
-        stroke-width="1.5"
-        stroke-opacity="0.85"
-      />
-    {/each}
-  </svg>
-  <div class="fan-meta">
-    <span>min {fmt(model.yLo)}</span>
-    <span>latest median {fmt(model.latestMedian)}</span>
-    <span>max {fmt(model.yHi)}</span>
+  <div class="violin-chart">
+    <div class="y-col">
+      <span class="y-axis-title">advantage</span>
+      <div class="y-axis">
+        {#each model.ticks as t (t.val)}
+          <span class="y-tick" style:top={t.y + "px"}>{fmt(t.val)}</span>
+        {/each}
+      </div>
+    </div>
+    <div
+      class="plot"
+      role="presentation"
+      onpointermove={onPlotMove}
+      onpointerleave={onPlotLeave}
+    >
+      <svg viewBox="0 0 {W} {H}" preserveAspectRatio="none" aria-hidden="true">
+        {#each model.ticks as t (t.val)}
+          <line class="gridline" x1="0" x2={W} y1={t.y} y2={t.y} />
+        {/each}
+        {#if model.zeroY != null}
+          <line class="zeroline" x1="0" x2={W} y1={model.zeroY} y2={model.zeroY} />
+        {/if}
+        {#each model.violins as v (v.x)}
+          <path class="violin" d={v.path} />
+          <line class="median" x1={v.medX1} x2={v.medX2} y1={v.medY} y2={v.medY} />
+        {/each}
+      </svg>
+      {#if hover}
+        <div class="crosshair" style:top={hover.top + "px"}></div>
+        <div
+          class="cursor-readout"
+          style:top={hover.top + "px"}
+          style:left={hover.left + "px"}
+        >
+          {fmt(hover.value)}
+        </div>
+      {/if}
+    </div>
   </div>
-  {#if model.showEachLabel}
-    <div class="violin-labels" style:grid-template-columns={`repeat(${model.violins.length}, 1fr)`}>
-      {#each model.violins as v, i (v.x)}
-        <span title={labelFor(v, i)}>{labelFor(v, i)}</span>
-      {/each}
+  <div class="below">
+    <div class="fan-meta">
+      <span>min {fmt(model.yLo)}</span>
+      <span>latest median {fmt(model.latestMedian)}</span>
+      <span>max {fmt(model.yHi)}</span>
     </div>
-  {:else}
-    <div class="fan-axis">
-      <span>step {model.firstX}</span>
-      <span class="fan-axis-label">training step</span>
-      <span>step {model.lastX}</span>
-    </div>
-  {/if}
+    {#if model.showEachLabel}
+      <div class="violin-labels" style:grid-template-columns={`repeat(${model.violins.length}, 1fr)`}>
+        {#each model.violins as v, i (v.x)}
+          <span title={labelFor(v, i)}>{labelFor(v, i)}</span>
+        {/each}
+      </div>
+    {:else}
+      <div class="fan-axis">
+        <span>step {model.firstX}</span>
+        <span class="fan-axis-label">training step</span>
+        <span>step {model.lastX}</span>
+      </div>
+    {/if}
+  </div>
 {:else}
   <div class="empty">Advantage distribution needs ≥1 step of data.</div>
 {/if}
@@ -219,13 +288,96 @@
     background: #0a0e14;
     border-radius: 4px;
   }
-  .bucket {
+  .violin-chart {
+    display: flex;
+    align-items: stretch;
+  }
+  .y-col {
+    display: flex;
+    flex: 0 0 56px;
+    width: 56px;
+    height: 210px;
+  }
+  .y-axis-title {
+    writing-mode: vertical-rl;
+    transform: rotate(180deg);
+    align-self: center;
+    width: 14px;
+    text-align: center;
+    font-size: 10px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  .y-axis {
+    position: relative;
+    flex: 1;
+    height: 100%;
+  }
+  .y-tick {
+    position: absolute;
+    right: 4px;
+    transform: translateY(-50%);
+    font-size: 10px;
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  .plot {
+    position: relative;
+    flex: 1;
+    min-width: 0;
+    height: 210px;
+  }
+  .gridline {
+    stroke: #fff;
+    stroke-opacity: 0.08;
+    stroke-width: 0.5;
+  }
+  .zeroline {
+    stroke: #fff;
+    stroke-opacity: 0.35;
+    stroke-width: 0.75;
+    stroke-dasharray: 4 4;
+  }
+  .violin {
     fill: var(--accent);
     fill-opacity: 0.35;
+    stroke: var(--accent);
+    stroke-width: 1;
+    stroke-opacity: 0.9;
+    vector-effect: non-scaling-stroke;
     transition: fill-opacity 0.08s ease;
   }
-  .bucket:hover {
-    fill-opacity: 0.85;
+  .median {
+    stroke: #fff;
+    stroke-width: 1.5;
+    stroke-opacity: 0.85;
+  }
+  .crosshair {
+    position: absolute;
+    left: 0;
+    width: 100%;
+    height: 0;
+    border-top: 1px dashed rgba(255, 255, 255, 0.5);
+    pointer-events: none;
+  }
+  .cursor-readout {
+    position: absolute;
+    transform: translate(10px, -50%);
+    padding: 1px 6px;
+    border-radius: 4px;
+    background: rgba(10, 14, 20, 0.92);
+    border: 1px solid var(--accent);
+    color: var(--text-bright, #fff);
+    font-size: 10px;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    pointer-events: none;
+    z-index: 2;
+  }
+  .below {
+    padding-left: 56px;
   }
   .violin-legend {
     display: flex;
