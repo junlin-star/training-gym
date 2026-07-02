@@ -9,6 +9,7 @@
   import AdvantageViolins from "../components/AdvantageViolins.svelte";
   import AdvantageSpreadChart from "../components/AdvantageSpreadChart.svelte";
   import ComparativeBarChart from "../components/ComparativeBarChart.svelte";
+  import ChartSkeleton from "../components/ChartSkeleton.svelte";
   import LineChart from "../components/LineChart.svelte";
   import ResizableTable from "../components/ResizableTable.svelte";
   import {
@@ -781,78 +782,93 @@
       <div class="summary-tab">
         <div class="summary-tab-main">
           {#if rolloutsLoading && !rolloutSummaries.length}
-            <div class="empty">Loading rollouts…</div>
+            <div class="rollout-chart">
+              <ChartSkeleton variant="line" height={140} showTitle />
+            </div>
+            <div class="rollout-chart">
+              <div class="rollout-chart-title">Score distribution</div>
+              <ChartSkeleton variant="bars" height={120} />
+            </div>
+            <div class="chart-grid">
+              <div class="rollout-chart">
+                <div class="rollout-chart-title">Advantage spread over time</div>
+                <ChartSkeleton variant="line" height={200} />
+              </div>
+              <div class="rollout-chart">
+                <div class="rollout-chart-title">Advantage distribution over time</div>
+                <ChartSkeleton variant="violins" height={210} />
+              </div>
+            </div>
           {:else if rolloutsError}
             <div class="empty">Failed to load rollouts: {rolloutsError}</div>
           {:else if !rolloutSummaries.length}
             <div class="empty">No rollouts recorded yet.</div>
           {:else}
-            {#if rolloutSummaries.length}
-              <div class="rollout-chart">
-                <LineChart
-                  title="Reward"
-                  data={rewardChartData}
-                  formatX={(row) => `rollout ${row.rollout_id}`}
-                  formatY={(value) => formatMean(value)}
-                  ariaLabel="Reward chart"
+            <div class="rollout-chart">
+              <LineChart
+                title="Reward"
+                data={rewardChartData}
+                formatX={(row) => `rollout ${row.rollout_id}`}
+                formatY={(value) => formatMean(value)}
+                ariaLabel="Reward chart"
+              />
+              {#if chartStats}
+                <div class="rollout-chart-meta">
+                  <span>min {formatMean(chartStats.min)}</span>
+                  <span>latest {formatMean(chartStats.latest)}</span>
+                  <span>max {formatMean(chartStats.max)}</span>
+                </div>
+              {/if}
+            </div>
+
+            <!-- Score distribution: second graph, above the advantage graphs. -->
+            <div class="rollout-chart">
+              <div class="rollout-chart-title">Score distribution</div>
+              {#if scoreDist}
+                <ComparativeBarChart
+                  categories={distCategories(scoreDist)}
+                  series={distSeries(scoreDist)}
+                  height={120}
+                  showCategoryLabels={false}
+                  format={(v) => `${v}`}
                 />
-                {#if chartStats}
-                  <div class="rollout-chart-meta">
-                    <span>min {formatMean(chartStats.min)}</span>
-                    <span>latest {formatMean(chartStats.latest)}</span>
-                    <span>max {formatMean(chartStats.max)}</span>
-                  </div>
-                {/if}
-              </div>
-            {/if}
-            {#if rolloutSummaries.length}
+                <div class="dist-axis">
+                  <span>{formatMean(scoreDist.lo)}</span>
+                  <span class="dist-axis-label">reward</span>
+                  <span>{formatMean(scoreDist.hi)}</span>
+                </div>
+              {:else}
+                <ChartSkeleton variant="bars" height={120} />
+              {/if}
+            </div>
+
+            {#if hasAdvantages}
               <div class="chart-grid">
-                {#if hasAdvantages}
-                  <div class="rollout-chart">
-                    <div class="rollout-chart-title">Advantage spread over time</div>
-                    <AdvantageSpreadChart steps={advantageSteps} />
-                  </div>
-                  <div class="rollout-chart">
-                    <div class="rollout-chart-title">Advantage distribution over time</div>
-                    <AdvantageViolins steps={advantageSteps} />
-                  </div>
-                  <div class="rollout-chart">
-                    <div class="rollout-chart-title">Advantage distribution: rollout 0 vs latest</div>
-                    {#if advantageDist}
-                      <ComparativeBarChart
-                        categories={distCategories(advantageDist)}
-                        series={distSeries(advantageDist)}
-                        height={120}
-                        showCategoryLabels={false}
-                        format={(v) => `${v}`}
-                      />
-                      <div class="dist-axis">
-                        <span>{formatMean(advantageDist.lo)}</span>
-                        <span class="dist-axis-label">advantage</span>
-                        <span>{formatMean(advantageDist.hi)}</span>
-                      </div>
-                    {:else}
-                      <div class="empty">Loading distribution…</div>
-                    {/if}
-                  </div>
-                {/if}
-                <div class="rollout-chart score-dist-chart">
-                  <div class="rollout-chart-title">Score distribution</div>
-                  {#if scoreDist}
+                <div class="rollout-chart">
+                  <div class="rollout-chart-title">Advantage spread over time</div>
+                  <AdvantageSpreadChart steps={advantageSteps} />
+                </div>
+                <div class="rollout-chart">
+                  <div class="rollout-chart-title">Advantage distribution over time</div>
+                  <AdvantageViolins steps={advantageSteps} />
+                </div>
+                <div class="rollout-chart">
+                  <div class="rollout-chart-title">Advantage distribution: rollout 0 vs latest</div>
+                  {#if advantageDist}
                     <ComparativeBarChart
-                      categories={distCategories(scoreDist)}
-                      series={distSeries(scoreDist)}
+                      categories={distCategories(advantageDist)}
+                      series={distSeries(advantageDist)}
                       height={120}
                       showCategoryLabels={false}
                       format={(v) => `${v}`}
                     />
                     <div class="dist-axis">
-                      <span>{formatMean(scoreDist.lo)}</span>
-                      <span class="dist-axis-label">reward</span>
-                      <span>{formatMean(scoreDist.hi)}</span>
+                      <span>{formatMean(advantageDist.lo)}</span>
+                      <span class="dist-axis-label">advantage</span>
+                      <span>{formatMean(advantageDist.hi)}</span>
                     </div>
                   {:else}
-                    <div class="empty">Loading distribution…</div>
+                    <ChartSkeleton variant="bars" height={120} />
                   {/if}
                 </div>
               </div>
@@ -1076,6 +1092,10 @@
                             <span class="rollout-sample-metric sample-exit-status" class:exit-ok={activeSample.sample.metadata.exit_status === "ok"} class:exit-err={activeSample.sample.metadata.exit_status !== "ok"}>
                               {activeSample.sample.metadata.exit_status}
                             </span>
+                          {/if}
+                          {#if activeSample.sample.metadata?.eval_detail}
+                            <div class="rollout-sample-label">failure reason</div>
+                            <pre class="rollout-sample-text">{activeSample.sample.metadata.eval_detail}</pre>
                           {/if}
                           {#if activeSample.sample.trace?.length}
                             <div class="rollout-sample-label">trajectory timeline</div>
@@ -1371,10 +1391,6 @@
   .chart-grid .rollout-chart {
     margin-bottom: 0;
     min-width: 0;
-  }
-
-  .chart-grid .score-dist-chart {
-    grid-column: 1 / -1;
   }
 
   @media (max-width: 900px) {
