@@ -191,10 +191,10 @@
   }
 
   :global(table.resizable-table.sticky-first-column tbody tr:hover td:first-child) {
-    background: color-mix(in srgb, var(--text-bright) 4%, var(--bg));
+    background: color-mix(in srgb, var(--text) 6%, var(--bg));
   }
 
   :global(table.resizable-table.sticky-first-column tr.row-selected td:first-child) {
-    background: color-mix(in srgb, var(--accent) 7%, var(--bg));
+    background: color-mix(in srgb, var(--text) 8%, var(--bg));
   }
 </style>
