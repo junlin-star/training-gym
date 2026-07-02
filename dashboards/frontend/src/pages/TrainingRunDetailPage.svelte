@@ -6,11 +6,16 @@
   import TimeAgo from "../components/TimeAgo.svelte";
   import SampleTimeline from "../components/SampleTimeline.svelte";
   import ConversationView from "../components/ConversationView.svelte";
-  import AdvantageHeatmap from "../components/AdvantageHeatmap.svelte";
+  import AdvantageViolins from "../components/AdvantageViolins.svelte";
   import AdvantageSpreadChart from "../components/AdvantageSpreadChart.svelte";
   import LineChart from "../components/LineChart.svelte";
   import ResizableTable from "../components/ResizableTable.svelte";
-  import { fetchRunRollouts, fetchRollout, fetchRunAdvantages } from "../lib/api.js";
+  import {
+    fetchRunRollouts,
+    fetchRollout,
+    fetchRunAdvantages,
+    fetchRunAdvantageStep,
+  } from "../lib/api.js";
 
   let {
     runId,
@@ -94,6 +99,20 @@
   // step's overall stats + quantiles) — drives the advantage fan chart.
   let advantageSteps = $state([]);
   let hasAdvantages = $derived(advantageSteps.length > 0);
+
+  // Endpoint rollout ids (first vs latest) for the advantage comparison chart.
+  let advantageStepIds = $derived(
+    advantageSteps
+      .filter((s) => s && s.stats)
+      .map((s) => Number(s.rollout_id) || 0)
+      .sort((a, b) => a - b),
+  );
+  let advantageFirstId = $derived(
+    advantageStepIds.length ? advantageStepIds[0] : null,
+  );
+  let advantageLastId = $derived(
+    advantageStepIds.length ? advantageStepIds[advantageStepIds.length - 1] : null,
+  );
 
   // Per-step sample view: a histogram of sample scores. Clicking a bar opens
   // a single-sample viewer scoped to that bucket; ←/→ step through it.
@@ -550,11 +569,14 @@
   );
   let scoreDist = $state(null);
 
-  function buildScoreDist(firstSamples, lastSamples, firstId, lastId) {
-    const scores = [...firstSamples, ...lastSamples].map((s) => Number(s.score) || 0);
-    if (!scores.length) return null;
-    const lo = Math.min(...scores);
-    const hi = Math.max(...scores);
+  // Grouped-bar histogram of two value sets (first vs latest), sharing a common
+  // [lo, hi] range so the bars line up. Drives both the score and advantage
+  // before/after comparison charts.
+  function buildDist(firstValues, lastValues, firstId, lastId) {
+    const all = [...firstValues, ...lastValues];
+    if (!all.length) return null;
+    const lo = Math.min(...all);
+    const hi = Math.max(...all);
     const n = lo === hi ? 1 : 12;
     const span = hi - lo || 1;
     const bins = Array.from({ length: n }, (_, i) => ({
@@ -563,11 +585,20 @@
       first: 0,
       last: 0,
     }));
-    const idx = (s) => Math.max(0, Math.min(n - 1, Math.floor(((s - lo) / span) * n)));
-    for (const s of firstSamples) bins[idx(Number(s.score) || 0)].first += 1;
-    for (const s of lastSamples) bins[idx(Number(s.score) || 0)].last += 1;
+    const idx = (v) => Math.max(0, Math.min(n - 1, Math.floor(((v - lo) / span) * n)));
+    for (const v of firstValues) bins[idx(v)].first += 1;
+    for (const v of lastValues) bins[idx(v)].last += 1;
     const max = Math.max(1, ...bins.map((b) => Math.max(b.first, b.last)));
     return { bins, max, lo, hi, firstId, lastId };
+  }
+
+  function buildScoreDist(firstSamples, lastSamples, firstId, lastId) {
+    return buildDist(
+      firstSamples.map((s) => Number(s.score) || 0),
+      lastSamples.map((s) => Number(s.score) || 0),
+      firstId,
+      lastId,
+    );
   }
 
   // Fetch the two rollouts' samples only when the endpoints change (a new step
@@ -590,6 +621,47 @@
         scoreDist = buildScoreDist(first?.samples || [], last?.samples || [], fId, lId);
       } catch {
         if (!cancelled) scoreDist = null;
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  });
+
+  // Advantage-distribution comparison: raw advantages of the first vs latest
+  // step, bucketed the same way as the score comparison. The merged-step
+  // payloads are large, so only refetch when the endpoint ids change.
+  let advantageDist = $state(null);
+
+  function mergedAdvantages(merged) {
+    return (merged?.groups || []).flatMap((g) =>
+      (g?.advantages || []).map((v) => Number(v) || 0),
+    );
+  }
+
+  $effect(() => {
+    if (activeTab !== "summary") return;
+    const id = runId;
+    const fId = advantageFirstId;
+    const lId = advantageLastId;
+    if (!id || fId == null || lId == null) {
+      advantageDist = null;
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const first = await fetchRunAdvantageStep(id, fId);
+        const last = fId === lId ? first : await fetchRunAdvantageStep(id, lId);
+        if (cancelled) return;
+        advantageDist = buildDist(
+          mergedAdvantages(first),
+          mergedAdvantages(last),
+          fId,
+          lId,
+        );
+      } catch {
+        if (!cancelled) advantageDist = null;
       }
     })();
     return () => {
@@ -699,7 +771,50 @@
                   </div>
                   <div class="rollout-chart">
                     <div class="rollout-chart-title">Advantage distribution over time</div>
-                    <AdvantageHeatmap steps={advantageSteps} />
+                    <AdvantageViolins steps={advantageSteps} />
+                  </div>
+                  <div class="rollout-chart">
+                    <div class="rollout-chart-title">Advantage distribution: rollout 0 vs latest</div>
+                    {#if advantageDist}
+                      <div class="dist-legend">
+                        <span class="dist-legend-item">
+                          <span class="dist-swatch swatch-first"></span>
+                          rollout {advantageDist.firstId}
+                        </span>
+                        {#if advantageDist.firstId !== advantageDist.lastId}
+                          <span class="dist-legend-item">
+                            <span class="dist-swatch swatch-last"></span>
+                            latest (rollout {advantageDist.lastId})
+                          </span>
+                        {/if}
+                      </div>
+                      <div class="dist-compare">
+                        {#each advantageDist.bins as bin, i (i)}
+                          <div
+                            class="dist-compare-bin"
+                            title={`advantage ${formatMean(bin.lo)}–${formatMean(bin.hi)} · rollout ${advantageDist.firstId}: ${bin.first}, latest: ${bin.last}`}
+                          >
+                            <div
+                              class="dist-compare-bar swatch-first"
+                              style:height={`${(bin.first / advantageDist.max) * 100}%`}
+                            ></div>
+                            {#if advantageDist.firstId !== advantageDist.lastId}
+                              <div
+                                class="dist-compare-bar swatch-last"
+                                style:height={`${(bin.last / advantageDist.max) * 100}%`}
+                              ></div>
+                            {/if}
+                          </div>
+                        {/each}
+                      </div>
+                      <div class="dist-axis">
+                        <span>{formatMean(advantageDist.lo)}</span>
+                        <span class="dist-axis-label">advantage</span>
+                        <span>{formatMean(advantageDist.hi)}</span>
+                      </div>
+                    {:else}
+                      <div class="empty">Loading distribution…</div>
+                    {/if}
                   </div>
                 {/if}
                 <div class="rollout-chart score-dist-chart">
