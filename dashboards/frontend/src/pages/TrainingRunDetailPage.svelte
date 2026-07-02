@@ -8,6 +8,7 @@
   import ConversationView from "../components/ConversationView.svelte";
   import AdvantageViolins from "../components/AdvantageViolins.svelte";
   import AdvantageSpreadChart from "../components/AdvantageSpreadChart.svelte";
+  import ComparativeBarChart from "../components/ComparativeBarChart.svelte";
   import LineChart from "../components/LineChart.svelte";
   import ResizableTable from "../components/ResizableTable.svelte";
   import {
@@ -617,6 +618,32 @@
     );
   }
 
+  // Adapt a buildDist result into ComparativeBarChart inputs: one category per
+  // bin (value range, shown only in the tooltip — the endpoint axis is drawn
+  // separately), and a series per rollout endpoint. The latest series is dropped
+  // when the first and latest rollout are the same one.
+  function distCategories(dist) {
+    return dist.bins.map((b) => `${formatMean(b.lo)}–${formatMean(b.hi)}`);
+  }
+
+  function distSeries(dist) {
+    const series = [
+      {
+        name: `rollout ${dist.firstId}`,
+        color: "var(--color-c-gray-40)",
+        values: dist.bins.map((b) => b.first),
+      },
+    ];
+    if (dist.firstId !== dist.lastId) {
+      series.push({
+        name: `latest (rollout ${dist.lastId})`,
+        color: "var(--accent)",
+        values: dist.bins.map((b) => b.last),
+      });
+    }
+    return series;
+  }
+
   // Fetch the two rollouts' samples only when the endpoints change (a new step
   // lands), not on every 5s poll — the payloads are large.
   $effect(() => {
@@ -792,37 +819,13 @@
                   <div class="rollout-chart">
                     <div class="rollout-chart-title">Advantage distribution: rollout 0 vs latest</div>
                     {#if advantageDist}
-                      <div class="dist-legend">
-                        <span class="dist-legend-item">
-                          <span class="dist-swatch swatch-first"></span>
-                          rollout {advantageDist.firstId}
-                        </span>
-                        {#if advantageDist.firstId !== advantageDist.lastId}
-                          <span class="dist-legend-item">
-                            <span class="dist-swatch swatch-last"></span>
-                            latest (rollout {advantageDist.lastId})
-                          </span>
-                        {/if}
-                      </div>
-                      <div class="dist-compare">
-                        {#each advantageDist.bins as bin, i (i)}
-                          <div
-                            class="dist-compare-bin"
-                            title={`advantage ${formatMean(bin.lo)}–${formatMean(bin.hi)} · rollout ${advantageDist.firstId}: ${bin.first}, latest: ${bin.last}`}
-                          >
-                            <div
-                              class="dist-compare-bar swatch-first"
-                              style:height={`${(bin.first / advantageDist.max) * 100}%`}
-                            ></div>
-                            {#if advantageDist.firstId !== advantageDist.lastId}
-                              <div
-                                class="dist-compare-bar swatch-last"
-                                style:height={`${(bin.last / advantageDist.max) * 100}%`}
-                              ></div>
-                            {/if}
-                          </div>
-                        {/each}
-                      </div>
+                      <ComparativeBarChart
+                        categories={distCategories(advantageDist)}
+                        series={distSeries(advantageDist)}
+                        height={120}
+                        showCategoryLabels={false}
+                        format={(v) => `${v}`}
+                      />
                       <div class="dist-axis">
                         <span>{formatMean(advantageDist.lo)}</span>
                         <span class="dist-axis-label">advantage</span>
@@ -836,37 +839,13 @@
                 <div class="rollout-chart score-dist-chart">
                   <div class="rollout-chart-title">Score distribution</div>
                   {#if scoreDist}
-                    <div class="dist-legend">
-                      <span class="dist-legend-item">
-                        <span class="dist-swatch swatch-first"></span>
-                        rollout {scoreDist.firstId}
-                      </span>
-                      {#if scoreDist.firstId !== scoreDist.lastId}
-                        <span class="dist-legend-item">
-                          <span class="dist-swatch swatch-last"></span>
-                          latest (rollout {scoreDist.lastId})
-                        </span>
-                      {/if}
-                    </div>
-                    <div class="dist-compare">
-                      {#each scoreDist.bins as bin, i (i)}
-                        <div
-                          class="dist-compare-bin"
-                          title={`reward ${formatMean(bin.lo)}–${formatMean(bin.hi)} · rollout ${scoreDist.firstId}: ${bin.first}, latest: ${bin.last}`}
-                        >
-                          <div
-                            class="dist-compare-bar swatch-first"
-                            style:height={`${(bin.first / scoreDist.max) * 100}%`}
-                          ></div>
-                          {#if scoreDist.firstId !== scoreDist.lastId}
-                            <div
-                              class="dist-compare-bar swatch-last"
-                              style:height={`${(bin.last / scoreDist.max) * 100}%`}
-                            ></div>
-                          {/if}
-                        </div>
-                      {/each}
-                    </div>
+                    <ComparativeBarChart
+                      categories={distCategories(scoreDist)}
+                      series={distSeries(scoreDist)}
+                      height={120}
+                      showCategoryLabels={false}
+                      format={(v) => `${v}`}
+                    />
                     <div class="dist-axis">
                       <span>{formatMean(scoreDist.lo)}</span>
                       <span class="dist-axis-label">reward</span>
@@ -1409,59 +1388,6 @@
     font-weight: 600;
     color: var(--text-bright);
     margin-bottom: 6px;
-  }
-
-  /* Score-distribution comparison (first vs latest rollout). */
-  .swatch-first {
-    background: var(--color-c-gray-40, #5e5e5e);
-  }
-
-  .swatch-last {
-    background: var(--accent);
-  }
-
-  .dist-legend {
-    display: flex;
-    gap: 16px;
-    margin-bottom: 8px;
-    font-size: 11px;
-    color: var(--muted);
-  }
-
-  .dist-legend-item {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-  }
-
-  .dist-swatch {
-    width: 10px;
-    height: 10px;
-    border-radius: 2px;
-  }
-
-  .dist-compare {
-    display: flex;
-    align-items: flex-end;
-    gap: 3px;
-    height: 120px;
-    padding-top: 8px;
-    border-bottom: 1px solid var(--border, #2f2f2f);
-  }
-
-  .dist-compare-bin {
-    flex: 1;
-    height: 100%;
-    display: flex;
-    align-items: flex-end;
-    justify-content: center;
-    gap: 2px;
-  }
-
-  .dist-compare-bar {
-    flex: 1;
-    min-height: 1px;
-    border-radius: 2px 2px 0 0;
   }
 
   .rollout-chart-meta {
