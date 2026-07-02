@@ -463,12 +463,20 @@
     background: color-mix(in srgb, var(--text) 8%, transparent);
   }
 
+  :global(table.runs-table tr.row-selected td:first-child) {
+    background: color-mix(in srgb, var(--text) 8%, var(--bg));
+  }
+
   .run-row {
     cursor: pointer;
   }
 
   :global(table.runs-table tr.run-row:hover:not(.row-selected) td) {
     background: color-mix(in srgb, var(--text) 6%, transparent);
+  }
+
+  :global(table.runs-table tr.run-row:hover:not(.row-selected) td:first-child) {
+    background: color-mix(in srgb, var(--text) 6%, var(--bg));
   }
 
   .run-row:focus-visible {
