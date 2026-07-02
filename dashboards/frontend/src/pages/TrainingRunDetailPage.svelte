@@ -1087,8 +1087,6 @@
     color: var(--text);
   }
 
-  /* Inside the expanded drawer the drawer owns padding/width, so drop the
-     page chrome and let the rollouts + logs fill the wide drawer. */
   .detail.embedded {
     padding: 0;
     max-width: none;
@@ -1202,7 +1200,6 @@
     padding-top: 20px;
   }
 
-  /* Summary tab: chart on the left, run summary metadata on the right. */
   .summary-tab {
     display: grid;
     grid-template-columns: minmax(0, 1fr) minmax(280px, 340px);
@@ -1214,14 +1211,17 @@
   .summary-tab-side {
     border-left: 1px solid var(--border, #2f2f2f);
     padding-left: 24px;
-    /* Keep the summary sections (status / retry-resume / W&B / group / full
-       slime params) in view while the charts scroll, and let the panel scroll
-       internally when it outgrows the viewport. */
     position: sticky;
     top: 20px;
     max-height: calc(100vh - 40px);
     overflow-y: auto;
     overscroll-behavior: contain;
+  }
+
+  .detail.embedded .summary-tab-side {
+    position: static;
+    max-height: none;
+    overflow-y: visible;
   }
 
   .logs-statusbar {
@@ -1241,7 +1241,6 @@
       padding-left: 0;
       border-top: 1px solid var(--border, #2f2f2f);
       padding-top: 16px;
-      /* Stacked below the charts on mobile — flow naturally, no inner scroll. */
       position: static;
       max-height: none;
       overflow-y: visible;
@@ -1252,8 +1251,6 @@
     margin-bottom: 20px;
   }
 
-  /* Score + advantage charts share a 2-column grid on desktop, stacking on
-     mobile. Children drop their own bottom margin in favour of the grid gap. */
   .chart-grid {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));

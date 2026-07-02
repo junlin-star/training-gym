@@ -198,37 +198,34 @@
               {@const stageLabel = frameworkStatusLabel(run)}
               {@const progress = frameworkProgress(run)}
               {@const groupTags = getGroupTags(run)}
-              <tr
-                class="run-row"
-                class:row-selected={drawerRunId === run.run_id}
-                role="button"
-                tabindex="0"
-                aria-label={`Open training run ${runName}`}
-                onclick={() => selectRun(run.run_id)}
-                onkeydown={(event) => {
-                  if (event.key === "Enter" || event.key === " ") {
-                    event.preventDefault();
-                    selectRun(run.run_id);
-                  }
-                }}
-              >
-                <td class="run-cell">
-                  <div class="cell-content" title={runName}>
+              <tr class="run-row" class:row-selected={drawerRunId === run.run_id}>
+                <td class="run-cell row-open-cell">
+                  <button
+                    type="button"
+                    class="cell-open-button"
+                    title={runName}
+                    aria-label={`Open training run ${runName}`}
+                    onclick={() => selectRun(run.run_id)}
+                  >
                     <div class="run-name">{runName}</div>
-                  </div>
+                  </button>
                 </td>
-                <td>
-                  <div class="cell-content">
+                <td class="row-open-cell">
+                  <button type="button" class="cell-open-button" onclick={() => selectRun(run.run_id)}>
                     <span class="status-stack">
                       <StatusPill status={status} />
                       {#if resumeBadge(run)}
                         <span class="resume-badge">{resumeBadge(run)}</span>
                       {/if}
                     </span>
-                  </div>
+                  </button>
                 </td>
-                <td class="stage-cell">
-                  <div class="cell-content stage-content">
+                <td class="stage-cell row-open-cell">
+                  <button
+                    type="button"
+                    class="cell-open-button stage-open-button"
+                    onclick={() => selectRun(run.run_id)}
+                  >
                     {#if showFrameworkStatus(run) && stageLabel}
                       <FrameworkStageProgress
                         progress={progress}
@@ -240,34 +237,38 @@
                     {:else}
                       <span class="stage-empty">—</span>
                     {/if}
-                  </div>
+                  </button>
                 </td>
-                <td class="model-cell" title={modelName(run)}>
-                  <div class="cell-content">
+                <td class="model-cell row-open-cell" title={modelName(run)}>
+                  <button type="button" class="cell-open-button" onclick={() => selectRun(run.run_id)}>
                     {modelName(run)}
-                  </div>
+                  </button>
                 </td>
-                <td class="dataset-cell" title={run.config_summary?.dataset_name || "—"}>
-                  <div class="cell-content">
+                <td class="dataset-cell row-open-cell" title={run.config_summary?.dataset_name || "—"}>
+                  <button type="button" class="cell-open-button" onclick={() => selectRun(run.run_id)}>
                     {run.config_summary?.dataset_name || "—"}
-                  </div>
+                  </button>
                 </td>
-                <td>
-                  <div class="cell-content">
+                <td class="row-open-cell">
+                  <button type="button" class="cell-open-button" onclick={() => selectRun(run.run_id)}>
                     {run.framework || "—"}
-                  </div>
+                  </button>
                 </td>
-                <td class="group-cell" title={groupTags?.group_id || run.group_id || ""}>
-                  <div class="cell-content">
+                <td class="group-cell row-open-cell" title={groupTags?.group_id || run.group_id || ""}>
+                  <button type="button" class="cell-open-button" onclick={() => selectRun(run.run_id)}>
                     {#if groupTags?.group_id}
                       <span class="group-tag">{groupTags.group_id}</span>
                     {:else}
                       <span class="group-empty">—</span>
                     {/if}
-                  </div>
+                  </button>
                 </td>
-                <td class="tags-cell">
-                  <div class="cell-content tags-content">
+                <td class="tags-cell row-open-cell">
+                  <button
+                    type="button"
+                    class="cell-open-button tags-open-button"
+                    onclick={() => selectRun(run.run_id)}
+                  >
                     {#if groupTags?.tags.length}
                       <span class="tag-pill-list">
                         {#each groupTags.tags as tag (tag.key)}
@@ -279,13 +280,17 @@
                     {:else}
                       <span class="group-empty">—</span>
                     {/if}
-                  </div>
+                  </button>
                 </td>
-                <td class="created-cell">
-                  <TimeAgo timestamp={run.started_at || run.created_at} showJustNow falsyRepresentation="—" />
+                <td class="created-cell row-open-cell">
+                  <button type="button" class="cell-open-button" onclick={() => selectRun(run.run_id)}>
+                    <TimeAgo timestamp={run.started_at || run.created_at} showJustNow falsyRepresentation="—" />
+                  </button>
                 </td>
-                <td class="updated-cell">
-                  <TimeAgo timestamp={run.updated_at} showJustNow falsyRepresentation="—" />
+                <td class="updated-cell row-open-cell">
+                  <button type="button" class="cell-open-button" onclick={() => selectRun(run.run_id)}>
+                    <TimeAgo timestamp={run.updated_at} showJustNow falsyRepresentation="—" />
+                  </button>
                 </td>
                 <td class="modal-link-cell">
                   <div class="modal-link-wrap">
@@ -468,7 +473,7 @@
   }
 
   .run-row {
-    cursor: pointer;
+    cursor: default;
   }
 
   :global(table.runs-table tr.run-row:hover:not(.row-selected) td) {
@@ -479,24 +484,38 @@
     background: color-mix(in srgb, var(--text) 6%, var(--bg));
   }
 
-  .run-row:focus-visible {
-    outline: 2px solid var(--accent);
-    outline-offset: -2px;
+  :global(table.runs-table td.row-open-cell) {
+    padding: 0;
   }
 
-  .cell-content {
+  .cell-open-button {
+    border: 0;
+    background: transparent;
     color: var(--text);
     font: inherit;
     font-size: 14px;
     line-height: 20px;
+    cursor: pointer;
+    padding: 8px 16px;
     text-align: left;
     width: 100%;
+    min-height: 40px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
-  .stage-content {
+  .cell-open-button:hover,
+  .cell-open-button:focus-visible {
+    color: var(--text-bright);
+  }
+
+  .cell-open-button:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+  }
+
+  .stage-open-button {
     white-space: normal;
     line-height: 16px;
   }
@@ -571,7 +590,7 @@
     background: color-mix(in srgb, var(--panel-alt) 70%, transparent);
   }
 
-  .tags-content {
+  .tags-open-button {
     overflow: visible;
     text-overflow: clip;
     white-space: normal;
