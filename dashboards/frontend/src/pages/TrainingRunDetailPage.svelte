@@ -702,7 +702,7 @@
                     <AdvantageHeatmap steps={advantageSteps} />
                   </div>
                 {/if}
-                <div class="rollout-chart">
+                <div class="rollout-chart score-dist-chart">
                   <div class="rollout-chart-title">Score distribution</div>
                   {#if scoreDist}
                     <div class="dist-legend">
@@ -1264,6 +1264,10 @@
   .chart-grid .rollout-chart {
     margin-bottom: 0;
     min-width: 0;
+  }
+
+  .chart-grid .score-dist-chart {
+    grid-column: 1 / -1;
   }
 
   @media (max-width: 900px) {
