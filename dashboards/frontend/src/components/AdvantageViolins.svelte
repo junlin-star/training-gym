@@ -122,7 +122,7 @@
           };
         });
       // Median tick spans the bucket that contains p50.
-      const medBucket = s.buckets.find((b) => s.p50 >= b.lo && s.p50 < b.hi);
+      const medBucket = s.buckets.find((b, bi) => s.p50 >= b.lo && (s.p50 < b.hi || bi === s.buckets.length - 1));
       const medHW = hw(medBucket ? medBucket.mass : 0);
       return {
         bars,
