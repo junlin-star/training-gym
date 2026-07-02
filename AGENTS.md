@@ -110,3 +110,7 @@ Each source declares `TUTORIAL_METADATA` dict with `framework`, `cluster_shape`,
 - Modal Secrets `huggingface-secret` (HF_TOKEN) and `wandb-secret` (WANDB_API_KEY) are required for remote runs.
 - Served endpoints (`DeploymentConfig.serve()`) sit behind Modal proxy auth: export a proxy-auth token pair `MODAL_KEY` (`wk-…`) / `MODAL_SECRET` (`ws-…`) in the launching shell, or every eval/`generate`/teacher call returns HTTP 401. For calls from remote workers (custom rm/reward fns), also forward the pair into the worker via a `modal.Secret` — the driver shell env doesn't reach them.
 - Every framework's Modal app is tagged with `_modal_framework`, `_modal_job_type=training`, and W&B project/group for dashboard auto-discovery (see `common/__init__.py: COMMON_TRAINING_GYM_TAGS`).
+
+## Agent skills
+
+- For model support work, read `skills/model-support/SKILL.md` before acting. Use it when adding, debugging, validating, or productionizing new model support, especially Slime recipes and model configs.
