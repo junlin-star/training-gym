@@ -125,8 +125,15 @@
     const samples = expandedRollout?.samples || [];
     if (!samples.length) return null;
     const scores = samples.map((s) => Number(s.score) || 0);
-    const lo = Math.min(...scores);
-    const hi = Math.max(...scores);
+    // Loop instead of Math.min(...arr): a single rollout's per-sample array can
+    // exceed the engine's max argument count and make the spread throw a
+    // RangeError (same failure class buildDist avoids).
+    let lo = Infinity;
+    let hi = -Infinity;
+    for (const v of scores) {
+      if (v < lo) lo = v;
+      if (v > hi) hi = v;
+    }
     // When every sample scored the same, a single bucket reads clearer than a
     // lone bar pinned to one edge.
     const count = lo === hi ? 1 : BUCKET_COUNT;
