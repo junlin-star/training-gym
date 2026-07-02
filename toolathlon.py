@@ -85,14 +85,16 @@ ROLLOUT_RESPONSE_LEN = 8192
 ROLLOUT_CONTEXT_LEN = 32768
 MAX_TOKENS_PER_GPU = 8192
 
-# Length penalty applied to a full-pass reward: a task solved in fewer than
-# LENGTH_PENALTY_FULL_REWARD_LEN response tokens keeps the full 1.0; the reward
-# then decays linearly to LENGTH_PENALTY_MIN_REWARD at LENGTH_PENALTY_MAX_LEN
-# tokens (and is clamped there beyond). Only full passes (reward == 1.0) are
-# penalized — failures stay at their raw reward.
-LENGTH_PENALTY_FULL_REWARD_LEN = 16000
-LENGTH_PENALTY_MAX_LEN = 32768
-LENGTH_PENALTY_MIN_REWARD = 0.75
+# Length penalty on the model's OWN generated (assistant) tokens — the
+# loss-masked turns the policy actually controls — NOT total response_length,
+# which is ~80% tool-observation tokens the model doesn't write. Applied as an
+# additive cost to passes AND fails so verbosity is discouraged regardless of
+# task success: cost is 0 up to LENGTH_PENALTY_FREE_TOKENS, then grows linearly to
+# LENGTH_PENALTY_MAX_COST at LENGTH_PENALTY_MAX_TOKENS (clamped beyond).
+# NOTE: initial thresholds — calibrate against toolathlon_assistant_tokens_mean.
+LENGTH_PENALTY_FREE_TOKENS = 4000
+LENGTH_PENALTY_MAX_TOKENS = 16000
+LENGTH_PENALTY_MAX_COST = 0.25
 
 
 class ToolathlonExitStatus(StrEnum):
@@ -1107,12 +1109,23 @@ async def toolathlon_generate(
     sample.response_length = len(response_tokens)
     sample.tokens = prompt_tokens + response_tokens
     sample.loss_mask = loss_mask
-    sample.reward = float(payload.get("reward", 0.0))
+    # Apply the length penalty HERE, not in reward_func. toolathlon_generate sets
+    # sample.reward + status=COMPLETED, so slime's rm step (generate_and_rm) treats
+    # the reward as already computed and SKIPS custom_rm_function — a penalty applied
+    # in reward_func never reaches GRPO. sample.reward is the value GRPO optimizes.
+    # Penalize on the model's OWN generated tokens (loss_mask=1), not total length.
+    assistant_tokens = sum(loss_mask)
+    task_reward = float(payload.get("reward", 0.0))
+    sample.reward = _length_penalized_reward(task_reward, assistant_tokens)
     sample.status = Sample.Status.COMPLETED
     sample.metadata = {
         **metadata,
         **payload,
-        "reward": payload.get("reward", 0.0),
+        # Raw 0/1 task reward (true pass/fail); sample.reward carries the penalty.
+        "reward": task_reward,
+        "task_reward": task_reward,
+        "penalized_reward": sample.reward,
+        "training_assistant_tokens": assistant_tokens,
         "exit_status": payload.get("exit_status"),
         "training_response_source": "assistant_action_turns",
         "training_assistant_turns": len(assistant_turns),
@@ -1124,37 +1137,35 @@ async def toolathlon_generate(
     return sample
 
 
-def _length_penalized_reward(reward: float, response_length: int) -> float:
-    """Scale a full-pass reward down for verbose trajectories.
+def _length_penalized_reward(reward: float, assistant_tokens: int) -> float:
+    """Subtract a verbosity cost that grows with the model's own generated
+    (assistant) token count — applied to passes AND fails so long trajectories
+    are discouraged regardless of task success.
 
-    A raw reward that isn't a full pass (``!= 1.0``) is returned unchanged. A
-    full pass keeps the whole 1.0 when solved in fewer than
-    ``LENGTH_PENALTY_FULL_REWARD_LEN`` response tokens, then decays linearly to
-    ``LENGTH_PENALTY_MIN_REWARD`` at ``LENGTH_PENALTY_MAX_LEN`` tokens (clamped
-    to the floor beyond that).
+    Cost is 0 up to ``LENGTH_PENALTY_FREE_TOKENS``, then grows linearly to
+    ``LENGTH_PENALTY_MAX_COST`` at ``LENGTH_PENALTY_MAX_TOKENS`` (clamped beyond).
+    ``assistant_tokens`` is ``sum(loss_mask)`` — the trainable turns the policy
+    controls, not total ``response_length`` (dominated by tool observations).
     """
-    if reward != 1.0:
+    if assistant_tokens <= LENGTH_PENALTY_FREE_TOKENS:
         return reward
-    if response_length <= LENGTH_PENALTY_FULL_REWARD_LEN:
-        return 1.0
-    span = LENGTH_PENALTY_MAX_LEN - LENGTH_PENALTY_FULL_REWARD_LEN
-    frac = min(1.0, (response_length - LENGTH_PENALTY_FULL_REWARD_LEN) / span)
-    return 1.0 + (LENGTH_PENALTY_MIN_REWARD - 1.0) * frac
+    span = LENGTH_PENALTY_MAX_TOKENS - LENGTH_PENALTY_FREE_TOKENS
+    frac = min(1.0, (assistant_tokens - LENGTH_PENALTY_FREE_TOKENS) / span)
+    return reward - LENGTH_PENALTY_MAX_COST * frac
 
 
 async def reward_func(args, samples, **kwargs):
-    """Pass through the task reward with a length penalty on full passes; slime
-    computes the GRPO advantage."""
+    """Pass through ``sample.reward`` (already length-penalized in
+    toolathlon_generate); slime computes the GRPO advantage.
 
-    def _reward(sample) -> float:
-        return _length_penalized_reward(
-            float(getattr(sample, "reward", 0.0) or 0.0),
-            int(getattr(sample, "response_length", 0) or 0),
-        )
-
+    NOTE: for toolathlon this is effectively never called — toolathlon_generate
+    sets ``sample.reward`` + ``status=COMPLETED``, so slime's ``generate_and_rm``
+    skips ``custom_rm_function`` for samples that already have a reward. Reward
+    shaping MUST happen in toolathlon_generate, not here.
+    """
     if isinstance(samples, (list, tuple)):
-        return [_reward(s) for s in samples]
-    return _reward(samples)
+        return [float(getattr(s, "reward", 0.0) or 0.0) for s in samples]
+    return float(getattr(samples, "reward", 0.0) or 0.0)
 
 
 def toolathlon_rollout_log(
@@ -1163,14 +1174,26 @@ def toolathlon_rollout_log(
     del args, rollout_time
 
     latencies = []
-    rewards = []
+    task_rewards = []  # raw 0/1 task reward -> true pass rate
+    penalized_rewards = []  # length-penalized reward GRPO actually optimizes
+    response_lengths = []
+    assistant_tokens_list = []  # model's own generated tokens (penalty target)
     exit_status_counts: dict[str, int] = {}
     truncated_count = 0
     for sample in samples:
-        rewards.append(float(getattr(sample, "reward", 0.0) or 0.0))
+        penalized_rewards.append(float(getattr(sample, "reward", 0.0) or 0.0))
+        rl = getattr(sample, "response_length", None)
+        if isinstance(rl, (int, float)):
+            response_lengths.append(float(rl))
         metadata = getattr(sample, "metadata", None)
         if not isinstance(metadata, dict):
             continue
+        task_rewards.append(
+            float(metadata.get("task_reward", metadata.get("reward", 0.0)) or 0.0)
+        )
+        at = metadata.get("training_assistant_tokens")
+        if isinstance(at, (int, float)):
+            assistant_tokens_list.append(float(at))
         exit_status = str(metadata.get("exit_status") or "unknown")
         exit_status_counts[exit_status] = exit_status_counts.get(exit_status, 0) + 1
         if metadata.get("training_tokens_truncated"):
@@ -1180,13 +1203,25 @@ def toolathlon_rollout_log(
         except (KeyError, TypeError, ValueError):
             continue
 
-    if not latencies and not rewards:
+    if not latencies and not penalized_rewards:
         return False
 
     metrics: dict[str, float] = {}
-    if rewards:
-        metrics["toolathlon_pass_rate"] = sum(rewards) / len(rewards)
-        metrics["toolathlon_truncation_rate"] = truncated_count / len(rewards)
+    if task_rewards:
+        metrics["toolathlon_pass_rate"] = sum(task_rewards) / len(task_rewards)
+    if penalized_rewards:
+        metrics["toolathlon_mean_penalized_reward"] = sum(penalized_rewards) / len(
+            penalized_rewards
+        )
+        metrics["toolathlon_truncation_rate"] = truncated_count / len(penalized_rewards)
+    if response_lengths:
+        metrics["toolathlon_response_length_mean"] = sum(response_lengths) / len(
+            response_lengths
+        )
+    if assistant_tokens_list:
+        metrics["toolathlon_assistant_tokens_mean"] = sum(assistant_tokens_list) / len(
+            assistant_tokens_list
+        )
     if latencies:
         metrics["tool_execution_latency"] = sum(latencies) / len(latencies)
     for status, count in exit_status_counts.items():
