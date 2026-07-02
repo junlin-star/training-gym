@@ -190,7 +190,7 @@
     z-index: 2;
   }
 
-  :global(table.resizable-table.sticky-first-column tbody tr:hover td:first-child) {
+  :global(table.resizable-table.sticky-first-column tbody tr:hover:not(.row-selected) td:first-child) {
     background: color-mix(in srgb, var(--text) 6%, var(--bg));
   }
 

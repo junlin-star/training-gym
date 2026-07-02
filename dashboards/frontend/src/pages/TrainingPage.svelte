@@ -467,7 +467,7 @@
     cursor: pointer;
   }
 
-  :global(table.runs-table tr.run-row:hover td) {
+  :global(table.runs-table tr.run-row:hover:not(.row-selected) td) {
     background: color-mix(in srgb, var(--text) 6%, transparent);
   }
 
