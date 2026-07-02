@@ -515,7 +515,13 @@ def _compact_trajectory_messages(raw: Any) -> list[dict[str, Any]] | None:
             continue
         content = msg.get("content")
         if not isinstance(content, str):
-            content = "" if content is None else json.dumps(content)
+            if content is None:
+                content = ""
+            else:
+                try:
+                    content = json.dumps(content)
+                except TypeError:
+                    content = str(content)
         if len(content) > _TRAJECTORY_MSG_CHARS_MAX:
             edge = _TRAJECTORY_MSG_CHARS_MAX // 2
             elided = len(content) - 2 * edge
@@ -670,6 +676,7 @@ def _sample_to_dict(
     if isinstance(sample_meta, dict):
         for key in (
             "exit_status",
+            "eval_detail",
             "training_response_source",
             "training_assistant_turns",
         ):

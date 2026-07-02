@@ -102,20 +102,6 @@
   let advantageSteps = $state([]);
   let hasAdvantages = $derived(advantageSteps.length > 0);
 
-  // Endpoint rollout ids (first vs latest) for the advantage comparison chart.
-  let advantageStepIds = $derived(
-    advantageSteps
-      .filter((s) => s && s.stats)
-      .map((s) => Number(s.rollout_id) || 0)
-      .sort((a, b) => a - b),
-  );
-  let advantageFirstId = $derived(
-    advantageStepIds.length ? advantageStepIds[0] : null,
-  );
-  let advantageLastId = $derived(
-    advantageStepIds.length ? advantageStepIds[advantageStepIds.length - 1] : null,
-  );
-
   // Per-step sample view: a histogram of sample scores. Clicking a bar opens
   // a single-sample viewer scoped to that bucket; ←/→ step through it.
   const BUCKET_COUNT = 12;
@@ -686,8 +672,8 @@
   $effect(() => {
     if (activeTab !== "summary") return;
     const id = runId;
-    const fId = advantageFirstId;
-    const lId = advantageLastId;
+    const fId = firstRolloutId;
+    const lId = lastRolloutId;
     if (!id || fId == null || lId == null) {
       advantageDist = null;
       return;
@@ -853,7 +839,7 @@
                   <AdvantageViolins steps={advantageSteps} />
                 </div>
                 <div class="rollout-chart">
-                  <div class="rollout-chart-title">Advantage distribution: rollout 0 vs latest</div>
+                  <div class="rollout-chart-title">Advantage distribution: rollout {firstRolloutId} vs latest</div>
                   {#if advantageDist}
                     <ComparativeBarChart
                       categories={distCategories(advantageDist)}
