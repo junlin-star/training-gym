@@ -690,59 +690,61 @@
                 {/if}
               </div>
             {/if}
-            {#if rolloutSummaries.length && hasAdvantages}
-              <div class="rollout-chart">
-                <div class="rollout-chart-title">Advantage spread over time</div>
-                <AdvantageSpreadChart steps={advantageSteps} />
-              </div>
-              <div class="rollout-chart">
-                <div class="rollout-chart-title">Advantage distribution over time</div>
-                <AdvantageHeatmap steps={advantageSteps} />
-              </div>
-            {/if}
             {#if rolloutSummaries.length}
-              <div class="rollout-chart">
-                <div class="rollout-chart-title">Score distribution</div>
-                {#if scoreDist}
-                  <div class="dist-legend">
-                    <span class="dist-legend-item">
-                      <span class="dist-swatch swatch-first"></span>
-                      rollout {scoreDist.firstId}
-                    </span>
-                    {#if scoreDist.firstId !== scoreDist.lastId}
-                      <span class="dist-legend-item">
-                        <span class="dist-swatch swatch-last"></span>
-                        latest (rollout {scoreDist.lastId})
-                      </span>
-                    {/if}
+              <div class="chart-grid">
+                {#if hasAdvantages}
+                  <div class="rollout-chart">
+                    <div class="rollout-chart-title">Advantage spread over time</div>
+                    <AdvantageSpreadChart steps={advantageSteps} />
                   </div>
-                  <div class="dist-compare">
-                    {#each scoreDist.bins as bin, i (i)}
-                      <div
-                        class="dist-compare-bin"
-                        title={`reward ${formatMean(bin.lo)}–${formatMean(bin.hi)} · rollout ${scoreDist.firstId}: ${bin.first}, latest: ${bin.last}`}
-                      >
-                        <div
-                          class="dist-compare-bar swatch-first"
-                          style:height={`${(bin.first / scoreDist.max) * 100}%`}
-                        ></div>
-                        {#if scoreDist.firstId !== scoreDist.lastId}
-                          <div
-                            class="dist-compare-bar swatch-last"
-                            style:height={`${(bin.last / scoreDist.max) * 100}%`}
-                          ></div>
-                        {/if}
-                      </div>
-                    {/each}
+                  <div class="rollout-chart">
+                    <div class="rollout-chart-title">Advantage distribution over time</div>
+                    <AdvantageHeatmap steps={advantageSteps} />
                   </div>
-                  <div class="dist-axis">
-                    <span>{formatMean(scoreDist.lo)}</span>
-                    <span class="dist-axis-label">reward</span>
-                    <span>{formatMean(scoreDist.hi)}</span>
-                  </div>
-                {:else}
-                  <div class="empty">Loading distribution…</div>
                 {/if}
+                <div class="rollout-chart score-dist-chart">
+                  <div class="rollout-chart-title">Score distribution</div>
+                  {#if scoreDist}
+                    <div class="dist-legend">
+                      <span class="dist-legend-item">
+                        <span class="dist-swatch swatch-first"></span>
+                        rollout {scoreDist.firstId}
+                      </span>
+                      {#if scoreDist.firstId !== scoreDist.lastId}
+                        <span class="dist-legend-item">
+                          <span class="dist-swatch swatch-last"></span>
+                          latest (rollout {scoreDist.lastId})
+                        </span>
+                      {/if}
+                    </div>
+                    <div class="dist-compare">
+                      {#each scoreDist.bins as bin, i (i)}
+                        <div
+                          class="dist-compare-bin"
+                          title={`reward ${formatMean(bin.lo)}–${formatMean(bin.hi)} · rollout ${scoreDist.firstId}: ${bin.first}, latest: ${bin.last}`}
+                        >
+                          <div
+                            class="dist-compare-bar swatch-first"
+                            style:height={`${(bin.first / scoreDist.max) * 100}%`}
+                          ></div>
+                          {#if scoreDist.firstId !== scoreDist.lastId}
+                            <div
+                              class="dist-compare-bar swatch-last"
+                              style:height={`${(bin.last / scoreDist.max) * 100}%`}
+                            ></div>
+                          {/if}
+                        </div>
+                      {/each}
+                    </div>
+                    <div class="dist-axis">
+                      <span>{formatMean(scoreDist.lo)}</span>
+                      <span class="dist-axis-label">reward</span>
+                      <span>{formatMean(scoreDist.hi)}</span>
+                    </div>
+                  {:else}
+                    <div class="empty">Loading distribution…</div>
+                  {/if}
+                </div>
               </div>
             {/if}
           {/if}
@@ -1085,8 +1087,6 @@
     color: var(--text);
   }
 
-  /* Inside the expanded drawer the drawer owns padding/width, so drop the
-     page chrome and let the rollouts + logs fill the wide drawer. */
   .detail.embedded {
     padding: 0;
     max-width: none;
@@ -1200,7 +1200,6 @@
     padding-top: 20px;
   }
 
-  /* Summary tab: chart on the left, run summary metadata on the right. */
   .summary-tab {
     display: grid;
     grid-template-columns: minmax(0, 1fr) minmax(280px, 340px);
@@ -1212,6 +1211,17 @@
   .summary-tab-side {
     border-left: 1px solid var(--border, #2f2f2f);
     padding-left: 24px;
+    position: sticky;
+    top: 20px;
+    max-height: calc(100vh - 40px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  .detail.embedded .summary-tab-side {
+    position: static;
+    max-height: none;
+    overflow-y: visible;
   }
 
   .logs-statusbar {
@@ -1231,11 +1241,36 @@
       padding-left: 0;
       border-top: 1px solid var(--border, #2f2f2f);
       padding-top: 16px;
+      position: static;
+      max-height: none;
+      overflow-y: visible;
     }
   }
 
   .rollout-chart {
     margin-bottom: 20px;
+  }
+
+  .chart-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 20px;
+    margin-bottom: 20px;
+  }
+
+  .chart-grid .rollout-chart {
+    margin-bottom: 0;
+    min-width: 0;
+  }
+
+  .chart-grid .score-dist-chart {
+    grid-column: 1 / -1;
+  }
+
+  @media (max-width: 900px) {
+    .chart-grid {
+      grid-template-columns: 1fr;
+    }
   }
 
   .rollout-chart-title {

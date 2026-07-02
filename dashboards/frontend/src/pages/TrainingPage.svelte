@@ -198,18 +198,20 @@
               {@const stageLabel = frameworkStatusLabel(run)}
               {@const progress = frameworkProgress(run)}
               {@const groupTags = getGroupTags(run)}
-              <tr class:row-selected={drawerRunId === run.run_id}>
-                <td class="run-cell">
+              <tr class="run-row" class:row-selected={drawerRunId === run.run_id}>
+                <td class="run-cell row-open-cell">
                   <button
-                    class="cell-open-button run-name-button"
+                    type="button"
+                    class="cell-open-button"
                     title={runName}
+                    aria-label={`Open training run ${runName}`}
                     onclick={() => selectRun(run.run_id)}
                   >
                     <div class="run-name">{runName}</div>
                   </button>
                 </td>
-                <td>
-                  <button class="cell-open-button" onclick={() => selectRun(run.run_id)}>
+                <td class="row-open-cell">
+                  <button type="button" class="cell-open-button" onclick={() => selectRun(run.run_id)}>
                     <span class="status-stack">
                       <StatusPill status={status} />
                       {#if resumeBadge(run)}
@@ -218,8 +220,9 @@
                     </span>
                   </button>
                 </td>
-                <td class="stage-cell">
+                <td class="stage-cell row-open-cell">
                   <button
+                    type="button"
                     class="cell-open-button stage-open-button"
                     onclick={() => selectRun(run.run_id)}
                   >
@@ -236,23 +239,23 @@
                     {/if}
                   </button>
                 </td>
-                <td class="model-cell" title={modelName(run)}>
-                  <button class="cell-open-button" onclick={() => selectRun(run.run_id)}>
+                <td class="model-cell row-open-cell" title={modelName(run)}>
+                  <button type="button" class="cell-open-button" onclick={() => selectRun(run.run_id)}>
                     {modelName(run)}
                   </button>
                 </td>
-                <td class="dataset-cell" title={run.config_summary?.dataset_name || "—"}>
-                  <button class="cell-open-button" onclick={() => selectRun(run.run_id)}>
+                <td class="dataset-cell row-open-cell" title={run.config_summary?.dataset_name || "—"}>
+                  <button type="button" class="cell-open-button" onclick={() => selectRun(run.run_id)}>
                     {run.config_summary?.dataset_name || "—"}
                   </button>
                 </td>
-                <td>
-                  <button class="cell-open-button" onclick={() => selectRun(run.run_id)}>
+                <td class="row-open-cell">
+                  <button type="button" class="cell-open-button" onclick={() => selectRun(run.run_id)}>
                     {run.framework || "—"}
                   </button>
                 </td>
-                <td class="group-cell" title={groupTags?.group_id || run.group_id || ""}>
-                  <button class="cell-open-button" onclick={() => selectRun(run.run_id)}>
+                <td class="group-cell row-open-cell" title={groupTags?.group_id || run.group_id || ""}>
+                  <button type="button" class="cell-open-button" onclick={() => selectRun(run.run_id)}>
                     {#if groupTags?.group_id}
                       <span class="group-tag">{groupTags.group_id}</span>
                     {:else}
@@ -260,8 +263,12 @@
                     {/if}
                   </button>
                 </td>
-                <td class="tags-cell">
-                  <button class="cell-open-button tags-open-button" onclick={() => selectRun(run.run_id)}>
+                <td class="tags-cell row-open-cell">
+                  <button
+                    type="button"
+                    class="cell-open-button tags-open-button"
+                    onclick={() => selectRun(run.run_id)}
+                  >
                     {#if groupTags?.tags.length}
                       <span class="tag-pill-list">
                         {#each groupTags.tags as tag (tag.key)}
@@ -275,11 +282,15 @@
                     {/if}
                   </button>
                 </td>
-                <td class="created-cell">
-                  <TimeAgo timestamp={run.started_at || run.created_at} showJustNow falsyRepresentation="—" />
+                <td class="created-cell row-open-cell">
+                  <button type="button" class="cell-open-button" onclick={() => selectRun(run.run_id)}>
+                    <TimeAgo timestamp={run.started_at || run.created_at} showJustNow falsyRepresentation="—" />
+                  </button>
                 </td>
-                <td class="updated-cell">
-                  <TimeAgo timestamp={run.updated_at} showJustNow falsyRepresentation="—" />
+                <td class="updated-cell row-open-cell">
+                  <button type="button" class="cell-open-button" onclick={() => selectRun(run.run_id)}>
+                    <TimeAgo timestamp={run.updated_at} showJustNow falsyRepresentation="—" />
+                  </button>
                 </td>
                 <td class="modal-link-cell">
                   <div class="modal-link-wrap">
@@ -454,7 +465,27 @@
   }
 
   :global(table.runs-table tr.row-selected td) {
-    background: color-mix(in srgb, var(--accent) 6%, transparent);
+    background: color-mix(in srgb, var(--text) 8%, transparent);
+  }
+
+  :global(table.runs-table tr.row-selected td:first-child) {
+    background: color-mix(in srgb, var(--text) 8%, var(--bg));
+  }
+
+  .run-row {
+    cursor: default;
+  }
+
+  :global(table.runs-table tr.run-row:hover:not(.row-selected) td) {
+    background: color-mix(in srgb, var(--text) 6%, transparent);
+  }
+
+  :global(table.runs-table tr.run-row:hover:not(.row-selected) td:first-child) {
+    background: color-mix(in srgb, var(--text) 6%, var(--bg));
+  }
+
+  :global(table.runs-table td.row-open-cell) {
+    padding: 0;
   }
 
   .cell-open-button {
@@ -465,16 +496,23 @@
     font-size: 14px;
     line-height: 20px;
     cursor: pointer;
-    padding: 0;
+    padding: 8px 16px;
     text-align: left;
     width: 100%;
+    min-height: 40px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
-  .cell-open-button:hover {
-    color: var(--accent);
+  .cell-open-button:hover,
+  .cell-open-button:focus-visible {
+    color: var(--text-bright);
+  }
+
+  .cell-open-button:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
   }
 
   .stage-open-button {
