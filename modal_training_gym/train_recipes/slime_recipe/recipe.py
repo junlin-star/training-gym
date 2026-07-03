@@ -199,6 +199,12 @@ class SlimeRecipe(BaseTrainRecipe):
     use_dynamic_batch_size: bool = True
     max_tokens_per_gpu: int = 9216
 
+    # QKV layout for the Megatron backend. Emitted as --qkv-format (slime's own
+    # default is "thd"). Set explicitly because SLIME_IMAGE nightly-dev-20260701a's
+    # compute_advantages_and_returns reads args.qkv_format and AttributeError's at
+    # the first train step if it isn't provided.
+    qkv_format: str = "thd"
+
     # ── Eval ────────────────────────────────────────────────────────────────
     eval_interval: int | None = None
     n_samples_per_eval_prompt: int = 4
@@ -489,6 +495,16 @@ class SlimeRecipe(BaseTrainRecipe):
         if self.wandb is not None:
             fields.update(self._wandb_to_fields(self.wandb))
         out = {k: v for k, v in fields.items() if k not in _SLIME_SKIP}
+        # extra_config is an explicit per-recipe escape hatch and must ALWAYS win
+        # over a top-level field's value. slime's --<flag> CLI args override the
+        # YAML custom-config, so any key a recipe also sets in extra_config would
+        # otherwise be clobbered by the field's CLI flag (e.g. qkv_format="thd"
+        # default overriding ASR/VL's extra_config "bshd"). Drop any such CLI flag
+        # so the extra_config value stands.
+        extra_cfg = fields.get("extra_config")
+        if isinstance(extra_cfg, dict):
+            for key in extra_cfg:
+                out.pop(key, None)
         if "extra_config" in out:
             out["custom_config_path"] = out.pop("extra_config")
         for src, dst in {
