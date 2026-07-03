@@ -113,6 +113,12 @@
         <span class="kv-key">Status</span>
         <StatusPill status={getStatus(run)} />
       </div>
+      {#if run.error_message}
+        <div class="kv kv-error">
+          <span class="kv-key">Error</span>
+          <pre class="error-text">{run.error_message}</pre>
+        </div>
+      {/if}
       {#if showFrameworkStatus(run) && frameworkStatusLabel()}
         {@const progress = frameworkProgress()}
         <div class="kv">
@@ -436,5 +442,27 @@
     overflow: auto;
     padding: 10px;
     white-space: pre;
+  }
+
+  /* Failure cause (run.error_message): a red-tinted, scrollable mono block so a
+     failed run shows *why* right under its status. */
+  .kv-error {
+    align-items: flex-start;
+  }
+
+  .error-text {
+    border: 1px solid color-mix(in srgb, var(--red, #f87171) 45%, transparent);
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--red, #f87171) 12%, transparent);
+    color: var(--red, #f87171);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    line-height: 16px;
+    margin: 0;
+    max-height: 220px;
+    overflow: auto;
+    padding: 8px 10px;
+    white-space: pre-wrap;
+    word-break: break-word;
   }
 </style>

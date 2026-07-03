@@ -602,7 +602,7 @@ def build_slime_app(
             str(HF_CACHE_PATH): hf_cache_volume,
             checkpoints_mount_path: checkpoints_volume,
         },
-        timeout=2 * 60 * 60,
+        timeout=6 * 60 * 60,
         secrets=hf_secrets(),
         serialized=True,
         name="download",
@@ -989,7 +989,12 @@ def build_slime_app(
         secrets=train_secrets or None,
         ephemeral_disk=train_ephemeral_disk,
         timeout=24 * 60 * 60,
-        retries=Retries(max_retries=10, initial_delay=0.0),
+        # Retries exist for transient failures (preemption/NCCL), where a retry
+        # resumes from the last checkpoint. But a *deterministic* crash (esp.
+        # before the first save_interval checkpoint) re-runs from scratch and
+        # crashloops through every attempt — 10 wasted ~4h of a 40-GPU cluster on
+        # a step-1 crash. Cap low so a persistent failure surfaces fast.
+        retries=Retries(max_retries=3, initial_delay=0.0),
         single_use_containers=True,
         experimental_options=train_experimental_options or None,
         serialized=True,
@@ -1115,6 +1120,9 @@ def build_slime_app(
         )
         print(f"TrainingRun recorded: {training_run_id}")
 
+        # Terminal error text captured on failure and persisted to the run
+        # record (in the finally, which re-fetches the record from the volume).
+        terminal_error: str | None = None
         try:  # Wraps all post-setup work so any failure marks the run terminal.
             # In-flight status updates are fire-and-forget via the dashboard's
             # /api/framework-status endpoint so the training thread doesn't pay
@@ -1283,7 +1291,14 @@ def build_slime_app(
             await _set_framework_status_async(SlimeStatus.ROLLOUT_INITIALIZING)
             async with cluster.forward_dashboard() as tunnel:
                 print(f"Ray dashboard: {tunnel.url}")
-                await cluster.submit_and_tail(cmd, runtime_env=runtime_env)
+                result = await cluster.submit_and_tail(cmd, runtime_env=runtime_env)
+                if not result.is_success:
+                    run_record.error_message = result.message
+                    raise RuntimeError(
+                        result.message
+                        or f"Ray job finished with status: {result.status}"
+                    )
+                print(f"Ray job completed: {result.status}")
 
             result_kwargs = {
                 "app_name": app_name,
@@ -1316,8 +1331,12 @@ def build_slime_app(
                 run_record, status="stopped", ended_at=int(time.time())
             )
             raise
-        except BaseException:
+        except BaseException as exc:
             run_record.status = TrainingRunStatus.FAILED
+            terminal_error = f"{type(exc).__name__}: {exc}"
+            # Prefer a more specific message already set (e.g. the raw Ray driver
+            # message from the is_success check) over the generic wrapper.
+            run_record.error_message = run_record.error_message or terminal_error
             mark_training_attempt_finished(
                 run_record, status="failed", ended_at=int(time.time())
             )
@@ -1331,6 +1350,10 @@ def build_slime_app(
 
             latest_run_record.status = run_record.status
             latest_run_record.ended_at = finished_at
+            # Propagate the terminal error onto the re-fetched record so the save
+            # below persists it (the fresh fetch wouldn't carry it).
+            if run_record.error_message:
+                latest_run_record.error_message = run_record.error_message
             if latest_run_record.completed_at is None:
                 latest_run_record.completed_at = finished_at
             latest_run_record.duration_seconds = max(

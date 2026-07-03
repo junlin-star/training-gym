@@ -663,6 +663,9 @@ def build_miles_app(
                 if run_record is not None:
                     finished_at = int(time.time())
                     run_record.status = TrainingRunStatus.FAILED
+                    run_record.error_message = (
+                        run_record.error_message or f"{type(exc).__name__}: {exc}"
+                    )
                     mark_training_attempt_finished(
                         run_record, status="failed", ended_at=finished_at
                     )
@@ -771,7 +774,12 @@ def build_miles_app(
             await _set_framework_status(MilesStatus.TRAINING)
             async with cluster.forward_dashboard() as tunnel:
                 print(f"Ray dashboard: {tunnel.url}")
-                await cluster.submit_and_tail(cmd, runtime_env=runtime_env)
+                result = await cluster.submit_and_tail(cmd, runtime_env=runtime_env)
+                if not result.is_success:
+                    run_record.error_message = result.message
+                    raise RuntimeError(result.message)
+                print(f"Ray job completed: {result.status}")
+                print(f"Ray job message: {result.message}")
 
             result_kwargs = {
                 "app_name": app_name,
@@ -804,20 +812,41 @@ def build_miles_app(
                 run_record, status="stopped", ended_at=int(time.time())
             )
             raise
-        except BaseException:
+        except BaseException as exc:
             run_record.status = TrainingRunStatus.FAILED
+            # Store the failure cause (prefer a specific message already set, e.g.
+            # the raw Ray driver message from the is_success check).
+            run_record.error_message = (
+                run_record.error_message or f"{type(exc).__name__}: {exc}"
+            )
             mark_training_attempt_finished(
                 run_record, status="failed", ended_at=int(time.time())
             )
             raise
         finally:
             finished_at = int(time.time())
-            run_record.ended_at = finished_at
-            if run_record.completed_at is None:
-                run_record.completed_at = finished_at
-            run_record.duration_seconds = max(0, finished_at - run_record.started_at)
+            # Re-fetch the record (like slime) so the terminal save overlays only
+            # the terminal fields and doesn't clobber concurrent volume updates
+            # made during the run; fall back to the in-memory record if the fetch
+            # fails.
             try:
-                await run_record.save_async()
+                latest_run_record = await TrainingRun.from_id_async(training_run_id)
+            except Exception:
+                latest_run_record = run_record
+
+            latest_run_record.status = run_record.status
+            latest_run_record.ended_at = finished_at
+            # Propagate the terminal error onto the re-fetched record so the save
+            # below persists it (the fresh fetch wouldn't carry it).
+            if run_record.error_message:
+                latest_run_record.error_message = run_record.error_message
+            if latest_run_record.completed_at is None:
+                latest_run_record.completed_at = finished_at
+            latest_run_record.duration_seconds = max(
+                0, finished_at - latest_run_record.started_at
+            )
+            try:
+                await latest_run_record.save_async()
             except Exception:
                 pass
 
