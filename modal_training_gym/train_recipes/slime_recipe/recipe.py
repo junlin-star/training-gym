@@ -199,6 +199,12 @@ class SlimeRecipe(BaseTrainRecipe):
     use_dynamic_batch_size: bool = True
     max_tokens_per_gpu: int = 9216
 
+    # QKV layout for the Megatron backend. Emitted as --qkv-format (slime's own
+    # default is "thd"). Set explicitly because SLIME_IMAGE nightly-dev-20260701a's
+    # compute_advantages_and_returns reads args.qkv_format and AttributeError's at
+    # the first train step if it isn't provided.
+    qkv_format: str = "thd"
+
     # ── Eval ────────────────────────────────────────────────────────────────
     eval_interval: int | None = None
     n_samples_per_eval_prompt: int = 4
