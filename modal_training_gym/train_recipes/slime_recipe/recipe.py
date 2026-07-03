@@ -495,6 +495,16 @@ class SlimeRecipe(BaseTrainRecipe):
         if self.wandb is not None:
             fields.update(self._wandb_to_fields(self.wandb))
         out = {k: v for k, v in fields.items() if k not in _SLIME_SKIP}
+        # extra_config is an explicit per-recipe escape hatch and must ALWAYS win
+        # over a top-level field's value. slime's --<flag> CLI args override the
+        # YAML custom-config, so any key a recipe also sets in extra_config would
+        # otherwise be clobbered by the field's CLI flag (e.g. qkv_format="thd"
+        # default overriding ASR/VL's extra_config "bshd"). Drop any such CLI flag
+        # so the extra_config value stands.
+        extra_cfg = fields.get("extra_config")
+        if isinstance(extra_cfg, dict):
+            for key in extra_cfg:
+                out.pop(key, None)
         if "extra_config" in out:
             out["custom_config_path"] = out.pop("extra_config")
         for src, dst in {
