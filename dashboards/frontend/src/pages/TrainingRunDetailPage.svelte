@@ -1201,12 +1201,21 @@
   .detail {
     padding: 0 0 24px;
     color: var(--text);
+    display: flex;
+    flex-direction: column;
+    height: calc(100vh - 145px);
+    max-height: calc(100vh - 145px);
+    min-height: 0;
+    overflow: hidden;
   }
 
   .detail.embedded {
     padding: 0;
     max-width: none;
     margin: 0;
+    height: auto;
+    max-height: none;
+    overflow: visible;
   }
 
   .detail-header {
@@ -1313,6 +1322,10 @@
 
   /* ── Tab panels ───────────────────────────────────────────────────────── */
   .tab-panel {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
     padding-top: 20px;
   }
 
@@ -1321,21 +1334,35 @@
     grid-template-columns: minmax(0, 1fr) minmax(280px, 340px);
     gap: 32px;
     align-items: start;
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: hidden;
     padding-top: 20px;
+  }
+
+  .summary-tab-main {
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding-right: 4px;
   }
 
   .summary-tab-side {
     border-left: 1px solid var(--border, #2f2f2f);
     padding-left: 24px;
-    position: sticky;
-    top: 20px;
-    max-height: calc(100vh - 40px);
+    max-height: 100%;
+    min-height: 0;
     overflow-y: auto;
     overscroll-behavior: contain;
   }
 
+  .detail.embedded .summary-tab,
+  .detail.embedded .tab-panel,
+  .detail.embedded .summary-tab-main {
+    overflow-y: visible;
+  }
+
   .detail.embedded .summary-tab-side {
-    position: static;
     max-height: none;
     overflow-y: visible;
   }
@@ -1350,6 +1377,12 @@
     .summary-tab {
       grid-template-columns: 1fr;
       gap: 20px;
+      overflow-y: auto;
+    }
+
+    .summary-tab-main {
+      overflow-y: visible;
+      padding-right: 0;
     }
 
     .summary-tab-side {
@@ -1357,7 +1390,6 @@
       padding-left: 0;
       border-top: 1px solid var(--border, #2f2f2f);
       padding-top: 16px;
-      position: static;
       max-height: none;
       overflow-y: visible;
     }

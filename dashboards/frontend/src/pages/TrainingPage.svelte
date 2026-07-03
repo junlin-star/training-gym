@@ -68,7 +68,29 @@
     { key: "actions", label: "", ariaLabel: "Actions", width: 236, minWidth: 180 },
   ];
 
-  function selectRun(runId) {
+  function trainingRunDetailPath(runId) {
+    return `/training/${encodeURIComponent(runId)}`;
+  }
+
+  function openRunInNewTab(runId) {
+    if (typeof window === "undefined") return;
+    const url = new URL(trainingRunDetailPath(runId), window.location.href);
+    window.open(url.href, "_blank", "noopener,noreferrer");
+  }
+
+  function isPlainLeftClick(event) {
+    return event.button === 0 && !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey;
+  }
+
+  function selectRun(runId, event) {
+    if (event?.shiftKey) {
+      event.preventDefault();
+      openRunInNewTab(runId);
+      return;
+    }
+
+    if (event && !isPlainLeftClick(event)) return;
+    event?.preventDefault();
     onOpenDetail(runId);
   }
 
@@ -200,31 +222,31 @@
               {@const groupTags = getGroupTags(run)}
               <tr class="run-row" class:row-selected={drawerRunId === run.run_id}>
                 <td class="run-cell row-open-cell">
-                  <button
-                    type="button"
+                  <a
+                    href={trainingRunDetailPath(run.run_id)}
                     class="cell-open-button"
                     title={runName}
                     aria-label={`Open training run ${runName}`}
-                    onclick={() => selectRun(run.run_id)}
+                    onclick={(event) => selectRun(run.run_id, event)}
                   >
                     <div class="run-name">{runName}</div>
-                  </button>
+                  </a>
                 </td>
                 <td class="row-open-cell">
-                  <button type="button" class="cell-open-button" onclick={() => selectRun(run.run_id)}>
+                  <a href={trainingRunDetailPath(run.run_id)} class="cell-open-button" onclick={(event) => selectRun(run.run_id, event)}>
                     <span class="status-stack">
                       <StatusPill status={status} />
                       {#if resumeBadge(run)}
                         <span class="resume-badge">{resumeBadge(run)}</span>
                       {/if}
                     </span>
-                  </button>
+                  </a>
                 </td>
                 <td class="stage-cell row-open-cell">
-                  <button
-                    type="button"
+                  <a
+                    href={trainingRunDetailPath(run.run_id)}
                     class="cell-open-button stage-open-button"
-                    onclick={() => selectRun(run.run_id)}
+                    onclick={(event) => selectRun(run.run_id, event)}
                   >
                     {#if showFrameworkStatus(run) && stageLabel}
                       <FrameworkStageProgress
@@ -237,37 +259,37 @@
                     {:else}
                       <span class="stage-empty">—</span>
                     {/if}
-                  </button>
+                  </a>
                 </td>
                 <td class="model-cell row-open-cell" title={modelName(run)}>
-                  <button type="button" class="cell-open-button" onclick={() => selectRun(run.run_id)}>
+                  <a href={trainingRunDetailPath(run.run_id)} class="cell-open-button" onclick={(event) => selectRun(run.run_id, event)}>
                     {modelName(run)}
-                  </button>
+                  </a>
                 </td>
                 <td class="dataset-cell row-open-cell" title={run.config_summary?.dataset_name || "—"}>
-                  <button type="button" class="cell-open-button" onclick={() => selectRun(run.run_id)}>
+                  <a href={trainingRunDetailPath(run.run_id)} class="cell-open-button" onclick={(event) => selectRun(run.run_id, event)}>
                     {run.config_summary?.dataset_name || "—"}
-                  </button>
+                  </a>
                 </td>
                 <td class="row-open-cell">
-                  <button type="button" class="cell-open-button" onclick={() => selectRun(run.run_id)}>
+                  <a href={trainingRunDetailPath(run.run_id)} class="cell-open-button" onclick={(event) => selectRun(run.run_id, event)}>
                     {run.framework || "—"}
-                  </button>
+                  </a>
                 </td>
                 <td class="group-cell row-open-cell" title={groupTags?.group_id || run.group_id || ""}>
-                  <button type="button" class="cell-open-button" onclick={() => selectRun(run.run_id)}>
+                  <a href={trainingRunDetailPath(run.run_id)} class="cell-open-button" onclick={(event) => selectRun(run.run_id, event)}>
                     {#if groupTags?.group_id}
                       <span class="group-tag">{groupTags.group_id}</span>
                     {:else}
                       <span class="group-empty">—</span>
                     {/if}
-                  </button>
+                  </a>
                 </td>
                 <td class="tags-cell row-open-cell">
-                  <button
-                    type="button"
+                  <a
+                    href={trainingRunDetailPath(run.run_id)}
                     class="cell-open-button tags-open-button"
-                    onclick={() => selectRun(run.run_id)}
+                    onclick={(event) => selectRun(run.run_id, event)}
                   >
                     {#if groupTags?.tags.length}
                       <span class="tag-pill-list">
@@ -280,17 +302,17 @@
                     {:else}
                       <span class="group-empty">—</span>
                     {/if}
-                  </button>
+                  </a>
                 </td>
                 <td class="created-cell row-open-cell">
-                  <button type="button" class="cell-open-button" onclick={() => selectRun(run.run_id)}>
+                  <a href={trainingRunDetailPath(run.run_id)} class="cell-open-button" onclick={(event) => selectRun(run.run_id, event)}>
                     <TimeAgo timestamp={run.started_at || run.created_at} showJustNow falsyRepresentation="—" />
-                  </button>
+                  </a>
                 </td>
                 <td class="updated-cell row-open-cell">
-                  <button type="button" class="cell-open-button" onclick={() => selectRun(run.run_id)}>
+                  <a href={trainingRunDetailPath(run.run_id)} class="cell-open-button" onclick={(event) => selectRun(run.run_id, event)}>
                     <TimeAgo timestamp={run.updated_at} showJustNow falsyRepresentation="—" />
-                  </button>
+                  </a>
                 </td>
                 <td class="modal-link-cell">
                   <div class="modal-link-wrap">
@@ -300,7 +322,7 @@
                       aria-label={`Open expanded view for training run ${run.run_id}`}
                       onclick={(event) => {
                         event.stopPropagation();
-                        onOpenDetail(run.run_id);
+                        selectRun(run.run_id, event);
                       }}
                     >
                       <Maximize2 size={12} strokeWidth={2.1} />
@@ -360,7 +382,7 @@
         <div class="drawer-actions">
           <button
             class="drawer-expand-button"
-            onclick={() => onOpenDetail(selectedRun.run_id)}
+            onclick={(event) => selectRun(selectedRun.run_id, event)}
             title="Expand to full view"
           >
             <Maximize2 size={12} />
@@ -489,6 +511,8 @@
   }
 
   .cell-open-button {
+    display: block;
+    box-sizing: border-box;
     border: 0;
     background: transparent;
     color: var(--text);
@@ -503,6 +527,7 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    text-decoration: none;
   }
 
   .cell-open-button:hover,
