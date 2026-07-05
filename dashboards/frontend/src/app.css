@@ -514,8 +514,9 @@ table.resizable-table.sticky-first-column tr.row-selected td:first-child {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  min-width: 0;
-  max-width: 100%;
+  /* Never shrink below the (short) label — a constrained flex/table cell was
+     squeezing the pill and ellipsizing the status text. */
+  flex-shrink: 0;
   white-space: nowrap;
   border-radius: 9999px;
   padding: 3px 10px;

@@ -48,6 +48,6 @@
     </span>
   {/if}
   {#if !iconOnly}
-    <span class="font-medium [font-variant-numeric:tabular-nums] min-w-0 overflow-hidden text-ellipsis">{statusLabel}</span>
+    <span class="font-medium [font-variant-numeric:tabular-nums]">{statusLabel}</span>
   {/if}
 </div>
