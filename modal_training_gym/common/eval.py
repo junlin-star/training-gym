@@ -347,7 +347,7 @@ class EvalConfig:
         debug: bool = False,
         max_concurrency: int = 1,
     ) -> EvalResult:
-        from modal_training_gym.setup import ensure_dashboard_deployed
+        from modal_training_gym.cli.setup import ensure_dashboard_deployed
 
         if max_concurrency < 1:
             raise TrainingGymConfigError("max_concurrency must be >= 1")

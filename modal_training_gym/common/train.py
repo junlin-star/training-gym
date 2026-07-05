@@ -526,7 +526,7 @@ class TrainConfig:
             get_framework_status_url,
         )
         from modal_training_gym.common.status_reporter import enqueue_framework_status
-        from modal_training_gym.setup import ensure_dashboard_deployed
+        from modal_training_gym.cli.setup import ensure_dashboard_deployed
 
         training_run_id = self.training_run_id
         ensure_dashboard_deployed()

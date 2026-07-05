@@ -7,13 +7,8 @@ import sys
 
 
 def main():
-    from modal_training_gym.setup import (
-        setup,
-        open_dashboard,
-        set_password,
-        set_proxy_auth,
-    )
-    from modal_training_gym.cleanup import cleanup
+    from .setup import setup, open_dashboard, set_password, set_proxy_auth
+    from .cleanup import cleanup
 
     parser = argparse.ArgumentParser(prog="training-gym")
     sub = parser.add_subparsers(dest="command")
