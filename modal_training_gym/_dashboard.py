@@ -14,7 +14,7 @@ import re
 import secrets as _secrets
 import time
 from pathlib import Path
-from typing import Any, Awaitable, Callable
+from typing import Awaitable, Callable
 
 import modal
 
@@ -26,6 +26,17 @@ import modal
 # invisible to FastAPI's introspection, which then mistakes the parameter
 # for a query string and 422s with ``{"loc": ["query", "request"]}``.
 from starlette.requests import Request
+
+# Used as endpoint parameter annotations, so — like ``Request`` above — these
+# must resolve from this module's globals.
+from modal_training_gym.common.advantage_distribution import AdvantageDistribution
+from modal_training_gym.common.run import FrameworkStatusUpdate, TrainingRun
+from modal_training_gym.common.training_rollout import TrainingRolloutResult
+
+# A JSON object as stored in the metadata volume (summary rows, result
+# payloads). ``object`` values — not ``Any`` — so readers must narrow.
+JsonDict = dict[str, object]
+SummaryLoader = Callable[[], Awaitable[list[JsonDict]]]
 
 REPO_URL = "https://github.com/modal-projects/training-gym.git"
 REPO_BRANCH = "main"
@@ -261,17 +272,12 @@ def fastapi_app():
     )
     from fastapi.staticfiles import StaticFiles
 
-    from modal_training_gym.common.advantage_distribution import AdvantageDistribution
     from modal_training_gym.common.modal_urls import modal_app_dashboard_url
-    from modal_training_gym.common.run import TrainingRun
-    from modal_training_gym.common.status import MilesStatus, SlimeStatus
-    from modal_training_gym.common.training_rollout import TrainingRolloutResult
     from modal_training_gym.utils.metadata import (
         MetadataStore,
         vol_get,
         vol_get_summary_items_healed,
         vol_put_summary_items,
-        _step_times_dict,
     )
 
     web = FastAPI()
@@ -303,31 +309,19 @@ def fastapi_app():
         return await call_next(request)
 
     cache_ttl_seconds = 30.0
-    eval_summary_store = MetadataStore.EVALS
-    eval_summary_key = "summary"
-    eval_summary_payload_key = "summaries"
+    cache_keys = ("runs", "train_results", "evals", "deployments")
     # Each entry holds (expires_at, values, loaded_at). ``loaded_at == 0.0``
     # means "never successfully loaded", which lets the very first request block
     # for real data instead of flashing an empty list.
-    cache_entries: dict[str, tuple[float, list[dict[str, Any]], float]] = {
-        "runs": (0.0, [], 0.0),
-        "train_results": (0.0, [], 0.0),
-        "evals": (0.0, [], 0.0),
-        "deployments": (0.0, [], 0.0),
+    cache_entries: dict[str, tuple[float, list[JsonDict], float]] = {
+        key: (0.0, [], 0.0) for key in cache_keys
     }
-    cache_locks = {
-        "runs": asyncio.Lock(),
-        "train_results": asyncio.Lock(),
-        "evals": asyncio.Lock(),
-        "deployments": asyncio.Lock(),
-    }
+    cache_locks = {key: asyncio.Lock() for key in cache_keys}
     # Hold strong refs to background refresh tasks so they aren't GC'd mid-flight.
-    refresh_tasks: set[asyncio.Task] = set()
+    refresh_tasks: set[asyncio.Task[list[JsonDict]]] = set()
     web.mount("/assets", StaticFiles(directory=f"{STATIC_DIR}/assets"), name="assets")
 
-    async def refresh_cache(
-        key: str, loader: Callable[[], Awaitable[list[dict[str, Any]]]]
-    ) -> list[dict[str, Any]]:
+    async def refresh_cache(key: str, loader: SummaryLoader) -> list[JsonDict]:
         async with cache_locks[key]:
             now = time.monotonic()
             expires_at, values, loaded_at = cache_entries[key]
@@ -350,9 +344,7 @@ def fastapi_app():
         _expires_at, values, loaded_at = cache_entries[key]
         cache_entries[key] = (0.0, values, loaded_at)
 
-    async def get_cached_list(
-        key: str, loader: Callable[[], Awaitable[list[dict[str, Any]]]]
-    ) -> list[dict[str, Any]]:
+    async def get_cached_list(key: str, loader: SummaryLoader) -> list[JsonDict]:
         now = time.monotonic()
         expires_at, values, loaded_at = cache_entries[key]
         if now < expires_at:
@@ -373,10 +365,10 @@ def fastapi_app():
         return values
 
     def list_from_payload(
-        payload: Any,
+        payload: object,
         *,
         payload_key: str,
-    ) -> list[dict[str, Any]]:
+    ) -> list[JsonDict]:
         if isinstance(payload, list):
             return [item for item in payload if isinstance(item, dict)]
         if isinstance(payload, dict):
@@ -386,9 +378,9 @@ def fastapi_app():
         return []
 
     def add_modal_app_urls(
-        items: list[dict[str, Any]],
-    ) -> tuple[list[dict[str, Any]], bool]:
-        updated = []
+        items: list[JsonDict],
+    ) -> tuple[list[JsonDict], bool]:
+        updated: list[JsonDict] = []
         changed = False
         for item in items:
             new_item = dict(item)
@@ -400,105 +392,78 @@ def fastapi_app():
             updated.append(new_item)
         return updated, changed
 
-    async def load_eval_summaries() -> list[dict[str, Any]]:
+    def merge_missing_fields(
+        merged: JsonDict, source: JsonDict, fields: tuple[str, ...]
+    ) -> None:
+        for field in fields:
+            value = source.get(field)
+            if field not in merged and value is not None:
+                merged[field] = value
+
+    async def fetch_by_id(
+        store: MetadataStore, key: str
+    ) -> tuple[str, JsonDict | None]:
         try:
-            payload = await run_in_threadpool(
-                vol_get, eval_summary_store, eval_summary_key
-            )
+            return key, await run_in_threadpool(vol_get, store, key)
+        except KeyError:
+            return key, None
+
+    async def fetch_all_by_id(
+        store: MetadataStore, keys: list[str]
+    ) -> dict[str, JsonDict]:
+        fetched = await asyncio.gather(*(fetch_by_id(store, key) for key in keys))
+        return {key: value for key, value in fetched if value is not None}
+
+    async def load_eval_summaries() -> list[JsonDict]:
+        try:
+            payload = await run_in_threadpool(vol_get, MetadataStore.EVALS, "summary")
         except KeyError:
             return []
 
-        summaries = list_from_payload(payload, payload_key=eval_summary_payload_key)
+        summaries = list_from_payload(payload, payload_key="summaries")
         if not summaries:
             return []
 
-        eval_ids = [
-            str(s.get("eval_id", ""))
-            for s in summaries
-            if isinstance(s, dict) and s.get("eval_id")
-        ]
-
-        async def fetch_result(eval_id: str) -> tuple[str, dict | None]:
-            try:
-                r = await run_in_threadpool(
-                    vol_get, MetadataStore.EVAL_RESULTS, eval_id
-                )
-                return eval_id, r
-            except KeyError:
-                return eval_id, None
-
-        fetched = await asyncio.gather(*(fetch_result(eid) for eid in eval_ids))
-        results_by_id = {eid: r for eid, r in fetched if r is not None}
-
-        eval_config_ids = [
-            str(s.get("eval_config_id", ""))
-            for s in summaries
-            if isinstance(s, dict) and s.get("eval_config_id")
-        ]
-
-        async def fetch_eval_config(
-            eval_config_id: str,
-        ) -> tuple[str, dict | None]:
-            try:
-                cfg = await run_in_threadpool(
-                    vol_get, MetadataStore.EVAL_CONFIGS, eval_config_id
-                )
-                return eval_config_id, cfg
-            except KeyError:
-                return eval_config_id, None
-
-        fetched_configs = await asyncio.gather(
-            *(fetch_eval_config(cfg_id) for cfg_id in eval_config_ids)
+        results_by_id = await fetch_all_by_id(
+            MetadataStore.EVAL_RESULTS,
+            [str(s.get("eval_id") or "") for s in summaries if s.get("eval_id")],
         )
-        configs_by_id = {
-            cfg_id: cfg for cfg_id, cfg in fetched_configs if cfg is not None
-        }
+        configs_by_id = await fetch_all_by_id(
+            MetadataStore.EVAL_CONFIGS,
+            [
+                str(s.get("eval_config_id") or "")
+                for s in summaries
+                if s.get("eval_config_id")
+            ],
+        )
 
-        enriched: list[dict[str, Any]] = []
+        enriched: list[JsonDict] = []
         for summary in summaries:
-            if not isinstance(summary, dict):
-                continue
-            eval_id = str(summary.get("eval_id", ""))
-            eval_config_id = str(summary.get("eval_config_id", ""))
-            result = results_by_id.get(eval_id)
-            eval_config = configs_by_id.get(eval_config_id)
-            if not result:
-                merged = dict(summary)
-                if eval_config:
-                    merged["eval_config"] = eval_config
-                    for field in (
+            merged = dict(summary)
+            result = results_by_id.get(str(summary.get("eval_id") or ""))
+            if result:
+                merge_missing_fields(
+                    merged, result, ("deployment_id", "config", "status")
+                )
+            eval_config = configs_by_id.get(str(summary.get("eval_config_id") or ""))
+            if eval_config:
+                merged["eval_config"] = eval_config
+                merge_missing_fields(
+                    merged,
+                    eval_config,
+                    (
                         "dataset_name",
                         "eval_fn_name",
                         "prompt_column",
                         "generate_kwargs",
-                    ):
-                        value = eval_config.get(field)
-                        if field not in merged and value is not None:
-                            merged[field] = value
-                enriched.append(merged)
-                continue
-            merged = dict(summary)
-            for field in ("deployment_id", "config", "status"):
-                value = result.get(field)
-                if field not in merged and value is not None:
-                    merged[field] = value
-            if eval_config:
-                merged["eval_config"] = eval_config
-                for field in (
-                    "dataset_name",
-                    "eval_fn_name",
-                    "prompt_column",
-                    "generate_kwargs",
-                ):
-                    value = eval_config.get(field)
-                    if field not in merged and value is not None:
-                        merged[field] = value
+                    ),
+                )
             enriched.append(merged)
         return enriched
 
     async def load_list_summary(
         summary_store: MetadataStore,
-    ) -> list[dict[str, Any]]:
+    ) -> list[JsonDict]:
         items = await run_in_threadpool(vol_get_summary_items_healed, summary_store)
         if not items:
             return []
@@ -507,37 +472,14 @@ def fastapi_app():
             await run_in_threadpool(vol_put_summary_items, summary_store, items)
         return items
 
-    async def load_runs() -> list[dict[str, Any]]:
+    async def load_runs() -> list[JsonDict]:
         return await load_list_summary(MetadataStore.TRAINING_RUNS_SUMMARY)
 
-    async def load_train_results() -> list[dict[str, Any]]:
+    async def load_train_results() -> list[JsonDict]:
         return await load_list_summary(MetadataStore.TRAIN_RESULTS_SUMMARY)
 
-    async def load_deployments() -> list[dict[str, Any]]:
+    async def load_deployments() -> list[JsonDict]:
         return await load_list_summary(MetadataStore.DEPLOYMENTS_SUMMARY)
-
-    def _resolve_framework_status(phase: str, framework: str) -> Any | None:
-        phase = phase.strip()
-        framework = framework.strip().lower()
-        if framework == "miles":
-            try:
-                return MilesStatus(phase)
-            except ValueError:
-                return None
-        try:
-            return SlimeStatus(phase)
-        except ValueError:
-            try:
-                return MilesStatus(phase)
-            except ValueError:
-                return None
-
-    def _optional_int(value: Any) -> int | None:
-        try:
-            parsed = int(value)
-        except (TypeError, ValueError):
-            return None
-        return parsed if parsed >= 0 else None
 
     # ── Response display ──────────────────────────────────────────────────
     # Responses are parsed at write time (slime recorder for rollouts, the eval
@@ -572,7 +514,7 @@ def fastapi_app():
         cleaned = re.sub(r"(?m)^(system|user|assistant)\s*$\n?", "", cleaned)
         return re.sub(r"\n{3,}", "\n\n", cleaned).strip()
 
-    def _apply_parsed(rows: Any) -> None:
+    def _apply_parsed(rows: object) -> None:
         if not isinstance(rows, list):
             return
         for row in rows:
@@ -622,6 +564,15 @@ def fastapi_app():
         ):
             raise HTTPException(status_code=403, detail="Invalid status token")
 
+    async def _get_run_or_404(training_run_id: str) -> TrainingRun:
+        try:
+            return await TrainingRun.from_id(training_run_id, is_async=True)
+        except KeyError:
+            raise HTTPException(
+                status_code=404,
+                detail=f"TrainingRun {training_run_id!r} not found",
+            )
+
     # ── Training runs ────────────────────────────────────────────────────
 
     @web.get("/api/runs")
@@ -634,80 +585,22 @@ def fastapi_app():
 
     @web.post("/api/framework-status")
     async def framework_status(
-        payload: dict[str, Any],
+        update: FrameworkStatusUpdate,
         authorization: str | None = Header(default=None),
     ):
-        training_run_id = str(payload.get("training_run_id", "") or "").strip()
-        phase = str(payload.get("phase", "") or "").strip()
-        if not training_run_id or not phase:
-            raise HTTPException(
-                status_code=400,
-                detail="training_run_id and phase are required",
-            )
+        run = await _get_run_or_404(update.training_run_id)
+        await _require_framework_status_token(update.training_run_id, authorization)
 
-        try:
-            run = await run_in_threadpool(TrainingRun.from_id, training_run_id)
-        except KeyError:
-            raise HTTPException(
-                status_code=404,
-                detail=f"TrainingRun {training_run_id!r} not found",
-            )
-        await _require_framework_status_token(training_run_id, authorization)
-
-        status = _resolve_framework_status(phase, str(run.framework.value))
+        status = await run_in_threadpool(run.apply_framework_status, update)
         if status is None:
             raise HTTPException(
                 status_code=400,
-                detail=f"Unsupported framework status {phase!r} for {run.framework.value}",
+                detail=(
+                    f"Unsupported framework status {update.phase!r} "
+                    f"for {run.framework.value}"
+                ),
             )
-
-        run.framework_status = status
-        metadata = dict(run.metadata or {})
-        progress = {
-            "phase": status.value,
-            "updated_at": int(time.time()),
-        }
-        # is_active: True = stage is actually running on hardware; False =
-        # we've marked the stage but it's queuing for a GPU. Sent by the
-        # orchestration code in common/train.py (queue=False) and by the
-        # Modal function itself when its body starts executing (active=True).
-        if "is_active" in payload:
-            progress["is_active"] = bool(payload.get("is_active"))
-        for src, dst in (
-            ("progress_current", "current"),
-            ("progress_total", "total"),
-            ("progress_unit", "unit"),
-            ("rollout_id", "rollout_id"),
-            ("step_id", "step_id"),
-        ):
-            if src not in payload:
-                continue
-            value = payload.get(src)
-            if dst in ("current", "total", "rollout_id", "step_id"):
-                value = _optional_int(value)
-                if value is None:
-                    continue
-            progress[dst] = value
-        existing_progress = metadata.get("framework_progress")
-        if isinstance(existing_progress, dict):
-            # Drop the existing is_active when we get a fresh transition into
-            # a different phase — it shouldn't bleed across stage changes.
-            if existing_progress.get("phase") != progress.get("phase"):
-                existing_progress = {
-                    k: v for k, v in existing_progress.items() if k != "is_active"
-                }
-            progress = {**existing_progress, **progress}
-        metadata["framework_progress"] = progress
-        run.metadata = metadata
-        current_step = progress.get("current")
-        step_event = str(payload.get("step_event", "") or "").strip()
-        if isinstance(current_step, int) and current_step > 0:
-            step_times = _step_times_dict()
-            if step_event == "start":
-                step_times[f"{training_run_id}:{current_step}:start"] = time.time()
-            elif step_event == "finish":
-                step_times[f"{training_run_id}:{current_step}:finish"] = time.time()
-        await run.save_async()
+        await run.save(is_async=True)
         invalidate_cache("runs")
         return JSONResponse({"status": "ok", "framework_status": status.value})
 
@@ -715,57 +608,15 @@ def fastapi_app():
 
     @web.post("/api/training-rollouts")
     async def training_rollout(
-        payload: dict[str, Any],
+        result: TrainingRolloutResult,
         authorization: str | None = Header(default=None),
     ):
-        training_run_id = str(payload.get("training_run_id", "") or "").strip()
-        rollout_id_raw = payload.get("rollout_id")
-        if not training_run_id or rollout_id_raw is None:
-            raise HTTPException(
-                status_code=400,
-                detail="training_run_id and rollout_id are required",
-            )
-        try:
-            rollout_id = int(rollout_id_raw)
-        except (TypeError, ValueError):
-            raise HTTPException(status_code=400, detail="rollout_id must be an integer")
+        run = await _get_run_or_404(result.training_run_id)
+        await _require_framework_status_token(result.training_run_id, authorization)
 
-        samples_raw = payload.get("samples") or []
-        if not isinstance(samples_raw, list):
-            raise HTTPException(status_code=400, detail="samples must be a list")
-
-        try:
-            run = await run_in_threadpool(TrainingRun.from_id, training_run_id)
-        except KeyError:
-            raise HTTPException(
-                status_code=404,
-                detail=f"TrainingRun {training_run_id!r} not found",
-            )
-        await _require_framework_status_token(training_run_id, authorization)
-
-        result = TrainingRolloutResult(
-            training_run_id=training_run_id,
-            rollout_id=rollout_id,
-            created_at=_optional_int(payload.get("created_at")) or int(time.time()),
-            samples=samples_raw,
-            metrics=payload.get("metrics") or {},
-            rollout_time=(
-                float(payload["rollout_time"])
-                if isinstance(payload.get("rollout_time"), (int, float))
-                else None
-            ),
-        )
-        await result.save_async()
-
-        metadata = dict(run.metadata or {})
-        metadata["latest_rollout"] = {
-            "rollout_id": result.rollout_id,
-            "mean": result.mean,
-            "total": result.total,
-            "created_at": result.created_at,
-        }
-        run.metadata = metadata
-        await run.save_async()
+        await result.save(is_async=True)
+        run.record_latest_rollout(result)
+        await run.save(is_async=True)
         invalidate_cache("runs")
 
         return JSONResponse(
@@ -799,48 +650,17 @@ def fastapi_app():
 
     @web.post("/api/advantage-distributions")
     async def advantage_distribution(
-        payload: dict[str, Any],
+        shard: AdvantageDistribution,
         authorization: str | None = Header(default=None),
     ):
-        training_run_id = str(payload.get("training_run_id", "") or "").strip()
-        rollout_id_raw = payload.get("rollout_id")
-        if not training_run_id or rollout_id_raw is None:
-            raise HTTPException(
-                status_code=400,
-                detail="training_run_id and rollout_id are required",
-            )
-        try:
-            rollout_id = int(rollout_id_raw)
-        except (TypeError, ValueError):
-            raise HTTPException(status_code=400, detail="rollout_id must be an integer")
+        await _get_run_or_404(shard.training_run_id)
+        await _require_framework_status_token(shard.training_run_id, authorization)
 
-        samples_raw = payload.get("samples") or []
-        if not isinstance(samples_raw, list):
-            raise HTTPException(status_code=400, detail="samples must be a list")
-
-        try:
-            await run_in_threadpool(TrainingRun.from_id, training_run_id)
-        except KeyError:
-            raise HTTPException(
-                status_code=404,
-                detail=f"TrainingRun {training_run_id!r} not found",
-            )
-        await _require_framework_status_token(training_run_id, authorization)
-
-        shard = AdvantageDistribution(
-            training_run_id=training_run_id,
-            rollout_id=rollout_id,
-            dp_rank=_optional_int(payload.get("dp_rank")) or 0,
-            n_samples_per_prompt=_optional_int(payload.get("n_samples_per_prompt"))
-            or 1,
-            created_at=_optional_int(payload.get("created_at")) or int(time.time()),
-            samples=samples_raw,
-        )
-        await shard.save_async()
+        await shard.save(is_async=True)
         return JSONResponse(
             {
                 "status": "ok",
-                "rollout_id": rollout_id,
+                "rollout_id": shard.rollout_id,
                 "dp_rank": shard.dp_rank,
                 "samples": len(shard.samples),
             }
@@ -895,13 +715,7 @@ def fastapi_app():
         from modal.client import _Client
         from modal_proto import api_pb2
 
-        try:
-            run = await TrainingRun.from_id_async(training_run_id)
-        except KeyError:
-            raise HTTPException(
-                status_code=404,
-                detail=f"TrainingRun {training_run_id!r} not found",
-            )
+        run = await _get_run_or_404(training_run_id)
 
         app_id = (run.modal_app_id or "").strip()
         if not app_id:
@@ -949,79 +763,73 @@ def fastapi_app():
                 window_dropped = 0
                 return f"event: dropped\ndata: {json.dumps(payload)}\n\n"
 
-            try:
-                while True:
-                    if await request.is_disconnected():
-                        return
-                    req = api_pb2.AppGetLogsRequest(
-                        app_id=app_id,
-                        timeout=55,
-                        last_entry_id=last_entry_id,
-                    )
-                    try:
-                        async for log_batch in client.stub.AppGetLogs.unary_stream(req):
-                            if await request.is_disconnected():
-                                return
-                            consecutive_errors = 0
-                            if log_batch.entry_id:
-                                last_entry_id = log_batch.entry_id
-                            for log in log_batch.items:
-                                if not log.data:
-                                    continue
-                                if (
-                                    search_lower
-                                    and search_lower not in log.data.lower()
-                                ):
-                                    continue
+            while True:
+                if await request.is_disconnected():
+                    return
+                req = api_pb2.AppGetLogsRequest(
+                    app_id=app_id,
+                    timeout=55,
+                    last_entry_id=last_entry_id,
+                )
+                try:
+                    async for log_batch in client.stub.AppGetLogs.unary_stream(req):
+                        if await request.is_disconnected():
+                            return
+                        consecutive_errors = 0
+                        if log_batch.entry_id:
+                            last_entry_id = log_batch.entry_id
+                        for log in log_batch.items:
+                            if not log.data:
+                                continue
+                            if search_lower and search_lower not in log.data.lower():
+                                continue
 
-                                now = time.monotonic()
-                                if now - window_start >= 1.0:
-                                    drop_event = _drain_drop_event()
-                                    if drop_event:
-                                        yield drop_event
-                                    window_start = now
-                                    window_emitted = 0
-
-                                if rate_cap and window_emitted >= rate_cap:
-                                    window_dropped += 1
-                                    continue
-
-                                window_emitted += 1
-                                payload = {
-                                    "task_id": log_batch.task_id,
-                                    "line": log.data,
-                                }
-                                ts = getattr(log, "timestamp", 0) or 0
-                                if ts:
-                                    payload["ts"] = ts
-                                yield f"data: {json.dumps(payload)}\n\n"
-                            if log_batch.app_done:
+                            now = time.monotonic()
+                            if now - window_start >= 1.0:
                                 drop_event = _drain_drop_event()
                                 if drop_event:
                                     yield drop_event
-                                yield "event: done\ndata: {}\n\n"
-                                return
+                                window_start = now
+                                window_emitted = 0
+
+                            if rate_cap and window_emitted >= rate_cap:
+                                window_dropped += 1
+                                continue
+
+                            window_emitted += 1
+                            payload: dict[str, str | float] = {
+                                "task_id": log_batch.task_id,
+                                "line": log.data,
+                            }
+                            ts = getattr(log, "timestamp", 0) or 0
+                            if ts:
+                                payload["ts"] = ts
+                            yield f"data: {json.dumps(payload)}\n\n"
+                        if log_batch.app_done:
+                            drop_event = _drain_drop_event()
+                            if drop_event:
+                                yield drop_event
+                            yield "event: done\ndata: {}\n\n"
+                            return
+                except asyncio.CancelledError:
+                    return
+                except Exception as exc:
+                    consecutive_errors += 1
+                    if consecutive_errors >= max_consecutive_errors:
+                        yield (
+                            "event: error\n"
+                            f"data: {json.dumps({'error': f'log stream failed after {consecutive_errors} retries: {exc!s}'})}\n\n"
+                        )
+                        return
+                    backoff = min(2 ** (consecutive_errors - 1), 10)
+                    yield (
+                        "event: reconnect\n"
+                        f"data: {json.dumps({'reason': str(exc)})}\n\n"
+                    )
+                    try:
+                        await asyncio.sleep(backoff)
                     except asyncio.CancelledError:
                         return
-                    except Exception as exc:
-                        consecutive_errors += 1
-                        if consecutive_errors >= max_consecutive_errors:
-                            yield (
-                                "event: error\n"
-                                f"data: {json.dumps({'error': f'log stream failed after {consecutive_errors} retries: {exc!s}'})}\n\n"
-                            )
-                            return
-                        backoff = min(2 ** (consecutive_errors - 1), 10)
-                        yield (
-                            "event: reconnect\n"
-                            f"data: {json.dumps({'reason': str(exc)})}\n\n"
-                        )
-                        try:
-                            await asyncio.sleep(backoff)
-                        except asyncio.CancelledError:
-                            return
-            finally:
-                pass
 
         return StreamingResponse(
             event_stream(),

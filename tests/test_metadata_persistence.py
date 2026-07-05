@@ -1,10 +1,11 @@
 """Drive the real ``save()`` chain to completion without Modal or a GPU.
 
 ``TrainingRun.save()``, ``TrainResult.save()``, and
-``TrainingRolloutResult.save_async()`` are exercised against an in-memory
+``TrainingRolloutResult.save(is_async=True)`` are exercised against an in-memory
 ``FakeVolume`` (see ``conftest.py``) so the full serialize-and-write path is
-covered in CI: the payload must stay JSON-serializable, and ``save()`` /
-``save_async()`` must complete even when ``Volume.reload()`` is unavailable.
+covered in CI: the payload must stay JSON-serializable, and ``save()`` (in both
+sync and ``is_async=True`` modes) must complete even when ``Volume.reload()``
+is unavailable.
 """
 
 from __future__ import annotations
@@ -40,14 +41,14 @@ def test_train_result_save_survives_unmounted_volume(fake_volume, fw):
     assert json.loads(blob)["framework"] == fw.value
 
 
-def test_rollout_save_async_survives_unmounted_volume(fake_volume):
-    """TrainingRolloutResult.save_async() completes when reload() raises."""
+def test_rollout_async_save_survives_unmounted_volume(fake_volume):
+    """TrainingRolloutResult.save(is_async=True) completes when reload() raises."""
     asyncio.run(
         TrainingRolloutResult(
             training_run_id="t3",
             rollout_id=0,
             samples=[{"score": 1.0, "prompt": "p", "response": "r"}],
-        ).save_async()
+        ).save(is_async=True)
     )
 
     blob = fake_volume.files[

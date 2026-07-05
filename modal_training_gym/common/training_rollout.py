@@ -10,6 +10,7 @@ phase-reporter; reads happen via the dashboard's
 from __future__ import annotations
 
 import time
+from collections.abc import Awaitable
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -18,10 +19,7 @@ from modal_training_gym.common.sample import Sample
 from modal_training_gym.utils.metadata import (
     MetadataStore,
     vol_get_summary_items,
-    vol_put,
-    vol_put_async,
-    vol_upsert_summary_item,
-    vol_upsert_summary_item_async,
+    vol_put_with_summary,
 )
 
 
@@ -138,28 +136,18 @@ class TrainingRolloutResult(BaseModel):
         # summary_key keeps (run_id, rollout_id) uniqueness across runs.
         return {**self.to_summary(), "summary_key": self.storage_key}
 
-    def save(self) -> None:
+    def save(self, *, is_async: bool = False) -> None | Awaitable[None]:
         self._touch_created_at()
-        payload = self.model_dump(mode="json")
-        vol_put(MetadataStore.TRAINING_ROLLOUTS, self.storage_key, payload)
-        vol_upsert_summary_item(
-            MetadataStore.TRAINING_ROLLOUTS_SUMMARY,
-            self._summary_item(),
+        return vol_put_with_summary(
+            MetadataStore.TRAINING_ROLLOUTS,
+            self.storage_key,
+            self.model_dump(mode="json"),
+            summary_store=MetadataStore.TRAINING_ROLLOUTS_SUMMARY,
+            summary_item=self._summary_item(),
             item_id_key="summary_key",
             sort_key=self._summary_sort_key,
             reverse=False,
-        )
-
-    async def save_async(self) -> None:
-        self._touch_created_at()
-        payload = self.model_dump(mode="json")
-        await vol_put_async(MetadataStore.TRAINING_ROLLOUTS, self.storage_key, payload)
-        await vol_upsert_summary_item_async(
-            MetadataStore.TRAINING_ROLLOUTS_SUMMARY,
-            self._summary_item(),
-            item_id_key="summary_key",
-            sort_key=self._summary_sort_key,
-            reverse=False,
+            is_async=is_async,
         )
 
     @classmethod
