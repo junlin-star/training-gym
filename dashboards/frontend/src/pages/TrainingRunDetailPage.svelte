@@ -767,6 +767,12 @@
     {#if activeTab === "summary"}
       <div class="summary-tab">
         <div class="summary-tab-main">
+          {#if run?.error_message}
+            <div class="detail-error">
+              <div class="detail-error-title">Error</div>
+              <pre class="detail-error-text">{run.error_message}</pre>
+            </div>
+          {/if}
           {#if rolloutsLoading && !rolloutSummaries.length}
             <div class="rollout-chart">
               <ChartSkeleton variant="line" height={140} showTitle />
@@ -1397,6 +1403,37 @@
 
   .rollout-chart {
     margin-bottom: 20px;
+  }
+
+  /* Failure cause (run.error_message), shown at the top of the details column
+     for a failed run — a red-tinted, scrollable mono block. */
+  .detail-error {
+    margin-bottom: 20px;
+  }
+
+  .detail-error-title {
+    color: var(--red, #f87171);
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    margin-bottom: 6px;
+    text-transform: uppercase;
+  }
+
+  .detail-error-text {
+    border: 1px solid color-mix(in srgb, var(--red, #f87171) 45%, transparent);
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--red, #f87171) 12%, transparent);
+    color: var(--red, #f87171);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    line-height: 17px;
+    margin: 0;
+    max-height: 320px;
+    overflow: auto;
+    padding: 12px 14px;
+    white-space: pre-wrap;
+    word-break: break-word;
   }
 
   .chart-grid {

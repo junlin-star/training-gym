@@ -53,6 +53,10 @@ class TrainingRun(BaseModel):
     updated_at: int = 0
     duration_seconds: int | None = None
     step_times: dict[str, dict[str, int | None]] | None = None
+    # Terminal failure message (Ray driver error / exception) for a failed run,
+    # so the cause is queryable from the record and shown on the dashboard even
+    # after logs roll off. None while running / on success.
+    error_message: str | None = None
     metadata: dict[str, Any] | None = None
 
     def _summary_sort_key(self, item: dict[str, Any]) -> tuple[int, str]:
