@@ -70,9 +70,9 @@ def _build_image() -> modal.Image:
             "rm -rf /tmp/training-gym",
         )
 
-    return base.add_local_python_source("modal_training_gym", copy=True).run_commands(
+    return base.run_commands(
         "cd /app/frontend && npm install && npm run build",
-    )
+    ).add_local_python_source("modal_training_gym", copy=True)
 
 
 image = _build_image()
@@ -896,14 +896,6 @@ def fastapi_app():
         except Exception:
             data = []
         return JSONResponse(data)
-
-    # ── Compaction (on-demand repair) ─────────────────────────────────────
-
-    @web.post("/api/compact")
-    async def compact():
-        """Trigger an on-demand compaction (the scheduled cron is the primary path)."""
-        await run_in_threadpool(_run_compact_sync)
-        return JSONResponse({"status": "compacted"})
 
     @web.get("/favicon.svg", include_in_schema=False)
     async def favicon():
