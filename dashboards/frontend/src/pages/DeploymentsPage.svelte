@@ -299,7 +299,7 @@
 
 <svelte:window onclick={() => (statusMenuOpen = false)} />
 
-<section class="grid [grid-template-columns:repeat(3,minmax(0,1fr))] gap-[14px] mb-[24px] max-[1080px]:[grid-template-columns:repeat(2,minmax(0,1fr))] max-[760px]:[grid-template-columns:1fr]">
+<section class="summary-sticky grid [grid-template-columns:repeat(3,minmax(0,1fr))] gap-[14px] mb-[24px] max-[1080px]:[grid-template-columns:repeat(2,minmax(0,1fr))] max-[760px]:[grid-template-columns:1fr]">
   <article class="summary-card">
     <span class="summary-label">Total deployments</span>
     <strong>{allDeployments.length}</strong>
@@ -363,7 +363,7 @@
 
     <div class="p-0">
     {#if loading}
-      <div class="table-wrap">
+      <div class="table-wrap freeze-header">
         <MinimalTableSkeleton
           class="deployments-table"
           columns={["Name", "Training run name", "Status", "Base model", "Created", ""]}
@@ -375,7 +375,7 @@
     {:else if !allDeployments.length}
       <div class="page-empty">No deployments recorded yet.</div>
     {:else}
-      <div class="table-wrap">
+      <div class="table-wrap freeze-header">
         <ResizableTable class="deployments-table" columns={deploymentColumns} stickyFirstColumn>
           <tbody>
             {#each filteredRows as row (row.key)}

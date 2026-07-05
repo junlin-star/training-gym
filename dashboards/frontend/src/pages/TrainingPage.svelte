@@ -148,7 +148,7 @@
   });
 </script>
 
-<section class="grid grid-cols-5 gap-[14px] mb-[24px] max-[900px]:grid-cols-2 max-[640px]:grid-cols-1">
+<section class="summary-sticky grid grid-cols-5 gap-[14px] mb-[24px] max-[900px]:grid-cols-2 max-[640px]:grid-cols-1">
   <article class="summary-card">
     <span class="summary-label">Total runs</span>
     <strong>{allRuns.length}</strong>
@@ -197,7 +197,7 @@
 
   <div class="p-0">
     {#if loading}
-      <div class="table-wrap">
+      <div class="table-wrap freeze-header">
         <MinimalTableSkeleton
           class="training-runs-table"
           columns={["Name", "Status", "Stage", "Model", "Dataset", "Recipe", "Group", "Tags", "Created", "Last updated", ""]}
@@ -211,7 +211,7 @@
     {:else if !filteredRuns.length}
       <div class="page-empty">No runs match the current filters.</div>
     {:else}
-      <div class="table-wrap">
+      <div class="table-wrap freeze-header">
         <ResizableTable class="training-runs-table" {columns} stickyFirstColumn>
           <tbody>
             {#each filteredRuns as run, runIndex (`${run.run_id || "run"}-${run.created_at || 0}-${runIndex}`)}
