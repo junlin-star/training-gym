@@ -50,7 +50,20 @@ recipe = Qwen3_4b_Stitch_Recipe(
     wandb=WandbConfig(project="training-gym", group="stitch-qwen3-4b-gsm8k"),
 )
 
-app = build_stitch_app(model=model, dataset=dataset, recipe=recipe)
+_launch = build_stitch_app(model=model, dataset=dataset, recipe=recipe)
+app = _launch.app
+
+
+@app.local_entrypoint()
+def download_model() -> None:
+    """Cache the base model weights into the shared HF cache volume."""
+    _launch.download_model.remote()
+
+
+@app.local_entrypoint()
+def prepare_dataset() -> None:
+    """Materialize the GSM8K train/eval splits onto the data volume."""
+    _launch.prepare_dataset.remote()
 
 
 @app.local_entrypoint()

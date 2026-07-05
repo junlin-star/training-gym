@@ -4,10 +4,12 @@ Unlike the colocated slime launcher (``build_slime_app``, driven by
 ``modal run ::train``), the disaggregated flow is **deploy-based**: a persistent
 Modal Flash pool of SGLang rollout servers plus a clustered trainer that
 publishes sparse weight deltas to a Modal Volume bulletin board the pool syncs
-from. Build the app with :func:`build_stitch_app`, ``modal deploy`` it, then
-spawn a run through the ``launch_train`` local entrypoint::
+from. Build the app with :func:`build_stitch_app` (which returns a
+:class:`StitchApp` bundle), ``modal deploy`` it, then spawn a run through the
+``launch_train`` local entrypoint the example module wires up::
 
-    app = build_stitch_app(model=..., dataset=..., recipe=StitchRecipe(...))
+    launch = build_stitch_app(model=..., dataset=..., recipe=StitchRecipe(...))
+    app = launch.app
 
     uv run modal deploy -m <module_with_app>
     uv run modal run -m <module_with_app>::launch_train
@@ -23,6 +25,7 @@ import os
 import subprocess
 import tempfile
 import uuid
+from dataclasses import dataclass
 from types import SimpleNamespace
 
 import modal
@@ -55,6 +58,22 @@ SLIME_ROOT = "/root/slime"
 # commit so a moving tip can't silently change the cached image layer.
 STITCH_REPO_URL = "https://github.com/modal-projects/stitch.git"
 STITCH_REPO_REF = "1486e2e80540fcef72a78a6ecb98aa229c6139fc"
+
+
+@dataclass
+class StitchApp:
+    """What :func:`build_stitch_app` returns: the deployable Modal ``App`` plus
+    handles to its ``download_model`` / ``prepare_dataset`` functions.
+
+    ``download_model`` and ``prepare_dataset`` are defined as closures inside the
+    factory (they capture the model/dataset), so ``modal run`` can't address
+    them by name. The example module exposes them by wrapping ``.remote()`` in
+    module-level ``@app.local_entrypoint``\\ s.
+    """
+
+    app: modal.App
+    download_model: modal.Function
+    prepare_dataset: modal.Function
 
 
 class _ShippedSlimeConfig:
@@ -146,12 +165,14 @@ def build_stitch_app(
     dataset: DatasetConfig,
     recipe: StitchRecipe,
     name: str | None = None,
-) -> modal.App:
-    """Return a deployable Modal App for disaggregated slime training.
+) -> StitchApp:
+    """Build the deployable Modal App for disaggregated slime training.
 
-    Defines a ``Server`` Flash-pool class, a clustered ``Trainer`` class,
-    ``download_model`` / ``prepare_dataset`` functions, and ``launch_train`` /
-    ``smoke_flash_pool`` local entrypoints.
+    Defines a ``Server`` Flash-pool class, a clustered ``Trainer`` class, and
+    ``download_model`` / ``prepare_dataset`` functions. Returns a
+    :class:`StitchApp` bundle (``.app`` plus the two function handles); the
+    example module wraps those in module-level ``launch_train`` /
+    ``smoke_flash_pool`` / ``download_model`` / ``prepare_dataset`` entrypoints.
     """
     StitchRecipe._resolve_data_paths(dataset)  # validate dataset paths resolve
 
@@ -222,12 +243,6 @@ def build_stitch_app(
     memory = recipe.memory
     app = modal.App(app_name, tags=tags)
 
-    with image.imports():
-        from autoinference_utils.endpoint import (
-            SGLangEndpoint,
-            warmup_chat_completions,
-        )
-
     @app.cls(
         image=image,
         gpu=f"{recipe.gpu_type}:{recipe.rollout_num_gpus_per_engine}",
@@ -255,6 +270,11 @@ def build_stitch_app(
 
         @modal.enter()
         def startup(self) -> None:
+            from autoinference_utils.endpoint import (
+                SGLangEndpoint,
+                warmup_chat_completions,
+            )
+
             from modal_training_gym.frameworks.stitch import sidecar_process
 
             self.endpoint = SGLangEndpoint(
@@ -439,7 +459,9 @@ def build_stitch_app(
         dataset.prepare(prompt_data, eval_paths)
         data_volume.commit()
 
-    return app
+    return StitchApp(
+        app=app, download_model=download_model, prepare_dataset=prepare_dataset
+    )
 
 
 def spawn_training_run(
