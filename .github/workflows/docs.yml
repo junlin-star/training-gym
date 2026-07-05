@@ -68,13 +68,19 @@ jobs:
         run: uv run python -m py_compile docs-next/docs_next_app.py
 
   deploy:
-    if: github.event_name == 'push' && github.ref_name == github.event.repository.default_branch && secrets.MODAL_TOKEN_ID != '' && secrets.MODAL_TOKEN_SECRET != ''
+    # The `secrets` context is not available in job-level `if:`, so gate on the
+    # ref only; credentials come from the `modal-deploy` environment, which has
+    # no required reviewers (auto-approves) and is restricted to main. The
+    # `modal` environment used by validate-models keeps its approval gate.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs:
       - build
     runs-on: ubuntu-latest
+    environment: modal-deploy
     env:
       MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
       MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+      MODAL_ENVIRONMENT: training-gym
       UV_CACHE_DIR: /tmp/uv-cache
     steps:
       - uses: actions/checkout@v4
