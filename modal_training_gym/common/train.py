@@ -420,6 +420,15 @@ class TrainConfig:
                 name=self.training_run_id,
                 group_id=self.group_id,
             )
+        if recipe_type == RecipeType.STITCH:
+            raise TrainingGymConfigError(
+                "StitchRecipe drives disaggregated (deploy-based) slime training and "
+                "is not launched through TrainConfig.build_app(). Build its Modal app "
+                "directly with modal_training_gym.frameworks.stitch.build_stitch_app("
+                "model=..., dataset=..., recipe=...), then `modal deploy` it and spawn "
+                "runs via the app's launch_train entrypoint (see "
+                "modal_training_gym/frameworks/stitch/examples/qwen3_4b_gsm8k.py)."
+            )
         raise TrainingGymConfigError(f"Unknown recipe type: {recipe_type}")
 
     # ── Run-record helpers ─────────────────────────────────────────────────
