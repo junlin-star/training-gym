@@ -26,9 +26,11 @@ from modal_training_gym.common.modal_urls import modal_app_dashboard_url
 from modal_training_gym.utils.metadata import MetadataStore, vol_put
 from modal_training_gym.frameworks.miles import build_miles_app
 from modal_training_gym.frameworks.slime import build_slime_app
+from modal_training_gym.frameworks.stitch import build_stitch_app
 from modal_training_gym.train_recipes.base import BaseTrainRecipe, RecipeType
 from modal_training_gym.train_recipes.miles_recipe import MilesConfig
 from modal_training_gym.train_recipes.slime_recipe import SlimeRecipe
+from modal_training_gym.train_recipes.stitch_recipe import StitchRecipe
 from pydantic import ConfigDict
 from pydantic.dataclasses import dataclass
 
@@ -420,11 +422,32 @@ class TrainConfig:
                 name=self.training_run_id,
                 group_id=self.group_id,
             )
+        if recipe_type == RecipeType.STITCH:
+            if not isinstance(self.recipe, StitchRecipe):
+                raise TrainingGymConfigError(
+                    f"Recipe type {recipe_type} requires StitchRecipe, got {type(self.recipe).__name__}"
+                )
+            combined_stitch = _resolve_slime_recipe(
+                self.model,
+                cast(StitchRecipe, self.recipe),
+                merge_model_recipe=self.merge_model_recipe,
+            )
+            return build_stitch_app(
+                training_run_id=self.training_run_id,
+                stitch=cast(StitchRecipe, combined_stitch),
+                model=self.model,
+                dataset=self.dataset,
+                checkpoint=self.checkpoint,
+                name=self.training_run_id,
+                group_id=self.group_id,
+            )
         raise TrainingGymConfigError(f"Unknown recipe type: {recipe_type}")
 
     # ── Run-record helpers ─────────────────────────────────────────────────
 
     def _framework(self) -> Framework:
+        if isinstance(self.recipe, StitchRecipe):
+            return Framework.STITCH
         if isinstance(self.recipe, SlimeRecipe):
             return Framework.SLIME
         if isinstance(self.recipe, MilesConfig):
