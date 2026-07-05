@@ -24,6 +24,7 @@ from __future__ import annotations
 import os
 import subprocess
 import tempfile
+import time
 import uuid
 from dataclasses import dataclass
 from types import SimpleNamespace
@@ -34,7 +35,15 @@ import modal.experimental
 from modal_training_gym.common import COMMON_TRAINING_GYM_TAGS, modal_tag_value
 from modal_training_gym.common.dataset import DatasetConfig
 from modal_training_gym.common.framework import Framework
+from modal_training_gym.common.modal_urls import modal_app_dashboard_url
 from modal_training_gym.common.models import ModelConfig
+from modal_training_gym.common.run import (
+    TrainingRun,
+    TrainingRunStatus,
+    record_wandb_attempt,
+    wandb_run_id_for_attempt,
+)
+from modal_training_gym.common.wandb import preflight_wandb
 from modal_training_gym.train_recipes.stitch_recipe.recipe import (
     CHECKPOINTS_PATH,
     DATA_PATH,
@@ -157,6 +166,98 @@ def _stitch_base_image(recipe: StitchRecipe) -> modal.Image:
     # subprocess, and the Ray workers can import the vendored spine + hooks.
     image = image.add_local_python_source("modal_training_gym", copy=True)
     return image
+
+
+def _record_run_started(
+    *,
+    run_id: str,
+    recipe: StitchRecipe,
+    model: ModelConfig | None,
+    dataset: DatasetConfig | None,
+    config_fields: dict,
+) -> TrainingRun | None:
+    """Write a ``RUNNING`` :class:`TrainingRun` to the ``training-gym-metadata``
+    Volume so the disagg run shows up in the dashboard (the deployed app is
+    already tagged for auto-discovery; this adds the run record slime writes for
+    itself in the colocated flow). Best-effort: a metadata hiccup must never take
+    down the training run, so failures are logged and swallowed."""
+    try:
+        modal_app_id = os.environ.get("MODAL_APP_ID", "")
+        wandb_block: dict = {}
+        if recipe.wandb is not None:
+            # Resolve the W&B entity for a dashboard deep-link; keep the run
+            # alive if the probe fails (bad key / no access).
+            entity = recipe.wandb.entity
+            try:
+                entity = preflight_wandb(recipe.wandb) or entity
+            except Exception as exc:  # noqa: BLE001
+                print(f"W&B preflight for dashboard deep-link failed: {exc}")
+            wandb_block = {
+                "project": recipe.wandb.project,
+                "group": recipe.wandb.group,
+                "entity": entity,
+                "run_id": wandb_run_id_for_attempt(run_id, 1),
+            }
+        config_summary = {
+            "model": {"model_name": model.model_name} if model else {},
+            "dataset": (
+                {
+                    "hf_repo": getattr(dataset, "hf_repo", ""),
+                    "name": type(dataset).__name__,
+                }
+                if dataset
+                else {}
+            ),
+            "recipe": config_fields,
+            "wandb": wandb_block,
+            "lr": recipe.lr,
+            "global_batch_size": recipe.global_batch_size,
+        }
+        created_at = int(time.time())
+        run_record = TrainingRun(
+            training_run_id=run_id,
+            modal_app_id=modal_app_id,
+            modal_app_url=modal_app_dashboard_url(modal_app_id),
+            framework=Framework.STITCH,
+            config=config_summary,
+            status=TrainingRunStatus.RUNNING,
+            created_at=created_at,
+            started_at=created_at,
+        )
+        if wandb_block:
+            record_wandb_attempt(
+                run_record,
+                entity=wandb_block["entity"],
+                project=wandb_block["project"],
+                group=wandb_block["group"],
+                run_id=wandb_block["run_id"],
+                attempt_count=1,
+            )
+        run_record.save()
+        print(f"TrainingRun recorded for dashboard: {run_id}")
+        return run_record
+    except Exception as exc:  # noqa: BLE001
+        print(f"Failed to record TrainingRun {run_id} for dashboard: {exc}")
+        return None
+
+
+def _record_run_finished(
+    run_record: TrainingRun | None, status: TrainingRunStatus
+) -> None:
+    """Stamp the terminal status + duration on the dashboard run record.
+    Best-effort, mirroring :func:`_record_run_started`."""
+    if run_record is None:
+        return
+    try:
+        finished_at = int(time.time())
+        run_record.status = status
+        run_record.ended_at = finished_at
+        if run_record.completed_at is None:
+            run_record.completed_at = finished_at
+        run_record.duration_seconds = max(0, finished_at - run_record.started_at)
+        run_record.save()
+    except Exception as exc:  # noqa: BLE001
+        print(f"Failed to finalize dashboard TrainingRun: {exc}")
 
 
 def build_stitch_app(
@@ -433,7 +534,22 @@ def build_stitch_app(
                 f"rollout_endpoint={cfg.rollout_endpoint_url}"
             )
             print(f"Command: {cmd}")
-            subprocess.run(["bash", "-lc", cmd], check=True)
+
+            run_record = _record_run_started(
+                run_id=run_id,
+                recipe=recipe,
+                model=model,
+                dataset=dataset,
+                config_fields=payload["fields"],
+            )
+            status = TrainingRunStatus.COMPLETED
+            try:
+                subprocess.run(["bash", "-lc", cmd], check=True)
+            except BaseException:
+                status = TrainingRunStatus.FAILED
+                raise
+            finally:
+                _record_run_finished(run_record, status)
 
     @app.function(
         image=image,
