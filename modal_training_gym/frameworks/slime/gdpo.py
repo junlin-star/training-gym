@@ -66,8 +66,8 @@ def _grpo_group_normalize(rewards, group_indices, eps: float = 1e-8):
         mask = group_indices == g
         group_r = rewards[mask]
         mean = group_r.mean()
-        std = group_r.std()
-        if std < eps:
+        std = group_r.std(correction=0)
+        if std != std or std < eps:  # std != std catches NaN
             advantages[mask] = 0.0
         else:
             advantages[mask] = (group_r - mean) / (std + eps)
