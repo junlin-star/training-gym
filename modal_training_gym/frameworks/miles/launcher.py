@@ -777,8 +777,11 @@ def build_miles_app(
                 print(f"Ray dashboard: {tunnel.url}")
                 result = await cluster.submit_and_tail(cmd, runtime_env=runtime_env)
                 if not result.is_success:
-                    run_record.error_message = result.message
-                    raise RuntimeError(result.message)
+                    run_record.error_message = (
+                        result.message
+                        or f"Ray job finished with status: {result.status}"
+                    )
+                    raise RuntimeError(run_record.error_message)
                 print(f"Ray job completed: {result.status}")
                 print(f"Ray job message: {result.message}")
 
