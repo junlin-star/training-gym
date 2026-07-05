@@ -157,6 +157,7 @@ def build_stitch_app(
         scaledown_window=15 * MINUTES,
         include_source=False,
         secrets=hf_secrets(),
+        serialized=True,
     )
     @modal.experimental.http_server(
         port=SIDECAR_PORT,
@@ -297,6 +298,7 @@ def build_stitch_app(
         timeout=24 * 60 * MINUTES,
         experimental_options={"efa_enabled": True},
         include_source=False,
+        serialized=True,
     )
     @modal.experimental.clustered(n_train_nodes, rdma=True)
     class Trainer:
@@ -404,6 +406,7 @@ def build_stitch_app(
         timeout=2 * 60 * MINUTES,
         secrets=hf_secrets(),
         include_source=False,
+        serialized=True,
         name="download",
     )
     def download() -> None:
@@ -419,6 +422,7 @@ def build_stitch_app(
         timeout=2 * 60 * MINUTES,
         secrets=hf_secrets(),
         include_source=False,
+        serialized=True,
         name="prepare_dataset",
     )
     def prepare_dataset() -> None:
@@ -426,13 +430,5 @@ def build_stitch_app(
         prompt_data, eval_paths = SlimeRecipe._resolve_data_paths(dataset)
         dataset.prepare(prompt_data, eval_paths)
         data_volume.commit()
-
-    @app.local_entrypoint()
-    def launch() -> None:
-        """Deploy the app and run training."""
-        download.remote()
-        prepare_dataset.remote()
-        trainer = Trainer()
-        trainer.train.remote()
 
     return app
