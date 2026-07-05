@@ -19,6 +19,7 @@ from modal_training_gym.common.status import (
     FrameworkStatus,
     MilesStatus,
     SlimeStatus,
+    StitchStatus,
 )
 from modal_training_gym.common.train_result import TrainResult
 from modal_training_gym.common.modal_lifecycle import stop_app
@@ -26,9 +27,11 @@ from modal_training_gym.common.modal_urls import modal_app_dashboard_url
 from modal_training_gym.utils.metadata import MetadataStore, vol_put
 from modal_training_gym.frameworks.miles import build_miles_app
 from modal_training_gym.frameworks.slime import build_slime_app
+from modal_training_gym.frameworks.stitch import build_stitch_app
 from modal_training_gym.train_recipes.base import BaseTrainRecipe, RecipeType
 from modal_training_gym.train_recipes.miles_recipe import MilesConfig
 from modal_training_gym.train_recipes.slime_recipe import SlimeRecipe
+from modal_training_gym.train_recipes.stitch_recipe import StitchRecipe
 from pydantic import ConfigDict
 from pydantic.dataclasses import dataclass
 
@@ -401,6 +404,25 @@ class TrainConfig:
                 name=self.training_run_id,
                 group_id=self.group_id,
             )
+        if recipe_type == RecipeType.STITCH:
+            if not isinstance(self.recipe, StitchRecipe):
+                raise TrainingGymConfigError(
+                    f"Recipe type {recipe_type} requires StitchRecipe, got {type(self.recipe).__name__}"
+                )
+            combined = _resolve_slime_recipe(
+                self.model,
+                cast(StitchRecipe, self.recipe),
+                merge_model_recipe=self.merge_model_recipe,
+            )
+            return build_stitch_app(
+                training_run_id=self.training_run_id,
+                stitch=cast(StitchRecipe, combined),
+                model=self.model,
+                dataset=self.dataset,
+                checkpoint=self.checkpoint,
+                name=self.training_run_id,
+                group_id=self.group_id,
+            )
         if recipe_type == RecipeType.SLIME:
             if not isinstance(self.recipe, SlimeRecipe):
                 raise TrainingGymConfigError(
@@ -425,6 +447,8 @@ class TrainConfig:
     # ── Run-record helpers ─────────────────────────────────────────────────
 
     def _framework(self) -> Framework:
+        if isinstance(self.recipe, StitchRecipe):
+            return Framework.STITCH
         if isinstance(self.recipe, SlimeRecipe):
             return Framework.SLIME
         if isinstance(self.recipe, MilesConfig):
@@ -434,6 +458,8 @@ class TrainConfig:
         )
 
     def _initializing_status(self) -> FrameworkStatus:
+        if isinstance(self.recipe, StitchRecipe):
+            return StitchStatus.INITIALIZING
         if isinstance(self.recipe, SlimeRecipe):
             return SlimeStatus.INITIALIZING
         if isinstance(self.recipe, MilesConfig):
@@ -469,7 +495,21 @@ class TrainConfig:
             "global_batch_size": getattr(recipe, "global_batch_size", None),
         }
 
-        if isinstance(recipe, SlimeRecipe):
+        if isinstance(recipe, StitchRecipe):
+            from modal_training_gym.frameworks.slime.launcher import (
+                _serialize_slime_params,
+            )
+
+            combined = _resolve_slime_recipe(
+                model,
+                cast(StitchRecipe, recipe),
+                merge_model_recipe=self.merge_model_recipe,
+            )
+            summary["recipe"] = _serialize_slime_params(
+                combined, dataset=dataset, model=model
+            )
+            summary["recipe"]["framework"] = "stitch"
+        elif isinstance(recipe, SlimeRecipe):
             from modal_training_gym.frameworks.slime.launcher import (
                 _serialize_slime_params,
             )
@@ -647,7 +687,14 @@ class TrainConfig:
                 megatron_to_hf_mode = getattr(self.recipe, "megatron_to_hf_mode", "")
                 needs_conversion = megatron_to_hf_mode != "bridge"
                 if prepare_inputs:
-                    if isinstance(self.recipe, SlimeRecipe):
+                    if isinstance(self.recipe, StitchRecipe):
+                        _set_status(StitchStatus.DOWNLOAD_MODEL, is_active=False)
+                        app.download.remote(
+                            training_run_id=training_run_id,
+                            framework_status_url=framework_status_url,
+                            framework_status_token=framework_status_token,
+                        )
+                    elif isinstance(self.recipe, SlimeRecipe):
                         _set_status(SlimeStatus.DOWNLOAD_MODEL, is_active=False)
                         app.download.remote(
                             training_run_id=training_run_id,

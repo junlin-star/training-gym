@@ -74,6 +74,11 @@ _EXPORTS = {
     ),
     "score_in_sandbox": ("modal_training_gym.common.eval", "score_in_sandbox"),
     "SlimeRecipe": ("modal_training_gym.train_recipes.slime_recipe", "SlimeRecipe"),
+    "StitchRecipe": ("modal_training_gym.train_recipes.stitch_recipe", "StitchRecipe"),
+    "Qwen3_4b_Stitch_Recipe": (
+        "modal_training_gym.train_recipes.stitch_recipe",
+        "Qwen3_4b_Stitch_Recipe",
+    ),
     "ToolCall": ("modal_training_gym.common.models", "ToolCall"),
     "TrainConfig": ("modal_training_gym.common.train", "TrainConfig"),
     "TrainingGymConfigError": (
@@ -130,6 +135,8 @@ __all__ = [
     "Qwen3_VL_8b_Recipe",
     "score_in_sandbox",
     "SlimeRecipe",
+    "StitchRecipe",
+    "Qwen3_4b_Stitch_Recipe",
     "setup",
     "ToolCall",
     "TrainConfig",
