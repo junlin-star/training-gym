@@ -32,6 +32,7 @@ from modal_training_gym.common.framework import (
 from modal_training_gym.common.modal_refs import register_modal_cloudpickle_reducers
 from modal_training_gym.common.models import ModelConfig
 from modal_training_gym.common.checkpoint import Checkpoint
+from modal_training_gym.common.ray_cluster import clustered_if, _supports_rdma
 from modal_training_gym.train_recipes.slime_recipe.recipe import (
     CHECKPOINTS_PATH,
     DATA_PATH,
@@ -279,7 +280,7 @@ def build_stitch_app(
                 except subprocess.TimeoutExpired:
                     proc.kill()
 
-    # ── Trainer Cluster ───────────────────────────────────────────────────────
+    # ── Trainer ─────────────────────────────────────────────────────────────────
     n_train_nodes = stitch.actor_num_nodes
     gpu_spec = f"{stitch.gpu_type}:{stitch.actor_num_gpus_per_node}"
 
@@ -287,7 +288,11 @@ def build_stitch_app(
     if stitch.wandb is not None:
         train_secrets.append(Secret.from_name(stitch.wandb.modal_wandb_secret_name))
 
-    @app.cls(
+    _use_clustered = n_train_nodes > 1 or (
+        stitch.actor_num_gpus_per_node >= 8 and _supports_rdma(stitch.gpu_type)
+    )
+
+    @app.function(
         image=image,
         gpu=gpu_spec,
         memory=stitch.memory,
@@ -299,104 +304,99 @@ def build_stitch_app(
         experimental_options={"efa_enabled": True},
         include_source=False,
         serialized=True,
+        name="train",
     )
-    @modal.experimental.clustered(n_train_nodes, rdma=True)
-    class Trainer:
-        """SLIME trainer cluster with stitch delta-publish hooks."""
+    @clustered_if(_use_clustered, n_train_nodes, gpu_type=stitch.gpu_type)
+    def train(
+        modal_app_id: str = "",
+        modal_app_url: str = "",
+        framework_status_url: str = "",
+        framework_status_token: str = "",
+    ) -> None:
+        """Run stitch training. Matches the interface expected by TrainConfig."""
+        import asyncio
 
-        @modal.enter()
-        def start_ray(self) -> None:
-            from modal_training_gym.common.ray_cluster import ModalRayCluster
-            from modal_training_gym.frameworks.slime.modal_helpers.utils import (
-                get_modal_cluster_context,
-            )
+        from modal_training_gym.common.ray_cluster import ModalRayCluster
+        from modal_training_gym.frameworks.slime.modal_helpers.utils import (
+            build_train_cmd,
+            get_modal_cluster_context,
+            prepare_slime_config,
+        )
+        from stitch.providers.modal import resolve_flash_gateway_url
 
-            rank, master_addr, my_ip, _ = get_modal_cluster_context(n_train_nodes)
-            self.rank = rank
-            os.environ.update(
-                {
-                    "SLIME_HOST_IP": my_ip,
-                    "SGLANG_HOST_IP": my_ip,
-                    "HOST_IP": my_ip,
-                    **stitch.environment,
-                }
-            )
-            cluster = ModalRayCluster()
-            cluster.discover_cluster(n_train_nodes)
-            cluster.start_ray()
-            self.cluster = cluster
+        for vol in train_volumes.values():
+            vol.reload()
 
-        @modal.method()
-        def train(self) -> None:
-            """Run training. Rank 0 drives; others provide Ray workers."""
-            import asyncio
+        rank, master_addr, my_ip, _ = get_modal_cluster_context(n_train_nodes)
+        os.environ.update(
+            {
+                "SLIME_HOST_IP": my_ip,
+                "SGLANG_HOST_IP": my_ip,
+                "HOST_IP": my_ip,
+                **stitch.environment,
+            }
+        )
+        cluster = ModalRayCluster()
+        cluster.discover_cluster(n_train_nodes)
+        cluster.start_ray()
 
-            for vol in train_volumes.values():
-                vol.reload()
+        if not cluster.is_head:
+            asyncio.run(cluster.wait_forever())
+            return
 
-            if not self.cluster.is_head:
-                asyncio.run(self.cluster.wait_forever())
-                return
+        # Resolve the Flash gateway URL for rollout traffic
+        rollout_endpoint_url = resolve_flash_gateway_url(app_name, "Server")
 
-            from modal_training_gym.frameworks.slime.modal_helpers.utils import (
-                build_train_cmd,
-                prepare_slime_config,
-            )
-            from stitch.providers.modal import resolve_flash_gateway_url
+        # Fresh run_id per launch for bulletin board partitioning
+        run_id = uuid.uuid4().hex[:12]
 
-            # Resolve the Flash gateway URL for rollout traffic
-            rollout_endpoint_url = resolve_flash_gateway_url(app_name, "Server")
+        # Configure stitch-specific overrides on the recipe
+        object.__setattr__(stitch, "rollout_endpoint_url", rollout_endpoint_url)
+        object.__setattr__(
+            stitch,
+            "update_weight_disk_dir",
+            f"{stitch.delta_bulletin_root}/{run_id}",
+        )
+        object.__setattr__(
+            stitch,
+            "custom_delta_pre_push_path",
+            "stitch.trainers.slime.publish_delta_version",
+        )
+        object.__setattr__(
+            stitch,
+            "custom_rollout_request_hook_path",
+            "stitch.trainers.slime.rollout_request_weight_version_hook",
+        )
 
-            # Fresh run_id per launch for bulletin board partitioning
-            run_id = uuid.uuid4().hex[:12]
+        extra_cfg = dict(stitch.extra_config or {})
+        extra_cfg["update_weight_delta_volume_name"] = stitch.delta_volume_name
+        extra_cfg["rollout_modal_flash_app_name"] = app_name
+        extra_cfg["rollout_modal_flash_server_cls_name"] = "Server"
+        extra_cfg["run_id"] = run_id
+        object.__setattr__(stitch, "extra_config", extra_cfg)
 
-            # Configure stitch-specific overrides on the recipe
-            object.__setattr__(stitch, "rollout_endpoint_url", rollout_endpoint_url)
-            object.__setattr__(
-                stitch,
-                "update_weight_disk_dir",
-                f"{stitch.delta_bulletin_root}/{run_id}",
-            )
-            object.__setattr__(
-                stitch,
-                "custom_delta_pre_push_path",
-                "stitch.trainers.slime.publish_delta_version",
-            )
-            object.__setattr__(
-                stitch,
-                "custom_rollout_request_hook_path",
-                "stitch.trainers.slime.rollout_request_weight_version_hook",
-            )
+        tmpdir = tempfile.mkdtemp()
+        prepare_slime_config(stitch, model, tmpdir)
+        cmd = build_train_cmd(stitch, SLIME_ROOT, model=model, dataset=dataset)
 
-            extra_cfg = dict(stitch.extra_config or {})
-            extra_cfg["update_weight_delta_volume_name"] = stitch.delta_volume_name
-            extra_cfg["rollout_modal_flash_app_name"] = app_name
-            extra_cfg["rollout_modal_flash_server_cls_name"] = "Server"
-            extra_cfg["run_id"] = run_id
-            object.__setattr__(stitch, "extra_config", extra_cfg)
+        # Claim the rollout pool before training starts
+        from stitch.bulletin import FilesystemBulletinBoard
+        from stitch.providers.modal import commit_volume
 
-            tmpdir = tempfile.mkdtemp()
-            prepare_slime_config(stitch, model, tmpdir)
-            cmd = build_train_cmd(stitch, SLIME_ROOT, model=model, dataset=dataset)
+        board = FilesystemBulletinBoard(
+            Path(stitch.delta_bulletin_root), layout="slime"
+        )
+        board.claim(run_id)
+        commit_volume(stitch.delta_volume_name)
 
-            # Claim the rollout pool before training starts
-            from stitch.bulletin import FilesystemBulletinBoard
-            from stitch.providers.modal import commit_volume
-
-            board = FilesystemBulletinBoard(
-                Path(stitch.delta_bulletin_root), layout="slime"
-            )
-            board.claim(run_id)
-            commit_volume(stitch.delta_volume_name)
-
-            print(
-                f"Training: nodes={n_train_nodes}, "
-                f"rollout_endpoint={rollout_endpoint_url}, "
-                f"run_id={run_id}"
-            )
-            print(f"Command: {cmd}")
-            env = {**os.environ, **stitch.environment}
-            subprocess.run(["bash", "-lc", cmd], check=True, env=env)
+        print(
+            f"Training: nodes={n_train_nodes}, "
+            f"rollout_endpoint={rollout_endpoint_url}, "
+            f"run_id={run_id}"
+        )
+        print(f"Command: {cmd}")
+        env = {**os.environ, **stitch.environment}
+        subprocess.run(["bash", "-lc", cmd], check=True, env=env)
 
     # ── Setup entrypoints ─────────────────────────────────────────────────────
 

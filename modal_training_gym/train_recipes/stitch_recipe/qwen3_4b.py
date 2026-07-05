@@ -1,3 +1,5 @@
+from dataclasses import field
+
 from pydantic import ConfigDict
 from pydantic.dataclasses import dataclass
 
@@ -25,7 +27,15 @@ class Qwen3_4b_Stitch_Recipe(StitchRecipe):
     rollout_gpu_type: str = "H200"
     rollout_min_containers: int = 4
     sglang_server_concurrency: int = 64
-    sglang_server_args: dict[str, str] = None  # type: ignore[assignment]
+    sglang_server_args: dict[str, str] = field(
+        default_factory=lambda: {
+            "--reasoning-parser": "qwen3",
+            "--context-length": "16384",
+            "--mem-fraction-static": "0.84",
+            "--chunked-prefill-size": "4096",
+            "--max-prefill-tokens": "4096",
+        }
+    )
     delta_volume_name: str = "stitch-delta-bulletin-qwen3-4b"
 
     # ── RL algorithm ────────────────────────────────────────────────────────
@@ -39,17 +49,3 @@ class Qwen3_4b_Stitch_Recipe(StitchRecipe):
 
     # ── Weight sync ─────────────────────────────────────────────────────────
     use_fault_tolerance: bool = False
-
-    def __post_init__(self) -> None:
-        if self.sglang_server_args is None:
-            object.__setattr__(
-                self,
-                "sglang_server_args",
-                {
-                    "--reasoning-parser": "qwen3",
-                    "--context-length": "16384",
-                    "--mem-fraction-static": "0.84",
-                    "--chunked-prefill-size": "4096",
-                    "--max-prefill-tokens": "4096",
-                },
-            )

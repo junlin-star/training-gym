@@ -427,14 +427,13 @@ class TrainConfig:
                 raise TrainingGymConfigError(
                     f"Recipe type {recipe_type} requires StitchRecipe, got {type(self.recipe).__name__}"
                 )
-            combined_stitch = _resolve_slime_recipe(
-                self.model,
-                cast(StitchRecipe, self.recipe),
-                merge_model_recipe=self.merge_model_recipe,
-            )
+            # StitchRecipe subclasses already carry all needed fields
+            # (disaggregated pool config + training config). Skipping
+            # _resolve_slime_recipe avoids downcasting to a plain SlimeRecipe
+            # and losing stitch-specific fields.
             return build_stitch_app(
                 training_run_id=self.training_run_id,
-                stitch=cast(StitchRecipe, combined_stitch),
+                stitch=cast(StitchRecipe, self.recipe),
                 model=self.model,
                 dataset=self.dataset,
                 checkpoint=self.checkpoint,
@@ -670,7 +669,12 @@ class TrainConfig:
                 megatron_to_hf_mode = getattr(self.recipe, "megatron_to_hf_mode", "")
                 needs_conversion = megatron_to_hf_mode != "bridge"
                 if prepare_inputs:
-                    if isinstance(self.recipe, SlimeRecipe):
+                    if isinstance(self.recipe, StitchRecipe):
+                        # Stitch download/prepare_dataset take no arguments
+                        _set_status(SlimeStatus.DOWNLOAD_MODEL, is_active=False)
+                        app.download.remote()
+                        app.prepare_dataset.remote()
+                    elif isinstance(self.recipe, SlimeRecipe):
                         _set_status(SlimeStatus.DOWNLOAD_MODEL, is_active=False)
                         app.download.remote(
                             training_run_id=training_run_id,
