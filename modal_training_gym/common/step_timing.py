@@ -1,10 +1,30 @@
 from __future__ import annotations
 
 from collections.abc import MutableMapping
+from enum import Enum
 from typing import Any
 
-EVAL_BEFORE_SUBSTEP = "evaluate_rollouts"
-EVAL_AFTER_SUBSTEP = "evaluate_rollouts_end"
+from modal_training_gym.common.status import SlimeStatus
+
+
+class Substep(str, Enum):
+    """Stringified substep names as they appear in step-time keys.
+
+    Declaration order is the canonical driver-loop order (used to build the
+    launcher's ``SUBSTEP_ORDER``). Values mirror ``SlimeStatus`` phases except
+    ``EVAL_AFTER``, which is synthesized — the post-step eval window has no
+    status of its own.
+    """
+
+    EVAL_BEFORE = SlimeStatus.EVAL_ROLLOUT_LOGGING.value
+    GENERATE_ROLLOUTS = SlimeStatus.ROLLOUT_LOGGING.value
+    OFFLOAD_ROLLOUT = SlimeStatus.OFFLOAD_ROLLOUT.value
+    COMPUTE_LOG_PROBS = SlimeStatus.COMPUTE_LOG_PROBS.value
+    OPTIMIZER_STEP = SlimeStatus.OPTIMIZER_STEP.value
+    CHECKPOINT_SAVE = SlimeStatus.CHECKPOINT_SAVE.value
+    OFFLOAD_TRAIN = SlimeStatus.OFFLOAD_TRAIN.value
+    WEIGHT_SYNC = SlimeStatus.WEIGHT_SYNC.value
+    EVAL_AFTER = f"{SlimeStatus.EVAL_ROLLOUT_LOGGING.value}_end"
 
 
 def record_step_time_event(
@@ -34,10 +54,10 @@ def record_step_time_event(
         put_once(f"{training_run_id}:{current_step}:substep_finish")
     elif step_event in ("eval_begin", "eval_end"):
         substep = (
-            EVAL_BEFORE_SUBSTEP if step_event == "eval_begin" else EVAL_AFTER_SUBSTEP
+            Substep.EVAL_BEFORE if step_event == "eval_begin" else Substep.EVAL_AFTER
         )
-        put_once(f"{training_run_id}:{current_step}:substep:{substep}")
-    elif not step_event and phase == EVAL_BEFORE_SUBSTEP:
+        put_once(f"{training_run_id}:{current_step}:substep:{substep.value}")
+    elif not step_event and phase == Substep.EVAL_BEFORE.value:
         pass
     elif step_event == "finish":
         pass

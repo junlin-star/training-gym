@@ -28,34 +28,10 @@ PREAMBLE = (
     "    _tg_sys.path.insert(0, '/root')\n"
     "try:\n"
     "    from modal_training_gym.frameworks.slime.phase_reporting import (\n"
-    "        report_generate_rollouts as _tg_report_generate_rollouts,\n"
-    "        report_compute_log_probs as _tg_report_compute_log_probs,\n"
-    "        report_rollout_initializing as _tg_report_rollout_initializing,\n"
-    "        report_step_start as _tg_report_step_start,\n"
-    "        report_step_complete as _tg_report_step_complete,\n"
-    "        report_weight_sync as _tg_report_weight_sync,\n"
-    "        report_offload_rollout as _tg_report_offload_rollout,\n"
-    "        report_offload_train as _tg_report_offload_train,\n"
-    "        report_checkpoint_save as _tg_report_checkpoint_save,\n"
-    "        report_substep_finish as _tg_report_substep_finish,\n"
-    "        report_substep_window_start as _tg_report_substep_window_start,\n"
-    "        report_eval_begin as _tg_report_eval_begin,\n"
-    "        report_eval_end as _tg_report_eval_end,\n"
+    "        report_step_event as _tg_report,\n"
     "    )\n"
     "except ImportError:\n"
-    "    def _tg_report_generate_rollouts(args, rollout_id=None): pass\n"
-    "    def _tg_report_compute_log_probs(args, rollout_id=None): pass\n"
-    "    def _tg_report_rollout_initializing(args): pass\n"
-    "    def _tg_report_step_start(args, rollout_id=None): pass\n"
-    "    def _tg_report_step_complete(args, rollout_id=None): pass\n"
-    "    def _tg_report_weight_sync(args, rollout_id=None): pass\n"
-    "    def _tg_report_offload_rollout(args, rollout_id=None): pass\n"
-    "    def _tg_report_offload_train(args, rollout_id=None): pass\n"
-    "    def _tg_report_checkpoint_save(args, rollout_id=None): pass\n"
-    "    def _tg_report_substep_finish(args, rollout_id=None): pass\n"
-    "    def _tg_report_substep_window_start(args, rollout_id=None): pass\n"
-    "    def _tg_report_eval_begin(args, rollout_id=None): pass\n"
-    "    def _tg_report_eval_end(args, rollout_id=None): pass\n"
+    "    def _tg_report(status, args=None, rollout_id=None, step_event=''): pass\n"
     "\n"
 )
 
@@ -102,136 +78,18 @@ def _patch_file(path: Path) -> None:
 
     if needs_preamble:
         src = PREAMBLE + src
-    elif "_tg_report_generate_rollouts" not in src:
+    elif "report_step_event" not in src:
+        # File carries an older preamble: extend it with the generic reporter.
         src = src.replace(
             "    from modal_training_gym.frameworks.slime.phase_reporting import (\n",
             "    from modal_training_gym.frameworks.slime.phase_reporting import (\n"
-            "        report_generate_rollouts as _tg_report_generate_rollouts,\n",
+            "        report_step_event as _tg_report,\n",
             1,
         )
         src = src.replace(
             "except ImportError:\n",
-            "except ImportError:\n    def _tg_report_generate_rollouts(args, rollout_id=None): pass\n",
-            1,
-        )
-    if "_tg_report_compute_log_probs" not in src:
-        src = src.replace(
-            "    from modal_training_gym.frameworks.slime.phase_reporting import (\n",
-            "    from modal_training_gym.frameworks.slime.phase_reporting import (\n"
-            "        report_compute_log_probs as _tg_report_compute_log_probs,\n",
-            1,
-        )
-        src = src.replace(
-            "except ImportError:\n",
-            "except ImportError:\n    def _tg_report_compute_log_probs(args, rollout_id=None): pass\n",
-            1,
-        )
-    if "_tg_report_step_start" not in src:
-        src = src.replace(
-            "    from modal_training_gym.frameworks.slime.phase_reporting import (\n",
-            "    from modal_training_gym.frameworks.slime.phase_reporting import (\n"
-            "        report_step_start as _tg_report_step_start,\n",
-            1,
-        )
-        src = src.replace(
-            "except ImportError:\n",
-            "except ImportError:\n    def _tg_report_step_start(args, rollout_id=None): pass\n",
-            1,
-        )
-    if "_tg_report_step_complete" not in src:
-        src = src.replace(
-            "    from modal_training_gym.frameworks.slime.phase_reporting import (\n",
-            "    from modal_training_gym.frameworks.slime.phase_reporting import (\n"
-            "        report_step_complete as _tg_report_step_complete,\n",
-            1,
-        )
-        src = src.replace(
-            "except ImportError:\n",
-            "except ImportError:\n    def _tg_report_step_complete(args, rollout_id=None): pass\n",
-            1,
-        )
-    if "_tg_report_offload_rollout" not in src:
-        src = src.replace(
-            "    from modal_training_gym.frameworks.slime.phase_reporting import (\n",
-            "    from modal_training_gym.frameworks.slime.phase_reporting import (\n"
-            "        report_offload_rollout as _tg_report_offload_rollout,\n",
-            1,
-        )
-        src = src.replace(
-            "except ImportError:\n",
-            "except ImportError:\n    def _tg_report_offload_rollout(args, rollout_id=None): pass\n",
-            1,
-        )
-    if "_tg_report_offload_train" not in src:
-        src = src.replace(
-            "    from modal_training_gym.frameworks.slime.phase_reporting import (\n",
-            "    from modal_training_gym.frameworks.slime.phase_reporting import (\n"
-            "        report_offload_train as _tg_report_offload_train,\n",
-            1,
-        )
-        src = src.replace(
-            "except ImportError:\n",
-            "except ImportError:\n    def _tg_report_offload_train(args, rollout_id=None): pass\n",
-            1,
-        )
-    if "_tg_report_checkpoint_save" not in src:
-        src = src.replace(
-            "    from modal_training_gym.frameworks.slime.phase_reporting import (\n",
-            "    from modal_training_gym.frameworks.slime.phase_reporting import (\n"
-            "        report_checkpoint_save as _tg_report_checkpoint_save,\n",
-            1,
-        )
-        src = src.replace(
-            "except ImportError:\n",
-            "except ImportError:\n    def _tg_report_checkpoint_save(args, rollout_id=None): pass\n",
-            1,
-        )
-    if "_tg_report_substep_finish" not in src:
-        src = src.replace(
-            "    from modal_training_gym.frameworks.slime.phase_reporting import (\n",
-            "    from modal_training_gym.frameworks.slime.phase_reporting import (\n"
-            "        report_substep_finish as _tg_report_substep_finish,\n",
-            1,
-        )
-        src = src.replace(
-            "except ImportError:\n",
-            "except ImportError:\n    def _tg_report_substep_finish(args, rollout_id=None): pass\n",
-            1,
-        )
-    if "_tg_report_substep_window_start" not in src:
-        src = src.replace(
-            "    from modal_training_gym.frameworks.slime.phase_reporting import (\n",
-            "    from modal_training_gym.frameworks.slime.phase_reporting import (\n"
-            "        report_substep_window_start as _tg_report_substep_window_start,\n",
-            1,
-        )
-        src = src.replace(
-            "except ImportError:\n",
-            "except ImportError:\n    def _tg_report_substep_window_start(args, rollout_id=None): pass\n",
-            1,
-        )
-    if "_tg_report_eval_begin" not in src:
-        src = src.replace(
-            "    from modal_training_gym.frameworks.slime.phase_reporting import (\n",
-            "    from modal_training_gym.frameworks.slime.phase_reporting import (\n"
-            "        report_eval_begin as _tg_report_eval_begin,\n",
-            1,
-        )
-        src = src.replace(
-            "except ImportError:\n",
-            "except ImportError:\n    def _tg_report_eval_begin(args, rollout_id=None): pass\n",
-            1,
-        )
-    if "_tg_report_eval_end" not in src:
-        src = src.replace(
-            "    from modal_training_gym.frameworks.slime.phase_reporting import (\n",
-            "    from modal_training_gym.frameworks.slime.phase_reporting import (\n"
-            "        report_eval_end as _tg_report_eval_end,\n",
-            1,
-        )
-        src = src.replace(
-            "except ImportError:\n",
-            "except ImportError:\n    def _tg_report_eval_end(args, rollout_id=None): pass\n",
+            "except ImportError:\n"
+            "    def _tg_report(status, args=None, rollout_id=None, step_event=''): pass\n",
             1,
         )
 
@@ -246,7 +104,7 @@ def _patch_file(path: Path) -> None:
             indent = match.group("indent")
             return (
                 f"{indent}# {ROLLOUT_MARKER}: rollout engine startup state\n"
-                f"{indent}_tg_report_rollout_initializing(args)\n"
+                f"{indent}_tg_report('initialize_rollouts', args)\n"
                 f'{indent}rollout_manager, num_rollout_per_epoch = create_rollout_manager(args, pgs["rollout"])'
             )
 
@@ -266,7 +124,7 @@ def _patch_file(path: Path) -> None:
             return "\n".join(
                 [
                     f"{indent}# {STEP_START_MARKER}: training step start",
-                    f"{indent}_tg_report_step_start(args, {rollout_id})",
+                    f"{indent}_tg_report('generate_rollouts', args, {rollout_id}, 'start')",
                     f"{indent}{line}",
                 ]
             )
@@ -288,7 +146,7 @@ def _patch_file(path: Path) -> None:
             call = match.group("call")
             return (
                 f"{indent}# {COMPUTE_LOG_PROBS_MARKER}: compute log probs state\n"
-                f"{indent}_tg_report_compute_log_probs(args, rollout_id)\n"
+                f"{indent}_tg_report('compute_log_probs', args, rollout_id)\n"
                 f"{indent}{call}"
             )
 
@@ -307,7 +165,7 @@ def _patch_file(path: Path) -> None:
             indent = match.group("indent")
             return (
                 f"{indent}# {OFFLOAD_ROLLOUT_MARKER}: rollout offload state\n"
-                f"{indent}_tg_report_offload_rollout(args, rollout_id)\n"
+                f"{indent}_tg_report('offload_rollout', args, rollout_id)\n"
                 f"{indent}ray.get(rollout_manager.offload.remote())"
             )
 
@@ -326,7 +184,7 @@ def _patch_file(path: Path) -> None:
             indent = match.group("indent")
             return (
                 f"{indent}# {OFFLOAD_TRAIN_MARKER}: train offload state\n"
-                f"{indent}_tg_report_offload_train(args, rollout_id)\n"
+                f"{indent}_tg_report('offload_train', args, rollout_id)\n"
                 f"{indent}offload_train(actor_trains_this_step)"
             )
 
@@ -345,7 +203,7 @@ def _patch_file(path: Path) -> None:
             indent = match.group("indent")
             return (
                 f"{indent}# {CHECKPOINT_SAVE_MARKER}: checkpoint save state\n"
-                f"{indent}_tg_report_checkpoint_save(args, rollout_id)\n"
+                f"{indent}_tg_report('checkpoint_save', args, rollout_id)\n"
                 f"{indent}save(rollout_id)"
             )
 
@@ -367,7 +225,7 @@ def _patch_file(path: Path) -> None:
             return (
                 f"{match.group(0)}"
                 f"{indent}# {SUBSTEP_FINISH_MARKER}: end-of-iteration substep boundary\n"
-                f"{indent}_tg_report_substep_finish(args, rollout_id)\n"
+                f"{indent}_tg_report('weight_sync', args, rollout_id, 'substep_finish')\n"
             )
 
         src, substep_finish_count = substep_finish_pattern.subn(
@@ -386,7 +244,7 @@ def _patch_file(path: Path) -> None:
             indent = match.group("indent")
             return (
                 f"{indent}# {SUBSTEP_START_MARKER}: substep window start (before eval)\n"
-                f"{indent}_tg_report_substep_window_start(args, rollout_id)\n"
+                f"{indent}_tg_report('generate_rollouts', args, rollout_id, 'substep_start')\n"
                 f"{match.group(0)}"
             )
 
@@ -410,7 +268,7 @@ def _patch_file(path: Path) -> None:
             return (
                 f"{guard}"
                 f"{body_indent}# {EVAL_BEGIN_MARKER}: eval-before-train substep start\n"
-                f"{body_indent}_tg_report_eval_begin(args, rollout_id)\n"
+                f"{body_indent}_tg_report('evaluate_rollouts', args, rollout_id, 'eval_begin')\n"
                 f"{body}"
             )
 
@@ -434,7 +292,7 @@ def _patch_file(path: Path) -> None:
             return (
                 f"{guard}"
                 f"{body_indent}# {EVAL_END_MARKER}: eval-after-train substep start\n"
-                f"{body_indent}_tg_report_eval_end(args, rollout_id)\n"
+                f"{body_indent}_tg_report('evaluate_rollouts', args, rollout_id, 'eval_end')\n"
                 f"{body}"
             )
 
@@ -458,7 +316,7 @@ def _patch_file(path: Path) -> None:
             return (
                 f"{indent}{call}\n"
                 f"{indent}# {GENERATE_ROLLOUT_MARKER}: rollout generation state\n"
-                f"{indent}_tg_report_generate_rollouts(args, args.start_rollout_id)"
+                f"{indent}_tg_report('generate_rollouts', args, args.start_rollout_id)"
             )
 
         src, generate_rollout_count = generate_rollout_pattern.subn(
@@ -499,7 +357,7 @@ def _patch_file(path: Path) -> None:
                     patched_lines.extend(
                         [
                             f"{indent}# {WEIGHT_SYNC_MARKER}: weight sync state{newline}",
-                            f"{indent}_tg_report_weight_sync(args, rollout_id){newline}",
+                            f"{indent}_tg_report('weight_sync', args, rollout_id){newline}",
                         ]
                     )
                     weight_sync_count += 1
@@ -540,7 +398,7 @@ def _patch_file(path: Path) -> None:
                     patched_lines.extend(
                         [
                             f"{indent}# {STEP_FINISH_MARKER}: training step finish{newline}",
-                            f"{indent}_tg_report_step_complete(args, rollout_id){newline}",
+                            f"{indent}_tg_report('weight_sync', args, rollout_id, 'finish'){newline}",
                         ]
                     )
                     step_finish_count += 1

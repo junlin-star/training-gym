@@ -985,155 +985,42 @@ def before_train_step_hook(
     )
 
 
-def report_rollout_initializing(args: Any) -> None:
-    report_phase(
-        SlimeStatus.ROLLOUT_INITIALIZING,
-        args,
-        **_step_progress(args),
-    )
+def report_step_event(
+    status: SlimeStatus | str,
+    args: Any = None,
+    rollout_id: int | None = None,
+    step_event: str = "",
+) -> None:
+    """Report one step/substep event tagged with the ``status`` phase.
 
-
-def report_step_start(args: Any, rollout_id: int | None = None) -> None:
-    _post_framework_status(
-        {
-            **_run_context(args),
-            "phase": SlimeStatus.ROLLOUT_LOGGING.value,
-            **_step_progress(args, rollout_id),
-            "rollout_id": rollout_id,
-            "step_event": "start",
-        },
-        _STEP_EVENT_TIMEOUT_SECONDS,
-    )
-
-
-def report_weight_sync(args: Any, rollout_id: int | None = None) -> None:
-    report_phase(
-        SlimeStatus.WEIGHT_SYNC,
-        args,
+    ``status`` may be a plain string — the patched slime train.py passes phase
+    names as literals so the injected code stays stdlib-only.
+    """
+    payload = {
+        **_run_context(args),
+        "phase": status.value if isinstance(status, SlimeStatus) else str(status),
         **_step_progress(args, rollout_id),
-        rollout_id=rollout_id,
-    )
-
-
-def report_generate_rollouts(args: Any, rollout_id: int | None = None) -> None:
-    report_phase(
-        SlimeStatus.ROLLOUT_LOGGING,
-        args,
-        **_step_progress(args, rollout_id),
-        rollout_id=rollout_id,
-    )
-
-
-def report_compute_log_probs(args: Any, rollout_id: int | None = None) -> None:
-    report_phase(
-        SlimeStatus.COMPUTE_LOG_PROBS,
-        args,
-        **_step_progress(args, rollout_id),
-        rollout_id=rollout_id,
-    )
-
-
-def report_step_complete(args: Any, rollout_id: int | None = None) -> None:
-    if rollout_id is None:
-        return
-    _post_framework_status(
-        {
-            **_run_context(args),
-            "phase": SlimeStatus.WEIGHT_SYNC.value,
-            **_step_progress(args, rollout_id),
-            "rollout_id": rollout_id,
-            "step_event": "finish",
-        },
-        _STEP_EVENT_TIMEOUT_SECONDS,
-    )
-
-
-def report_offload_rollout(args: Any, rollout_id: int | None = None) -> None:
-    report_phase(
-        SlimeStatus.OFFLOAD_ROLLOUT,
-        args,
-        **_step_progress(args, rollout_id),
-        rollout_id=rollout_id,
-    )
-
-
-def report_offload_train(args: Any, rollout_id: int | None = None) -> None:
-    report_phase(
-        SlimeStatus.OFFLOAD_TRAIN,
-        args,
-        **_step_progress(args, rollout_id),
-        rollout_id=rollout_id,
-    )
-
-
-def report_checkpoint_save(args: Any, rollout_id: int | None = None) -> None:
-    report_phase(
-        SlimeStatus.CHECKPOINT_SAVE,
-        args,
-        **_step_progress(args, rollout_id),
-        rollout_id=rollout_id,
-    )
-
-
-def report_substep_window_start(args: Any, rollout_id: int | None = None) -> None:
-    report_phase(
-        SlimeStatus.ROLLOUT_LOGGING,
-        args,
-        **_step_progress(args, rollout_id),
-        rollout_id=rollout_id,
-        step_event="substep_start",
-    )
-
-
-def report_substep_finish(args: Any, rollout_id: int | None = None) -> None:
-    report_phase(
-        SlimeStatus.WEIGHT_SYNC,
-        args,
-        **_step_progress(args, rollout_id),
-        rollout_id=rollout_id,
-        step_event="substep_finish",
-    )
-
-
-def report_eval_begin(args: Any, rollout_id: int | None = None) -> None:
-    report_phase(
-        SlimeStatus.EVAL_ROLLOUT_LOGGING,
-        args,
-        **_step_progress(args, rollout_id),
-        rollout_id=rollout_id,
-        step_event="eval_begin",
-    )
-
-
-def report_eval_end(args: Any, rollout_id: int | None = None) -> None:
-    report_phase(
-        SlimeStatus.EVAL_ROLLOUT_LOGGING,
-        args,
-        **_step_progress(args, rollout_id),
-        rollout_id=rollout_id,
-        step_event="eval_end",
-    )
+        "rollout_id": rollout_id,
+    }
+    if step_event:
+        payload["step_event"] = step_event
+    match step_event:
+        case "start":
+            _post_framework_status(payload, _STEP_EVENT_TIMEOUT_SECONDS)
+        case "finish":
+            if rollout_id is not None:
+                _post_framework_status(payload, _STEP_EVENT_TIMEOUT_SECONDS)
+        case _:
+            _enqueue({**payload, "event_ts": time.time()})
 
 
 __all__ = [
     "before_log_prob_hook",
     "before_train_step_hook",
     "report_advantage_distribution",
-    "report_checkpoint_save",
-    "report_compute_log_probs",
-    "report_eval_begin",
-    "report_eval_end",
-    "report_generate_rollouts",
-    "report_offload_rollout",
-    "report_offload_train",
     "report_phase",
-    "report_rollout_initializing",
     "report_rollout_samples",
-    "report_step_start",
-    "report_step_complete",
-    "report_substep_finish",
-    "report_substep_window_start",
-    "report_weight_sync",
+    "report_step_event",
     "log_eval_rollout_data",
     "log_rollout_data",
 ]

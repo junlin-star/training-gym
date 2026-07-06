@@ -63,6 +63,7 @@ from modal_training_gym.common.run import (
 )
 from modal_training_gym.common.wandb import WandbConfig
 from modal_training_gym.common.status import SlimeStatus
+from modal_training_gym.common.step_timing import Substep
 from modal_training_gym.common.train_result import TrainResult
 from modal_training_gym.utils.metadata import MetadataStore, vol_put_async
 
@@ -309,7 +310,7 @@ def aggregate_step_times(
             full_step_end_time = end_time
 
         substep_times[f"{current_step_num}"] = {}
-        eval_before = SlimeStatus.EVAL_ROLLOUT_LOGGING.value
+        eval_before = Substep.EVAL_BEFORE.value
         present: set[str] = set()
         recorded: list[tuple[float, int, str]] = []
         for order_idx, substep in enumerate(SUBSTEP_ORDER):
@@ -1019,21 +1020,11 @@ def build_slime_app(
         unsupported = ", ".join(sorted(train_function_kwargs))
         raise TypeError(f"Unsupported slime.train_function_kwargs keys: {unsupported}")
 
-    SUBSTEP_ORDER = [
-        SlimeStatus.EVAL_ROLLOUT_LOGGING.value,
-        SlimeStatus.ROLLOUT_LOGGING.value,
-        SlimeStatus.OFFLOAD_ROLLOUT.value,
-        SlimeStatus.COMPUTE_LOG_PROBS.value,
-        SlimeStatus.OPTIMIZER_STEP.value,
-        SlimeStatus.CHECKPOINT_SAVE.value,
-        SlimeStatus.OFFLOAD_TRAIN.value,
-        SlimeStatus.WEIGHT_SYNC.value,
-        f"{SlimeStatus.EVAL_ROLLOUT_LOGGING.value}_end",
-    ]
+    SUBSTEP_ORDER = [substep.value for substep in Substep]
     OPTIONAL_SUBSTEPS = {
-        SlimeStatus.EVAL_ROLLOUT_LOGGING.value,
-        SlimeStatus.CHECKPOINT_SAVE.value,
-        f"{SlimeStatus.EVAL_ROLLOUT_LOGGING.value}_end",
+        Substep.EVAL_BEFORE.value,
+        Substep.CHECKPOINT_SAVE.value,
+        Substep.EVAL_AFTER.value,
     }
 
     async def write_step_times(
