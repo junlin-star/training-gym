@@ -64,7 +64,7 @@ from modal_training_gym.common.run import (
 from modal_training_gym.common.wandb import WandbConfig
 from modal_training_gym.common.status import SlimeStatus
 from modal_training_gym.common.train_result import TrainResult
-from modal_training_gym.utils.metadata import MetadataStore, vol_put_async
+from modal_training_gym.utils.metadata import MetadataStore, vol_put
 
 from modal_training_gym.train_recipes.slime_recipe.recipe import (
     CHECKPOINTS_PATH,
@@ -84,8 +84,8 @@ from modal_training_gym.common.checkpoint import Checkpoint
 from modal_training_gym.common.framework import Framework
 
 SLIME_ROOT = "/root/slime"
-# Pin by digest to prevent mutable-tag drift.  Tag: nightly-dev-20260701a
-SLIME_IMAGE = "slimerl/slime@sha256:512b6bed52d3ffd7b8d76c7238ed2bf43446cfadd8aa03a1ea4a39646c92ebf3"
+# Pin by digest to prevent mutable-tag drift.  Tag: nightly-dev-20260703b
+SLIME_IMAGE = "slimerl/slime@sha256:269b44b17e3f7136447db4cdaa3bf36ef9e3169f1596af0d7180c45f2a301965"
 # v0.8.0+ makes per-task CPU/memory requests configurable via enforcement
 # policies ("limit"/"ignore"), letting sandboxes burst on Modal and bill by
 # actual CPU-/RAM-second usage instead of over-provisioning a static reservation.
@@ -1072,7 +1072,7 @@ def build_slime_app(
         # are visible in the dashboard. Reuse it; fall back to a fresh record
         # if someone invokes train() directly (e.g. older callers).
         try:
-            run_record = await TrainingRun.from_id_async(training_run_id)
+            run_record = await TrainingRun.from_id(training_run_id, is_async=True)
             run_record.modal_app_id = modal_app_id
             run_record.modal_app_url = modal_app_url or modal_app_dashboard_url(
                 modal_app_id
@@ -1112,11 +1112,12 @@ def build_slime_app(
             )
         if not framework_status_token:
             framework_status_token = _secrets.token_urlsafe(32)
-        await run_record.save_async()
-        await vol_put_async(
+        await run_record.save(is_async=True)
+        await vol_put(
             MetadataStore.FRAMEWORK_STATUS_TOKENS,
             training_run_id,
             {"token": framework_status_token},
+            is_async=True,
         )
         print(f"TrainingRun recorded: {training_run_id}")
 
@@ -1127,8 +1128,9 @@ def build_slime_app(
             # In-flight status updates are fire-and-forget via the dashboard's
             # /api/framework-status endpoint so the training thread doesn't pay
             # the ~300ms volume-write latency on each transition. Terminal state
-            # (COMPLETED/FAILED/STOPPED) still goes through run_record.save_async
-            # below to guarantee delivery before the container exits.
+            # (COMPLETED/FAILED/STOPPED) still goes through
+            # run_record.save(is_async=True) below to guarantee delivery
+            # before the container exits.
             from modal_training_gym.common.status_reporter import (
                 enqueue_framework_status,
             )
@@ -1216,7 +1218,7 @@ def build_slime_app(
                 save_root, is_complete=_is_complete_torch_dist_checkpoint
             )
             record_resume_checkpoint(run_record, resume_checkpoint)
-            await run_record.save_async()
+            await run_record.save(is_async=True)
 
             if resume_checkpoint is not None:
                 print(
@@ -1317,7 +1319,7 @@ def build_slime_app(
             result = TrainResult(
                 **{k: v for k, v in result_kwargs.items() if k in accepted_fields}
             )
-            await result.save_async()
+            await result.save(is_async=True)
             run_record.status = TrainingRunStatus.COMPLETED
             mark_training_attempt_finished(
                 run_record, status="completed", ended_at=int(time.time())
@@ -1344,7 +1346,9 @@ def build_slime_app(
         finally:
             finished_at = int(time.time())
             try:
-                latest_run_record = await TrainingRun.from_id_async(training_run_id)
+                latest_run_record = await TrainingRun.from_id(
+                    training_run_id, is_async=True
+                )
             except Exception:
                 latest_run_record = run_record
 
@@ -1370,7 +1374,7 @@ def build_slime_app(
                 print(f"Failed to read step times: {exc}")
 
             try:
-                await latest_run_record.save_async()
+                await latest_run_record.save(is_async=True)
             except Exception as exc:
                 print(f"Failed to save run record: {exc}")
             else:

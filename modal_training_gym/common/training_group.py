@@ -33,7 +33,8 @@ import secrets
 import traceback
 from typing import Any
 
-from modal_training_gym.common.train import TrainConfig, TrainLaunch
+from modal_training_gym.common.run import TrainingRun
+from modal_training_gym.common.train import TrainConfig
 from modal_training_gym.common.train_result import TrainResult
 
 
@@ -109,7 +110,7 @@ class TrainingGroup:
         self.group_id = _slugify(name) if name else f"group-{secrets.token_hex(6)}"
 
         self.results: list[TrainResult] = []
-        self.launches: list[TrainLaunch] = []
+        self.launches: list[TrainingRun] = []
         self.failures: list[tuple[dict[str, Any], BaseException]] = []
         self._variants: list[tuple[dict[str, Any], TrainConfig]] | None = None
 
@@ -268,7 +269,7 @@ class TrainingGroup:
         else:
             for i in range(0, len(variants), max_parallel):
                 batch = variants[i : i + max_parallel]
-                launched: list[tuple[dict[str, Any], TrainLaunch]] = []
+                launched: list[tuple[dict[str, Any], TrainingRun]] = []
                 for overrides, cfg in batch:
                     try:
                         launched.append(
@@ -298,10 +299,10 @@ class TrainingGroup:
         *,
         continue_on_error: bool = True,
         prepare_inputs: bool = False,
-    ) -> list[TrainLaunch]:
+    ) -> list[TrainingRun]:
         """Start every variant as a detached Modal call and return immediately."""
         variants = self.iter_variants()
-        launches: list[TrainLaunch] = []
+        launches: list[TrainingRun] = []
         failures: list[tuple[dict[str, Any], BaseException]] = []
 
         print(f"[TrainingGroup] {self.group_id}: launching {len(variants)} variant(s)")

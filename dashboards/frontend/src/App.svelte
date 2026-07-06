@@ -808,17 +808,17 @@
   }
 </script>
 
-<div class="app-shell">
-  <header class="top-navbar">
-    <div class="top-brand">
-      <img src={logoSvg} alt="Modal" class="top-brand-logo" />
-      <span class="top-brand-title">
-        <span class="top-brand-modal">Modal</span>
-        <span class="top-brand-gym">Training Gym</span>
+<div class="min-h-[100vh] grid grid-rows-[auto_1fr] bg-(--bg)">
+  <header class="[border-bottom:1px_solid_var(--color-c-surface-highlight-gray-opaque,#272727)] bg-(--bg-depth) flex items-center justify-between gap-[1rem] min-h-[53px] p-[0_1rem] max-[900px]:min-h-[53px] max-[900px]:p-[0_1rem]">
+    <div class="inline-flex items-center gap-[0.55rem] flex-[0_0_auto] min-w-0">
+      <img src={logoSvg} alt="Modal" class="h-[17.5px] w-auto flex-[0_0_auto]" />
+      <span class="inline-flex items-center gap-[0.18rem] [font-family:var(--font-display)] [font-feature-settings:'ss01'_on] text-[17.6px] leading-[1] [padding-block:0.08rem] font-[600] tracking-[-0.02em] [transform:translateY(1px)] whitespace-nowrap">
+        <span class="text-[#ddffdc]">Modal</span>
+        <span class="text-(--green)">Training Gym</span>
       </span>
     </div>
     <a
-      class="docs-button"
+      class="[border:0] rounded-[10px] text-(--text) [background:transparent] [text-decoration:none] text-[14px] font-medium p-[8px] inline-flex items-center gap-[8px] flex-[0_0_auto] hover:text-(--text-bright) hover:[background:color-mix(in_srgb,white_4%,transparent)] max-[520px]:hidden"
       href={DOCS_URL}
       target="_blank"
       rel="noopener noreferrer"
@@ -828,10 +828,10 @@
     </a>
   </header>
 
-  <div class="shell">
+  <div class="grid grid-cols-[232px_minmax(0,1fr)] min-h-0 bg-(--bg) max-[900px]:grid-cols-[1fr]">
     <Sidebar {navItems} {activePage} onNavigate={setActivePage} />
 
-    <main class="workspace">
+    <main class="p-[16px_24px] max-[900px]:p-[24px]">
       <DashboardHeader
         title={pageMeta[activePage].title}
         {statusText}
@@ -919,112 +919,3 @@
     </main>
   </div>
 </div>
-
-<style>
-  .app-shell {
-    min-height: 100vh;
-    display: grid;
-    grid-template-rows: auto 1fr;
-    background: var(--bg);
-  }
-
-  .top-navbar {
-    border-bottom: 1px solid var(--color-c-surface-highlight-gray-opaque, #272727);
-    background: var(--bg-depth);
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 1rem;
-    min-height: 53px;
-    padding: 0 1rem;
-  }
-
-  .top-brand {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.55rem;
-    flex: 0 0 auto;
-    min-width: 0;
-  }
-
-  .top-brand-logo {
-    height: 17.5px;
-    width: auto;
-    flex: 0 0 auto;
-  }
-
-  .top-brand-title {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.18rem;
-    font-family: var(--font-display);
-    font-feature-settings: "ss01" on;
-    font-size: 17.6px;
-    line-height: 1;
-    padding-block: 0.08rem;
-    font-weight: 600;
-    letter-spacing: -0.02em;
-    transform: translateY(1px);
-    white-space: nowrap;
-  }
-
-  .top-brand-modal {
-    color: #ddffdc;
-  }
-
-  .top-brand-gym {
-    color: var(--green);
-  }
-
-  .docs-button {
-    border: 0;
-    border-radius: 10px;
-    color: var(--text);
-    background: transparent;
-    text-decoration: none;
-    font-size: 14px;
-    font-weight: 500;
-    padding: 8px;
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    flex: 0 0 auto;
-  }
-
-  .docs-button:hover {
-    color: var(--text-bright);
-    background: color-mix(in srgb, white 4%, transparent);
-  }
-
-  .shell {
-    display: grid;
-    grid-template-columns: 232px minmax(0, 1fr);
-    min-height: 0;
-    background: var(--bg);
-  }
-
-  .workspace {
-    padding: 16px 24px;
-  }
-
-  @media (max-width: 900px) {
-    .top-navbar {
-      min-height: 53px;
-      padding: 0 1rem;
-    }
-
-    .shell {
-      grid-template-columns: 1fr;
-    }
-
-    .workspace {
-      padding: 24px;
-    }
-  }
-
-  @media (max-width: 520px) {
-    .docs-button {
-      display: none;
-    }
-  }
-</style>

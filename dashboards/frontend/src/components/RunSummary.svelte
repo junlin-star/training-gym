@@ -141,7 +141,7 @@
         <div class="kv">
           <span class="kv-key">Modal app</span>
           <a
-            class="kv-link kv-value-mono"
+            class="text-(--accent) [overflow-wrap:anywhere] [text-decoration:none] hover:[text-decoration:underline] kv-value-mono"
             href={modalAppUrl}
             target="_blank"
             rel="noopener noreferrer"
@@ -216,10 +216,10 @@
     {#if wandbLinks.length}
       <section class="summary-section">
         <h3 class="summary-section-title">W&B</h3>
-        <div class="link-chip-list">
+        <div class="flex flex-wrap gap-[6px]">
           {#each wandbLinks as link (link.url)}
             <a
-              class="link-chip wandb-chip"
+              class="[border:1px_solid_var(--color-c-gray-10,#2f2f2f)] rounded-[999px] text-(--accent) text-[12px] leading-[16px] p-[2px_8px] [text-decoration:none] hover:[text-decoration:underline] [border-color:color-mix(in_srgb,var(--yellow,#fbbf24)_45%,transparent)] text-(--yellow,#fbbf24)!"
               href={link.url}
               target="_blank"
               rel="noopener noreferrer"
@@ -242,21 +242,21 @@
         {#if groupTags.axes.length}
           <div class="kv">
             <span class="kv-key">Customized params</span>
-            <div class="tag-chip-list">
+            <div class="flex flex-wrap gap-[6px] min-w-0">
               {#each groupTags.axes as axis (axis)}
-                <span class="tag-chip kv-value-mono">{axis}</span>
+                <span class="[border:1px_solid_var(--color-c-gray-10,#2f2f2f)] rounded-[999px] text-(--text) bg-[color-mix(in_srgb,var(--panel-alt)_74%,black)] p-[2px_8px] kv-value-mono">{axis}</span>
               {/each}
             </div>
           </div>
         {/if}
         {#if groupTags.tags.length}
-          <div class="kv kv-block">
+          <div class="kv items-start!">
             <span class="kv-key">This run differs by</span>
-            <div class="tag-table">
+            <div class="grid gap-[6px] min-w-0">
               {#each groupTags.tags as tag (tag.key)}
-                <div class="tag-row">
-                  <span class="tag-key kv-value-mono">{tag.key}</span>
-                  <span class="tag-value">{formatTagValue(tag.value)}</span>
+                <div class="grid grid-cols-[minmax(0,1fr)_max-content] gap-[8px] items-baseline min-w-0">
+                  <span class="text-(--muted) [overflow-wrap:anywhere] kv-value-mono">{tag.key}</span>
+                  <span class="text-(--text) text-[12px] leading-[16px] [overflow-wrap:anywhere]">{formatTagValue(tag.value)}</span>
                 </div>
               {/each}
             </div>
@@ -268,7 +268,7 @@
     {#if isSlimeRun() && recipeJson}
       <section class="summary-section">
         <h3 class="summary-section-title">Full Slime parameters</h3>
-        <pre class="summary-json">{recipeJson}</pre>
+        <pre class="[border:1px_solid_var(--color-c-gray-10,#2f2f2f)] rounded-[8px] [background:color-mix(in_srgb,var(--panel-alt)_74%,black)] text-(--text) [font-family:var(--font-mono)] text-[11px] leading-[16px] m-0 max-h-[360px] overflow-auto p-[10px] whitespace-pre">{recipeJson}</pre>
       </section>
     {/if}
 
@@ -282,160 +282,8 @@
           </div>
         {/each}
       {:else}
-        <div class="summary-empty">No recipe values found for this run.</div>
+        <div class="text-(--muted) text-[12px] leading-[16px]">No recipe values found for this run.</div>
       {/if}
     </section>
   </div>
 {/if}
-
-<style>
-  .summary-section {
-    border-bottom: 1px solid var(--color-c-gray-10, #2f2f2f);
-    padding: 16px 0;
-  }
-
-  .summary-section:first-child {
-    padding-top: 0;
-  }
-
-  .summary-section:last-child {
-    border-bottom: 0;
-  }
-
-  .summary-section-title {
-    color: var(--text-bright);
-    font-size: 14px;
-    font-weight: 500;
-    line-height: 20px;
-    margin-bottom: 8px;
-  }
-
-  .kv {
-    display: grid;
-    grid-template-columns: 100px minmax(0, 1fr);
-    align-items: baseline;
-    gap: 8px;
-    padding: 4px 0;
-  }
-
-  .kv-key {
-    color: var(--muted);
-    font-size: 12px;
-    line-height: 16px;
-  }
-
-  .kv-value {
-    color: var(--text);
-    font-size: 14px;
-    line-height: 20px;
-    overflow-wrap: anywhere;
-  }
-
-  .kv-value-mono {
-    font-family: var(--font-mono);
-    font-size: 12px;
-    line-height: 16px;
-  }
-
-  .kv-link {
-    color: var(--accent);
-    overflow-wrap: anywhere;
-    text-decoration: none;
-  }
-
-  .kv-link:hover {
-    text-decoration: underline;
-  }
-
-  .kv-block {
-    align-items: start;
-  }
-
-  .tag-chip-list {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-    min-width: 0;
-  }
-
-  .tag-chip {
-    border: 1px solid var(--color-c-gray-10, #2f2f2f);
-    border-radius: 999px;
-    color: var(--text);
-    background: color-mix(in srgb, var(--panel-alt) 74%, black);
-    padding: 2px 8px;
-  }
-
-  .link-chip-list {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-  }
-
-  .link-chip {
-    border: 1px solid var(--color-c-gray-10, #2f2f2f);
-    border-radius: 999px;
-    color: var(--accent);
-    font-size: 12px;
-    line-height: 16px;
-    padding: 2px 8px;
-    text-decoration: none;
-  }
-
-  .link-chip:hover {
-    text-decoration: underline;
-  }
-
-  .wandb-chip {
-    border-color: color-mix(in srgb, var(--yellow, #fbbf24) 45%, transparent);
-    color: var(--yellow, #fbbf24);
-  }
-
-  .tag-table {
-    display: grid;
-    gap: 6px;
-    min-width: 0;
-  }
-
-  .tag-row {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) max-content;
-    gap: 8px;
-    align-items: baseline;
-    min-width: 0;
-  }
-
-  .tag-key {
-    color: var(--muted);
-    overflow-wrap: anywhere;
-  }
-
-  .tag-value {
-    color: var(--text);
-    font-size: 12px;
-    line-height: 16px;
-    overflow-wrap: anywhere;
-  }
-
-  .summary-empty {
-    color: var(--muted);
-    font-size: 12px;
-    line-height: 16px;
-  }
-
-  .summary-json {
-    border: 1px solid var(--color-c-gray-10, #2f2f2f);
-    border-radius: 8px;
-    background: color-mix(in srgb, var(--panel-alt) 74%, black);
-    color: var(--text);
-    font-family: var(--font-mono);
-    font-size: 11px;
-    line-height: 16px;
-    margin: 0;
-    max-height: 360px;
-    overflow: auto;
-    padding: 10px;
-    white-space: pre;
-  }
-
-</style>

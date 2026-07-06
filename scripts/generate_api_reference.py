@@ -120,6 +120,15 @@ def _seo_description(cls: type, class_name: str) -> str:
     return first_para
 
 
+def _yaml_quote(value: str) -> str:
+    """Render a string as a safe single-quoted YAML scalar.
+
+    Doubles embedded single quotes so apostrophes (e.g. "run's") don't
+    prematurely terminate the quoted scalar and break frontmatter parsing.
+    """
+    return "'" + value.replace("'", "''") + "'"
+
+
 def _format_type(type_hint: Any) -> str:
     """Format a type hint for display."""
     raw = str(type_hint)
@@ -284,8 +293,8 @@ def generate_config_data_page(
 
     lines = [
         "---",
-        f"title: {entry['sidebar_label']}",
-        f"description: '{_seo_description(cls, entry['class_name'])}'",
+        f"title: {_yaml_quote(entry['sidebar_label'])}",
+        f"description: {_yaml_quote(_seo_description(cls, entry['class_name']))}",
         "---",
         "",
         "```python",
@@ -402,8 +411,8 @@ def generate_behavior_page(
 
     lines = [
         "---",
-        f"title: {entry['sidebar_label']}",
-        f"description: '{_seo_description(cls, entry['class_name'])}'",
+        f"title: {_yaml_quote(entry['sidebar_label'])}",
+        f"description: {_yaml_quote(_seo_description(cls, entry['class_name']))}",
         "---",
         "",
         "```python",
@@ -652,8 +661,8 @@ def main() -> None:
             desc = first_sentence or f"API reference for {entry['class_name']}"
             lines = [
                 "---",
-                f'title: "{entry.get("sidebar_label", entry["class_name"])}"',
-                f"description: '{desc}'",
+                f"title: {_yaml_quote(entry.get('sidebar_label', entry['class_name']))}",
+                f"description: {_yaml_quote(desc)}",
                 "---",
                 "",
                 f"# `{entry['class_name']}`",

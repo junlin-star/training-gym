@@ -334,19 +334,18 @@ class ModalRayCluster:
             # Surface Ray's recorded driver failure message in the exception
             # itself: the real traceback is streamed above but is easily buried
             # in rollout logs and is lost once logs roll off after termination.
-            detail = None
+            message = None
             try:
                 info = self._client.get_job_info(job_id)
                 if inspect.isawaitable(info):
                     info = await info
-                message = getattr(info, "message", None)
-                if message:
-                    detail = f": {message}"
+                message = getattr(info, "message", None) or None
             except Exception:  # noqa: BLE001 — best-effort enrichment
                 pass
-            print(f"Ray job {job_id} finished with status: {status}{detail}")
+            suffix = f": {message}" if message else ""
+            print(f"Ray job {job_id} finished with status: {status}{suffix}")
             return ModalRayJobResult(
-                status=status, is_success=status == "SUCCEEDED", message=detail
+                status=status, is_success=status == "SUCCEEDED", message=message
             )
         return ModalRayJobResult(status=status, is_success=status == "SUCCEEDED")
 

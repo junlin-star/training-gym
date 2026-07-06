@@ -5,7 +5,7 @@ import pytest
 from modal_training_gym import TrainConfig, TrainingGroup
 from modal_training_gym.common.dataset import HuggingFaceDataset
 from modal_training_gym.common.models import Qwen3_6_35B
-from modal_training_gym.common.train import TrainLaunch
+from modal_training_gym.common.run import TrainingRun
 from modal_training_gym.common.training_group import TrainingGroupError
 from modal_training_gym.train_recipes.slime_recipe.qwen3_6_35b import Qwen3_6_35b_Recipe
 
@@ -158,7 +158,7 @@ def test_train_result_persists_group_id():
     assert restored.group_id == "group-abc123"
 
 
-def test_train_launch_resolves_train_result():
+def test_training_run_resolves_train_result():
     from modal_training_gym.common.framework import Framework
     from modal_training_gym.common.train_result import TrainResult
 
@@ -172,16 +172,21 @@ def test_train_launch_resolves_train_result():
                 group_id="group-abc123",
             )._to_dict()
 
-    launch = TrainLaunch(
+    run = TrainingRun(
         training_run_id="run-x",
         modal_app_id="",
         modal_app_url="",
+        framework=Framework.SLIME,
+        config={},
         function_call_id="fc-123",
-        group_id="group-abc123",
-        _function_call=FakeFunctionCall(),
+        metadata={"group_id": "group-abc123"},
     )
+    run._function_call = FakeFunctionCall()
 
-    result = launch.result(timeout=123, stop_app_on_success=False)
+    # group_id is derived from metadata, not stored separately.
+    assert run.group_id == "group-abc123"
+
+    result = run.result(timeout=123, stop_app_on_success=False)
     assert result.training_run_id == "run-x"
     assert result.group_id == "group-abc123"
 

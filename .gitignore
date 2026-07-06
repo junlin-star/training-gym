@@ -130,6 +130,9 @@ celerybeat.pid
 # SageMath parsed files
 *.sage.py
 
+# Gym workstation
+.gym
+
 # Environments
 .env
 .venv

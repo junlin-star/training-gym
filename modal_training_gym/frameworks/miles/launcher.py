@@ -48,7 +48,7 @@ from modal_training_gym.common.run import (
 )
 from modal_training_gym.common.status import MilesStatus
 from modal_training_gym.common.train_result import TrainResult
-from modal_training_gym.utils.metadata import MetadataStore, vol_put_async
+from modal_training_gym.utils.metadata import MetadataStore, vol_put
 from modal_training_gym.train_recipes.miles_recipe.recipe import (
     CHECKPOINTS_PATH,
     DATA_PATH,
@@ -549,7 +549,7 @@ def build_miles_app(
             # so those phases are visible in the dashboard. Reuse it; fall
             # back to a fresh record if someone invokes train() directly.
             try:
-                run_record = await TrainingRun.from_id_async(training_run_id)
+                run_record = await TrainingRun.from_id(training_run_id, is_async=True)
                 run_record.modal_app_id = modal_app_id
                 run_record.modal_app_url = modal_app_url
                 run_record.config = config_summary
@@ -587,11 +587,12 @@ def build_miles_app(
                 )
             if not framework_status_token:
                 framework_status_token = _secrets.token_urlsafe(32)
-            await run_record.save_async()
-            await vol_put_async(
+            await run_record.save(is_async=True)
+            await vol_put(
                 MetadataStore.FRAMEWORK_STATUS_TOKENS,
                 training_run_id,
                 {"token": framework_status_token},
+                is_async=True,
             )
             print(f"TrainingRun recorded: {training_run_id}")
 
@@ -674,7 +675,7 @@ def build_miles_app(
                     run_record.duration_seconds = max(
                         0, finished_at - run_record.started_at
                     )
-                    await run_record.save_async()
+                    await run_record.save(is_async=True)
                 os.makedirs(os.path.dirname(prep_error), exist_ok=True)
                 with open(prep_error, "w") as f:
                     f.write(repr(exc))
@@ -733,7 +734,7 @@ def build_miles_app(
             miles.save = save_root
             resume_checkpoint = torch_dist_resume_checkpoint(save_root)
             record_resume_checkpoint(run_record, resume_checkpoint)
-            await run_record.save_async()
+            await run_record.save(is_async=True)
 
             if resume_checkpoint is not None:
                 print(
@@ -776,8 +777,11 @@ def build_miles_app(
                 print(f"Ray dashboard: {tunnel.url}")
                 result = await cluster.submit_and_tail(cmd, runtime_env=runtime_env)
                 if not result.is_success:
-                    run_record.error_message = result.message
-                    raise RuntimeError(result.message)
+                    run_record.error_message = (
+                        result.message
+                        or f"Ray job finished with status: {result.status}"
+                    )
+                    raise RuntimeError(run_record.error_message)
                 print(f"Ray job completed: {result.status}")
                 print(f"Ray job message: {result.message}")
 
@@ -798,7 +802,7 @@ def build_miles_app(
             result = TrainResult(
                 **{k: v for k, v in result_kwargs.items() if k in accepted_fields}
             )
-            await result.save_async()
+            await result.save(is_async=True)
             run_record.status = TrainingRunStatus.COMPLETED
             mark_training_attempt_finished(
                 run_record, status="completed", ended_at=int(time.time())
@@ -830,7 +834,9 @@ def build_miles_app(
             # made during the run; fall back to the in-memory record if the fetch
             # fails.
             try:
-                latest_run_record = await TrainingRun.from_id_async(training_run_id)
+                latest_run_record = await TrainingRun.from_id(
+                    training_run_id, is_async=True
+                )
             except Exception:
                 latest_run_record = run_record
 
@@ -846,7 +852,7 @@ def build_miles_app(
                 0, finished_at - latest_run_record.started_at
             )
             try:
-                await latest_run_record.save_async()
+                await latest_run_record.save(is_async=True)
             except Exception:
                 pass
 

@@ -46,6 +46,7 @@ Two design invariants:
 
 from __future__ import annotations
 
+from collections.abc import Awaitable
 from dataclasses import asdict, dataclass, field, fields
 import copy
 from typing import TYPE_CHECKING, Any
@@ -54,10 +55,7 @@ from modal_training_gym.common.framework import Framework
 from modal_training_gym.utils.metadata import (
     MetadataStore,
     vol_get,
-    vol_put,
-    vol_put_async,
-    vol_upsert_summary_item,
-    vol_upsert_summary_item_async,
+    vol_put_with_summary,
 )
 
 if TYPE_CHECKING:
@@ -137,26 +135,16 @@ class TrainResult:
     def _summary_sort_key(item: dict[str, Any]) -> str:
         return str(item.get("training_run_id", ""))
 
-    def save(self) -> None:
-        payload = self._to_dict()
-        vol_put(MetadataStore.TRAIN_RESULTS, self.training_run_id, payload)
-        vol_upsert_summary_item(
-            MetadataStore.TRAIN_RESULTS_SUMMARY,
-            payload,
+    def save(self, *, is_async: bool = False) -> None | Awaitable[None]:
+        return vol_put_with_summary(
+            MetadataStore.TRAIN_RESULTS,
+            self.training_run_id,
+            self._to_dict(),
+            summary_store=MetadataStore.TRAIN_RESULTS_SUMMARY,
             item_id_key="training_run_id",
             sort_key=self._summary_sort_key,
             reverse=True,
-        )
-
-    async def save_async(self) -> None:
-        payload = self._to_dict()
-        await vol_put_async(MetadataStore.TRAIN_RESULTS, self.training_run_id, payload)
-        await vol_upsert_summary_item_async(
-            MetadataStore.TRAIN_RESULTS_SUMMARY,
-            payload,
-            item_id_key="training_run_id",
-            sort_key=self._summary_sort_key,
-            reverse=True,
+            is_async=is_async,
         )
 
     @staticmethod
