@@ -98,6 +98,12 @@ def gdpo_compute_advantages(args, rollout_data):
     loss_masks = rollout_data["loss_masks"]  # [num_samples, seq_len] or list
     response_lengths = rollout_data["response_lengths"]  # [num_samples]
 
+    # Ensure task_rewards and response_lengths are tensors (may arrive as lists)
+    if isinstance(task_rewards, list):
+        task_rewards = torch.tensor(task_rewards, dtype=torch.float32)
+    if isinstance(response_lengths, list):
+        response_lengths = torch.tensor(response_lengths, dtype=torch.long)
+
     # Group indices for GRPO normalization — samples from the same prompt share
     # a group index.
     group_indices = rollout_data.get("sample_indices")
