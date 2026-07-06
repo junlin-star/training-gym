@@ -451,7 +451,7 @@
   }}
 />
 
-<section class="grid [grid-template-columns:repeat(3,minmax(0,1fr))] gap-[14px] mb-[24px] max-[1080px]:[grid-template-columns:repeat(2,minmax(0,1fr))] max-[900px]:[grid-template-columns:1fr]">
+<section class="summary-sticky grid [grid-template-columns:repeat(3,minmax(0,1fr))] gap-[14px] mb-[24px] max-[1080px]:[grid-template-columns:repeat(2,minmax(0,1fr))] max-[900px]:[grid-template-columns:1fr]">
   <article class="summary-card">
     <span class="summary-label">Total runs</span>
     <strong>{allEvals.length}</strong>
@@ -553,7 +553,7 @@
 
   <div class="p-0">
     {#if loading}
-      <div class="table-wrap">
+      <div class="table-wrap freeze-header">
         <MinimalTableSkeleton
           class="evals-runs-table"
           columns={evalSkeletonColumns}
@@ -598,7 +598,7 @@
             </button>
 
             {#if expandedConfigIds.has(group.evalConfigId)}
-              <div class="table-wrap">
+              <div class="table-wrap freeze-header" style="--frozen-table-offset: 360px;">
                 <ResizableTable class="evals-runs-table" columns={evalColumns} stickyFirstColumn>
                   <tbody>
                     {#each group.visibleRuns as run, runIndex (run.eval.eval_id || `${group.evalConfigId}-${run.eval.created_at || 0}-${runIndex}`)}

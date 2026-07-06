@@ -82,8 +82,11 @@ def test_miles_uses_same_gpu_allocation_math() -> None:
     assert config.total_nodes == 2
 
 
-def test_miles_raises_training_gym_error_for_bad_gpu_count_type() -> None:
-    with pytest.raises(GpuAllocationError, match="actor_num_gpus_per_node"):
+def test_miles_rejects_bad_gpu_count_type() -> None:
+    # Pydantic's field validation rejects the fractional GPU count before
+    # resolve_gpu_allocation runs; both ValidationError and GpuAllocationError
+    # are ValueError subclasses.
+    with pytest.raises(ValueError, match="actor_num_gpus_per_node"):
         MilesConfig(actor_num_gpus_per_node=8.5)
 
 

@@ -3,7 +3,6 @@ import secrets as _secrets
 import threading
 import time
 from contextlib import nullcontext
-from enum import Enum
 from typing import Any
 from typing import cast
 
@@ -86,38 +85,21 @@ def _resolve_slime_recipe(
     return resolved
 
 
-class TrainStepStatus(Enum):
-    INITIALIZING = "initializing"
-    DOWNLOAD_MODEL = "download_model"
-    CONVERT_MODEL = "convert_model"
-    PREPARE_DATASET = "prepare_dataset"
-    ROLLOUT_INITIALIZING = "initialize_rollouts"
-    ROLLOUT_LOGGING = "generate_rollouts"
-    EVAL_ROLLOUT_LOGGING = "evaluate_rollouts"
-    COMPUTE_LOG_PROBS = "compute_log_probs"
-    OPTIMIZER_STEP = "optimizer_step"
-    WEIGHT_SYNC = "weight_sync"
-    OFFLOAD_ROLLOUT = "offload_rollout"
-    OFFLOAD_TRAIN = "offload_train"
-    CHECKPOINT_SAVE = "checkpoint_save"
-    TRAINING = "training"
-
-
 _STAGE_LABELS: dict[str, str] = {
-    TrainStepStatus.INITIALIZING.value: "Initializing",
-    TrainStepStatus.DOWNLOAD_MODEL.value: "Downloading model",
-    TrainStepStatus.CONVERT_MODEL.value: "Converting model",
-    TrainStepStatus.PREPARE_DATASET.value: "Preparing dataset",
-    TrainStepStatus.ROLLOUT_INITIALIZING.value: "Initializing rollouts",
-    TrainStepStatus.ROLLOUT_LOGGING.value: "Generating rollouts",
-    TrainStepStatus.EVAL_ROLLOUT_LOGGING.value: "Evaluating rollouts",
-    TrainStepStatus.COMPUTE_LOG_PROBS.value: "Computing log probs",
-    TrainStepStatus.OPTIMIZER_STEP.value: "Optimizer step",
-    TrainStepStatus.WEIGHT_SYNC.value: "Weight sync",
-    TrainStepStatus.OFFLOAD_ROLLOUT.value: "Offload rollout",
-    TrainStepStatus.OFFLOAD_TRAIN.value: "Offload train",
-    TrainStepStatus.CHECKPOINT_SAVE.value: "Saving checkpoint",
-    TrainStepStatus.TRAINING.value: "Training",
+    SlimeStatus.INITIALIZING.value: "Initializing",
+    SlimeStatus.DOWNLOAD_MODEL.value: "Downloading model",
+    SlimeStatus.CONVERT_MODEL.value: "Converting model",
+    SlimeStatus.PREPARE_DATASET.value: "Preparing dataset",
+    SlimeStatus.ROLLOUT_INITIALIZING.value: "Initializing rollouts",
+    SlimeStatus.ROLLOUT_LOGGING.value: "Generating rollouts",
+    SlimeStatus.EVAL_ROLLOUT_LOGGING.value: "Evaluating rollouts",
+    SlimeStatus.COMPUTE_LOG_PROBS.value: "Computing log probs",
+    SlimeStatus.OPTIMIZER_STEP.value: "Optimizer step",
+    SlimeStatus.WEIGHT_SYNC.value: "Weight sync",
+    SlimeStatus.OFFLOAD_ROLLOUT.value: "Offload rollout",
+    SlimeStatus.OFFLOAD_TRAIN.value: "Offload train",
+    SlimeStatus.CHECKPOINT_SAVE.value: "Saving checkpoint",
+    SlimeStatus.TRAINING.value: "Training",
 }
 
 

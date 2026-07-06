@@ -1336,6 +1336,48 @@ tr.framework-run-row:last-child td {
   -webkit-overflow-scrolling: auto;
 }
 
+/* Frozen header row. position:sticky pins to the nearest scrollport, and the
+   horizontal overflow above already makes .table-wrap that scrollport — so a
+   thead can only freeze against page scroll if the wrap owns vertical
+   scrolling too. Bound its height to the viewport and pin the thead inside. */
+.table-wrap.freeze-header {
+  overflow: auto;
+  max-height: max(240px, calc(100dvh - var(--frozen-table-offset, 280px)));
+}
+
+.table-wrap.freeze-header thead th {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  background: var(--bg);
+  background-clip: padding-box;
+  /* Rows carry the separator as border-top, which scrolls away under the
+     stuck header — keep a line under it. */
+  box-shadow: 0 1px 0 0 var(--color-c-gray-10, #2f2f2f);
+}
+
+/* The corner cell is sticky on both axes and must paint over the frozen
+   header row and the frozen first column. */
+.table-wrap.freeze-header table.resizable-table.sticky-first-column th:first-child {
+  z-index: 4;
+}
+
+/* Summary stat cards pinned while the page itself scrolls. The background
+   covers the grid gaps so rows don't show through. */
+.summary-sticky {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: var(--bg);
+}
+
+@media (max-width: 900px) {
+  /* Stacked cards would eat most of a small viewport — let them scroll. */
+  .summary-sticky {
+    position: static;
+  }
+}
+
 .page-empty {
   padding: 24px;
   color: var(--muted);
