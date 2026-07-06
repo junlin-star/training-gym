@@ -128,7 +128,9 @@ def gdpo_compute_advantages(args, rollout_data):
     if group_indices is None:
         group_indices = torch.zeros_like(task_rewards, dtype=torch.long)
     elif isinstance(group_indices, list):
-        group_indices = torch.tensor(group_indices, dtype=torch.long) // n_per
+        group_indices = (
+            torch.tensor(group_indices, dtype=torch.long, device=_dev) // n_per
+        )
     else:
         group_indices = group_indices // n_per
 

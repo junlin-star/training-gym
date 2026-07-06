@@ -545,6 +545,94 @@ def train(experiment_name: str, eval_interval: int = 5) -> None:
 
 
 @app.local_entrypoint()
+def ablation(experiment_name: str = "gdpo-ablation") -> None:
+    """Launch parallel ablation arms to diagnose pass-rate collapse.
+
+    Arms (all share lr=3e-7 to fix catastrophic forgetting; ablate length penalty):
+      1. low-lr:         lr=3e-7, full GDPO (max_cost=0.25)
+      2. low-lr-weak:    lr=3e-7, weaker penalty (max_cost=0.1)
+      3. low-lr-no-pen:  lr=3e-7, no length penalty (max_cost=0.0, = pure GRPO)
+    """
+    try:
+        modal.Secret.from_name("huggingface-secret").hydrate()
+    except modal.exception.NotFoundError as exc:
+        raise RuntimeError(
+            "Missing Modal Secret 'huggingface-secret' (needs HF_TOKEN)."
+        ) from exc
+
+    arms: list[tuple[str, dict]] = [
+        # arm 1: lower LR, same GDPO penalty
+        (
+            "low-lr",
+            {"lr": 3e-7, "max_cost": 0.25, "free_tokens": 4000, "max_tokens": 16000},
+        ),
+        # arm 2: lower LR + weaker penalty
+        (
+            "low-lr-weak",
+            {"lr": 3e-7, "max_cost": 0.1, "free_tokens": 6000, "max_tokens": 16000},
+        ),
+        # arm 3: lower LR, no length penalty (pure task-reward GRPO)
+        (
+            "low-lr-no-pen",
+            {"lr": 3e-7, "max_cost": 0.0, "free_tokens": 4000, "max_tokens": 16000},
+        ),
+    ]
+
+    all_launches = []
+    all_failures = []
+
+    for arm_name, params in arms:
+        extra = {
+            "rl_parallel_generation_tasks": 64,
+            "custom_advantage_function_path": (
+                "modal_training_gym.frameworks.slime.gdpo.gdpo_compute_advantages"
+            ),
+            "gdpo_length_penalty_free_tokens": params["free_tokens"],
+            "gdpo_length_penalty_max_tokens": params["max_tokens"],
+            "gdpo_length_penalty_max_cost": params["max_cost"],
+        }
+        recipe = ToolathlonGDPOQwen3_6_35bRecipe(
+            lr=params["lr"],
+            extra_config=extra,
+            wandb=WandbConfig(
+                project="toolathlon-gdpo",
+                group=f"ablation-{arm_name}",
+            ),
+            custom_rollout_log_function=gdpo_rollout_log,
+            eval_interval=None,
+            save_interval=5,
+        )
+        group = TrainingGroup(
+            name=f"{experiment_name}-{arm_name}",
+            base=TrainConfig(
+                model=Qwen3_6_35B(),
+                dataset=ToolathlonDataset(),
+                recipe=recipe,
+            ),
+            merge_model_recipe=False,
+            grid={"recipe.sglang_disable_custom_all_reduce": [False]},
+        )
+        print(f"\n{'=' * 60}")
+        print(f"Launching arm: {arm_name}")
+        print(
+            f"  lr={params['lr']}, max_cost={params['max_cost']}, "
+            f"free_tokens={params['free_tokens']}"
+        )
+        print(f"{'=' * 60}")
+        launches = group.launch(prepare_inputs=True)
+        all_launches.extend(launches)
+        all_failures.extend(group.failures)
+
+    print(f"\n{'=' * 60}")
+    print(f"ABLATION SUMMARY: {len(all_launches)} launched, {len(all_failures)} failed")
+    for launch in all_launches:
+        print(f"  {launch.training_run_id}  (app_id={launch.modal_app_id})")
+    for overrides, err in all_failures:
+        print(f"  FAILED {overrides}: {_exception_summary(err)}")
+    return None
+
+
+@app.local_entrypoint()
 def eval(
     training_run_id: str = "",
     max_concurrency: int = 4,
