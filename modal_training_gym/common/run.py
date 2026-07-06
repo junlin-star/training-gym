@@ -253,19 +253,11 @@ class TrainingRun(BaseModel):
 
     def save(self, *, is_async: bool = False) -> None | Awaitable[None]:
         self._touch()
-        payload = self.model_dump(mode="json")
-        # The summary feeds the dashboard's /api/runs list; step/substep
-        # timings grow with num_rollout and are only needed on the detail
-        # page, which fetches them lazily via /api/runs/{id}/step-times.
-        summary_item = {
-            k: v for k, v in payload.items() if k not in ("step_times", "substep_times")
-        }
         return vol_put_with_summary(
             MetadataStore.TRAINING_RUNS,
             self.training_run_id,
-            payload,
+            self.model_dump(mode="json"),
             summary_store=MetadataStore.TRAINING_RUNS_SUMMARY,
-            summary_item=summary_item,
             item_id_key="training_run_id",
             sort_key=self._summary_sort_key,
             reverse=True,

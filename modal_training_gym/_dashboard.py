@@ -611,18 +611,6 @@ def fastapi_app():
             {"status": "ok", "rollout_id": result.rollout_id, "mean": result.mean}
         )
 
-    @web.get("/api/runs/{training_run_id}/step-times")
-    async def get_run_step_times(training_run_id: str):
-        # Lazily served: the /api/runs list summary excludes these blobs
-        # (they grow with num_rollout); the detail page fetches them here.
-        run = await _get_run_or_404(training_run_id)
-        return JSONResponse(
-            {
-                "step_times": run.step_times,
-                "substep_times": run.substep_times,
-            }
-        )
-
     @web.get("/api/runs/{training_run_id}/rollouts")
     async def list_run_rollouts(training_run_id: str):
         summaries = await run_in_threadpool(
