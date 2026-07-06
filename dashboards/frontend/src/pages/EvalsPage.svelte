@@ -284,11 +284,21 @@
   );
 
   let allStatusFiltersActive = $derived(activeStatusFilters.size === 3);
-  let allDatasetFiltersActive = $derived(activeDatasetFilters.size === datasetOptions.length);
+  let allDatasetFiltersActive = $derived.by(() =>
+    datasetOptions.length > 0 && datasetOptions.every((dataset) => activeDatasetFilters.has(dataset)),
+  );
 
   $effect(() => {
-    const next = new Set(activeDatasetFilters);
+    const optionsSet = new Set(datasetOptions);
+    const next = new Set(
+      [...activeDatasetFilters].filter((dataset) => optionsSet.has(dataset)),
+    );
     let changed = false;
+
+    if (next.size !== activeDatasetFilters.size) {
+      changed = true;
+    }
+
     for (const dataset of datasetOptions) {
       if (!seenDatasets.has(dataset)) {
         seenDatasets.add(dataset);
@@ -296,6 +306,13 @@
         changed = true;
       }
     }
+
+    for (const dataset of [...seenDatasets]) {
+      if (!optionsSet.has(dataset)) {
+        seenDatasets.delete(dataset);
+      }
+    }
+
     if (changed) activeDatasetFilters = next;
   });
 
