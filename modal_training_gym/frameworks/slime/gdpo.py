@@ -105,12 +105,16 @@ def gdpo_compute_advantages(args, rollout_data):
         response_lengths = torch.tensor(response_lengths, dtype=torch.long)
 
     # Group indices for GRPO normalization — samples from the same prompt share
-    # a group index.
+    # a group index.  sample_indices are sequential per-sample; divide by
+    # n_samples_per_prompt to get the prompt-level group.
     group_indices = rollout_data.get("sample_indices")
+    n_per = max(1, int(getattr(args, "n_samples_per_prompt", 1) or 1))
     if group_indices is None:
         group_indices = torch.zeros_like(task_rewards, dtype=torch.long)
     elif isinstance(group_indices, list):
-        group_indices = torch.tensor(group_indices, dtype=torch.long)
+        group_indices = torch.tensor(group_indices, dtype=torch.long) // n_per
+    else:
+        group_indices = group_indices // n_per
 
     # ── Length penalty params from args (injected via extra_config) ────────
     free_tokens = int(getattr(args, "gdpo_length_penalty_free_tokens", 4000))
