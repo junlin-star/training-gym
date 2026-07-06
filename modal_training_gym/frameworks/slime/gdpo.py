@@ -109,6 +109,8 @@ def gdpo_compute_advantages(args, rollout_data):
     group_indices = rollout_data.get("sample_indices")
     if group_indices is None:
         group_indices = torch.zeros_like(task_rewards, dtype=torch.long)
+    elif isinstance(group_indices, list):
+        group_indices = torch.tensor(group_indices, dtype=torch.long)
 
     # ── Length penalty params from args (injected via extra_config) ────────
     free_tokens = int(getattr(args, "gdpo_length_penalty_free_tokens", 4000))
