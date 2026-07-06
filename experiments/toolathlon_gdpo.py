@@ -421,10 +421,8 @@ class ToolathlonGDPOQwen3_6_35bRecipe(SlimeRecipe):
     attention_backend: str = "flash"
     no_save_optim: bool = True
     no_load_optim: bool = True
-    over_sampling_batch_size: int | None = 48
-    dynamic_sampling_filter_path: str | None = (
-        "modal_training_gym.train_recipes.slime_recipe.dynamic_sampling.check_reward_nonzero_std_bounded"
-    )
+    over_sampling_batch_size: int | None = None
+    dynamic_sampling_filter_path: str | None = None
 
     # ── Checkpointing / eval ──────────────────────────────────────────────
     megatron_to_hf_mode: str = ""
