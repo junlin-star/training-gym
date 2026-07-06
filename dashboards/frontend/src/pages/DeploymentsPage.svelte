@@ -1,5 +1,6 @@
 <script>
   import {
+    Check,
     ChevronDown,
     ExternalLink,
     Filter,
@@ -27,7 +28,7 @@
   } = $props();
 
   let search = $state("");
-  let selectedStatus = $state("all");
+  let activeStatuses = $state(new Set(["Ready", "Pending", "Inactive"]));
   let statusMenuOpen = $state(false);
   let selectedDeploymentKey = $state(null);
   let relatedRunExpanded = $state(true);
@@ -242,6 +243,7 @@
   );
 
   let statusFilters = $derived.by(() => ["Ready", "Pending", "Inactive"]);
+  let allStatusesActive = $derived(activeStatuses.size === statusFilters.length);
 
   let readyDeployments = $derived(statusCounts.Ready || 0);
   let pendingDeployments = $derived(statusCounts.Pending || 0);
@@ -249,7 +251,7 @@
   let filteredRows = $derived.by(() => {
     const query = search.trim().toLowerCase();
     return enrichedRows.filter((row) => {
-      if (selectedStatus !== "all" && row.status !== selectedStatus) return false;
+      if (!activeStatuses.has(row.status)) return false;
       return matchesSearch(row, query);
     });
   });
@@ -291,9 +293,16 @@
     selectedDeploymentKey = null;
   }
 
-  function switchStatusFilter(status) {
-    selectedStatus = status;
-    statusMenuOpen = false;
+  function toggleStatusFilter(status) {
+    const next = new Set(activeStatuses);
+    if (next.has(status)) next.delete(status);
+    else next.add(status);
+    activeStatuses = next;
+  }
+
+  function toggleAllStatuses() {
+    if (allStatusesActive) activeStatuses = new Set();
+    else activeStatuses = new Set(statusFilters);
   }
 </script>
 
@@ -346,13 +355,35 @@
         </button>
         {#if statusMenuOpen}
           <div class="status-menu">
-            <button class="status-item" onclick={() => switchStatusFilter("all")}>
-              <span>All</span>
+            <button
+              class="status-item"
+              onclick={(event) => {
+                event.stopPropagation();
+                toggleAllStatuses();
+              }}
+            >
+              <span class="checkmark" class:checked={allStatusesActive}>
+                {#if allStatusesActive}
+                  <Check size={11} />
+                {/if}
+              </span>
+              <span class="item-label">All</span>
               <span class="status-count">{allDeployments.length}</span>
             </button>
             {#each statusFilters as status (status)}
-              <button class="status-item" onclick={() => switchStatusFilter(status)}>
-                <span>{status}</span>
+              <button
+                class="status-item filter-item-nested"
+                onclick={(event) => {
+                  event.stopPropagation();
+                  toggleStatusFilter(status);
+                }}
+              >
+                <span class="checkmark" class:checked={activeStatuses.has(status)}>
+                  {#if activeStatuses.has(status)}
+                    <Check size={11} />
+                  {/if}
+                </span>
+                <span class="item-label">{status}</span>
                 <span class="status-count">{statusCounts[status] || 0}</span>
               </button>
             {/each}

@@ -1429,9 +1429,10 @@ tr.framework-run-row:last-child td {
   color: var(--text);
   padding: 0.34rem 0.4rem;
   border-radius: 7px;
-  display: flex;
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
   align-items: center;
-  justify-content: space-between;
+  gap: 0.42rem;
   font: inherit;
   font-size: 0.74rem;
   text-align: left;
@@ -1441,6 +1442,10 @@ tr.framework-run-row:last-child td {
 .status-item:hover {
   background: color-mix(in srgb, var(--text-bright) 6%, transparent);
   color: var(--text-bright);
+}
+
+.filter-item-nested {
+  padding-left: 1rem;
 }
 
 .status-count {

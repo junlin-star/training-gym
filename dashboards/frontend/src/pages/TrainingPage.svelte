@@ -41,6 +41,7 @@
     onToggleRecipe,
     onToggleAllRecipes,
     onToggleStatus,
+    onToggleAllStatuses,
     onToggleGroup,
     onToggleAllGroups,
   } = $props();
@@ -181,6 +182,7 @@
       {statuses}
       {statusCounts}
       {activeStatuses}
+      allStatusesActive={activeStatuses.size === statuses.length}
       {groups}
       {groupCounts}
       {activeGroups}
@@ -190,6 +192,7 @@
       onToggleRecipe={onToggleRecipe}
       onToggleAllRecipes={onToggleAllRecipes}
       onToggleStatus={onToggleStatus}
+      onToggleAllStatuses={onToggleAllStatuses}
       onToggleGroup={onToggleGroup}
       onToggleAllGroups={onToggleAllGroups}
     />

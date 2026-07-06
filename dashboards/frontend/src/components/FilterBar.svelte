@@ -9,6 +9,7 @@
     statuses,
     statusCounts,
     activeStatuses,
+    allStatusesActive,
     groups,
     groupCounts,
     activeGroups,
@@ -18,6 +19,7 @@
     onToggleRecipe,
     onToggleAllRecipes,
     onToggleStatus,
+    onToggleAllStatuses,
     onToggleGroup,
     onToggleAllGroups,
   } = $props();
@@ -65,9 +67,24 @@
     </button>
     {#if openMenu === "status"}
       <div class="menu">
+        <button
+          class="menu-item"
+          onclick={(event) => {
+            event.stopPropagation();
+            onToggleAllStatuses();
+          }}
+        >
+          <span class="checkmark" class:checked={allStatusesActive}>
+            {#if allStatusesActive}
+              <Check size={11} />
+            {/if}
+          </span>
+          <span class="item-label">All</span>
+          <span class="item-count">{totalRuns}</span>
+        </button>
         {#each statuses as st (st)}
           <button
-            class="menu-item"
+            class="menu-item filter-item-nested"
             onclick={(event) => {
               event.stopPropagation();
               onToggleStatus(st);
@@ -122,7 +139,7 @@
         </button>
         {#each recipes as recipe (recipe)}
           <button
-            class="menu-item"
+            class="menu-item filter-item-nested"
             onclick={(event) => {
               event.stopPropagation();
               onToggleRecipe(recipe);
@@ -177,7 +194,7 @@
         </button>
         {#each groups as group (group)}
           <button
-            class="menu-item"
+            class="menu-item filter-item-nested"
             onclick={(event) => {
               event.stopPropagation();
               onToggleGroup(group);

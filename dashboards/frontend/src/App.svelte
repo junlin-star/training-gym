@@ -732,6 +732,11 @@
     activeStatuses = next;
   }
 
+  function toggleAllStatuses() {
+    if (activeStatuses.size === statuses.length) activeStatuses = new Set();
+    else activeStatuses = new Set(statuses);
+  }
+
   function toggleGroup(group) {
     const next = new Set(activeGroups);
     if (next.has(group)) next.delete(group);
@@ -882,6 +887,7 @@
         onToggleRecipe={toggleRecipe}
         onToggleAllRecipes={toggleAllRecipes}
         onToggleStatus={toggleStatus}
+        onToggleAllStatuses={toggleAllStatuses}
         onToggleGroup={toggleGroup}
         onToggleAllGroups={toggleAllGroups}
       />
