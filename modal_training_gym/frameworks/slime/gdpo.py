@@ -157,15 +157,22 @@ def gdpo_compute_advantages(args, rollout_data):
     # (--eps-clip-c), this gives the GDPO update rule from the paper.
     combined_advantages = task_advantages + length_advantages
 
-    # ── Expand per-sample advantages to per-token ─────────────────────────
-    # Slime's loss function does `torch.cat(batch["advantages"], dim=0)`
-    # then `split_with_sizes` using total_lengths (prompt + response).
-    # Each element must be 1-D with length = total_lengths[i].
+    # ── Expand per-sample advantages to CP-local per-token tensors ────────
+    # With context_parallel_size > 1, the loss function works on CP-local
+    # chunks.  We expand each scalar advantage to response_length tokens,
+    # then slice to the CP-local chunk via slice_log_prob_with_cp (the same
+    # helper used by the KL-zero fallback in patch_advantages.py).
     total_lengths = rollout_data["total_lengths"]
     if isinstance(total_lengths, list):
         total_lengths = torch.tensor(total_lengths, dtype=torch.long)
+    from slime.backends.megatron_utils.cp_utils import slice_log_prob_with_cp
+
     per_token_advantages = [
-        combined_advantages[i].expand(int(total_lengths[i].item()))
+        slice_log_prob_with_cp(
+            combined_advantages[i].expand(int(response_lengths[i].item())),
+            int(total_lengths[i].item()),
+            int(response_lengths[i].item()),
+        )
         for i in range(len(combined_advantages))
     ]
     rollout_data["advantages"] = per_token_advantages
