@@ -6,7 +6,10 @@ export default defineConfig({
   plugins: [tailwindcss(), svelte()],
   server: {
     proxy: {
-      "/api": "http://localhost:8000",
+      "/api": {
+        target: process.env.DASHBOARD_API || "http://localhost:8000",
+        changeOrigin: true,
+      },
     },
   },
   build: {
