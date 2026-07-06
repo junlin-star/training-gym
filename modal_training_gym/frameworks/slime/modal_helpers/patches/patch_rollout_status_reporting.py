@@ -78,8 +78,7 @@ def _patch_file(path: Path) -> None:
 
     if needs_preamble:
         src = PREAMBLE + src
-    elif "report_step_event" not in src:
-        # File carries an older preamble: extend it with the generic reporter.
+    elif "report_step_event" not in src: 
         src = src.replace(
             "    from modal_training_gym.frameworks.slime.phase_reporting import (\n",
             "    from modal_training_gym.frameworks.slime.phase_reporting import (\n"
