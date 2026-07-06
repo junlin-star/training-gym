@@ -158,11 +158,14 @@ def gdpo_compute_advantages(args, rollout_data):
     combined_advantages = task_advantages + length_advantages
 
     # ── Expand per-sample advantages to per-token ─────────────────────────
-    # Slime's loss function does `torch.cat(batch["advantages"], dim=0)`,
-    # expecting a list of 1-D tensors (one per sample, each of length
-    # response_lengths[i]).
+    # Slime's loss function does `torch.cat(batch["advantages"], dim=0)`
+    # then `split_with_sizes` using total_lengths (prompt + response).
+    # Each element must be 1-D with length = total_lengths[i].
+    total_lengths = rollout_data["total_lengths"]
+    if isinstance(total_lengths, list):
+        total_lengths = torch.tensor(total_lengths, dtype=torch.long)
     per_token_advantages = [
-        combined_advantages[i].expand(int(response_lengths[i].item()))
+        combined_advantages[i].expand(int(total_lengths[i].item()))
         for i in range(len(combined_advantages))
     ]
     rollout_data["advantages"] = per_token_advantages
