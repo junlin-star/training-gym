@@ -98,11 +98,27 @@ def gdpo_compute_advantages(args, rollout_data):
     loss_masks = rollout_data["loss_masks"]  # [num_samples, seq_len] or list
     response_lengths = rollout_data["response_lengths"]  # [num_samples]
 
-    # Ensure task_rewards and response_lengths are tensors (may arrive as lists)
+    # Determine target device from loss_masks (always on the correct CUDA device)
+    if isinstance(loss_masks, list) and len(loss_masks) > 0:
+        _dev = (
+            loss_masks[0].device
+            if isinstance(loss_masks[0], torch.Tensor)
+            else torch.device("cuda")
+        )
+    elif isinstance(loss_masks, torch.Tensor):
+        _dev = loss_masks.device
+    else:
+        _dev = torch.device("cuda")
+
+    # Ensure task_rewards and response_lengths are tensors on the right device
     if isinstance(task_rewards, list):
-        task_rewards = torch.tensor(task_rewards, dtype=torch.float32)
+        task_rewards = torch.tensor(task_rewards, dtype=torch.float32, device=_dev)
+    else:
+        task_rewards = task_rewards.to(_dev)
     if isinstance(response_lengths, list):
-        response_lengths = torch.tensor(response_lengths, dtype=torch.long)
+        response_lengths = torch.tensor(response_lengths, dtype=torch.long, device=_dev)
+    else:
+        response_lengths = response_lengths.to(_dev)
 
     # Group indices for GRPO normalization — samples from the same prompt share
     # a group index.  sample_indices are sequential per-sample; divide by
