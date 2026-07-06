@@ -21,6 +21,12 @@ from modal_training_gym.utils.metadata import (
 
 PRE_APP_TIMEOUT_SECONDS = 90 * 60
 QUEUED_STAGE_TIMEOUT_SECONDS = 4 * 3600
+# Backstop for an active run whose Modal app can't be queried (persistent API
+# failures returning ``app_live is None``): without this, a run that made it
+# past the queued stages could sit in ``running`` forever. A dead app
+# (``app_live is False``) is caught immediately by ``stale_modal_app_terminated``;
+# this only covers the never-resolves-either-way case, so the window is long.
+STALE_ACTIVE_TIMEOUT_SECONDS = 24 * 3600
 
 QUEUEABLE_STAGES = frozenset({"initializing", "download_model", "convert_model"})
 
@@ -120,6 +126,20 @@ def reconcile_decision(
         queued_at = _progress_updated_at(run)
         if queued_at and now - queued_at >= QUEUED_STAGE_TIMEOUT_SECONDS:
             return ReconcileDecision(True, reason="stale_queued_stage")
+
+    # Active run (past the queued stages) whose Modal app can't be queried and
+    # has shown no activity for a very long window. The queued-stage and
+    # unreachable-while-queued heuristics above only fire while still queued, so
+    # this is the last-resort backstop for a run that resolves neither live nor
+    # dead. Scoped to ``app_live is None`` so a live app is never reconciled.
+    if app_id and app_live is None:
+        last_activity = _run_last_activity(run)
+        if last_activity and now - last_activity >= STALE_ACTIVE_TIMEOUT_SECONDS:
+            return ReconcileDecision(
+                True,
+                reason="stale_running_no_update",
+                modal_app_state=modal_app_state,
+            )
 
     return ReconcileDecision(False)
 
