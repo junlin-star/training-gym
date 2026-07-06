@@ -305,6 +305,8 @@ def _patch_file(path: Path) -> None:
         # args.start_rollout_id instead — the id of the first rollout about to be
         # generated — so progress matches the upcoming step_start rather than
         # sending a zero-progress value that resets the dashboard step counter.
+        # getattr-guarded so a missing attribute degrades to rollout_id=None
+        # (report_step_event accepts None) instead of crashing the train loop.
         generate_rollout_pattern = re.compile(
             r"^(?P<indent>[ \t]*)(?P<call>(?:await[ \t]+)?(?:[A-Za-z_][A-Za-z0-9_]*\.)?update_weights\(\))",
             re.M,
@@ -316,7 +318,7 @@ def _patch_file(path: Path) -> None:
             return (
                 f"{indent}{call}\n"
                 f"{indent}# {GENERATE_ROLLOUT_MARKER}: rollout generation state\n"
-                f"{indent}_tg_report('generate_rollouts', args, args.start_rollout_id)"
+                f"{indent}_tg_report('generate_rollouts', args, getattr(args, 'start_rollout_id', None))"
             )
 
         src, generate_rollout_count = generate_rollout_pattern.subn(

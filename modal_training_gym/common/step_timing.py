@@ -7,15 +7,7 @@ from typing import Any
 from modal_training_gym.common.status import SlimeStatus
 
 
-class Substep(str, Enum):
-    """Stringified substep names as they appear in step-time keys.
-
-    Declaration order is the canonical driver-loop order (used to build the
-    launcher's ``SUBSTEP_ORDER``). Values mirror ``SlimeStatus`` phases except
-    ``EVAL_AFTER``, which is synthesized — the post-step eval window has no
-    status of its own.
-    """
-
+class Substep(str, Enum): 
     EVAL_BEFORE = SlimeStatus.EVAL_ROLLOUT_LOGGING.value
     GENERATE_ROLLOUTS = SlimeStatus.ROLLOUT_LOGGING.value
     OFFLOAD_ROLLOUT = SlimeStatus.OFFLOAD_ROLLOUT.value
