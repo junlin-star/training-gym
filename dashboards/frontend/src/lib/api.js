@@ -279,6 +279,8 @@ export async function fetchRuns({ signal } = {}) {
       updated_at: updatedAt,
       duration_seconds: durationSeconds,
       error_message: safeStr(run.error_message || ""),
+      step_times: run.step_times || null,
+      substep_times: run.substep_times || null,
       metadata,
       resume_state: summarizeResumeState(metadata),
       wandb_links: wandbLinks,
@@ -363,22 +365,6 @@ export async function fetchRunRollouts(trainingRunId, { signal } = {}) {
       error_summary: item.error_summary || null,
     }))
     .sort((a, b) => a.rollout_id - b.rollout_id);
-}
-
-// Step/substep timings are excluded from the /api/runs list payload (they
-// grow with the number of training steps) and fetched lazily per run here.
-export async function fetchRunStepTimes(trainingRunId, { signal } = {}) {
-  const res = await fetch(
-    `${SERVER}/runs/${encodeURIComponent(trainingRunId)}/step-times`,
-    { signal },
-  );
-  if (!res.ok) return null;
-  const data = await res.json();
-  if (!data || typeof data !== "object") return null;
-  return {
-    step_times: data.step_times || null,
-    substep_times: data.substep_times || null,
-  };
 }
 
 export async function fetchRollout(trainingRunId, rolloutId) {
