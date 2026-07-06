@@ -533,7 +533,7 @@ def train(experiment_name: str, eval_interval: int = 5) -> None:
     )
 
     print(f"Launching toolathlon GDPO trainings: {group.get_train_configs()}")
-    launches = group.launch()
+    launches = group.launch(prepare_inputs=True)
     print(f"Launched {len(launches)} runs")
     for launch in launches:
         print(
