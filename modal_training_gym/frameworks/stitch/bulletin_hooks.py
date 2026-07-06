@@ -74,6 +74,58 @@ def commit_and_wake(args: Any, version_dir: str, rollout_engines: list[Any]) -> 
     if version is None or rank not in (None, 0):
         return
     _best_effort_wake(args, version)
+    _barrier_until_synced(args, version)
+
+
+def _barrier_until_synced(args: Any, version: int) -> None:
+    """Block until the Flash pool serves ``version`` before returning control to
+    slime, so the next rollout generation targets a fully-synced pool. Without
+    this, slime dispatches the next rollout's requests while the pool is still
+    applying the just-published delta; sglang drops those in-flight requests on
+    reload and the rollout hangs waiting for completions that never arrive.
+
+    Bounded by a timeout (then proceeds): the staleness-gated rollout requests
+    are the backstop, and a hard block here would be worse than a brief skew.
+    Toggle via the ``rollout_sync_barrier`` config key (or ``DELTA_ROLLOUT_SYNC_BARRIER``)."""
+    if not _barrier_enabled(args):
+        return
+    try:
+        from modal_training_gym.frameworks.stitch.trainer_helpers import (
+            wait_pool_synced,
+        )
+
+        app_name = (
+            getattr(args, "rollout_modal_flash_app_name", None)
+            or os.environ["DELTA_APP_NAME"]
+        )
+        cls_name = getattr(
+            args, "rollout_modal_flash_server_cls_name", None
+        ) or os.getenv("DELTA_SERVER_CLS_NAME", "Server")
+        wait_pool_synced(
+            app_name=app_name,
+            cls_name=cls_name,
+            version=version,
+            timeout_seconds=float(
+                getattr(args, "rollout_sync_barrier_timeout_seconds", None) or 600.0
+            ),
+            poll_interval=float(
+                getattr(args, "rollout_sync_barrier_poll_seconds", None) or 3.0
+            ),
+        )
+    except Exception:  # noqa: BLE001
+        logger.warning(
+            "Rollout sync barrier for version %s failed; proceeding "
+            "(staleness-gated requests remain the backstop)",
+            version,
+            exc_info=True,
+        )
+
+
+def _barrier_enabled(args: Any) -> bool:
+    val = getattr(args, "rollout_sync_barrier", None)
+    if val is None:
+        val = os.getenv("DELTA_ROLLOUT_SYNC_BARRIER", "1")
+    return str(val).strip().lower() not in ("0", "false", "no", "")
 
 
 def claim_pool(args: Any) -> None:

@@ -13,6 +13,7 @@ import shlex
 import time
 import urllib.error
 import urllib.request
+from collections import namedtuple
 from collections.abc import Iterable
 from typing import Any
 
@@ -157,6 +158,65 @@ def _completion_payload(model_name: str, expected: int) -> dict:
         "weight_version": {"exact_version": expected},
         "chat_template_kwargs": {"enable_thinking": False},
     }
+
+
+# ── Post-publish sync barrier ─────────────────────────────────────────────────
+
+_SyncDetail = namedtuple("_SyncDetail", "synced count summary")
+
+
+def wait_pool_synced(
+    *,
+    app_name: str,
+    cls_name: str,
+    version: int,
+    timeout_seconds: float,
+    poll_interval: float,
+    min_containers: int = 1,
+) -> bool:
+    """Block until every discovered Flash target reports ``current_version >=
+    version`` (and at least ``min_containers`` are present), so the next rollout
+    generates against a fully-synced pool instead of racing servers that are
+    still applying the just-published delta (which drops in-flight requests and
+    hangs generation).
+
+    Returns ``True`` once the pool is synced, or ``False`` if it did not reach
+    the version within ``timeout_seconds`` — the caller proceeds regardless,
+    since the staleness-gated rollout requests (bounded retries) remain the
+    backstop and a hard block here would be worse than a brief version skew.
+    """
+    deadline = time.time() + timeout_seconds
+    while True:
+        detail = _pool_sync_detail(app_name, cls_name, version)
+        if detail.synced and detail.count >= min_containers:
+            print(f"[sync barrier] pool at v>={version}: {detail.summary}")
+            return True
+        if time.time() >= deadline:
+            print(
+                f"[sync barrier] pool did not reach v{version} within "
+                f"{timeout_seconds:.0f}s ({detail.summary}); proceeding anyway"
+            )
+            return False
+        print(f"[sync barrier] waiting for pool to reach v{version}: {detail.summary}")
+        time.sleep(poll_interval)
+
+
+def _pool_sync_detail(app_name: str, cls_name: str, version: int) -> _SyncDetail:
+    try:
+        targets = discover_flash_targets(app_name, cls_name)
+    except Exception as exc:  # noqa: BLE001
+        return _SyncDetail(False, 0, f"discover failed: {type(exc).__name__}: {exc}")
+    versions: list[int] = []
+    for target in targets:
+        try:
+            info = _get_json(f"{target}/server_info", timeout=15)
+            versions.append(int(info.get("current_version", -1)))
+        except Exception:  # noqa: BLE001
+            versions.append(-1)
+    synced = bool(versions) and all(v >= version for v in versions)
+    at = sum(1 for v in versions if v >= version)
+    summary = f"{at}/{len(versions)} at >=v{version} (versions={versions})"
+    return _SyncDetail(synced, len(targets), summary)
 
 
 def _get_json(url: str, *, timeout: float) -> dict:

@@ -20,7 +20,7 @@ class Qwen3_4b_Stitch_Recipe(StitchRecipe):
     actor_num_nodes: int = 1
     actor_num_gpus_per_node: int = 8
     rollout_num_gpus_per_engine: int = 1
-    rollout_min_containers: int = 4
+    rollout_min_containers: int = 3
 
     # ── Rollout pool (SGLang) ───────────────────────────────────────────────
     sglang_server_concurrency: int = 64

@@ -86,6 +86,9 @@ _STITCH_SKIP = {
     "memory",
     "rollout_min_containers",
     "proxy_regions",
+    "rollout_sync_barrier",
+    "rollout_sync_barrier_timeout_seconds",
+    "rollout_sync_barrier_poll_seconds",
     # stitch / rollout-pool infra
     "delta_volume_name",
     "delta_bulletin_root",
@@ -132,8 +135,17 @@ class StitchRecipe(BaseTrainRecipe):
     memory: int | tuple[int, int] | None = None
     actor_num_nodes: int = 1
     actor_num_gpus_per_node: int = 8
-    rollout_min_containers: int = 4
+    rollout_min_containers: int = 3
     proxy_regions: list[str] = field(default_factory=lambda: ["us-east"])
+    # Post-publish sync barrier (launcher instruction, injected into the
+    # trainer's custom_config, not a slime CLI flag). After publishing a delta,
+    # the trainer blocks until the Flash pool reports the new version before the
+    # next rollout generates — otherwise generation races servers mid-reload,
+    # which drops in-flight requests and hangs the rollout. Bounded by the
+    # timeout, then proceeds (staleness-gated requests are the backstop).
+    rollout_sync_barrier: bool = True
+    rollout_sync_barrier_timeout_seconds: int = 600
+    rollout_sync_barrier_poll_seconds: float = 3.0
 
     # ── stitch / Flash rollout pool infrastructure ──────────────────────────
     # Modal Volume that backs the weight-delta bulletin board. Empty → derived

@@ -511,6 +511,12 @@ def build_stitch_app(
                     "rollout_modal_flash_app_name": app_name,
                     "rollout_modal_flash_server_cls_name": "Server",
                     "run_id": run_id,
+                    # Post-publish barrier: block until the pool serves the new
+                    # version before the next rollout generates (read off args
+                    # by bulletin_hooks.commit_and_wake).
+                    "rollout_sync_barrier": recipe.rollout_sync_barrier,
+                    "rollout_sync_barrier_timeout_seconds": recipe.rollout_sync_barrier_timeout_seconds,
+                    "rollout_sync_barrier_poll_seconds": recipe.rollout_sync_barrier_poll_seconds,
                 }
             )
             cfg.custom_config_path = custom_config
