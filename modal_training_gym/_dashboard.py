@@ -275,6 +275,7 @@ def fastapi_app():
     from modal_training_gym.common.modal_urls import modal_app_dashboard_url
     from modal_training_gym.utils.metadata import (
         MetadataStore,
+        summary_items_from_payload,
         vol_get,
         vol_get_summary_items_healed,
         vol_put_summary_items,
@@ -364,19 +365,6 @@ def fastapi_app():
             task.add_done_callback(refresh_tasks.discard)
         return values
 
-    def list_from_payload(
-        payload: object,
-        *,
-        payload_key: str,
-    ) -> list[JsonDict]:
-        if isinstance(payload, list):
-            return [item for item in payload if isinstance(item, dict)]
-        if isinstance(payload, dict):
-            items = payload.get(payload_key, [])
-            if isinstance(items, list):
-                return [item for item in items if isinstance(item, dict)]
-        return []
-
     def add_modal_app_urls(
         items: list[JsonDict],
     ) -> tuple[list[JsonDict], bool]:
@@ -420,7 +408,7 @@ def fastapi_app():
         except KeyError:
             return []
 
-        summaries = list_from_payload(payload, payload_key="summaries")
+        summaries = summary_items_from_payload(payload, payload_key="summaries")
         if not summaries:
             return []
 

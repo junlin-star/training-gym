@@ -545,18 +545,6 @@ class ToolathlonEnvPool(SandboxEnvironmentPool):
         _await_gateway(sandbox, self.config, attempts=40)
         return ToolathlonEnvironment(sandbox, self.config, task_name)
 
-    def acquire_fresh(self, task_name: str) -> ToolathlonEnvironment:
-        """A pristine (step-0) episode seeded from scratch — no snapshot catalog.
-
-        Runs Toolathlon's ``container_preprocess`` directly in a new sandbox
-        (seeds the workspace + synthesizes the eval dump_line + starts the
-        gateway), so live RL rollouts don't depend on a pre-built snapshot
-        library. Use :meth:`acquire` when starting mid-trajectory (curriculum).
-        """
-        sandbox = self.create_sandbox(timeout=60 * 30, cpu=2.0, memory=4096)
-        _seed_workspace(sandbox, self.config, f"finalpool/{task_name}")
-        return ToolathlonEnvironment(sandbox, self.config, task_name)
-
 
 # Lazily-created module-level pool, shared across rollouts in a worker.
 _ENV_POOL_CACHE: dict[ToolathlonEnvConfig, ToolathlonEnvPool] = {}

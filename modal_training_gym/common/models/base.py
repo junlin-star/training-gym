@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from dataclasses import dataclass, field
 from typing import Any, Callable
@@ -220,6 +221,26 @@ class HFModelConfiguration(ModelConfig):
             shutil.copytree(snapshot_dir, str(self.model_path), dirs_exist_ok=True)
 
 
+def disable_mtp_in_config(snapshot_dir: str, log_prefix: str) -> None:
+    """Zero ``num_nextn_predict_layers`` in a snapshot's config.json.
+
+    Megatron-side loaders read this field from config.json and create MTP
+    (multi-token-prediction) layers that break multi-rank checkpoint
+    save/load (the MTP head duplicates the embedding across pipeline
+    stages). Callers pass ``log_prefix`` (e.g. the model module name) to
+    tag the patch log line. No-op when the field is already 0.
+    """
+    cfg_path = os.path.join(snapshot_dir, "config.json")
+    with open(cfg_path) as f:
+        cfg = json.load(f)
+    if cfg.get("num_nextn_predict_layers", 0) == 0:
+        return
+    cfg["num_nextn_predict_layers"] = 0
+    with open(cfg_path, "w") as f:
+        json.dump(cfg, f, indent=2)
+    print(f"[{log_prefix}] Patched config.json: num_nextn_predict_layers → 0")
+
+
 def _split_thinking(text: str) -> tuple[str | None, str]:
     """Split a leading ``<think>...</think>`` block off ``text``.
 
@@ -299,11 +320,8 @@ def _parse_qwen_chat(
         text = text.rsplit("<|im_start|>assistant", 1)[-1]
     text = text.replace("<|im_end|>", "")
 
-    thinking: str | None = None
-    if "</think>" in text:
-        parts = text.split("</think>", 1)
-        thinking = parts[0].replace("<think>", "").strip() or None
-        text = parts[1]
+    thinking, text = _split_thinking(text)
+    # Strip a stray unterminated <think> too (no closing tag emitted yet).
     text = text.replace("<think>", "")
 
     tool_calls: list[ToolCall] = []

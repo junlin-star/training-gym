@@ -49,10 +49,6 @@ def list_checkpoints(training_run_id: str) -> list[Checkpoint]:
     raise TrainingGymConfigError(f"Unsupported framework: {result.framework}")
 
 
-def _get_slime_checkpoint_prefix() -> str:
-    return "iter_"
-
-
 def _to_volume_path(checkpoint_dir: str, checkpoints_mount_path: str) -> str:
     checkpoint_dir_norm = os.path.normpath(checkpoint_dir)
     checkpoints_mount_path_norm = os.path.normpath(checkpoints_mount_path)
@@ -85,7 +81,7 @@ def _list_checkpoints(train_result: "TrainResult") -> list[Checkpoint]:
     )
     checkpoints_mount_path = train_result.checkpoints_mount_path or "/checkpoints"
     volume = Volume.from_name(checkpoints_volume_name, create_if_missing=True)
-    prefix = _get_slime_checkpoint_prefix()
+    prefix = "iter_"
     rel = _to_volume_path(checkpoint_dir, checkpoints_mount_path)
 
     try:
@@ -95,27 +91,6 @@ def _list_checkpoints(train_result: "TrainResult") -> list[Checkpoint]:
         }
     except (FileNotFoundError, NotFoundError):
         return []
-
-    if not prefix:
-        entry = entries.get(os.path.basename(checkpoint_dir))
-        if entry is None:
-            return []
-        name = os.path.basename(checkpoint_dir)
-        checkpoint_type = (
-            CheckpointType.hf if name.endswith("_hf") else CheckpointType.megatron
-        )
-        return [
-            Checkpoint(
-                checkpoint_type=checkpoint_type,
-                name=name,
-                path=checkpoint_dir,
-                timestamp=float(getattr(entry, "mtime", 0.0)),
-                training_run_id=train_result.training_run_id,
-                app_name=train_result.app_name,
-                checkpoints_volume_name=checkpoints_volume_name,
-                checkpoints_mount_path=checkpoints_mount_path,
-            )
-        ]
 
     def _is_dir_entry(entry: object) -> bool:
         is_dir_fn = getattr(entry, "is_dir", None)

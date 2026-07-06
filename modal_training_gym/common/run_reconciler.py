@@ -21,7 +21,6 @@ from modal_training_gym.utils.metadata import (
 
 PRE_APP_TIMEOUT_SECONDS = 90 * 60
 QUEUED_STAGE_TIMEOUT_SECONDS = 4 * 3600
-STALE_ACTIVE_TIMEOUT_SECONDS = 24 * 3600
 
 QUEUEABLE_STAGES = frozenset({"initializing", "download_model", "convert_model"})
 
@@ -94,7 +93,6 @@ def reconcile_decision(
     if has_train_result:
         return ReconcileDecision(False)
 
-    last_activity = _run_last_activity(run)
     app_id = str(run.modal_app_id or "").strip()
 
     if app_id and app_live is False:
@@ -122,16 +120,6 @@ def reconcile_decision(
         queued_at = _progress_updated_at(run)
         if queued_at and now - queued_at >= QUEUED_STAGE_TIMEOUT_SECONDS:
             return ReconcileDecision(True, reason="stale_queued_stage")
-
-    if last_activity and now - last_activity >= STALE_ACTIVE_TIMEOUT_SECONDS:
-        if not app_id:
-            return ReconcileDecision(True, reason="stale_running_no_update")
-        if app_live is False:
-            return ReconcileDecision(
-                True,
-                reason="stale_running_no_update",
-                modal_app_state=modal_app_state,
-            )
 
     return ReconcileDecision(False)
 

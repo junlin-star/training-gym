@@ -219,14 +219,11 @@ def deployed_dashboard_url() -> str | None:
     failure — not deployed, no credentials, network blip — yields ``None``.
     """
     import modal
-    from modal.exception import NotFoundError
 
     try:
         fn = modal.Function.from_name(DASHBOARD_APP_NAME, DASHBOARD_WEB_FUNCTION)
         fn.hydrate()
         return fn.get_web_url()
-    except NotFoundError:
-        return None
     except Exception:
         return None
 

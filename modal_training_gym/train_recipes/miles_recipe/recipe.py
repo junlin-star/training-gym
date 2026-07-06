@@ -1,22 +1,27 @@
-import json
 from collections.abc import Callable
-from pathlib import Path
+from dataclasses import field
 from typing import Any
 
 import modal
+from pydantic import ConfigDict, model_validator
+from pydantic.dataclasses import dataclass
 
 from modal_training_gym.common.dataset import DatasetConfig
 from modal_training_gym.common.models import ModelConfig
 from modal_training_gym.common.wandb import WandbConfig
-from modal_training_gym.train_recipes.base import BaseTrainRecipe, RecipeType
+from modal_training_gym.train_recipes.base import (
+    BaseTrainRecipe,
+    RecipeType,
+    # Re-exported for backwards compatibility (e.g. frameworks/miles/launcher.py
+    # imports the volume paths from this module).
+    CHECKPOINTS_PATH as CHECKPOINTS_PATH,
+    DATA_PATH as DATA_PATH,
+    HF_CACHE_PATH as HF_CACHE_PATH,
+    JSON_CONFIG_FIELDS as JSON_CONFIG_FIELDS,
+)
 from modal_training_gym.train_recipes.gpu_allocation import (
-    GpuAllocation,
     resolve_gpu_allocation,
 )
-
-HF_CACHE_PATH = Path("/root/.cache/huggingface")
-DATA_PATH = Path("/data")
-CHECKPOINTS_PATH = Path("/checkpoints")
 
 _MILES_SKIP = {
     "recipe_type",
@@ -43,9 +48,9 @@ _MILES_SKIP = {
 }
 
 YAML_CONFIG_FIELDS = ("eval_config", "custom_config_path", "sglang_config")
-JSON_CONFIG_FIELDS = ("train_env_vars", "apply_chat_template_kwargs", "multimodal_keys")
 
 
+@dataclass(config=ConfigDict(extra="forbid", arbitrary_types_allowed=True))
 class MilesConfig(BaseTrainRecipe):
     """Training Gym config for Miles training on Modal.
 
@@ -62,18 +67,20 @@ class MilesConfig(BaseTrainRecipe):
     cloud: str | None = None
     region: str | None = None
     name: str = ""
-    app_tags: dict = {}
+    app_tags: dict = field(default_factory=dict)
     image_overlay: Callable[[modal.Image], modal.Image] | None = None
-    image_run_commands: list[str] = []
-    image_env: dict[str, str] = {}
+    image_run_commands: list[str] = field(default_factory=list)
+    image_env: dict[str, str] = field(default_factory=dict)
     local_miles: str | None = None
-    patch_files: list[str] = []
+    patch_files: list[str] = field(default_factory=list)
 
-    environment: dict = {
-        "PYTHONPATH": "/root/Megatron-LM/",
-        "CUDA_DEVICE_MAX_CONNECTIONS": "1",
-        "NCCL_NVLS_ENABLE": "1",
-    }
+    environment: dict = field(
+        default_factory=lambda: {
+            "PYTHONPATH": "/root/Megatron-LM/",
+            "CUDA_DEVICE_MAX_CONNECTIONS": "1",
+            "NCCL_NVLS_ENABLE": "1",
+        }
+    )
     async_mode: bool = False
     miles_model_script: str = ""
     source_hf_checkpoint: str | None = None
@@ -158,58 +165,14 @@ class MilesConfig(BaseTrainRecipe):
     custom_rm_function: Callable | None = None
     custom_generate_function: Callable | None = None
 
-    def __init__(self, **kwargs: Any) -> None:
-        self.environment = dict(type(self).environment)
-        self.app_tags = dict(type(self).app_tags)
-        self.image_run_commands = list(type(self).image_run_commands)
-        self.image_env = dict(type(self).image_env)
-        self.patch_files = list(type(self).patch_files)
-        for k, v in kwargs.items():
-            setattr(self, k, v)
+    # ── Validators ───────────────────────────────────────────────────────────
+
+    @model_validator(mode="after")
+    def _validate_gpu_allocation(self) -> "MilesConfig":
         resolve_gpu_allocation(self)
+        return self
 
-    def _class_fields(self) -> dict[str, Any]:
-        fields: dict[str, Any] = {}
-        for cls in reversed(type(self).__mro__):
-            if cls is object:
-                continue
-            fields.update(
-                {
-                    k: v
-                    for k, v in vars(cls).items()
-                    if not k.startswith("_")
-                    and not isinstance(v, (staticmethod, classmethod, property))
-                    and not callable(v)
-                }
-            )
-        return fields
-
-    @staticmethod
-    def _resolve_data_paths(ds: DatasetConfig) -> tuple[str, dict[str, str] | None]:
-        hf_repo = getattr(ds, "hf_repo", "")
-        name = hf_repo.replace("/", "_") if hf_repo else type(ds).__name__
-        fmt = getattr(ds, "output_format", "parquet")
-        ext = "jsonl" if fmt == "jsonl" else "parquet"
-        split = getattr(ds, "hf_split", "train")
-        prompt_data = f"{DATA_PATH}/{name}/{split}.{ext}"
-        eval_prompt_data = {"eval": f"{DATA_PATH}/{name}/eval.{ext}"}
-        return prompt_data, eval_prompt_data
-
-    @staticmethod
-    def _dataset_to_fields(ds: DatasetConfig) -> dict[str, Any]:
-        prompt_data, eval_paths = MilesConfig._resolve_data_paths(ds)
-        eval_prompt_data: list[str] | None = None
-        if eval_paths:
-            eval_prompt_data = [
-                v for name, path in eval_paths.items() for v in (name, path)
-            ]
-        return {
-            "prompt_data": prompt_data,
-            "eval_prompt_data": eval_prompt_data,
-            "input_key": ds.input_key,
-            "label_key": ds.label_key,
-            "apply_chat_template": ds.apply_chat_template,
-        }
+    # ── Container → miles flag converters ────────────────────────────────────
 
     @staticmethod
     def _model_to_fields(m: ModelConfig) -> dict[str, Any]:
@@ -264,23 +227,16 @@ class MilesConfig(BaseTrainRecipe):
                 fields[key] = True
         return fields
 
-    @staticmethod
-    def _wandb_to_fields(w: WandbConfig) -> dict[str, Any]:
-        return {
-            "use_wandb": True,
-            "wandb_project": w.project,
-            "wandb_group": w.group,
-            "wandb_key": w.key,
-            "disable_wandb_random_suffix": w.disable_random_suffix,
-        }
-
     def _fields(
         self,
         dataset: DatasetConfig | None = None,
         model: ModelConfig | None = None,
     ) -> dict[str, Any]:
-        fields = self._class_fields()
-        fields.update(vars(self))
+        import dataclasses as _dc
+
+        fields: dict[str, Any] = {}
+        for f in _dc.fields(self):
+            fields[f.name] = getattr(self, f.name)
         if model is not None:
             for k, v in self._model_to_fields(model).items():
                 if k == "hf_checkpoint" and fields.get(k):
@@ -291,34 +247,6 @@ class MilesConfig(BaseTrainRecipe):
         if self.wandb is not None:
             fields.update(self._wandb_to_fields(self.wandb))
         return {k: v for k, v in fields.items() if k not in _MILES_SKIP}
-
-    def cli_args(
-        self,
-        dataset: DatasetConfig | None = None,
-        model: ModelConfig | None = None,
-    ) -> list[str]:
-        out: list[str] = []
-        for key, val in self._fields(dataset=dataset, model=model).items():
-            if val is None or val is False or val == "":
-                continue
-            flag = f"--{key.replace('_', '-')}"
-            if val is True:
-                out.append(flag)
-            elif isinstance(val, dict) and key in JSON_CONFIG_FIELDS:
-                out += [flag, json.dumps(val)]
-            elif isinstance(val, list):
-                out += [flag] + [str(v) for v in val]
-            else:
-                out += [flag, str(val)]
-        return out
-
-    @property
-    def total_nodes(self) -> int:
-        return self.gpu_allocation.total_nodes
-
-    @property
-    def gpu_allocation(self) -> GpuAllocation:
-        return resolve_gpu_allocation(self, warn=False)
 
     def download_model(self) -> None:
         from modal_training_gym.frameworks.miles.modal_helpers.utils import (

@@ -15,19 +15,13 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from modal_training_gym.common.coerce import safe_int
 from modal_training_gym.common.sample import Sample
 from modal_training_gym.utils.metadata import (
     MetadataStore,
     vol_get_summary_items,
     vol_put_with_summary,
 )
-
-
-def _safe_int(value: Any) -> int:
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return 0
 
 
 # A rollout sample is just a Sample (shared with eval rows). Alias kept for any
@@ -74,8 +68,8 @@ class TrainingRolloutResult(BaseModel):
             return None
 
         total_samples = (
-            _safe_int(m.get("agent/valid_sample_count"))
-            or _safe_int(m.get("agent/raw_zero_reward_sample_count"))
+            safe_int(m.get("agent/valid_sample_count"))
+            or safe_int(m.get("agent/raw_zero_reward_sample_count"))
             or self.total
             or 0
         )
@@ -91,7 +85,7 @@ class TrainingRolloutResult(BaseModel):
             ("agent/invalid_infra_sample_count", "infra_invalid"),
             ("agent/limits_exceeded_sample_count", "limits_exceeded"),
         ):
-            v = _safe_int(m.get(key))
+            v = safe_int(m.get(key))
             if v:
                 out[label] = v
 

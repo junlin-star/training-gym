@@ -306,6 +306,47 @@ def update_deployment_status(deployment_id: str, status: str) -> None:
     )
 
 
+class _CrashloopDetector:
+    """Crashloop heuristic over periodic container-count samples.
+
+    Zero containers is tolerated for ``cold_start_grace`` before any container
+    has been seen running (image pull, weight download, and server launch all
+    happen in that window), but only for ``restart_grace`` once one has come
+    up — a container that appeared and then vanished is a real restart cycle.
+    """
+
+    def __init__(self, *, cold_start_grace: int, restart_grace: int) -> None:
+        self._cold_start_grace = cold_start_grace
+        self._restart_grace = restart_grace
+        self._zero_since: float | None = None
+        self._seen_running = False
+
+    def observe(self, containers: int, now: float) -> tuple[int, str] | None:
+        """Record a container-count sample; returns ``(elapsed, phase)`` on crashloop.
+
+        Negative counts are transient failures querying Modal app state and are
+        ignored rather than counted as zero containers.
+        """
+        if containers < 0:
+            return None
+        if containers > 0:
+            self._seen_running = True
+            self._zero_since = None
+            return None
+        if self._zero_since is None:
+            self._zero_since = now
+        elapsed = int(now - self._zero_since)
+        grace = self._restart_grace if self._seen_running else self._cold_start_grace
+        if elapsed < grace:
+            return None
+        phase = (
+            "came up and then died"
+            if self._seen_running
+            else f"never reached a running state within {grace}s"
+        )
+        return elapsed, phase
+
+
 class ModelDeployment(BaseModel):
     """A deployed model endpoint.
 
@@ -500,13 +541,13 @@ class ModelDeployment(BaseModel):
         # Cap the cold-start grace at the overall deadline — otherwise it always
         # exceeds `timeout` and the loop hits TimeoutError before the crashloop
         # check can fire, so cold-start crashloop detection never engages.
-        cold_start_grace = min(startup_timeout, timeout)
-        restart_grace = 60
+        detector = _CrashloopDetector(
+            cold_start_grace=min(startup_timeout, timeout),
+            restart_grace=60,
+        )
 
         deadline = time.time() + timeout
         modal_poll_interval = 20
-        zero_container_since: float | None = None
-        seen_running = False
         last_modal_poll = 0.0
         last_probe = "no response yet"
 
@@ -548,31 +589,16 @@ class ModelDeployment(BaseModel):
                             f"the deploy likely failed or was stopped. Check {self.modal_app_url} "
                             f"and {logs_hint}."
                         )
-                    if containers < 0:
-                        # Transient failure querying Modal app state — ignore
-                        # this poll rather than counting it as zero containers.
-                        pass
-                    elif containers > 0:
-                        seen_running = True
-                        zero_container_since = None
-                    else:
-                        if zero_container_since is None:
-                            zero_container_since = now
-                        elapsed = int(now - zero_container_since)
-                        grace = restart_grace if seen_running else cold_start_grace
-                        if elapsed >= grace:
-                            phase = (
-                                "came up and then died"
-                                if seen_running
-                                else f"never reached a running state within {grace}s"
-                            )
-                            raise RuntimeError(
-                                f"Modal app {app_name!r} has had 0 running containers for "
-                                f"~{elapsed}s ({phase}, last probe: {last_probe}). Containers "
-                                f"are most likely crashlooping on startup (OOM, missing weights, "
-                                f"bad config, etc.). Inspect logs with {logs_hint} or open "
-                                f"{self.modal_app_url}."
-                            )
+                    crashloop = detector.observe(containers, now)
+                    if crashloop is not None:
+                        elapsed, phase = crashloop
+                        raise RuntimeError(
+                            f"Modal app {app_name!r} has had 0 running containers for "
+                            f"~{elapsed}s ({phase}, last probe: {last_probe}). Containers "
+                            f"are most likely crashlooping on startup (OOM, missing weights, "
+                            f"bad config, etc.). Inspect logs with {logs_hint} or open "
+                            f"{self.modal_app_url}."
+                        )
 
                 time.sleep(5)
         finally:
@@ -587,9 +613,7 @@ class ModelDeployment(BaseModel):
     def _modal_container_count(self) -> int | None:
         """Container count for this deployment, or None if app isn't DEPLOYED."""
         try:
-            apps = list_deployed_apps()
-            if inspect.isawaitable(apps):
-                apps = asyncio.run(apps)
+            apps = _run_coro(list_deployed_apps())
         except Exception as exc:
             print(f"[deployment] couldn't query Modal app state: {exc!r}")
             return -1

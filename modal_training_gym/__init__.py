@@ -83,7 +83,7 @@ _EXPORTS = {
     "TrainingGymError": ("modal_training_gym.common.errors", "TrainingGymError"),
     "TrainingGroup": ("modal_training_gym.common.training_group", "TrainingGroup"),
     "TrainResult": ("modal_training_gym.common.train_result", "TrainResult"),
-    "setup": ("modal_training_gym.setup", "setup"),
+    "setup": ("modal_training_gym.cli.setup", "setup"),
     "WandbConfig": ("modal_training_gym.common.wandb", "WandbConfig"),
 }
 
