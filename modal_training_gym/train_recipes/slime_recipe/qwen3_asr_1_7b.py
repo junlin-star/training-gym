@@ -31,6 +31,7 @@ _ASR_PATCHES = (
     "patch_qwen3_asr_bridge_config",
     "patch_qwen3_asr_processor",
     "patch_qwen3_asr_pg_collection",
+    "patch_qwen3_asr_packed_seq",
 )
 
 
@@ -60,10 +61,11 @@ class Qwen3_ASR_1_7b_Recipe(SlimeRecipe):
       be driven through the slime audio-transcription rollout.
     * ``use_dynamic_batch_size=False`` + ``qkv_format="bshd"`` + ``micro_batch_size=1``
       — the native megatron-bridge Qwen3-ASR forward doesn't implement THD sequence
-      packing. slime only builds packed_seq_params when qkv_format="thd" (its
-      default), so padded "bshd" batches sidestep the unsupported path; bshd needs
-      dynamic batching off + an explicit micro_batch_size. The launcher enforces this
-      (``model.requires_bshd``).
+      packing. As of nightly-dev-20260701a, slime builds packed_seq_params
+      regardless of qkv_format, so a build-time patch
+      (``patch_qwen3_asr_packed_seq``) nullifies it in the thinker forward. bshd
+      still needs dynamic batching off + an explicit micro_batch_size. The launcher
+      enforces this (``model.requires_bshd``).
     * ``sglang_mem_fraction_static=0.45`` — audio conditioning lengthens prompts
       (expanded ``<audio_pad>``) and adds the frozen audio tower, so free SGLang
       memory for the colocated actor (text-only runs use ~0.78).

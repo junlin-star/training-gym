@@ -1,36 +1,27 @@
 import asyncio
-import base64
 import hashlib
-import inspect
 import os
-import secrets as _secrets
 import shlex
 import subprocess
 import shutil
 import tempfile
-import textwrap
 import time
 from collections.abc import Callable
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-import cloudpickle
 from modal import App, Image, Retries, Secret, Volume
 from modal.experimental import clustered
 
 from modal_training_gym.common import (
-    COMMON_TRAINING_GYM_TAGS,
     hf_secrets,
-    modal_tag_value,
 )
 from modal_training_gym.common.checkpoint import Checkpoint
 from modal_training_gym.common.dataset import DatasetConfig, HarborDataset
 from modal_training_gym.common.framework import (
     Framework,
     mount_tools_dir,
-    resolve_caller_module,
 )
-from modal_training_gym.common.modal_refs import register_modal_cloudpickle_reducers
 from modal_training_gym.common.modal_urls import modal_app_dashboard_url
 from modal_training_gym.common.models import ModelConfig
 from modal_training_gym.common.ray_cluster import ModalRayCluster
@@ -39,16 +30,24 @@ from modal_training_gym.common.run import (
     TrainingRunStatus,
     has_torch_dist_checkpoint,
     mark_training_attempt_finished,
-    mark_training_attempt_started,
     record_resume_checkpoint,
-    record_wandb_attempt,
-    run_scoped_save_root,
     torch_dist_resume_checkpoint,
-    wandb_run_id_for_attempt,
+)
+from modal_training_gym.common.launcher_helpers import (
+    build_app_tags,
+    build_terminal_run_record,
+    build_train_result,
+    compute_save_root,
+    init_training_run_record,
+    mark_run_failed,
+    mark_run_stopped,
+    resolve_caller_context,
+    resolve_checkpoint_volumes,
+    run_download_phase,
+    run_prepare_dataset,
+    ship_callable,
 )
 from modal_training_gym.common.status import MilesStatus
-from modal_training_gym.common.train_result import TrainResult
-from modal_training_gym.utils.metadata import MetadataStore, vol_put_async
 from modal_training_gym.train_recipes.miles_recipe.recipe import (
     CHECKPOINTS_PATH,
     DATA_PATH,
@@ -102,16 +101,7 @@ def build_miles_app(
     app_name = name or miles.name or f"miles-{type(miles).__name__.lstrip('_').lower()}"
     volume_prefix = miles.name or f"miles-{type(miles).__name__.lstrip('_').lower()}"
 
-    caller_module = resolve_caller_module()
-    if caller_module is not None and caller_module.__name__ != "__main__":
-        cloudpickle.register_pickle_by_value(caller_module)
-    register_modal_cloudpickle_reducers()
-
-    caller_script = None
-    if caller_module is not None:
-        mod_file = getattr(caller_module, "__file__", None)
-        if mod_file and os.path.isfile(mod_file):
-            caller_script = os.path.abspath(mod_file)
+    _caller_module, caller_script = resolve_caller_context()
 
     image = _build_miles_base_image(miles)
 
@@ -165,53 +155,13 @@ def build_miles_app(
         set_path: Callable[[str], None],
     ) -> None:
         nonlocal image
-        if fn is None:
-            return
-        fn_mod = getattr(fn, "__module__", None) or ""
-        if fn_mod.startswith("modal_training_gym"):
-            return
-        try:
-            fn_file = os.path.abspath(inspect.getfile(fn))
-        except (TypeError, OSError):
-            fn_file = None
-        if fn_file and os.path.isfile(fn_file) and fn_file != caller_script:
-            fn_module_name = os.path.splitext(os.path.basename(fn_file))[0]
-            image = image.add_local_file(
-                fn_file,
-                remote_path=f"/root/{fn_module_name}.py",
-                copy=True,
-            )
-            set_path(f"{fn_module_name}.{getattr(fn, '__name__', fallback_name)}")
-            return
-        fn_name = getattr(fn, "__name__", fallback_name)
-        try:
-            payload = base64.b64encode(cloudpickle.dumps(fn)).decode("ascii")
-        except Exception:
-            module_src = textwrap.dedent(inspect.getsource(fn))
-        else:
-            module_src = textwrap.dedent(
-                f"""
-                import base64
-                import cloudpickle
-
-                {fn_name} = cloudpickle.loads(base64.b64decode({payload!r}))
-                """
-            ).lstrip()
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            suffix=".py",
-            prefix=f"notebook_{fallback_name}_",
-            delete=False,
-        ) as tmp:
-            tmp.write(module_src)
-            tmp_path = tmp.name
-        mod_name = os.path.splitext(os.path.basename(tmp_path))[0]
-        image = image.add_local_file(
-            tmp_path,
-            remote_path=f"/root/{mod_name}.py",
-            copy=True,
+        image = ship_callable(
+            image,
+            fn,
+            caller_script=caller_script,
+            fallback_name=fallback_name,
+            set_path=set_path,
         )
-        set_path(f"{mod_name}.{fn_name}")
 
     _ship_callable(
         miles.custom_rm_function,
@@ -230,18 +180,12 @@ def build_miles_app(
 
     hf_cache_volume = Volume.from_name("huggingface-cache", create_if_missing=True)
     data_volume = Volume.from_name(f"{volume_prefix}-data", create_if_missing=True)
-    checkpoints_volume_name = (
-        checkpoint.checkpoints_volume_name
-        if checkpoint is not None and checkpoint.checkpoints_volume_name
-        else f"{volume_prefix}-checkpoints"
-    )
-    checkpoints_mount_path = (
-        checkpoint.checkpoints_mount_path.rstrip("/") or "/"
-        if checkpoint is not None and checkpoint.checkpoints_mount_path
-        else str(CHECKPOINTS_PATH).rstrip("/")
-    )
-    checkpoints_volume = Volume.from_name(
-        checkpoints_volume_name, create_if_missing=True
+    checkpoints_volume_name, checkpoints_mount_path, checkpoints_volume = (
+        resolve_checkpoint_volumes(
+            checkpoint,
+            volume_prefix=volume_prefix,
+            default_mount_path=str(CHECKPOINTS_PATH),
+        )
     )
     if checkpoint is not None and checkpoint.path and not model.model_path:
         model.model_path = checkpoint.path
@@ -252,16 +196,12 @@ def build_miles_app(
         checkpoints_mount_path: checkpoints_volume,
     }
 
-    tags = {
-        **COMMON_TRAINING_GYM_TAGS,
-        "_modal_framework": "miles",
-        "_modal_model_name": modal_tag_value(model.model_name),
-        **miles.app_tags,
-    }
-    if miles.wandb is not None:
-        tags["_modal_wandb_project"] = modal_tag_value(miles.wandb.project)
-        if miles.wandb.group:
-            tags["_modal_wandb_group"] = modal_tag_value(miles.wandb.group)
+    tags = build_app_tags(
+        framework="miles",
+        model=model,
+        recipe_app_tags=miles.app_tags,
+        wandb=miles.wandb,
+    )
 
     app = App(app_name, tags=tags)
     gpu_spec = f"{miles.gpu_type}:{miles.actor_num_gpus_per_node}"
@@ -282,28 +222,19 @@ def build_miles_app(
         framework_status_url: str = "",
         framework_status_token: str = "",
     ):
-        from modal_training_gym.common.status_reporter import (
-            enqueue_framework_status,
-            flush as flush_status_reporter,
-        )
+        def _download() -> None:
+            model.download()
+            miles.download_model()
+            miles.post_process_model()
 
-        if training_run_id:
-            enqueue_framework_status(
-                training_run_id,
-                MilesStatus.DOWNLOAD_MODEL.value,
-                url=framework_status_url or None,
-                token=framework_status_token or None,
-                is_active=True,
-            )
-        hf_cache_volume.reload()
-        checkpoints_volume.reload()
-        model.download()
-        miles.download_model()
-        miles.post_process_model()
-        hf_cache_volume.commit()
-        checkpoints_volume.commit()
-        if training_run_id:
-            flush_status_reporter(timeout_seconds=2.0)
+        run_download_phase(
+            training_run_id=training_run_id,
+            phase=MilesStatus.DOWNLOAD_MODEL.value,
+            framework_status_url=framework_status_url,
+            framework_status_token=framework_status_token,
+            volumes=(hf_cache_volume, checkpoints_volume),
+            download=_download,
+        )
 
     @app.function(
         image=image,
@@ -314,19 +245,7 @@ def build_miles_app(
         name="prepare_dataset",
     )
     def prepare_dataset():
-        data_volume.reload()
-        prompt_data, eval_paths = MilesConfig._resolve_data_paths(dataset)
-        if dataset.always_prepare and os.path.exists(prompt_data):
-            import shutil
-
-            data_dir = os.path.dirname(prompt_data)
-            print(f"always_prepare=True - removing {data_dir}")
-            shutil.rmtree(data_dir, ignore_errors=True)
-        dataset.prepare(prompt_data, eval_paths)
-        dataset.validate_prepared(prompt_data)
-        for ep in (eval_paths or {}).values():
-            dataset.validate_prepared(ep)
-        data_volume.commit()
+        run_prepare_dataset(dataset, data_volume, MilesConfig._resolve_data_paths)
 
     convert_nnodes = get_checkpoint_conversion_policy(miles, model=model)[0]
     convert_multi_node = convert_nnodes > 1
@@ -544,56 +463,21 @@ def build_miles_app(
                 "lr": miles.lr,
                 "global_batch_size": miles.global_batch_size,
             }
-            # The local TrainConfig.train() driver creates the initial
-            # TrainingRun record before invoking download/convert_checkpoint
-            # so those phases are visible in the dashboard. Reuse it; fall
-            # back to a fresh record if someone invokes train() directly.
-            try:
-                run_record = await TrainingRun.from_id_async(training_run_id)
-                run_record.modal_app_id = modal_app_id
-                run_record.modal_app_url = modal_app_url
-                run_record.config = config_summary
-                run_record.framework_status = MilesStatus.INITIALIZING
-            except KeyError:
-                created_at = int(time.time())
-                run_record = TrainingRun(
-                    training_run_id=training_run_id,
-                    modal_app_id=modal_app_id,
-                    modal_app_url=modal_app_url,
-                    framework=Framework.MILES,
-                    config=config_summary,
-                    framework_status=MilesStatus.INITIALIZING,
-                    created_at=created_at,
-                    started_at=created_at,
-                )
-            attempt_count = mark_training_attempt_started(
-                run_record, started_at=int(time.time())
+            (
+                run_record,
+                wandb_run_id,
+                framework_status_token,
+            ) = await init_training_run_record(
+                training_run_id=training_run_id,
+                modal_app_id=modal_app_id,
+                modal_app_url=modal_app_url,
+                framework=Framework.MILES,
+                initializing_status=MilesStatus.INITIALIZING,
+                config_summary=config_summary,
+                wandb_cfg=miles.wandb,
+                wandb_entity=wandb_entity,
+                framework_status_token=framework_status_token,
             )
-            if miles.wandb is not None:
-                wandb_run_id = wandb_run_id_for_attempt(training_run_id, attempt_count)
-                run_record.config["wandb"]["run_id"] = wandb_run_id
-                record_wandb_attempt(
-                    run_record,
-                    entity=wandb_entity,
-                    project=miles.wandb.project,
-                    group=miles.wandb.group,
-                    run_id=wandb_run_id,
-                    attempt_count=attempt_count,
-                )
-            if attempt_count > 1:
-                print(
-                    f"WARNING: training run {training_run_id} is retrying after preemption "
-                    f"or interruption (attempt {attempt_count})."
-                )
-            if not framework_status_token:
-                framework_status_token = _secrets.token_urlsafe(32)
-            await run_record.save_async()
-            await vol_put_async(
-                MetadataStore.FRAMEWORK_STATUS_TOKENS,
-                training_run_id,
-                {"token": framework_status_token},
-            )
-            print(f"TrainingRun recorded: {training_run_id}")
 
         # In-flight status updates are fire-and-forget HTTP POSTs to the
         # dashboard so they don't block on Modal Volume writes. Terminal
@@ -663,6 +547,9 @@ def build_miles_app(
                 if run_record is not None:
                     finished_at = int(time.time())
                     run_record.status = TrainingRunStatus.FAILED
+                    run_record.error_message = (
+                        run_record.error_message or f"{type(exc).__name__}: {exc}"
+                    )
                     mark_training_attempt_finished(
                         run_record, status="failed", ended_at=finished_at
                     )
@@ -671,7 +558,7 @@ def build_miles_app(
                     run_record.duration_seconds = max(
                         0, finished_at - run_record.started_at
                     )
-                    await run_record.save_async()
+                    await run_record.save(is_async=True)
                 os.makedirs(os.path.dirname(prep_error), exist_ok=True)
                 with open(prep_error, "w") as f:
                     f.write(repr(exc))
@@ -712,25 +599,19 @@ def build_miles_app(
                 if miles.wandb is not None:
                     miles.wandb.key = wandb_key
 
-            recipe_default_save_root = str(CHECKPOINTS_PATH).rstrip("/")
-            mounted_save_root = checkpoints_mount_path
-            configured_save_root = (
-                str(miles.save).rstrip("/") if miles.save else mounted_save_root
+            save_root = compute_save_root(
+                miles.save,
+                recipe_default_save_root=str(CHECKPOINTS_PATH).rstrip("/"),
+                mounted_save_root=checkpoints_mount_path,
+                training_run_id=training_run_id,
             )
-            save_root = run_scoped_save_root(
-                mounted_save_root
-                if configured_save_root == recipe_default_save_root
-                else configured_save_root,
-                training_run_id,
-            )
-            os.makedirs(save_root, exist_ok=True)
 
             original_save = miles.save
             original_load = miles.load
             miles.save = save_root
             resume_checkpoint = torch_dist_resume_checkpoint(save_root)
             record_resume_checkpoint(run_record, resume_checkpoint)
-            await run_record.save_async()
+            await run_record.save(is_async=True)
 
             if resume_checkpoint is not None:
                 print(
@@ -771,26 +652,30 @@ def build_miles_app(
             await _set_framework_status(MilesStatus.TRAINING)
             async with cluster.forward_dashboard() as tunnel:
                 print(f"Ray dashboard: {tunnel.url}")
-                await cluster.submit_and_tail(cmd, runtime_env=runtime_env)
+                result = await cluster.submit_and_tail(cmd, runtime_env=runtime_env)
+                if not result.is_success:
+                    run_record.error_message = (
+                        result.message
+                        or f"Ray job finished with status: {result.status}"
+                    )
+                    raise RuntimeError(run_record.error_message)
+                print(f"Ray job completed: {result.status}")
+                print(f"Ray job message: {result.message}")
 
-            result_kwargs = {
-                "app_name": app_name,
-                "framework": Framework.MILES,
-                "training_run_id": training_run_id,
-                "checkpoint_dir": save_root,
-                "model_config": model,
-                "checkpoints_volume_name": checkpoints_volume_name,
-                "checkpoints_mount_path": checkpoints_mount_path,
-                "wandb_project": miles.wandb.project if miles.wandb else "",
-                "wandb_entity": wandb_entity,
-                "wandb_training_run_id": wandb_run_id,
-                "group_id": group_id or "",
-            }
-            accepted_fields = set(inspect.signature(TrainResult).parameters)
-            result = TrainResult(
-                **{k: v for k, v in result_kwargs.items() if k in accepted_fields}
+            result = build_train_result(
+                app_name=app_name,
+                framework=Framework.MILES,
+                training_run_id=training_run_id,
+                checkpoint_dir=save_root,
+                model=model,
+                checkpoints_volume_name=checkpoints_volume_name,
+                checkpoints_mount_path=checkpoints_mount_path,
+                wandb_cfg=miles.wandb,
+                wandb_entity=wandb_entity,
+                wandb_run_id=wandb_run_id,
+                group_id=group_id,
             )
-            await result.save_async()
+            await result.save(is_async=True)
             run_record.status = TrainingRunStatus.COMPLETED
             mark_training_attempt_finished(
                 run_record, status="completed", ended_at=int(time.time())
@@ -799,25 +684,17 @@ def build_miles_app(
             print(f"TrainResult saved: {training_run_id}")
             return result._to_dict()
         except KeyboardInterrupt:
-            run_record.status = TrainingRunStatus.STOPPED
-            mark_training_attempt_finished(
-                run_record, status="stopped", ended_at=int(time.time())
-            )
+            mark_run_stopped(run_record)
             raise
-        except BaseException:
-            run_record.status = TrainingRunStatus.FAILED
-            mark_training_attempt_finished(
-                run_record, status="failed", ended_at=int(time.time())
-            )
+        except BaseException as exc:
+            mark_run_failed(run_record, exc)
             raise
         finally:
-            finished_at = int(time.time())
-            run_record.ended_at = finished_at
-            if run_record.completed_at is None:
-                run_record.completed_at = finished_at
-            run_record.duration_seconds = max(0, finished_at - run_record.started_at)
+            latest_run_record = await build_terminal_run_record(
+                run_record, training_run_id
+            )
             try:
-                await run_record.save_async()
+                await latest_run_record.save(is_async=True)
             except Exception:
                 pass
 

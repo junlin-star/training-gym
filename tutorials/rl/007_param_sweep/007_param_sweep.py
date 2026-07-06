@@ -23,7 +23,7 @@
 #   raise immediately, before any run starts. A sweep never dies three
 #   variants deep because of a typo.
 # * `launch()` starts every variant as a detached Modal run with
-#   `TrainLaunch` handles you can inspect or wait on later.
+#   `TrainingRun` handles you can inspect or wait on later.
 # Run locally (your machine drives the Modal GPU workers):
 #
 # ```
@@ -81,7 +81,7 @@ class MathDataset(HuggingFaceDataset):
 # * `train(max_parallel=...)` fans the sweep out across Modal; `group.failures`
 #   isolates any run that didn't make it.
 # * `launch(prepare_inputs=True)` fans the sweep out across Modal and returns
-#   `TrainLaunch` handles; `group.failures` isolates any run that didn't
+#   `TrainingRun` handles; `group.failures` isolates any run that didn't
 #   launch.
 # * Use `launch.result()` to wait on a specific launched run, or
 #   `train(max_parallel=...)` when you want one blocking call that returns the
@@ -192,7 +192,7 @@ def _main_impl() -> None:
     # ### Background param sweep
     #
     # `launch()` starts every variant as a detached Modal run and returns a list of
-    # `TrainLaunch` handles. Each handle has the `training_run_id`, Modal app URL,
+    # `TrainingRun` handles. Each handle has the `training_run_id`, Modal app URL,
     # function-call id, and shared `group_id`.
     #
     # Pass `prepare_inputs=True` to run the model/download conversion steps before

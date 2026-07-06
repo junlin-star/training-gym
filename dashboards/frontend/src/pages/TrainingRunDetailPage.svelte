@@ -6,11 +6,18 @@
   import TimeAgo from "../components/TimeAgo.svelte";
   import SampleTimeline from "../components/SampleTimeline.svelte";
   import ConversationView from "../components/ConversationView.svelte";
-  import AdvantageHeatmap from "../components/AdvantageHeatmap.svelte";
+  import AdvantageViolins from "../components/AdvantageViolins.svelte";
   import AdvantageSpreadChart from "../components/AdvantageSpreadChart.svelte";
+  import ComparativeBarChart from "../components/ComparativeBarChart.svelte";
+  import ChartSkeleton from "../components/ChartSkeleton.svelte";
   import LineChart from "../components/LineChart.svelte";
   import ResizableTable from "../components/ResizableTable.svelte";
-  import { fetchRunRollouts, fetchRollout, fetchRunAdvantages } from "../lib/api.js";
+  import {
+    fetchRunRollouts,
+    fetchRollout,
+    fetchRunAdvantages,
+    fetchRunAdvantageStep,
+  } from "../lib/api.js";
 
   let {
     runId,
@@ -106,8 +113,15 @@
     const samples = expandedRollout?.samples || [];
     if (!samples.length) return null;
     const scores = samples.map((s) => Number(s.score) || 0);
-    const lo = Math.min(...scores);
-    const hi = Math.max(...scores);
+    // Loop instead of Math.min(...arr): a single rollout's per-sample array can
+    // exceed the engine's max argument count and make the spread throw a
+    // RangeError (same failure class buildDist avoids).
+    let lo = Infinity;
+    let hi = -Infinity;
+    for (const v of scores) {
+      if (v < lo) lo = v;
+      if (v > hi) hi = v;
+    }
     // When every sample scored the same, a single bucket reads clearer than a
     // lone bar pinned to one edge.
     const count = lo === hi ? 1 : BUCKET_COUNT;
@@ -550,11 +564,23 @@
   );
   let scoreDist = $state(null);
 
-  function buildScoreDist(firstSamples, lastSamples, firstId, lastId) {
-    const scores = [...firstSamples, ...lastSamples].map((s) => Number(s.score) || 0);
-    if (!scores.length) return null;
-    const lo = Math.min(...scores);
-    const hi = Math.max(...scores);
+  // Grouped-bar histogram of two value sets (first vs latest), sharing a common
+  // [lo, hi] range so the bars line up. Drives both the score and advantage
+  // before/after comparison charts.
+  function buildDist(firstValues, lastValues, firstId, lastId) {
+    if (!firstValues.length && !lastValues.length) return null;
+    // Loop instead of Math.min(...arr): advantage arrays can exceed the
+    // engine's max argument count and make the spread throw a RangeError.
+    let lo = Infinity;
+    let hi = -Infinity;
+    for (const v of firstValues) {
+      if (v < lo) lo = v;
+      if (v > hi) hi = v;
+    }
+    for (const v of lastValues) {
+      if (v < lo) lo = v;
+      if (v > hi) hi = v;
+    }
     const n = lo === hi ? 1 : 12;
     const span = hi - lo || 1;
     const bins = Array.from({ length: n }, (_, i) => ({
@@ -563,11 +589,46 @@
       first: 0,
       last: 0,
     }));
-    const idx = (s) => Math.max(0, Math.min(n - 1, Math.floor(((s - lo) / span) * n)));
-    for (const s of firstSamples) bins[idx(Number(s.score) || 0)].first += 1;
-    for (const s of lastSamples) bins[idx(Number(s.score) || 0)].last += 1;
+    const idx = (v) => Math.max(0, Math.min(n - 1, Math.floor(((v - lo) / span) * n)));
+    for (const v of firstValues) bins[idx(v)].first += 1;
+    for (const v of lastValues) bins[idx(v)].last += 1;
     const max = Math.max(1, ...bins.map((b) => Math.max(b.first, b.last)));
     return { bins, max, lo, hi, firstId, lastId };
+  }
+
+  function buildScoreDist(firstSamples, lastSamples, firstId, lastId) {
+    return buildDist(
+      firstSamples.map((s) => Number(s.score) || 0),
+      lastSamples.map((s) => Number(s.score) || 0),
+      firstId,
+      lastId,
+    );
+  }
+
+  // Adapt a buildDist result into ComparativeBarChart inputs: one category per
+  // bin (value range, shown only in the tooltip — the endpoint axis is drawn
+  // separately), and a series per rollout endpoint. The latest series is dropped
+  // when the first and latest rollout are the same one.
+  function distCategories(dist) {
+    return dist.bins.map((b) => `${formatMean(b.lo)}–${formatMean(b.hi)}`);
+  }
+
+  function distSeries(dist) {
+    const series = [
+      {
+        name: `rollout ${dist.firstId}`,
+        color: "var(--color-c-gray-40)",
+        values: dist.bins.map((b) => b.first),
+      },
+    ];
+    if (dist.firstId !== dist.lastId) {
+      series.push({
+        name: `latest (rollout ${dist.lastId})`,
+        color: "var(--accent)",
+        values: dist.bins.map((b) => b.last),
+      });
+    }
+    return series;
   }
 
   // Fetch the two rollouts' samples only when the endpoints change (a new step
@@ -596,20 +657,61 @@
       cancelled = true;
     };
   });
+
+  // Advantage-distribution comparison: raw advantages of the first vs latest
+  // step, bucketed the same way as the score comparison. The merged-step
+  // payloads are large, so only refetch when the endpoint ids change.
+  let advantageDist = $state(null);
+
+  function mergedAdvantages(merged) {
+    return (merged?.groups || []).flatMap((g) =>
+      (g?.advantages || []).map((v) => Number(v) || 0),
+    );
+  }
+
+  $effect(() => {
+    if (activeTab !== "summary") return;
+    const id = runId;
+    const fId = firstRolloutId;
+    const lId = lastRolloutId;
+    if (!id || fId == null || lId == null) {
+      advantageDist = null;
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const first = await fetchRunAdvantageStep(id, fId);
+        const last = fId === lId ? first : await fetchRunAdvantageStep(id, lId);
+        if (cancelled) return;
+        advantageDist = buildDist(
+          mergedAdvantages(first),
+          mergedAdvantages(last),
+          fId,
+          lId,
+        );
+      } catch {
+        if (!cancelled) advantageDist = null;
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  });
 </script>
 
 <svelte:window onkeydown={onSampleKeydown} />
 
 <section class="detail" class:embedded>
   {#if !embedded}
-    <header class="detail-header">
-      <button class="back-button" onclick={onBack}>
+    <header class="flex items-center justify-between mb-[16px]">
+      <button class="inline-flex items-center gap-[6px] [background:none] [border:0] text-(--muted) cursor-pointer text-[13px] p-[4px_8px] rounded-[6px] hover:text-(--text) hover:bg-(--color-c-gray-10,#2f2f2f)" onclick={onBack}>
         <ArrowLeft size={14} strokeWidth={2.1} />
         <span>Back to runs</span>
       </button>
-      <div class="detail-header-actions">
+      <div class="inline-flex items-center flex-wrap gap-[8px]">
         {#if onCollapse}
-          <button class="detail-collapse-button" onclick={onCollapse} title="Collapse to drawer">
+          <button class="inline-flex items-center gap-[6px] [border:1px_solid_var(--border,#2f2f2f)] rounded-[6px] [background:none] text-(--muted) cursor-pointer [font:inherit] text-[12px] font-medium p-[4px_8px] hover:text-(--text-bright) hover:border-(--border-strong,#4a4a4a)" onclick={onCollapse} title="Collapse to drawer">
             <Minimize2 size={12} strokeWidth={2.1} />
             <span>Collapse</span>
           </button>
@@ -641,14 +743,14 @@
   {/if}
 
   {#if !run}
-    <div class="empty">Loading run {runId}…</div>
+    <div class="detail-empty">Loading run {runId}…</div>
   {:else}
     {#if !embedded}
-    <div class="detail-title-row">
-      <h1 class="detail-title" title={run.run_id}>{run.run_id}</h1>
+    <div class="flex items-center gap-[16px] mb-[16px]">
+      <h1 class="text-[22px] font-[600] text-(--text-bright) m-0 overflow-hidden text-ellipsis whitespace-nowrap" title={run.run_id}>{run.run_id}</h1>
       <StatusPill status={getStatus(run)} />
       {#if resumeBadge(run)}
-        <span class="resume-header-badge">{resumeBadge(run)}</span>
+        <span class="[border:1px_solid_color-mix(in_srgb,var(--yellow,#fbbf24)_42%,transparent)] rounded-[999px] bg-[color-mix(in_srgb,var(--yellow,#fbbf24)_10%,transparent)] text-(--yellow,#fbbf24) text-[12px] leading-[16px] p-[2px_8px] whitespace-nowrap">{resumeBadge(run)}</span>
       {/if}
     </div>
     {/if}
@@ -665,84 +767,102 @@
     {#if activeTab === "summary"}
       <div class="summary-tab">
         <div class="summary-tab-main">
+          {#if run?.error_message}
+            <div class="mb-[20px]">
+              <div class="text-(--red,#f87171) text-[12px] font-[600] tracking-[0.02em] mb-[6px] uppercase">Error</div>
+              <pre class="[border:1px_solid_color-mix(in_srgb,var(--red,#f87171)_45%,transparent)] rounded-[8px] bg-[color-mix(in_srgb,var(--red,#f87171)_12%,transparent)] text-(--red,#f87171) [font-family:var(--font-mono)] text-[12px] leading-[17px] m-0 max-h-[320px] overflow-auto p-[12px_14px] whitespace-pre-wrap [word-break:break-word]">{run.error_message}</pre>
+            </div>
+          {/if}
           {#if rolloutsLoading && !rolloutSummaries.length}
-            <div class="empty">Loading rollouts…</div>
-          {:else if rolloutsError}
-            <div class="empty">Failed to load rollouts: {rolloutsError}</div>
-          {:else if !rolloutSummaries.length}
-            <div class="empty">No rollouts recorded yet.</div>
-          {:else}
-            {#if rolloutSummaries.length}
-              <div class="rollout-chart">
-                <LineChart
-                  title="Reward"
-                  data={rewardChartData}
-                  formatX={(row) => `rollout ${row.rollout_id}`}
-                  formatY={(value) => formatMean(value)}
-                  ariaLabel="Reward chart"
-                />
-                {#if chartStats}
-                  <div class="rollout-chart-meta">
-                    <span>min {formatMean(chartStats.min)}</span>
-                    <span>latest {formatMean(chartStats.latest)}</span>
-                    <span>max {formatMean(chartStats.max)}</span>
-                  </div>
-                {/if}
-              </div>
-            {/if}
-            {#if rolloutSummaries.length && hasAdvantages}
+            <div class="rollout-chart">
+              <ChartSkeleton variant="line" height={140} showTitle />
+            </div>
+            <div class="rollout-chart">
+              <div class="rollout-chart-title">Score distribution</div>
+              <ChartSkeleton variant="bars" height={120} />
+            </div>
+            <div class="chart-grid">
               <div class="rollout-chart">
                 <div class="rollout-chart-title">Advantage spread over time</div>
-                <AdvantageSpreadChart steps={advantageSteps} />
+                <ChartSkeleton variant="line" height={200} />
               </div>
               <div class="rollout-chart">
                 <div class="rollout-chart-title">Advantage distribution over time</div>
-                <AdvantageHeatmap steps={advantageSteps} />
+                <ChartSkeleton variant="violins" height={210} />
               </div>
-            {/if}
-            {#if rolloutSummaries.length}
-              <div class="rollout-chart">
-                <div class="rollout-chart-title">Score distribution</div>
-                {#if scoreDist}
-                  <div class="dist-legend">
-                    <span class="dist-legend-item">
-                      <span class="dist-swatch swatch-first"></span>
-                      rollout {scoreDist.firstId}
-                    </span>
-                    {#if scoreDist.firstId !== scoreDist.lastId}
-                      <span class="dist-legend-item">
-                        <span class="dist-swatch swatch-last"></span>
-                        latest (rollout {scoreDist.lastId})
-                      </span>
-                    {/if}
-                  </div>
-                  <div class="dist-compare">
-                    {#each scoreDist.bins as bin, i (i)}
-                      <div
-                        class="dist-compare-bin"
-                        title={`reward ${formatMean(bin.lo)}–${formatMean(bin.hi)} · rollout ${scoreDist.firstId}: ${bin.first}, latest: ${bin.last}`}
-                      >
-                        <div
-                          class="dist-compare-bar swatch-first"
-                          style:height={`${(bin.first / scoreDist.max) * 100}%`}
-                        ></div>
-                        {#if scoreDist.firstId !== scoreDist.lastId}
-                          <div
-                            class="dist-compare-bar swatch-last"
-                            style:height={`${(bin.last / scoreDist.max) * 100}%`}
-                          ></div>
-                        {/if}
-                      </div>
-                    {/each}
-                  </div>
-                  <div class="dist-axis">
-                    <span>{formatMean(scoreDist.lo)}</span>
-                    <span class="dist-axis-label">reward</span>
-                    <span>{formatMean(scoreDist.hi)}</span>
-                  </div>
-                {:else}
-                  <div class="empty">Loading distribution…</div>
-                {/if}
+            </div>
+          {:else if rolloutsError}
+            <div class="detail-empty">Failed to load rollouts: {rolloutsError}</div>
+          {:else if !rolloutSummaries.length}
+            <div class="detail-empty">No rollouts recorded yet.</div>
+          {:else}
+            <div class="rollout-chart">
+              <LineChart
+                title="Reward"
+                data={rewardChartData}
+                formatX={(row) => `rollout ${row.rollout_id}`}
+                formatY={(value) => formatMean(value)}
+                ariaLabel="Reward chart"
+              />
+              {#if chartStats}
+                <div class="flex gap-[16px] mt-[6px] text-[11px] text-(--muted) [font-variant-numeric:tabular-nums]">
+                  <span>min {formatMean(chartStats.min)}</span>
+                  <span>latest {formatMean(chartStats.latest)}</span>
+                  <span>max {formatMean(chartStats.max)}</span>
+                </div>
+              {/if}
+            </div>
+
+            <!-- Score distribution: second graph, above the advantage graphs. -->
+            <div class="rollout-chart">
+              <div class="rollout-chart-title">Score distribution</div>
+              {#if scoreDist}
+                <ComparativeBarChart
+                  categories={distCategories(scoreDist)}
+                  series={distSeries(scoreDist)}
+                  height={120}
+                  showCategoryLabels={false}
+                  format={(v) => `${v}`}
+                />
+                <div class="dist-axis">
+                  <span>{formatMean(scoreDist.lo)}</span>
+                  <span class="dist-axis-label">reward</span>
+                  <span>{formatMean(scoreDist.hi)}</span>
+                </div>
+              {:else}
+                <ChartSkeleton variant="bars" height={120} />
+              {/if}
+            </div>
+
+            {#if hasAdvantages}
+              <div class="chart-grid">
+                <div class="rollout-chart">
+                  <div class="rollout-chart-title">Advantage spread over time</div>
+                  <AdvantageSpreadChart steps={advantageSteps} />
+                </div>
+                <div class="rollout-chart">
+                  <div class="rollout-chart-title">Advantage distribution over time</div>
+                  <AdvantageViolins steps={advantageSteps} />
+                </div>
+                <div class="rollout-chart">
+                  <div class="rollout-chart-title">Advantage distribution: rollout {firstRolloutId} vs latest</div>
+                  {#if advantageDist}
+                    <ComparativeBarChart
+                      categories={distCategories(advantageDist)}
+                      series={distSeries(advantageDist)}
+                      height={120}
+                      showCategoryLabels={false}
+                      format={(v) => `${v}`}
+                    />
+                    <div class="dist-axis">
+                      <span>{formatMean(advantageDist.lo)}</span>
+                      <span class="dist-axis-label">advantage</span>
+                      <span>{formatMean(advantageDist.hi)}</span>
+                    </div>
+                  {:else}
+                    <ChartSkeleton variant="bars" height={120} />
+                  {/if}
+                </div>
               </div>
             {/if}
           {/if}
@@ -761,11 +881,11 @@
     {:else if activeTab === "rollouts"}
       <div class="tab-panel">
       {#if rolloutsLoading && !rolloutSummaries.length}
-        <div class="empty">Loading rollouts…</div>
+        <div class="detail-empty">Loading rollouts…</div>
       {:else if rolloutsError}
-        <div class="empty">Failed to load rollouts: {rolloutsError}</div>
+        <div class="detail-empty">Failed to load rollouts: {rolloutsError}</div>
       {:else if !rolloutSummaries.length}
-        <div class="empty">No rollouts recorded yet.</div>
+        <div class="detail-empty">No rollouts recorded yet.</div>
       {:else}
         <ResizableTable class="rollout-table" columns={rolloutColumns}>
           <tbody>
@@ -777,12 +897,12 @@
                 onclick={() => toggleRolloutDetail(r.rollout_id)}
               >
                 <td>#{r.rollout_id}</td>
-                <td class="rollout-mean">
+                <td class="text-(--text-bright)">
                   {formatMean(r.mean)}
                   {#if r.error_summary?.verdict === "all_infra_failure"}
-                    <span class="rollout-error-badge" title="All samples failed due to infrastructure error">infra failure</span>
+                    <span class="inline-block text-[10px] font-medium p-[1px_6px] rounded-[3px] ml-[6px] align-middle bg-[rgba(239,68,68,0.15)] text-[#ef4444] [border:1px_solid_rgba(239,68,68,0.25)]" title="All samples failed due to infrastructure error">infra failure</span>
                   {:else if r.error_summary?.verdict === "partial_infra_failure"}
-                    <span class="rollout-warn-badge" title="Some samples failed due to infrastructure error">partial failure</span>
+                    <span class="inline-block text-[10px] font-medium p-[1px_6px] rounded-[3px] ml-[6px] align-middle bg-[rgba(251,191,36,0.15)] text-[#fbbf24] [border:1px_solid_rgba(251,191,36,0.25)]" title="Some samples failed due to infrastructure error">partial failure</span>
                   {/if}
                 </td>
                 <td>{r.total}</td>
@@ -791,12 +911,12 @@
                 </td>
               </tr>
               {#if expandedRolloutId === r.rollout_id}
-                <tr class="rollout-detail-row">
-                  <td colspan={rolloutColumns.length}>
+                <tr>
+                  <td class="p-[12px_10px] bg-(--color-c-gray-08,#1c1c1c) cursor-default" colspan={rolloutColumns.length}>
                     {#if expandedRolloutLoading}
-                      <div class="empty">Loading samples…</div>
+                      <div class="detail-empty">Loading samples…</div>
                     {:else if !expandedRollout || !sampleDist}
-                      <div class="empty">No samples recorded.</div>
+                      <div class="detail-empty">No samples recorded.</div>
                     {:else}
                       {#if expandedRollout.metrics && Object.keys(expandedRollout.metrics).length}
                         {@const m = expandedRollout.metrics}
@@ -815,7 +935,7 @@
                                 {remoteErr + infraInvalid} / {totalSamples} samples hit infrastructure errors
                               {/if}
                             </div>
-                            <div class="diag-details">
+                            <div class="flex flex-wrap gap-[6px] mb-[4px]">
                               {#if remoteErr}
                                 <span class="diag-tag">RemoteError: {remoteErr}</span>
                               {/if}
@@ -830,17 +950,17 @@
                               {/if}
                             </div>
                             {#if remoteErr >= totalSamples}
-                              <div class="diag-hint">
+                              <div class="text-[11px] text-(--muted,#a3a3a3) mt-[6px]">
                                 Check the Modal app logs for sandbox/image build errors. Common cause: the environment image failed to build.
                               </div>
                             {/if}
                           </div>
                         {/if}
                       {/if}
-                      <div class="dist">
-                        <div class="dist-toolbar">
+                      <div class="mb-[16px]">
+                        <div class="flex justify-end mb-[6px]">
                           <button
-                            class="download-all-btn"
+                            class="inline-flex items-center gap-[5px] [background:none] [border:1px_solid_var(--border,#2f2f2f)] rounded-[4px] text-(--muted) text-[11px] p-[3px_8px] cursor-pointer hover:text-(--text) hover:border-(--border-strong,#4a4a4a)"
                             onclick={downloadAllTrajectories}
                             title="Download all samples as JSON"
                           >
@@ -849,21 +969,21 @@
                           </button>
                         </div>
                         <div
-                          class="dist-bars"
+                          class="flex items-end gap-[2px] h-[120px] pt-[14px] [border-bottom:1px_solid_var(--border,#2f2f2f)]"
                           role="group"
                           aria-label="Sample score distribution"
                         >
                           {#each sampleDist.buckets as bucket, b (b)}
                             <button
                               class="dist-bar"
-                              class:active={activeBucket === b}
+                              class:detail-active={activeBucket === b}
                               class:is-empty={!bucket.length}
                               style:height={`${(bucket.length / sampleDist.maxCount) * 100}%`}
                               disabled={!bucket.length}
                               title={`${bucket.length} sample${bucket.length === 1 ? "" : "s"} · reward ${bucketRange(b)}`}
                               onclick={() => openBucket(b)}
                             >
-                              <span class="dist-bar-count">{bucket.length || ""}</span>
+                              <span class="absolute top-[-14px] left-0 right-0 text-center text-[10px] text-(--muted) [font-variant-numeric:tabular-nums]">{bucket.length || ""}</span>
                             </button>
                           {/each}
                         </div>
@@ -875,9 +995,9 @@
                       </div>
 
                       {#if activeSample}
-                        <div class="rollout-sample sample-viewer">
-                          <div class="sample-viewer-header">
-                            <div class="sample-viewer-nav">
+                        <div class="[border-left:2px_solid_var(--accent)] p-[8px_12px] mb-[12px] bg-(--color-c-gray-10,#2f2f2f) rounded-[0_4px_4px_0] sample-viewer">
+                          <div class="flex items-center justify-between gap-[12px] mb-[6px]">
+                            <div class="inline-flex items-center gap-[8px]">
                               <button
                                 class="sample-nav-btn"
                                 onclick={() => stepSample(-1)}
@@ -886,7 +1006,7 @@
                               >
                                 <ChevronLeft size={14} />
                               </button>
-                              <span class="sample-viewer-pos">
+                              <span class="text-[12px] text-(--text-bright) [font-variant-numeric:tabular-nums]">
                                 Sample {activeSample.pos + 1} / {activeSample.count}
                               </span>
                               <button
@@ -897,10 +1017,10 @@
                               >
                                 <ChevronRight size={14} />
                               </button>
-                              <span class="sample-viewer-hint">← / → to navigate</span>
+                              <span class="text-[11px] text-(--muted)">← / → to navigate</span>
                             </div>
-                            <div class="sample-viewer-meta">
-                              <span class="rollout-sample-score">
+                            <div class="inline-flex items-center gap-[8px]">
+                              <span class="text-(--text-bright) [font-variant-numeric:tabular-nums]">
                                 reward {formatMean(activeSample.sample.score)}
                               </span>
                               <button
@@ -923,7 +1043,7 @@
                           {#if activeSample.sample.metadata?._metadata_type === "audio" || activeSample.sample.metadata?.audio}
                             <div class="rollout-sample-label">audio</div>
                             <audio
-                              class="sample-audio"
+                              class="block w-full max-w-[400px] m-[4px_0_8px] rounded-[4px]"
                               controls
                               preload="none"
                               src={activeSample.sample.metadata.audio}
@@ -932,7 +1052,7 @@
                           {#if activeSample.sample.metadata?._metadata_type === "image" || activeSample.sample.metadata?.image}
                             <div class="rollout-sample-label">image</div>
                             <img
-                              class="sample-image"
+                              class="block w-full max-w-[400px] h-auto m-[4px_0_8px] rounded-[4px] [border:1px_solid_var(--border)]"
                               src={activeSample.sample.metadata.image}
                               alt="rollout input"
                               loading="lazy"
@@ -961,9 +1081,13 @@
                           {/each}
                           {#if activeSample.sample.metadata?.exit_status}
                             <div class="rollout-sample-label">exit status</div>
-                            <span class="rollout-sample-metric sample-exit-status" class:exit-ok={activeSample.sample.metadata.exit_status === "ok"} class:exit-err={activeSample.sample.metadata.exit_status !== "ok"}>
+                            <span class="rollout-sample-metric p-[2px_8px] rounded-[3px] text-[11px]! font-medium" class:exit-ok={activeSample.sample.metadata.exit_status === "ok"} class:exit-err={activeSample.sample.metadata.exit_status !== "ok"}>
                               {activeSample.sample.metadata.exit_status}
                             </span>
+                          {/if}
+                          {#if activeSample.sample.metadata?.eval_detail}
+                            <div class="rollout-sample-label">failure reason</div>
+                            <pre class="rollout-sample-text">{activeSample.sample.metadata.eval_detail}</pre>
                           {/if}
                           {#if activeSample.sample.trace?.length}
                             <div class="rollout-sample-label">trajectory timeline</div>
@@ -971,7 +1095,7 @@
                           {/if}
                         </div>
                       {:else}
-                        <div class="dist-hint">Click a bar to inspect its samples.</div>
+                        <div class="text-[12px] text-(--muted) p-[4px_0]">Click a bar to inspect its samples.</div>
                       {/if}
                     {/if}
                   </td>
@@ -984,18 +1108,18 @@
       </div>
     {:else if activeTab === "logs"}
       <div class="tab-panel">
-      <div class="logs-statusbar">
-        <span class="logs-status">
+      <div class="flex justify-end mb-[8px]">
+        <span class="inline-flex items-center gap-[6px] text-[11px] text-(--muted) uppercase tracking-[0.04em]">
           {#if logState === "streaming"}
-            <span class="dot dot-live"></span> live
+            <span class="dot bg-[#4ade80]! shadow-[0_0_0_2px_rgba(74,222,128,0.18)]"></span> live
           {:else if logState === "paused"}
             <span class="dot dot-dim"></span> paused
           {:else if logState === "reconnecting"}
-            <span class="dot dot-warn"></span> reconnecting…{#if logError} <span class="log-reconnect-reason">({logError})</span>{/if}
+            <span class="dot bg-[#fbbf24]!"></span> reconnecting…{#if logError} <span class="log-reconnect-reason">({logError})</span>{/if}
           {:else if logState === "done"}
             <span class="dot dot-dim"></span> finished
           {:else if logState === "error"}
-            <span class="dot dot-err"></span> error
+            <span class="dot bg-[#f87171]!"></span> error
           {:else if String(run?.status || "").toLowerCase() !== "running"}
             <span class="dot dot-dim"></span> run not active
           {:else}
@@ -1004,7 +1128,7 @@
         </span>
       </div>
 
-      <div class="logs-controls">
+      <div class="flex flex-wrap items-center gap-[8px] mb-[8px]">
         <button
           class="log-button"
           onclick={toggleLogPaused}
@@ -1016,15 +1140,15 @@
           Clear
         </button>
         <input
-          class="log-search"
+          class="[flex:1] min-w-[160px] bg-(--color-c-gray-08,#1c1c1c) text-(--text) [border:1px_solid_var(--border,#3a3a3a)] rounded-[4px] p-[4px_8px] text-[12px] [font-family:inherit]"
           type="search"
           placeholder="filter substring…"
           bind:value={logSearchInput}
           aria-label="Filter log lines"
         />
-        <label class="log-rate">
+        <label class="inline-flex items-center gap-[6px] text-(--muted) text-[11px]">
           <span>Rate cap</span>
-          <select bind:value={logRateCap} aria-label="Lines per second cap">
+          <select class="bg-(--color-c-gray-08,#1c1c1c) text-(--text) [border:1px_solid_var(--border,#3a3a3a)] rounded-[4px] p-[2px_6px] text-[12px]" bind:value={logRateCap} aria-label="Lines per second cap">
             <option value={0}>off</option>
             <option value={10}>10/s</option>
             <option value={50}>50/s</option>
@@ -1032,18 +1156,18 @@
             <option value={1000}>1000/s</option>
           </select>
         </label>
-        <label class="log-follow">
+        <label class="inline-flex items-center gap-[6px] text-(--muted) text-[11px]">
           <input type="checkbox" bind:checked={logFollow} />
           <span>Follow tail</span>
         </label>
       </div>
 
       {#if logState === "error" && logError}
-        <div class="empty">Log stream error: {logError}</div>
+        <div class="detail-empty">Log stream error: {logError}</div>
       {/if}
 
       {#if !logLines.length}
-        <div class="empty">
+        <div class="detail-empty">
           {#if String(run?.status || "").toLowerCase() !== "running"}
             Logs only stream while the run is active.
           {:else if logPaused}
@@ -1055,20 +1179,20 @@
           {/if}
         </div>
       {:else}
-        <div class="log-tail" bind:this={logTailEl}>
+        <div class="bg-(--color-c-gray-08,#0e0e0e) rounded-[6px] p-[8px_12px] max-h-[420px] overflow-y-auto overflow-x-auto [font-family:ui-monospace,SFMono-Regular,Menlo,monospace] text-[12px] leading-[1.45] text-(--text)" bind:this={logTailEl}>
           {#each logLines as entry (entry.id)}
-            <div class="log-row">
-              <span class="log-task">{entry.task_id || ""}</span>
-              <span class="log-line">{entry.line}</span>
+            <div class="flex gap-[10px] whitespace-pre">
+              <span class="shrink-0 text-(--muted) text-[10px] min-w-[64px] overflow-hidden text-ellipsis">{entry.task_id || ""}</span>
+              <span class="flex-1 whitespace-pre-wrap break-all">{entry.line}</span>
             </div>
           {/each}
         </div>
-        <div class="log-meta">
+        <div class="mt-[6px] text-[11px] text-(--muted) [font-variant-numeric:tabular-nums] flex gap-[6px]">
           <span>
             Showing last {logLines.length} line{logLines.length === 1 ? "" : "s"} (cap {LOG_BUFFER_MAX})
           </span>
           {#if logDropped > 0}
-            <span class="log-meta-drop">
+            <span class="text-[#fbbf24]">
               · {logDropped} dropped by rate cap
             </span>
           {/if}
@@ -1079,716 +1203,3 @@
   {/if}
 </section>
 
-<style>
-  .detail {
-    padding: 0 0 24px;
-    color: var(--text);
-  }
-
-  /* Inside the expanded drawer the drawer owns padding/width, so drop the
-     page chrome and let the rollouts + logs fill the wide drawer. */
-  .detail.embedded {
-    padding: 0;
-    max-width: none;
-    margin: 0;
-  }
-
-  .detail-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-bottom: 16px;
-  }
-
-  .back-button {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    background: none;
-    border: 0;
-    color: var(--muted);
-    cursor: pointer;
-    font-size: 13px;
-    padding: 4px 8px;
-    border-radius: 6px;
-  }
-
-  .back-button:hover {
-    color: var(--text);
-    background: var(--color-c-gray-10, #2f2f2f);
-  }
-
-  .detail-header-actions {
-    display: inline-flex;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 8px;
-  }
-
-  .detail-collapse-button {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    border: 1px solid var(--border, #2f2f2f);
-    border-radius: 6px;
-    background: none;
-    color: var(--muted);
-    cursor: pointer;
-    font: inherit;
-    font-size: 12px;
-    font-weight: 500;
-    padding: 4px 8px;
-  }
-
-  .detail-collapse-button:hover {
-    color: var(--text-bright);
-    border-color: var(--border-strong, #4a4a4a);
-  }
-
-  .header-link {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    color: var(--muted);
-    font-size: 12px;
-    text-decoration: none;
-  }
-
-  .header-link:hover {
-    color: var(--accent);
-  }
-
-  .wandb-link {
-    color: var(--yellow, #fbbf24);
-  }
-
-  .wandb-link:hover {
-    color: var(--yellow, #fbbf24);
-    opacity: 0.8;
-  }
-
-  .detail-title-row {
-    display: flex;
-    align-items: center;
-    gap: 16px;
-    margin-bottom: 16px;
-  }
-
-  .detail-title {
-    font-size: 22px;
-    font-weight: 600;
-    color: var(--text-bright);
-    margin: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .resume-header-badge {
-    border: 1px solid color-mix(in srgb, var(--yellow, #fbbf24) 42%, transparent);
-    border-radius: 999px;
-    background: color-mix(in srgb, var(--yellow, #fbbf24) 10%, transparent);
-    color: var(--yellow, #fbbf24);
-    font-size: 12px;
-    line-height: 16px;
-    padding: 2px 8px;
-    white-space: nowrap;
-  }
-
-  /* ── Tab panels ───────────────────────────────────────────────────────── */
-  .tab-panel {
-    padding-top: 20px;
-  }
-
-  /* Summary tab: chart on the left, run summary metadata on the right. */
-  .summary-tab {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(280px, 340px);
-    gap: 32px;
-    align-items: start;
-    padding-top: 20px;
-  }
-
-  .summary-tab-side {
-    border-left: 1px solid var(--border, #2f2f2f);
-    padding-left: 24px;
-  }
-
-  .logs-statusbar {
-    display: flex;
-    justify-content: flex-end;
-    margin-bottom: 8px;
-  }
-
-  @media (max-width: 900px) {
-    .summary-tab {
-      grid-template-columns: 1fr;
-      gap: 20px;
-    }
-
-    .summary-tab-side {
-      border-left: 0;
-      padding-left: 0;
-      border-top: 1px solid var(--border, #2f2f2f);
-      padding-top: 16px;
-    }
-  }
-
-  .rollout-chart {
-    margin-bottom: 20px;
-  }
-
-  .rollout-chart-title {
-    font-size: 12px;
-    font-weight: 600;
-    color: var(--text-bright);
-    margin-bottom: 6px;
-  }
-
-  /* Score-distribution comparison (first vs latest rollout). */
-  .swatch-first {
-    background: var(--color-c-gray-40, #5e5e5e);
-  }
-
-  .swatch-last {
-    background: var(--accent);
-  }
-
-  .dist-legend {
-    display: flex;
-    gap: 16px;
-    margin-bottom: 8px;
-    font-size: 11px;
-    color: var(--muted);
-  }
-
-  .dist-legend-item {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-  }
-
-  .dist-swatch {
-    width: 10px;
-    height: 10px;
-    border-radius: 2px;
-  }
-
-  .dist-compare {
-    display: flex;
-    align-items: flex-end;
-    gap: 3px;
-    height: 120px;
-    padding-top: 8px;
-    border-bottom: 1px solid var(--border, #2f2f2f);
-  }
-
-  .dist-compare-bin {
-    flex: 1;
-    height: 100%;
-    display: flex;
-    align-items: flex-end;
-    justify-content: center;
-    gap: 2px;
-  }
-
-  .dist-compare-bar {
-    flex: 1;
-    min-height: 1px;
-    border-radius: 2px 2px 0 0;
-  }
-
-  .rollout-chart-meta {
-    display: flex;
-    gap: 16px;
-    margin-top: 6px;
-    font-size: 11px;
-    color: var(--muted);
-    font-variant-numeric: tabular-nums;
-  }
-
-  :global(table.rollout-table) {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 13px;
-  }
-
-  :global(table.rollout-table th) {
-    text-align: left;
-    color: var(--muted);
-    font-weight: 500;
-    font-size: 11px;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-    padding: 6px 10px;
-    border-bottom: 1px solid var(--border, #2f2f2f);
-  }
-
-  :global(table.rollout-table tbody tr) {
-    cursor: pointer;
-  }
-
-  :global(table.rollout-table tbody tr:hover) {
-    background: var(--color-c-gray-10, #2f2f2f);
-  }
-
-  :global(table.rollout-table tbody tr.expanded) {
-    background: var(--color-c-gray-10, #2f2f2f);
-  }
-
-  :global(table.rollout-table td) {
-    padding: 8px 10px;
-    border-bottom: 1px solid var(--border, #2f2f2f);
-    font-variant-numeric: tabular-nums;
-  }
-
-  .rollout-mean {
-    color: var(--text-bright);
-  }
-
-  .rollout-detail-row td {
-    padding: 12px 10px;
-    background: var(--color-c-gray-08, #1c1c1c);
-    cursor: default;
-  }
-
-  .rollout-sample {
-    border-left: 2px solid var(--accent);
-    padding: 8px 12px;
-    margin-bottom: 12px;
-    background: var(--color-c-gray-10, #2f2f2f);
-    border-radius: 0 4px 4px 0;
-  }
-
-  /* ── Per-step sample score distribution ──────────────────────────────── */
-  .dist {
-    margin-bottom: 16px;
-  }
-
-  .dist-toolbar {
-    display: flex;
-    justify-content: flex-end;
-    margin-bottom: 6px;
-  }
-
-  .download-all-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    background: none;
-    border: 1px solid var(--border, #2f2f2f);
-    border-radius: 4px;
-    color: var(--muted);
-    font-size: 11px;
-    padding: 3px 8px;
-    cursor: pointer;
-  }
-
-  .download-all-btn:hover {
-    color: var(--text);
-    border-color: var(--border-strong, #4a4a4a);
-  }
-
-  .dist-bars {
-    display: flex;
-    align-items: flex-end;
-    gap: 2px;
-    height: 120px;
-    padding-top: 14px;
-    border-bottom: 1px solid var(--border, #2f2f2f);
-  }
-
-  .dist-bar {
-    position: relative;
-    flex: 1;
-    min-height: 2px;
-    padding: 0;
-    border: 0;
-    border-radius: 2px 2px 0 0;
-    background: var(--color-c-gray-30, #4a4a4a);
-    cursor: pointer;
-    transition:
-      background 0.12s ease,
-      opacity 0.12s ease;
-  }
-
-  .dist-bar:hover:not(:disabled) {
-    background: var(--color-c-gray-40, #5e5e5e);
-  }
-
-  .dist-bar.active {
-    background: var(--accent);
-  }
-
-  .dist-bar.is-empty {
-    background: var(--color-c-gray-10, #2f2f2f);
-    cursor: default;
-    opacity: 0.5;
-  }
-
-  .dist-bar-count {
-    position: absolute;
-    top: -14px;
-    left: 0;
-    right: 0;
-    text-align: center;
-    font-size: 10px;
-    color: var(--muted);
-    font-variant-numeric: tabular-nums;
-  }
-
-  .dist-axis {
-    display: flex;
-    justify-content: space-between;
-    margin-top: 6px;
-    font-size: 11px;
-    color: var(--muted);
-    font-variant-numeric: tabular-nums;
-  }
-
-  .dist-axis-label {
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-  }
-
-  .dist-hint {
-    font-size: 12px;
-    color: var(--muted);
-    padding: 4px 0;
-  }
-
-  /* ── Single-sample viewer (bucket drill-in) ──────────────────────────── */
-  .sample-viewer-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    margin-bottom: 6px;
-  }
-
-  .sample-viewer-nav,
-  .sample-viewer-meta {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-  }
-
-  .sample-viewer-pos {
-    font-size: 12px;
-    color: var(--text-bright);
-    font-variant-numeric: tabular-nums;
-  }
-
-  .sample-viewer-hint {
-    font-size: 11px;
-    color: var(--muted);
-  }
-
-  .sample-nav-btn {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    padding: 2px;
-    border: 1px solid var(--border, #2f2f2f);
-    border-radius: 4px;
-    background: none;
-    color: var(--muted);
-    cursor: pointer;
-  }
-
-  .sample-nav-btn:hover:not(:disabled) {
-    color: var(--text-bright);
-    border-color: var(--border-strong, #4a4a4a);
-  }
-
-  .sample-nav-btn:disabled {
-    opacity: 0.4;
-    cursor: default;
-  }
-
-  .rollout-sample-score {
-    color: var(--text-bright);
-    font-variant-numeric: tabular-nums;
-  }
-
-  .rollout-sample-label {
-    font-size: 10px;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    color: var(--muted);
-    margin-top: 8px;
-    margin-bottom: 2px;
-  }
-
-  .sample-audio {
-    display: block;
-    width: 100%;
-    max-width: 400px;
-    margin: 4px 0 8px;
-    border-radius: 4px;
-  }
-
-  .sample-image {
-    display: block;
-    width: 100%;
-    max-width: 400px;
-    height: auto;
-    margin: 4px 0 8px;
-    border-radius: 4px;
-    border: 1px solid var(--border);
-  }
-
-  .rollout-sample-metric {
-    font-size: 13px;
-    font-variant-numeric: tabular-nums;
-    color: var(--text-bright);
-  }
-
-  .rollout-sample-text {
-    margin: 0;
-    padding: 8px;
-    background: var(--color-c-gray-08, #1c1c1c);
-    border-radius: 4px;
-    font-size: 12px;
-    color: var(--text);
-    white-space: pre-wrap;
-    word-break: break-word;
-    max-height: 240px;
-    overflow: auto;
-  }
-
-  .sample-exit-status {
-    padding: 2px 8px;
-    border-radius: 3px;
-    font-size: 11px;
-    font-weight: 500;
-  }
-  .exit-ok {
-    background: rgba(74, 222, 128, 0.12);
-    color: #4ade80;
-  }
-  .exit-err {
-    background: rgba(248, 113, 113, 0.12);
-    color: #f87171;
-  }
-
-  .empty {
-    color: var(--muted);
-    font-size: 13px;
-    padding: 16px 0;
-  }
-
-  .logs-status {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 11px;
-    color: var(--muted);
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-  }
-
-  .dot {
-    display: inline-block;
-    width: 7px;
-    height: 7px;
-    border-radius: 9999px;
-    background: var(--muted);
-  }
-
-  .dot-live {
-    background: #4ade80;
-    box-shadow: 0 0 0 2px rgba(74, 222, 128, 0.18);
-  }
-
-  .dot-warn {
-    background: #fbbf24;
-  }
-
-  .dot-err {
-    background: #f87171;
-  }
-
-  .dot-dim {
-    background: #6b7280;
-  }
-
-  .log-tail {
-    background: var(--color-c-gray-08, #0e0e0e);
-    border-radius: 6px;
-    padding: 8px 12px;
-    max-height: 420px;
-    overflow-y: auto;
-    overflow-x: auto;
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 12px;
-    line-height: 1.45;
-    color: var(--text);
-  }
-
-  .log-row {
-    display: flex;
-    gap: 10px;
-    white-space: pre;
-  }
-
-  .log-task {
-    flex-shrink: 0;
-    color: var(--muted);
-    font-size: 10px;
-    min-width: 64px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .log-line {
-    flex: 1;
-    white-space: pre-wrap;
-    word-break: break-all;
-  }
-
-  .log-meta {
-    margin-top: 6px;
-    font-size: 11px;
-    color: var(--muted);
-    font-variant-numeric: tabular-nums;
-    display: flex;
-    gap: 6px;
-  }
-
-  .log-meta-drop {
-    color: #fbbf24;
-  }
-
-  .logs-controls {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 8px;
-    margin-bottom: 8px;
-  }
-
-  .log-button {
-    background: var(--color-c-gray-10, #2f2f2f);
-    color: var(--text);
-    border: 1px solid var(--border, #3a3a3a);
-    border-radius: 4px;
-    padding: 4px 10px;
-    font-size: 12px;
-    cursor: pointer;
-  }
-
-  .log-button:hover:not(:disabled) {
-    background: var(--color-c-gray-12, #3a3a3a);
-  }
-
-  .log-button:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
-
-  .log-search {
-    flex: 1;
-    min-width: 160px;
-    background: var(--color-c-gray-08, #1c1c1c);
-    color: var(--text);
-    border: 1px solid var(--border, #3a3a3a);
-    border-radius: 4px;
-    padding: 4px 8px;
-    font-size: 12px;
-    font-family: inherit;
-  }
-
-  .log-rate,
-  .log-follow {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    color: var(--muted);
-    font-size: 11px;
-  }
-
-  .log-rate select {
-    background: var(--color-c-gray-08, #1c1c1c);
-    color: var(--text);
-    border: 1px solid var(--border, #3a3a3a);
-    border-radius: 4px;
-    padding: 2px 6px;
-    font-size: 12px;
-  }
-
-  /* ── Rollout error indicators ──────────────────────────────────────── */
-
-  .rollout-error td {
-    background: rgba(239, 68, 68, 0.06);
-  }
-  .rollout-warn td {
-    background: rgba(251, 191, 36, 0.06);
-  }
-
-  .rollout-error-badge,
-  .rollout-warn-badge {
-    display: inline-block;
-    font-size: 10px;
-    font-weight: 500;
-    padding: 1px 6px;
-    border-radius: 3px;
-    margin-left: 6px;
-    vertical-align: middle;
-  }
-  .rollout-error-badge {
-    background: rgba(239, 68, 68, 0.15);
-    color: #ef4444;
-    border: 1px solid rgba(239, 68, 68, 0.25);
-  }
-  .rollout-warn-badge {
-    background: rgba(251, 191, 36, 0.15);
-    color: #fbbf24;
-    border: 1px solid rgba(251, 191, 36, 0.25);
-  }
-
-  /* ── Rollout diagnostics banner ────────────────────────────────────── */
-
-  .rollout-diagnostics {
-    padding: 10px 14px;
-    border-radius: 6px;
-    margin-bottom: 12px;
-    background: rgba(251, 191, 36, 0.08);
-    border: 1px solid rgba(251, 191, 36, 0.2);
-  }
-  .rollout-diagnostics.diag-critical {
-    background: rgba(239, 68, 68, 0.08);
-    border-color: rgba(239, 68, 68, 0.2);
-  }
-
-  .diag-title {
-    font-size: 13px;
-    font-weight: 600;
-    color: #fbbf24;
-    margin-bottom: 6px;
-  }
-  .diag-critical .diag-title {
-    color: #ef4444;
-  }
-
-  .diag-details {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-    margin-bottom: 4px;
-  }
-  .diag-tag {
-    font-size: 11px;
-    padding: 2px 8px;
-    border-radius: 3px;
-    background: rgba(255, 255, 255, 0.06);
-    color: var(--text, #d1d1d1);
-    font-variant-numeric: tabular-nums;
-  }
-
-  .diag-hint {
-    font-size: 11px;
-    color: var(--muted, #a3a3a3);
-    margin-top: 6px;
-  }
-</style>

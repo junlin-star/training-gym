@@ -1,10 +1,8 @@
-import asyncio
 import dataclasses as _dc
 import secrets as _secrets
 import threading
 import time
 from contextlib import nullcontext
-from enum import Enum
 from typing import Any
 from typing import cast
 
@@ -21,7 +19,6 @@ from modal_training_gym.common.status import (
     SlimeStatus,
 )
 from modal_training_gym.common.train_result import TrainResult
-from modal_training_gym.common.modal_lifecycle import stop_app
 from modal_training_gym.common.modal_urls import modal_app_dashboard_url
 from modal_training_gym.utils.metadata import MetadataStore, vol_put
 from modal_training_gym.frameworks.miles import build_miles_app
@@ -31,56 +28,6 @@ from modal_training_gym.train_recipes.miles_recipe import MilesConfig
 from modal_training_gym.train_recipes.slime_recipe import SlimeRecipe
 from pydantic import ConfigDict
 from pydantic.dataclasses import dataclass
-
-
-@_dc.dataclass(frozen=True)
-class TrainLaunch:
-    training_run_id: str
-    modal_app_id: str
-    modal_app_url: str
-    function_call_id: str
-    group_id: str | None = None
-    _function_call: Any | None = _dc.field(default=None, repr=False, compare=False)
-    _status_display: Any | None = _dc.field(default=None, repr=False, compare=False)
-
-    @property
-    def function_call(self):
-        if self._function_call is not None:
-            return self._function_call
-        import modal
-
-        return modal.FunctionCall.from_id(self.function_call_id)
-
-    def result(
-        self,
-        *,
-        timeout: float | None = None,
-        stop_app_on_success: bool = True,
-    ) -> TrainResult:
-        from modal_training_gym.common.status_reporter import (
-            flush as flush_status_reporter,
-        )
-
-        if self._status_display is not None:
-            self._status_display.start_polling(self.training_run_id)
-        try:
-            result_dict = self.function_call.get(timeout=timeout)
-        finally:
-            if self._status_display is not None:
-                self._status_display.stop_polling()
-            flush_status_reporter(timeout_seconds=2.0)
-
-        if stop_app_on_success and self.modal_app_id:
-            stop_app(self.modal_app_id)
-        result = TrainResult(**TrainResult._parse_model_config(result_dict))
-        print(f"Training complete: {result.training_run_id}")
-        return result
-
-    def __await__(self):
-        async def _wait() -> TrainResult:
-            return await asyncio.to_thread(self.result)
-
-        return _wait().__await__()
 
 
 def _merge_recipe(base: SlimeRecipe, overrides: SlimeRecipe) -> SlimeRecipe:
@@ -138,38 +85,21 @@ def _resolve_slime_recipe(
     return resolved
 
 
-class TrainStepStatus(Enum):
-    INITIALIZING = "initializing"
-    DOWNLOAD_MODEL = "download_model"
-    CONVERT_MODEL = "convert_model"
-    PREPARE_DATASET = "prepare_dataset"
-    ROLLOUT_INITIALIZING = "initialize_rollouts"
-    ROLLOUT_LOGGING = "generate_rollouts"
-    EVAL_ROLLOUT_LOGGING = "evaluate_rollouts"
-    COMPUTE_LOG_PROBS = "compute_log_probs"
-    OPTIMIZER_STEP = "optimizer_step"
-    WEIGHT_SYNC = "weight_sync"
-    OFFLOAD_ROLLOUT = "offload_rollout"
-    OFFLOAD_TRAIN = "offload_train"
-    CHECKPOINT_SAVE = "checkpoint_save"
-    TRAINING = "training"
-
-
 _STAGE_LABELS: dict[str, str] = {
-    TrainStepStatus.INITIALIZING.value: "Initializing",
-    TrainStepStatus.DOWNLOAD_MODEL.value: "Downloading model",
-    TrainStepStatus.CONVERT_MODEL.value: "Converting model",
-    TrainStepStatus.PREPARE_DATASET.value: "Preparing dataset",
-    TrainStepStatus.ROLLOUT_INITIALIZING.value: "Initializing rollouts",
-    TrainStepStatus.ROLLOUT_LOGGING.value: "Generating rollouts",
-    TrainStepStatus.EVAL_ROLLOUT_LOGGING.value: "Evaluating rollouts",
-    TrainStepStatus.COMPUTE_LOG_PROBS.value: "Computing log probs",
-    TrainStepStatus.OPTIMIZER_STEP.value: "Optimizer step",
-    TrainStepStatus.WEIGHT_SYNC.value: "Weight sync",
-    TrainStepStatus.OFFLOAD_ROLLOUT.value: "Offload rollout",
-    TrainStepStatus.OFFLOAD_TRAIN.value: "Offload train",
-    TrainStepStatus.CHECKPOINT_SAVE.value: "Saving checkpoint",
-    TrainStepStatus.TRAINING.value: "Training",
+    SlimeStatus.INITIALIZING.value: "Initializing",
+    SlimeStatus.DOWNLOAD_MODEL.value: "Downloading model",
+    SlimeStatus.CONVERT_MODEL.value: "Converting model",
+    SlimeStatus.PREPARE_DATASET.value: "Preparing dataset",
+    SlimeStatus.ROLLOUT_INITIALIZING.value: "Initializing rollouts",
+    SlimeStatus.ROLLOUT_LOGGING.value: "Generating rollouts",
+    SlimeStatus.EVAL_ROLLOUT_LOGGING.value: "Evaluating rollouts",
+    SlimeStatus.COMPUTE_LOG_PROBS.value: "Computing log probs",
+    SlimeStatus.OPTIMIZER_STEP.value: "Optimizer step",
+    SlimeStatus.WEIGHT_SYNC.value: "Weight sync",
+    SlimeStatus.OFFLOAD_ROLLOUT.value: "Offload rollout",
+    SlimeStatus.OFFLOAD_TRAIN.value: "Offload train",
+    SlimeStatus.CHECKPOINT_SAVE.value: "Saving checkpoint",
+    SlimeStatus.TRAINING.value: "Training",
 }
 
 
@@ -424,7 +354,8 @@ class TrainConfig:
 
     # ── Run-record helpers ─────────────────────────────────────────────────
 
-    def _framework(self) -> Framework:
+    @property
+    def framework(self) -> Framework:
         if isinstance(self.recipe, SlimeRecipe):
             return Framework.SLIME
         if isinstance(self.recipe, MilesConfig):
@@ -526,7 +457,7 @@ class TrainConfig:
             )
         return _TrainStatusDisplay(
             run_id=training_run_id,
-            framework=self._framework().value,
+            framework=self.framework.value,
             model_name=getattr(self.model, "model_name", "") if self.model else "",
             dataset_name=dataset_name,
             framework_status_url=framework_status_url,
@@ -568,7 +499,7 @@ class TrainConfig:
         *,
         show_output: bool = True,
         prepare_inputs: bool = False,
-    ) -> TrainLaunch:
+    ) -> TrainingRun:
         """Start training in a detached Modal app and return immediately."""
         import modal
 
@@ -577,7 +508,7 @@ class TrainConfig:
             get_framework_status_url,
         )
         from modal_training_gym.common.status_reporter import enqueue_framework_status
-        from modal_training_gym.setup import ensure_dashboard_deployed
+        from modal_training_gym.cli.setup import ensure_dashboard_deployed
 
         training_run_id = self.training_run_id
         ensure_dashboard_deployed()
@@ -597,7 +528,7 @@ class TrainConfig:
             training_run_id=training_run_id,
             modal_app_id="",
             modal_app_url="",
-            framework=self._framework(),
+            framework=self.framework,
             config=self._build_config_summary(),
             framework_status=self._initializing_status(),
             created_at=created_at,
@@ -682,17 +613,15 @@ class TrainConfig:
                     framework_status_token=framework_status_token,
                 )
 
-        launch = TrainLaunch(
-            training_run_id=training_run_id,
-            modal_app_id=modal_app_id,
-            modal_app_url=modal_app_url,
-            function_call_id=function_call.object_id,
-            group_id=self.group_id,
-            _function_call=function_call,
-            _status_display=status_display if show_output else None,
-        )
+        run_record.function_call_id = function_call.object_id
+        run_record._function_call = function_call
+        run_record._status_display = status_display if show_output else None
+        try:
+            run_record.save()
+        except RuntimeError:
+            pass
         print(
-            f"Launched training {launch.training_run_id}: "
-            f"app={launch.modal_app_id}, function_call={launch.function_call_id}"
+            f"Launched training {run_record.training_run_id}: "
+            f"app={run_record.modal_app_id}, function_call={run_record.function_call_id}"
         )
-        return launch
+        return run_record

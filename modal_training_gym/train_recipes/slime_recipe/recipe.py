@@ -1,11 +1,19 @@
-import json
 import os
 from collections.abc import Callable
 from dataclasses import field
 from pathlib import Path
 from typing import Any
 
-from modal_training_gym.train_recipes.base import BaseTrainRecipe, RecipeType
+from modal_training_gym.train_recipes.base import (
+    BaseTrainRecipe,
+    RecipeType,
+    # Re-exported for backwards compatibility (e.g. frameworks/slime/launcher.py
+    # imports the volume paths from this module).
+    CHECKPOINTS_PATH as CHECKPOINTS_PATH,
+    DATA_PATH as DATA_PATH,
+    HF_CACHE_PATH as HF_CACHE_PATH,
+    JSON_CONFIG_FIELDS as JSON_CONFIG_FIELDS,
+)
 from pydantic import ConfigDict, model_validator
 from pydantic.dataclasses import dataclass
 
@@ -17,19 +25,12 @@ from modal_training_gym.common.models import (
 from modal_training_gym.common.errors import TrainingGymConfigError
 from modal_training_gym.common.wandb import WandbConfig
 from modal_training_gym.train_recipes.gpu_allocation import (
-    GpuAllocation,
     validate_num_experts_divisible_by_expert_parallel_size,
     resolve_gpu_allocation,
     validate_megatron_actor_parallelism,
 )
 
 import modal
-
-# ── Volume mount paths ────────────────────────────────────────────────────────
-
-HF_CACHE_PATH = Path("/root/.cache/huggingface")
-DATA_PATH = Path("/data")
-CHECKPOINTS_PATH = Path("/checkpoints")
 
 # ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -65,10 +66,11 @@ _SLIME_SKIP = {
     "train_function_kwargs",
     "conversion_pipeline_model_parallel_size",
     "conversion_tensor_model_parallel_size",
+    "conversion_expert_model_parallel_size",
+    "conversion_expert_tensor_parallel_size",
 }
 
 YAML_CONFIG_FIELDS = ("eval_config", "extra_config", "sglang_config")
-JSON_CONFIG_FIELDS = ("train_env_vars", "apply_chat_template_kwargs", "multimodal_keys")
 
 _HOOK_PATH_CONFIG_KEYS = {
     "custom_rollout_log_function": "training_gym_custom_rollout_log_function_path",
@@ -199,6 +201,12 @@ class SlimeRecipe(BaseTrainRecipe):
     use_dynamic_batch_size: bool = True
     max_tokens_per_gpu: int = 9216
 
+    # QKV layout for the Megatron backend. Emitted as --qkv-format (slime's own
+    # default is "thd"). Set explicitly because SLIME_IMAGE nightly-dev-20260701a's
+    # compute_advantages_and_returns reads args.qkv_format and AttributeError's at
+    # the first train step if it isn't provided.
+    qkv_format: str = "thd"
+
     # ── Eval ────────────────────────────────────────────────────────────────
     eval_interval: int | None = None
     n_samples_per_eval_prompt: int = 4
@@ -317,35 +325,9 @@ class SlimeRecipe(BaseTrainRecipe):
 
     # ── Container → slime flag converters ────────────────────────────────────
 
-    @staticmethod
-    def _resolve_data_paths(
-        ds: "DatasetConfig",
-    ) -> tuple[str, dict[str, str] | None]:
-        """Derive on-volume file paths from a dataset's properties."""
-        hf_repo = getattr(ds, "hf_repo", "")
-        name = hf_repo.replace("/", "_") if hf_repo else type(ds).__name__
-        fmt = getattr(ds, "output_format", "parquet")
-        ext = "jsonl" if fmt == "jsonl" else "parquet"
-        split = getattr(ds, "hf_split", "train")
-        prompt_data = f"{DATA_PATH}/{name}/{split}.{ext}"
-        eval_prompt_data = {"eval": f"{DATA_PATH}/{name}/eval.{ext}"}
-        return prompt_data, eval_prompt_data
-
-    @staticmethod
-    def _dataset_to_fields(ds: "DatasetConfig") -> dict[str, Any]:
-        prompt_data, eval_paths = SlimeRecipe._resolve_data_paths(ds)
-        eval_prompt_data: list[str] | None = None
-        if eval_paths:
-            eval_prompt_data = [
-                v for name, path in eval_paths.items() for v in (name, path)
-            ]
-        fields: dict[str, Any] = {
-            "prompt_data": prompt_data,
-            "eval_prompt_data": eval_prompt_data,
-            "input_key": ds.input_key,
-            "label_key": ds.label_key,
-            "apply_chat_template": ds.apply_chat_template,
-        }
+    @classmethod
+    def _dataset_to_fields(cls, ds: "DatasetConfig") -> dict[str, Any]:
+        fields = super()._dataset_to_fields(ds)
         if getattr(ds, "multimodal_keys", None):
             fields["multimodal_keys"] = ds.multimodal_keys
         return fields
@@ -458,16 +440,6 @@ class SlimeRecipe(BaseTrainRecipe):
     def validate_model_parallelism(self, model: "ModelConfig") -> None:
         validate_num_experts_divisible_by_expert_parallel_size(self, model)
 
-    @staticmethod
-    def _wandb_to_fields(w: "WandbConfig") -> dict[str, Any]:
-        return {
-            "use_wandb": True,
-            "wandb_project": w.project,
-            "wandb_group": w.group,
-            "wandb_key": w.key,
-            "disable_wandb_random_suffix": w.disable_random_suffix,
-        }
-
     # ── Internal ──────────────────────────────────────────────────────────────
 
     def _fields(
@@ -489,6 +461,16 @@ class SlimeRecipe(BaseTrainRecipe):
         if self.wandb is not None:
             fields.update(self._wandb_to_fields(self.wandb))
         out = {k: v for k, v in fields.items() if k not in _SLIME_SKIP}
+        # extra_config is an explicit per-recipe escape hatch and must ALWAYS win
+        # over a top-level field's value. slime's --<flag> CLI args override the
+        # YAML custom-config, so any key a recipe also sets in extra_config would
+        # otherwise be clobbered by the field's CLI flag (e.g. qkv_format="thd"
+        # default overriding ASR/VL's extra_config "bshd"). Drop any such CLI flag
+        # so the extra_config value stands.
+        extra_cfg = fields.get("extra_config")
+        if isinstance(extra_cfg, dict):
+            for key in extra_cfg:
+                out.pop(key, None)
         if "extra_config" in out:
             out["custom_config_path"] = out.pop("extra_config")
         for src, dst in {
@@ -506,34 +488,6 @@ class SlimeRecipe(BaseTrainRecipe):
         return out
 
     # ── Public API ────────────────────────────────────────────────────────────
-
-    def cli_args(
-        self,
-        dataset: "DatasetConfig | None" = None,
-        model: "ModelConfig | None" = None,
-    ) -> list[str]:
-        out: list[str] = []
-        for key, val in self._fields(dataset=dataset, model=model).items():
-            if val is None or val is False or val == "":
-                continue
-            flag = f"--{key.replace('_', '-')}"
-            if val is True:
-                out.append(flag)
-            elif isinstance(val, dict) and key in JSON_CONFIG_FIELDS:
-                out += [flag, json.dumps(val)]
-            elif isinstance(val, list):
-                out += [flag] + [str(v) for v in val]
-            else:
-                out += [flag, str(val)]
-        return out
-
-    @property
-    def total_nodes(self) -> int:
-        return self.gpu_allocation.total_nodes
-
-    @property
-    def gpu_allocation(self) -> GpuAllocation:
-        return resolve_gpu_allocation(self, warn=False)
 
     @classmethod
     def get_base_recipe(cls, model_config: ModelConfig) -> "SlimeRecipe":

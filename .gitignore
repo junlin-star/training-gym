@@ -130,6 +130,9 @@ celerybeat.pid
 # SageMath parsed files
 *.sage.py
 
+# Gym workstation
+.gym
+
 # Environments
 .env
 .venv
@@ -186,6 +189,7 @@ node_modules/
 
 # AI tools
 .claude/*
+!.claude/skills
 !.claude/skills/
 .codex
 

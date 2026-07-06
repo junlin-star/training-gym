@@ -25,8 +25,8 @@ class FakeVolume:
 
     ``reload()`` raises like a real unattached/local volume (both sync and via
     ``.aio()``); reads and writes operate on an in-memory dict. A correct
-    metadata layer must still complete a ``save()`` / ``save_async()`` against
-    this — reload is only a freshness hint.
+    metadata layer must still complete a ``save()`` (sync or ``is_async=True``)
+    against this — reload is only a freshness hint.
     """
 
     class _DirEntry:

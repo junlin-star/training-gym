@@ -26,13 +26,6 @@ from modal_training_gym.train_recipes.slime_recipe import SlimeRecipe
 
 VALIDATION_EPHEMERAL_DISK_MIB = 2_097_152
 
-# TODO(melody/joy): Add more granular result per step
-# @dataclass
-# class StepResult:
-#     step_count: int
-#     step_duration_s: float # Extract from the step update time
-#     substep_duration_s: dict[TrainStepStatus, float] # Extract from the substep update time
-
 
 @dataclass
 class TutorialResult:
@@ -41,7 +34,6 @@ class TutorialResult:
     training_run_id: str
     training_run_status: TrainingRunStatus
     total_duration_s: float
-    # step_results: list[StepResult]
 
     @property
     def succeeded(self) -> bool:
