@@ -168,6 +168,21 @@ def _stitch_base_image(recipe: StitchRecipe) -> modal.Image:
     return image
 
 
+def _resolve_container_app_id() -> str:
+    """Best-effort Modal app id from inside the running Trainer container, used
+    as a fallback when the client didn't thread one in. A spawned deployed
+    function does not reliably get ``MODAL_APP_ID`` in its env, so also consult
+    the container's bound App object."""
+    app_id = os.environ.get("MODAL_APP_ID", "")
+    if app_id:
+        return app_id
+    try:
+        container_app = modal.App._get_container_app()
+        return (container_app.app_id if container_app else "") or ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def _record_run_started(
     *,
     run_id: str,
@@ -175,6 +190,7 @@ def _record_run_started(
     model: ModelConfig | None,
     dataset: DatasetConfig | None,
     config_fields: dict,
+    modal_app_id: str = "",
 ) -> TrainingRun | None:
     """Write a ``RUNNING`` :class:`TrainingRun` to the ``training-gym-metadata``
     Volume so the disagg run shows up in the dashboard (the deployed app is
@@ -182,7 +198,7 @@ def _record_run_started(
     itself in the colocated flow). Best-effort: a metadata hiccup must never take
     down the training run, so failures are logged and swallowed."""
     try:
-        modal_app_id = os.environ.get("MODAL_APP_ID", "")
+        modal_app_id = modal_app_id or _resolve_container_app_id()
         wandb_block: dict = {}
         if recipe.wandb is not None:
             # Resolve the W&B entity for a dashboard deep-link; keep the run
@@ -547,7 +563,16 @@ def build_stitch_app(
                 model=model,
                 dataset=dataset,
                 config_fields=payload["fields"],
+                modal_app_id=payload.get("modal_app_id", ""),
             )
+            if recipe.wandb is not None:
+                # Force slime's W&B run to use the same id recorded in the
+                # dashboard deep-link (slime/wandb honor these env vars). Without
+                # this, wandb autogenerates a run id and the dashboard link 404s.
+                os.environ["WANDB_RUN_ID"] = wandb_run_id_for_attempt(run_id, 1)
+                os.environ["WANDB_RESUME"] = "allow"
+                if recipe.wandb.entity:
+                    os.environ["WANDB_ENTITY"] = recipe.wandb.entity
             status = TrainingRunStatus.COMPLETED
             try:
                 subprocess.run(["bash", "-lc", cmd], check=True)
@@ -600,6 +625,13 @@ def spawn_training_run(
     from modal.exception import NotFoundError
 
     payload = recipe.to_payload(model=model, dataset=dataset)
+    # Resolve the deployed app id client-side so the trainer records a working
+    # "Open in Modal" dashboard link — a spawned deployed function's own
+    # MODAL_APP_ID env is not reliably populated.
+    try:
+        payload["modal_app_id"] = modal.App.lookup(app_name).app_id or ""
+    except Exception:  # noqa: BLE001
+        payload["modal_app_id"] = ""
     try:
         trainer = modal.Cls.from_name(app_name, "Trainer")()
         call = trainer.train.spawn(payload)
