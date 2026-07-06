@@ -1,5 +1,5 @@
 <script>
-  import { Download } from "lucide-svelte";
+  import { Download, ZoomIn, ZoomOut } from "lucide-svelte";
 
   let {
     stepTimes = null,
@@ -34,9 +34,11 @@
 
   const ORDER = Object.keys(SUBSTEP_LABELS);
 
-  // Timeline horizontal scale (pixels per second) + fixed width for dropped substeps.
-  const PX_PER_SEC = 2;
-  const NULL_WIDTH = 8;
+  // Timeline zoom bounds: 1 = fit-to-width, MAX_ZOOM = deepest magnification.
+  const MIN_ZOOM = 1;
+  const MAX_ZOOM = 64;
+  const ZOOM_BTN_FACTOR = 1.5;
+  const WHEEL_SENSITIVITY = 0.0015;
 
   function labelFor(name) {
     return SUBSTEP_LABELS[name] || name.replace(/_/g, " ");
@@ -68,11 +70,6 @@
     a.download = downloadName;
     a.click();
     URL.revokeObjectURL(url);
-  }
-
-  function segWidth(sub) {
-    if (sub.duration == null) return NULL_WIDTH;
-    return Math.max(sub.duration * PX_PER_SEC, 2);
   }
 
   let steps = $derived.by(() => {
@@ -110,6 +107,51 @@
 
   let tip = $state(null);
   let pinned = $state(false);
+
+  // ── Timeline zoom / pan state ────────────────────────────────────────
+  let zoom = $state(1);
+  let viewport = $state(null);
+
+  function stepWeight(step) {
+    const subTotal = step.substeps.reduce((acc, s) => acc + (s.duration ?? 0), 0);
+    if (subTotal > 0) return subTotal;
+    if (step.duration != null && step.duration > 0) return step.duration;
+    return 1;
+  }
+
+  function setZoom(next, anchorX = null) {
+    const clamped = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, next));
+    if (clamped === zoom) return;
+    if (viewport) {
+      const rect = viewport.getBoundingClientRect();
+      const cursorX = anchorX == null ? rect.width / 2 : anchorX - rect.left;
+      const contentX = viewport.scrollLeft + cursorX;
+      const scale = clamped / zoom;
+      zoom = clamped;
+      requestAnimationFrame(() => {
+        viewport.scrollLeft = contentX * scale - cursorX;
+      });
+    } else {
+      zoom = clamped;
+    }
+  }
+
+  function handleWheel(e) {
+    // Let horizontal trackpad gestures pan natively; vertical wheel zooms.
+    if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
+    e.preventDefault();
+    setZoom(zoom * Math.exp(-e.deltaY * WHEEL_SENSITIVITY), e.clientX);
+  }
+
+  // Wheel listeners are passive by default; zooming needs preventDefault.
+  function wheelZoom(node) {
+    node.addEventListener("wheel", handleWheel, { passive: false });
+    return {
+      destroy() {
+        node.removeEventListener("wheel", handleWheel);
+      },
+    };
+  }
 
   function isActive(step, sub) {
     return tip && tip.step === step.n && tip.name === sub.name;
@@ -150,13 +192,12 @@
 
 <svelte:window onclick={clearPin} />
 
-{#snippet segment(step, sub, timeline)}
+{#snippet segment(step, sub)}
   <div
     class="seg"
     class:seg-null={sub.duration == null}
     class:active={pinned && isActive(step, sub)}
-    style:flex-grow={timeline || sub.duration == null ? undefined : Math.max(sub.duration, 0.01)}
-    style:width={timeline ? `${segWidth(sub)}px` : undefined}
+    style:flex-grow={sub.duration == null ? undefined : Math.max(sub.duration, 0.01)}
     style:background={sub.duration == null ? undefined : colorFor(sub.name)}
     role="button"
     tabindex="0"
@@ -186,31 +227,69 @@
           {/each}
         </div>
         {#if layout === "timeline"}
-          <button
-            class="dl-btn"
-            onclick={downloadJson}
-            title="Download step + substep times as JSON"
-          >
-            <Download size={13} />
-            Download JSON
-          </button>
+          <div class="tl-toolbar">
+            <div class="zoom-controls">
+              <button
+                class="zoom-btn"
+                onclick={() => setZoom(zoom / ZOOM_BTN_FACTOR)}
+                disabled={zoom <= MIN_ZOOM}
+                title="Zoom out"
+              >
+                <ZoomOut size={13} />
+              </button>
+              <button
+                class="zoom-level"
+                onclick={() => setZoom(MIN_ZOOM)}
+                disabled={zoom <= MIN_ZOOM}
+                title="Reset zoom to fit"
+              >
+                {zoom >= 10 ? Math.round(zoom) : zoom.toFixed(1).replace(/\.0$/, "")}×
+              </button>
+              <button
+                class="zoom-btn"
+                onclick={() => setZoom(zoom * ZOOM_BTN_FACTOR)}
+                disabled={zoom >= MAX_ZOOM}
+                title="Zoom in"
+              >
+                <ZoomIn size={13} />
+              </button>
+            </div>
+            <button
+              class="dl-btn"
+              onclick={downloadJson}
+              title="Download step + substep times as JSON"
+            >
+              <Download size={13} />
+              Download JSON
+            </button>
+          </div>
         {/if}
       </div>
     {/if}
 
     {#if layout === "timeline"}
-      <div class="timeline-scroll">
-        <div class="bar tl-bar">
-          {#each steps as step, si (step.key)}
-            {#if si > 0}
-              <div class="tl-divider" title={`Step ${step.n}`}></div>
-            {/if}
-            {#each step.substeps as sub (sub.name)}
-              {@render segment(step, sub, true)}
-            {/each}
+      <div class="tl-viewport" bind:this={viewport} use:wheelZoom>
+        <div class="tl-track" style:width={`${zoom * 100}%`}>
+          {#each steps as step (step.key)}
+            <div class="tl-step" style:flex-grow={stepWeight(step)}>
+              <div class="tl-step-head">
+                <span class="tl-step-name">Step {step.n}</span>
+                <span class="tl-step-dur">{fmtSecs(step.duration)}</span>
+              </div>
+              {#if step.substeps.length}
+                <div class="bar tl-bar">
+                  {#each step.substeps as sub (sub.name)}
+                    {@render segment(step, sub)}
+                  {/each}
+                </div>
+              {:else}
+                <div class="bar tl-bar bar-empty"></div>
+              {/if}
+            </div>
           {/each}
         </div>
       </div>
+      <div class="tl-hint">Scroll to zoom · shift-scroll or drag the scrollbar to pan</div>
     {:else}
       {#each steps as step (step.key)}
         <div class="step-row">
@@ -221,7 +300,7 @@
           {#if step.substeps.length}
             <div class="bar">
               {#each step.substeps as sub (sub.name)}
-                {@render segment(step, sub, false)}
+                {@render segment(step, sub)}
               {/each}
             </div>
           {:else}
@@ -364,28 +443,104 @@
     );
   }
 
-  /* ── Timeline (one long continuous bar across all steps) ─────────────── */
-  .timeline-scroll {
+  /* ── Timeline (full-width zoomable bar across all steps) ─────────────── */
+  .tl-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+  }
+
+  .zoom-controls {
+    display: inline-flex;
+    align-items: center;
+    border: 1px solid var(--border, #2f2f2f);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+
+  .zoom-btn,
+  .zoom-level {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: none;
+    border: none;
+    color: var(--muted);
+    font-size: 11px;
+    padding: 3px 7px;
+    cursor: pointer;
+  }
+
+  .zoom-level {
+    min-width: 38px;
+    border-left: 1px solid var(--border, #2f2f2f);
+    border-right: 1px solid var(--border, #2f2f2f);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .zoom-btn:hover:not(:disabled),
+  .zoom-level:hover:not(:disabled) {
+    color: var(--text);
+    background: var(--color-c-gray-08, #1c1c1c);
+  }
+
+  .zoom-btn:disabled,
+  .zoom-level:disabled {
+    opacity: 0.4;
+    cursor: default;
+  }
+
+  .tl-viewport {
     overflow-x: auto;
     overflow-y: hidden;
     padding-bottom: 6px;
+    overscroll-behavior-x: contain;
+  }
+
+  .tl-track {
+    display: flex;
+    gap: 3px;
+    min-width: 100%;
+  }
+
+  .tl-step {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    flex-basis: 0;
+    min-width: 3px;
+    overflow: hidden;
+  }
+
+  .tl-step-head {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    font-size: 10px;
+    line-height: 14px;
+    white-space: nowrap;
+    overflow: hidden;
+  }
+
+  .tl-step-name {
+    color: var(--text-bright);
+    font-weight: 500;
+  }
+
+  .tl-step-dur {
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
   }
 
   .tl-bar {
-    width: max-content;
-    min-width: 100%;
     height: 18px;
   }
 
-  .tl-bar .seg {
-    flex: 0 0 auto;
-  }
-
-  /* Thin marker between steps within the single continuous bar. */
-  .tl-divider {
-    flex: 0 0 2px;
-    height: 100%;
-    background: var(--color-c-gray-02, #0d0d0d);
+  .tl-hint {
+    font-size: 10px;
+    color: var(--muted);
+    opacity: 0.7;
   }
 
   /* ── Pinnable tooltip ────────────────────────────────────────────────── */
