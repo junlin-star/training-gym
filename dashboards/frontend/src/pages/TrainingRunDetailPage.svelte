@@ -18,6 +18,7 @@
     fetchRollout,
     fetchRunAdvantages,
     fetchRunAdvantageStep,
+    fetchRunStepTimes,
   } from "../lib/api.js";
 
   let {
@@ -72,8 +73,8 @@
   // Map a rollout to its step timing. Step keys are 1-indexed; rollout ids are
   // 0-indexed, so step N corresponds to rollout N-1 (fall back to a direct match).
   function stepTimingForRollout(rolloutId) {
-    const st = run?.step_times || null;
-    const sub = run?.substep_times || null;
+    const st = stepTimesData?.step_times || null;
+    const sub = stepTimesData?.substep_times || null;
     if (!st && !sub) return null;
     const candidates = [String(Number(rolloutId) + 1), String(rolloutId)];
     const key = candidates.find((k) => (st && st[k]) || (sub && sub[k]));
@@ -116,6 +117,9 @@
   // Per-step advantage distribution summaries (one row per step, each with the
   // step's overall stats + quantiles) — drives the advantage fan chart.
   let advantageSteps = $state([]);
+  // Step/substep timings, fetched lazily (excluded from the runs list
+  // payload since they grow with the number of training steps).
+  let stepTimesData = $state(null);
   let hasAdvantages = $derived(advantageSteps.length > 0);
 
   // Per-step sample view: a histogram of sample scores. Clicking a bar opens
@@ -271,6 +275,18 @@
     }
   }
 
+  async function loadStepTimes(signal) {
+    if (!runId) return;
+    try {
+      const data = await fetchRunStepTimes(runId, { signal });
+      if (signal?.aborted) return;
+      // Keep what we have on a transient poll failure (null response).
+      if (data) stepTimesData = data;
+    } catch {
+      // Timing data is optional — keep whatever is already loaded.
+    }
+  }
+
   async function loadAdvantages(signal) {
     if (!runId) return;
     try {
@@ -292,6 +308,7 @@
     expandedRolloutId = null;
     expandedRollout = null;
     advantageSteps = [];
+    stepTimesData = null;
     closeBucket();
   });
 
@@ -303,10 +320,12 @@
 
     const controller = new AbortController();
     void loadAdvantages(controller.signal);
+    void loadStepTimes(controller.signal);
     const interval = window.setInterval(() => {
       const status = String(run?.status || "").toLowerCase();
       if (status && status !== "running") return;
       void loadAdvantages(controller.signal);
+      void loadStepTimes(controller.signal);
     }, 5000);
 
     return () => {
@@ -789,12 +808,12 @@
               <pre class="[border:1px_solid_color-mix(in_srgb,var(--red,#f87171)_45%,transparent)] rounded-[8px] bg-[color-mix(in_srgb,var(--red,#f87171)_12%,transparent)] text-(--red,#f87171) [font-family:var(--font-mono)] text-[12px] leading-[17px] m-0 max-h-[320px] overflow-auto p-[12px_14px] whitespace-pre-wrap [word-break:break-word]">{run.error_message}</pre>
             </div>
           {/if}
-          {#if run.step_times || run.substep_times}
+          {#if stepTimesData?.step_times || stepTimesData?.substep_times}
             <div class="rollout-chart">
               <div class="rollout-chart-title">Step &amp; substep timeline</div>
               <StepTimings
-                stepTimes={run.step_times}
-                substepTimes={run.substep_times}
+                stepTimes={stepTimesData?.step_times}
+                substepTimes={stepTimesData?.substep_times}
                 layout="timeline"
                 downloadName={`step_substep_times_${runId}.json`}
               />
