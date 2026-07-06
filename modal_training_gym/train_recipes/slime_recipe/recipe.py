@@ -494,9 +494,6 @@ class SlimeRecipe(BaseTrainRecipe):
         from modal_training_gym.train_recipes.slime_recipe.glm_4_7 import (
             GLM_4_7_Recipe,
         )
-        from modal_training_gym.train_recipes.slime_recipe.glm_5_2 import (
-            GLM_5_2_Recipe,
-        )
         from modal_training_gym.train_recipes.slime_recipe.qwen3_0_6b import (
             Qwen3_0_6b_Recipe,
         )
@@ -526,8 +523,6 @@ class SlimeRecipe(BaseTrainRecipe):
             return Qwen3_ASR_1_7b_Recipe()
         if model_config.model_name == "zai-org/GLM-4.7":
             return GLM_4_7_Recipe()
-        if model_config.model_name == "zai-org/GLM-5.2":
-            return GLM_5_2_Recipe()
         if model_config.model_name == "Qwen/Qwen3-0.6B":
             return Qwen3_0_6b_Recipe()
         if model_config.model_name == "Qwen/Qwen3-1.7B":
