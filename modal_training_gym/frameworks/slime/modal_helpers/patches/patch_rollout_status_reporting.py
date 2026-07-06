@@ -78,7 +78,7 @@ def _patch_file(path: Path) -> None:
 
     if needs_preamble:
         src = PREAMBLE + src
-    elif "report_step_event" not in src: 
+    elif "report_step_event" not in src:
         src = src.replace(
             "    from modal_training_gym.frameworks.slime.phase_reporting import (\n",
             "    from modal_training_gym.frameworks.slime.phase_reporting import (\n"

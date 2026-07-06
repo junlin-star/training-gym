@@ -7,7 +7,7 @@ from typing import Any
 from modal_training_gym.common.status import SlimeStatus
 
 
-class Substep(str, Enum): 
+class Substep(str, Enum):
     EVAL_BEFORE = SlimeStatus.EVAL_ROLLOUT_LOGGING.value
     GENERATE_ROLLOUTS = SlimeStatus.ROLLOUT_LOGGING.value
     OFFLOAD_ROLLOUT = SlimeStatus.OFFLOAD_ROLLOUT.value
