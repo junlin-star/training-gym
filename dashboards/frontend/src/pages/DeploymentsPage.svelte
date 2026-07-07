@@ -300,9 +300,12 @@
     activeStatuses = next;
   }
 
-  function toggleAllStatuses() {
-    if (allStatusesActive) activeStatuses = new Set();
-    else activeStatuses = new Set(statusFilters);
+  function selectAllStatuses() {
+    activeStatuses = new Set(statusFilters);
+  }
+
+  function clearStatuses() {
+    activeStatuses = new Set();
   }
 </script>
 
@@ -355,24 +358,31 @@
         </button>
         {#if statusMenuOpen}
           <div class="status-menu">
-            <button
-              class="status-item"
-              onclick={(event) => {
-                event.stopPropagation();
-                toggleAllStatuses();
-              }}
-            >
-              <span class="checkmark" class:checked={allStatusesActive}>
-                {#if allStatusesActive}
-                  <Check size={11} />
-                {/if}
-              </span>
-              <span class="item-label">All</span>
-              <span class="status-count">{allDeployments.length}</span>
-            </button>
+            <div class="filter-actions">
+              <button
+                class="filter-action"
+                disabled={allStatusesActive}
+                onclick={(event) => {
+                  event.stopPropagation();
+                  selectAllStatuses();
+                }}
+              >
+                Select all
+              </button>
+              <button
+                class="filter-action"
+                disabled={activeStatuses.size === 0}
+                onclick={(event) => {
+                  event.stopPropagation();
+                  clearStatuses();
+                }}
+              >
+                Deselect all
+              </button>
+            </div>
             {#each statusFilters as status (status)}
               <button
-                class="status-item filter-item-nested"
+                class="status-item"
                 onclick={(event) => {
                   event.stopPropagation();
                   toggleStatusFilter(status);

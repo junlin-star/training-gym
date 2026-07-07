@@ -720,9 +720,12 @@
     activeRecipes = next;
   }
 
-  function toggleAllRecipes() {
-    if (activeRecipes.size === recipes.length) activeRecipes = new Set();
-    else activeRecipes = new Set(recipes);
+  function selectAllRecipes() {
+    activeRecipes = new Set(recipes);
+  }
+
+  function clearRecipes() {
+    activeRecipes = new Set();
   }
 
   function toggleStatus(status) {
@@ -732,9 +735,12 @@
     activeStatuses = next;
   }
 
-  function toggleAllStatuses() {
-    if (activeStatuses.size === statuses.length) activeStatuses = new Set();
-    else activeStatuses = new Set(statuses);
+  function selectAllStatuses() {
+    activeStatuses = new Set(statuses);
+  }
+
+  function clearStatuses() {
+    activeStatuses = new Set();
   }
 
   function toggleGroup(group) {
@@ -744,9 +750,12 @@
     activeGroups = next;
   }
 
-  function toggleAllGroups() {
-    if (activeGroups.size === groups.length) activeGroups = new Set();
-    else activeGroups = new Set(groups);
+  function selectAllGroups() {
+    activeGroups = new Set(groups);
+  }
+
+  function clearGroups() {
+    activeGroups = new Set();
   }
 
   function setActivePage(page) {
@@ -885,11 +894,14 @@
         onOpenDetail={openTrainingRunDetail}
         onCloseDrawer={closeTrainingDrawer}
         onToggleRecipe={toggleRecipe}
-        onToggleAllRecipes={toggleAllRecipes}
+        onSelectAllRecipes={selectAllRecipes}
+        onClearRecipes={clearRecipes}
         onToggleStatus={toggleStatus}
-        onToggleAllStatuses={toggleAllStatuses}
+        onSelectAllStatuses={selectAllStatuses}
+        onClearStatuses={clearStatuses}
         onToggleGroup={toggleGroup}
-        onToggleAllGroups={toggleAllGroups}
+        onSelectAllGroups={selectAllGroups}
+        onClearGroups={clearGroups}
       />
     {:else if activePage === "deployments"}
       <DeploymentsPage

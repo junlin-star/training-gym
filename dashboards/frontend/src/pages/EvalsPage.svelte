@@ -374,9 +374,12 @@
     activeStatusFilters = next;
   }
 
-  function toggleAllStatusFilters() {
-    if (allStatusFiltersActive) activeStatusFilters = new Set();
-    else activeStatusFilters = new Set(["completed", "pending", "failed"]);
+  function selectAllStatusFilters() {
+    activeStatusFilters = new Set(["completed", "pending", "failed"]);
+  }
+
+  function clearStatusFilters() {
+    activeStatusFilters = new Set();
   }
 
   function toggleDatasetFilter(dataset) {
@@ -386,9 +389,12 @@
     activeDatasetFilters = next;
   }
 
-  function toggleAllDatasetFilters() {
-    if (allDatasetFiltersActive) activeDatasetFilters = new Set();
-    else activeDatasetFilters = new Set(datasetOptions);
+  function selectAllDatasetFilters() {
+    activeDatasetFilters = new Set(datasetOptions);
+  }
+
+  function clearDatasetFilters() {
+    activeDatasetFilters = new Set();
   }
 
   let selectedEval = $state(null);
@@ -558,23 +564,30 @@
       </button>
       {#if statusMenuOpen}
         <div class="status-menu">
+          <div class="filter-actions">
+            <button
+              class="filter-action"
+              disabled={allStatusFiltersActive}
+              onclick={(event) => {
+                event.stopPropagation();
+                selectAllStatusFilters();
+              }}
+            >
+              Select all
+            </button>
+            <button
+              class="filter-action"
+              disabled={activeStatusFilters.size === 0}
+              onclick={(event) => {
+                event.stopPropagation();
+                clearStatusFilters();
+              }}
+            >
+              Deselect all
+            </button>
+          </div>
           <button
             class="status-item"
-            onclick={(event) => {
-              event.stopPropagation();
-              toggleAllStatusFilters();
-            }}
-          >
-            <span class="checkmark" class:checked={allStatusFiltersActive}>
-              {#if allStatusFiltersActive}
-                <Check size={11} />
-              {/if}
-            </span>
-            <span class="item-label">All</span>
-            <span class="status-count">{allEvals.length}</span>
-          </button>
-          <button
-            class="status-item filter-item-nested"
             onclick={(event) => {
               event.stopPropagation();
               toggleStatusFilter("completed");
@@ -589,7 +602,7 @@
             <span class="status-count">{evalCompletedTotal}</span>
           </button>
           <button
-            class="status-item filter-item-nested"
+            class="status-item"
             onclick={(event) => {
               event.stopPropagation();
               toggleStatusFilter("pending");
@@ -604,7 +617,7 @@
             <span class="status-count">{evalPendingTotal}</span>
           </button>
           <button
-            class="status-item filter-item-nested"
+            class="status-item"
             onclick={(event) => {
               event.stopPropagation();
               toggleStatusFilter("failed");
@@ -640,24 +653,31 @@
       </button>
       {#if datasetMenuOpen}
         <div class="status-menu w-[min(320px,calc(100vw_-_2rem))]!">
-          <button
-            class="status-item"
-            onclick={(event) => {
-              event.stopPropagation();
-              toggleAllDatasetFilters();
-            }}
-          >
-            <span class="checkmark" class:checked={allDatasetFiltersActive}>
-              {#if allDatasetFiltersActive}
-                <Check size={11} />
-              {/if}
-            </span>
-            <span class="dataset-item-label">All datasets</span>
-            <span class="status-count">{allEvals.length}</span>
-          </button>
+          <div class="filter-actions">
+            <button
+              class="filter-action"
+              disabled={allDatasetFiltersActive}
+              onclick={(event) => {
+                event.stopPropagation();
+                selectAllDatasetFilters();
+              }}
+            >
+              Select all
+            </button>
+            <button
+              class="filter-action"
+              disabled={activeDatasetFilters.size === 0}
+              onclick={(event) => {
+                event.stopPropagation();
+                clearDatasetFilters();
+              }}
+            >
+              Deselect all
+            </button>
+          </div>
           {#each datasetOptions as dataset (dataset)}
             <button
-              class="status-item filter-item-nested"
+              class="status-item"
               onclick={(event) => {
                 event.stopPropagation();
                 toggleDatasetFilter(dataset);

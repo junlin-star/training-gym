@@ -720,6 +720,15 @@ table.resizable-table.sticky-first-column tr.row-selected td:first-child {
   color: var(--text-bright);
 }
 
+.filter-button:focus {
+  outline: none;
+}
+
+.filter-button:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--border-strong) 55%, transparent);
+}
+
 .button-icon {
   display: inline-flex;
   color: var(--muted);
@@ -1422,6 +1431,39 @@ tr.framework-run-row:last-child td {
   padding: 0.25rem;
 }
 
+.filter-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 0.2rem 0.38rem 0.34rem;
+  margin-bottom: 0.12rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+}
+
+.filter-action {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.68rem;
+  cursor: pointer;
+}
+
+.filter-action:hover:not(:disabled) {
+  color: var(--text);
+  text-decoration: underline;
+}
+
+.filter-action:disabled {
+  opacity: 0.45;
+  cursor: default;
+  text-decoration: none;
+}
+
+/* Keep dataset filter checks neutral (no blue accent). */
+
 .status-item {
   width: 100%;
   border: 0;
@@ -1442,10 +1484,6 @@ tr.framework-run-row:last-child td {
 .status-item:hover {
   background: color-mix(in srgb, var(--text-bright) 6%, transparent);
   color: var(--text-bright);
-}
-
-.filter-item-nested {
-  padding-left: 1rem;
 }
 
 .status-count {
@@ -2040,6 +2078,15 @@ table.rollout-table td {
     color: var(--text-bright);
   }
 
+  .evals-status-filter:focus {
+    outline: none;
+  }
+
+  .evals-status-filter:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--border-strong) 55%, transparent);
+  }
+
   .dataset-item-label {
     min-width: 0;
     overflow: hidden;
@@ -2203,6 +2250,15 @@ table.rollout-table td {
   border-color: var(--border-strong);
   background: var(--panel-alt);
   color: var(--text-bright);
+}
+
+.deploy-status-filter:focus {
+  outline: none;
+}
+
+.deploy-status-filter:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--border-strong) 55%, transparent);
 }
 
 table.deployments-table {

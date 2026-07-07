@@ -14,14 +14,16 @@
     groupCounts,
     activeGroups,
     allGroupsActive,
-    totalRuns,
     search = $bindable(),
     onToggleRecipe,
-    onToggleAllRecipes,
+    onSelectAllRecipes,
+    onClearRecipes,
     onToggleStatus,
-    onToggleAllStatuses,
+    onSelectAllStatuses,
+    onClearStatuses,
     onToggleGroup,
-    onToggleAllGroups,
+    onSelectAllGroups,
+    onClearGroups,
   } = $props();
 
   let openMenu = $state(null);
@@ -67,24 +69,31 @@
     </button>
     {#if openMenu === "status"}
       <div class="menu">
-        <button
-          class="menu-item"
-          onclick={(event) => {
-            event.stopPropagation();
-            onToggleAllStatuses();
-          }}
-        >
-          <span class="checkmark" class:checked={allStatusesActive}>
-            {#if allStatusesActive}
-              <Check size={11} />
-            {/if}
-          </span>
-          <span class="item-label">All</span>
-          <span class="item-count">{totalRuns}</span>
-        </button>
+        <div class="filter-actions">
+          <button
+            class="filter-action"
+            disabled={allStatusesActive}
+            onclick={(event) => {
+              event.stopPropagation();
+              onSelectAllStatuses();
+            }}
+          >
+            Select all
+          </button>
+          <button
+            class="filter-action"
+            disabled={activeStatuses.size === 0}
+            onclick={(event) => {
+              event.stopPropagation();
+              onClearStatuses();
+            }}
+          >
+            Deselect all
+          </button>
+        </div>
         {#each statuses as st (st)}
           <button
-            class="menu-item filter-item-nested"
+            class="menu-item"
             onclick={(event) => {
               event.stopPropagation();
               onToggleStatus(st);
@@ -122,24 +131,31 @@
     </button>
     {#if openMenu === "recipes"}
       <div class="menu">
-        <button
-          class="menu-item"
-          onclick={(event) => {
-            event.stopPropagation();
-            onToggleAllRecipes();
-          }}
-        >
-          <span class="checkmark" class:checked={allRecipesActive}>
-            {#if allRecipesActive}
-              <Check size={11} />
-            {/if}
-          </span>
-          <span class="item-label">All</span>
-          <span class="item-count">{totalRuns}</span>
-        </button>
+        <div class="filter-actions">
+          <button
+            class="filter-action"
+            disabled={allRecipesActive}
+            onclick={(event) => {
+              event.stopPropagation();
+              onSelectAllRecipes();
+            }}
+          >
+            Select all
+          </button>
+          <button
+            class="filter-action"
+            disabled={activeRecipes.size === 0}
+            onclick={(event) => {
+              event.stopPropagation();
+              onClearRecipes();
+            }}
+          >
+            Deselect all
+          </button>
+        </div>
         {#each recipes as recipe (recipe)}
           <button
-            class="menu-item filter-item-nested"
+            class="menu-item"
             onclick={(event) => {
               event.stopPropagation();
               onToggleRecipe(recipe);
@@ -177,24 +193,31 @@
     </button>
     {#if openMenu === "groups"}
       <div class="menu">
-        <button
-          class="menu-item"
-          onclick={(event) => {
-            event.stopPropagation();
-            onToggleAllGroups();
-          }}
-        >
-          <span class="checkmark" class:checked={allGroupsActive}>
-            {#if allGroupsActive}
-              <Check size={11} />
-            {/if}
-          </span>
-          <span class="item-label">All</span>
-          <span class="item-count">{totalRuns}</span>
-        </button>
+        <div class="filter-actions">
+          <button
+            class="filter-action"
+            disabled={allGroupsActive}
+            onclick={(event) => {
+              event.stopPropagation();
+              onSelectAllGroups();
+            }}
+          >
+            Select all
+          </button>
+          <button
+            class="filter-action"
+            disabled={activeGroups.size === 0}
+            onclick={(event) => {
+              event.stopPropagation();
+              onClearGroups();
+            }}
+          >
+            Deselect all
+          </button>
+        </div>
         {#each groups as group (group)}
           <button
-            class="menu-item filter-item-nested"
+            class="menu-item"
             onclick={(event) => {
               event.stopPropagation();
               onToggleGroup(group);

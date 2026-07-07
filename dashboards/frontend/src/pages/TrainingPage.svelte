@@ -39,11 +39,14 @@
     onOpenDetail = () => {},
     onCloseDrawer = () => {},
     onToggleRecipe,
-    onToggleAllRecipes,
+    onSelectAllRecipes,
+    onClearRecipes,
     onToggleStatus,
-    onToggleAllStatuses,
+    onSelectAllStatuses,
+    onClearStatuses,
     onToggleGroup,
-    onToggleAllGroups,
+    onSelectAllGroups,
+    onClearGroups,
   } = $props();
 
   // The drawer is now driven by the parent: it holds the run-summary while the
@@ -187,14 +190,16 @@
       {groupCounts}
       {activeGroups}
       allGroupsActive={activeGroups.size === groups.length}
-      totalRuns={allRuns.length}
       bind:search
       onToggleRecipe={onToggleRecipe}
-      onToggleAllRecipes={onToggleAllRecipes}
+      onSelectAllRecipes={onSelectAllRecipes}
+      onClearRecipes={onClearRecipes}
       onToggleStatus={onToggleStatus}
-      onToggleAllStatuses={onToggleAllStatuses}
+      onSelectAllStatuses={onSelectAllStatuses}
+      onClearStatuses={onClearStatuses}
       onToggleGroup={onToggleGroup}
-      onToggleAllGroups={onToggleAllGroups}
+      onSelectAllGroups={onSelectAllGroups}
+      onClearGroups={onClearGroups}
     />
   </div>
 
