@@ -14,9 +14,9 @@
     offload_rollout: "Offload rollout",
     compute_log_probs: "Compute log probs",
     optimizer_step: "Optimizer step",
-    weight_sync: "Weight sync",
     checkpoint_save: "Checkpoint save",
     offload_train: "Offload train",
+    weight_sync: "Weight sync",
     evaluate_rollouts_end: "Eval (after)",
   };
 
