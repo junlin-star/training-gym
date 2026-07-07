@@ -1,5 +1,6 @@
 <script>
   import {
+    Check,
     ChevronDown,
     ChevronRight,
     ExternalLink,
@@ -9,6 +10,7 @@
   } from "lucide-svelte";
   import ConversationView from "../components/ConversationView.svelte";
   import Drawer from "../components/Drawer.svelte";
+  import FilterBulkActions from "../components/FilterBulkActions.svelte";
   import MinimalTableSkeleton from "../components/MinimalTableSkeleton.svelte";
   import ResizableTable from "../components/ResizableTable.svelte";
   import StatusPill from "../components/StatusPill.svelte";
@@ -31,12 +33,13 @@
   } = $props();
 
   let search = $state("");
-  let statusFilter = $state("all");
+  let activeStatusFilters = $state(new Set(["completed", "pending", "failed"]));
   let statusMenuOpen = $state(false);
-  let datasetFilter = $state("all");
+  let activeDatasetFilters = $state(new Set());
   let datasetMenuOpen = $state(false);
   let expandedConfigIds = $state(new Set());
   let expandedInitialized = $state(false);
+  let seenDatasets = new Set();
   const evalColumns = [
     { key: "name", label: "Name", width: 220, minWidth: 140 },
     { key: "dataset", label: "Dataset", width: 180, minWidth: 120 },
@@ -281,22 +284,61 @@
       }, {}),
   );
 
+  let allStatusFiltersActive = $derived(activeStatusFilters.size === 3);
+  let allDatasetFiltersActive = $derived.by(() =>
+    datasetOptions.length > 0 && datasetOptions.every((dataset) => activeDatasetFilters.has(dataset)),
+  );
+
+  $effect(() => {
+    const optionsSet = new Set(datasetOptions);
+    const next = new Set(
+      [...activeDatasetFilters].filter((dataset) => optionsSet.has(dataset)),
+    );
+    let changed = false;
+
+    if (next.size !== activeDatasetFilters.size) {
+      changed = true;
+    }
+
+    for (const dataset of datasetOptions) {
+      if (!seenDatasets.has(dataset)) {
+        seenDatasets.add(dataset);
+        next.add(dataset);
+        changed = true;
+      }
+    }
+
+    for (const dataset of [...seenDatasets]) {
+      if (!optionsSet.has(dataset)) {
+        seenDatasets.delete(dataset);
+      }
+    }
+
+    if (changed) activeDatasetFilters = next;
+  });
+
   let filteredGroups = $derived.by(() => {
     const query = search.trim().toLowerCase();
     return evalConfigGroups
       .map((group) => {
-        if (datasetFilter !== "all" && groupDataset(group) !== datasetFilter) {
+        let runs = group.runs;
+        if (!activeDatasetFilters.has(groupDataset(group))) {
           return null;
         }
-        let runs = group.runs;
-        if (statusFilter !== "all") {
-          const wanted =
-            statusFilter === "completed"
-              ? "Completed"
-              : statusFilter === "pending"
-                ? "Pending"
-                : "Failed";
-          runs = runs.filter((run) => run.status === wanted);
+        if (activeStatusFilters.size === 0) {
+          return null;
+        }
+        runs = runs.filter((run) => {
+          const bucket =
+            run.status === "Completed"
+              ? "completed"
+              : run.status === "Pending"
+                ? "pending"
+                : "failed";
+          return activeStatusFilters.has(bucket);
+        });
+        if (!runs.length) {
+          return null;
         }
         if (query) {
           const groupMatches =
@@ -326,9 +368,34 @@
       .filter(Boolean);
   });
 
-  function switchDatasetFilter(dataset) {
-    datasetFilter = dataset;
-    datasetMenuOpen = false;
+  function toggleStatusFilter(status) {
+    const next = new Set(activeStatusFilters);
+    if (next.has(status)) next.delete(status);
+    else next.add(status);
+    activeStatusFilters = next;
+  }
+
+  function selectAllStatusFilters() {
+    activeStatusFilters = new Set(["completed", "pending", "failed"]);
+  }
+
+  function clearStatusFilters() {
+    activeStatusFilters = new Set();
+  }
+
+  function toggleDatasetFilter(dataset) {
+    const next = new Set(activeDatasetFilters);
+    if (next.has(dataset)) next.delete(dataset);
+    else next.add(dataset);
+    activeDatasetFilters = next;
+  }
+
+  function selectAllDatasetFilters() {
+    activeDatasetFilters = new Set(datasetOptions);
+  }
+
+  function clearDatasetFilters() {
+    activeDatasetFilters = new Set();
   }
 
   let selectedEval = $state(null);
@@ -498,20 +565,55 @@
       </button>
       {#if statusMenuOpen}
         <div class="status-menu">
-          <button class="status-item" onclick={() => ((statusFilter = "all"), (statusMenuOpen = false))}>
-            <span>All</span>
-            <span class="status-count">{allEvals.length}</span>
-          </button>
-          <button class="status-item" onclick={() => ((statusFilter = "completed"), (statusMenuOpen = false))}>
-            <span>Completed</span>
+          <FilterBulkActions
+            allSelected={allStatusFiltersActive}
+            noneSelected={activeStatusFilters.size === 0}
+            onSelectAll={selectAllStatusFilters}
+            onDeselectAll={clearStatusFilters}
+          />
+          <button
+            class="status-item"
+            onclick={(event) => {
+              event.stopPropagation();
+              toggleStatusFilter("completed");
+            }}
+          >
+            <span class="checkmark" class:checked={activeStatusFilters.has("completed")}>
+              {#if activeStatusFilters.has("completed")}
+                <Check size={11} />
+              {/if}
+            </span>
+            <span class="item-label">Completed</span>
             <span class="status-count">{evalCompletedTotal}</span>
           </button>
-          <button class="status-item" onclick={() => ((statusFilter = "pending"), (statusMenuOpen = false))}>
-            <span>Pending</span>
+          <button
+            class="status-item"
+            onclick={(event) => {
+              event.stopPropagation();
+              toggleStatusFilter("pending");
+            }}
+          >
+            <span class="checkmark" class:checked={activeStatusFilters.has("pending")}>
+              {#if activeStatusFilters.has("pending")}
+                <Check size={11} />
+              {/if}
+            </span>
+            <span class="item-label">Pending</span>
             <span class="status-count">{evalPendingTotal}</span>
           </button>
-          <button class="status-item" onclick={() => ((statusFilter = "failed"), (statusMenuOpen = false))}>
-            <span>Failed</span>
+          <button
+            class="status-item"
+            onclick={(event) => {
+              event.stopPropagation();
+              toggleStatusFilter("failed");
+            }}
+          >
+            <span class="checkmark" class:checked={activeStatusFilters.has("failed")}>
+              {#if activeStatusFilters.has("failed")}
+                <Check size={11} />
+              {/if}
+            </span>
+            <span class="item-label">Failed</span>
             <span class="status-count">{evalFailedTotal}</span>
           </button>
         </div>
@@ -536,12 +638,25 @@
       </button>
       {#if datasetMenuOpen}
         <div class="status-menu w-[min(320px,calc(100vw_-_2rem))]!">
-          <button class="status-item" onclick={() => switchDatasetFilter("all")}>
-            <span class="dataset-item-label">All datasets</span>
-            <span class="status-count">{allEvals.length}</span>
-          </button>
+          <FilterBulkActions
+            allSelected={allDatasetFiltersActive}
+            noneSelected={activeDatasetFilters.size === 0}
+            onSelectAll={selectAllDatasetFilters}
+            onDeselectAll={clearDatasetFilters}
+          />
           {#each datasetOptions as dataset (dataset)}
-            <button class="status-item" onclick={() => switchDatasetFilter(dataset)}>
+            <button
+              class="status-item"
+              onclick={(event) => {
+                event.stopPropagation();
+                toggleDatasetFilter(dataset);
+              }}
+            >
+              <span class="checkmark" class:checked={activeDatasetFilters.has(dataset)}>
+                {#if activeDatasetFilters.has(dataset)}
+                  <Check size={11} />
+                {/if}
+              </span>
               <span class="dataset-item-label">{dataset}</span>
               <span class="status-count">{datasetCounts[dataset] || 0}</span>
             </button>

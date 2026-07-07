@@ -1,5 +1,6 @@
 <script>
   import { Check, ChevronDown, Filter, Search } from "lucide-svelte";
+  import FilterBulkActions from "./FilterBulkActions.svelte";
 
   let {
     recipes,
@@ -9,17 +10,21 @@
     statuses,
     statusCounts,
     activeStatuses,
+    allStatusesActive,
     groups,
     groupCounts,
     activeGroups,
     allGroupsActive,
-    totalRuns,
     search = $bindable(),
     onToggleRecipe,
-    onToggleAllRecipes,
+    onSelectAllRecipes,
+    onClearRecipes,
     onToggleStatus,
+    onSelectAllStatuses,
+    onClearStatuses,
     onToggleGroup,
-    onToggleAllGroups,
+    onSelectAllGroups,
+    onClearGroups,
   } = $props();
 
   let openMenu = $state(null);
@@ -65,6 +70,12 @@
     </button>
     {#if openMenu === "status"}
       <div class="menu">
+        <FilterBulkActions
+          allSelected={allStatusesActive}
+          noneSelected={activeStatuses.size === 0}
+          onSelectAll={onSelectAllStatuses}
+          onDeselectAll={onClearStatuses}
+        />
         {#each statuses as st (st)}
           <button
             class="menu-item"
@@ -105,21 +116,12 @@
     </button>
     {#if openMenu === "recipes"}
       <div class="menu">
-        <button
-          class="menu-item"
-          onclick={(event) => {
-            event.stopPropagation();
-            onToggleAllRecipes();
-          }}
-        >
-          <span class="checkmark" class:checked={allRecipesActive}>
-            {#if allRecipesActive}
-              <Check size={11} />
-            {/if}
-          </span>
-          <span class="item-label">All</span>
-          <span class="item-count">{totalRuns}</span>
-        </button>
+        <FilterBulkActions
+          allSelected={allRecipesActive}
+          noneSelected={activeRecipes.size === 0}
+          onSelectAll={onSelectAllRecipes}
+          onDeselectAll={onClearRecipes}
+        />
         {#each recipes as recipe (recipe)}
           <button
             class="menu-item"
@@ -160,21 +162,12 @@
     </button>
     {#if openMenu === "groups"}
       <div class="menu">
-        <button
-          class="menu-item"
-          onclick={(event) => {
-            event.stopPropagation();
-            onToggleAllGroups();
-          }}
-        >
-          <span class="checkmark" class:checked={allGroupsActive}>
-            {#if allGroupsActive}
-              <Check size={11} />
-            {/if}
-          </span>
-          <span class="item-label">All</span>
-          <span class="item-count">{totalRuns}</span>
-        </button>
+        <FilterBulkActions
+          allSelected={allGroupsActive}
+          noneSelected={activeGroups.size === 0}
+          onSelectAll={onSelectAllGroups}
+          onDeselectAll={onClearGroups}
+        />
         {#each groups as group (group)}
           <button
             class="menu-item"
