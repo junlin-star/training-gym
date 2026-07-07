@@ -136,6 +136,8 @@ _PATCH_LOG_ELIDE_B64 = encode_patch("patch_log_elide", _SLIME_PATCHES)
 _PATCH_DIST_CKPT_QUANTIZED_B64 = encode_patch(
     "patch_dist_ckpt_quantized", _SLIME_PATCHES
 )
+# USACO VPO patch: threads the per-test reward vector into rollout_data for the VPO custom advantage fn.
+_PATCH_VPO_ROLLOUT_DATA_B64 = encode_patch("patch_vpo_rollout_data", _SLIME_PATCHES)
 
 
 def _build_slime_base_image() -> "Image":
@@ -155,6 +157,7 @@ def _build_slime_base_image() -> "Image":
             f"echo {_PATCH_ADVANTAGE_DIST_B64} | base64 -d | python3",
             f"echo {_PATCH_LOG_ELIDE_B64} | base64 -d | python3",
             f"echo {_PATCH_DIST_CKPT_QUANTIZED_B64} | base64 -d | python3",
+            f"echo {_PATCH_VPO_ROLLOUT_DATA_B64} | base64 -d | python3",
         )
     )
 
@@ -862,7 +865,7 @@ def build_slime_app(
         volumes=all_volumes,
         secrets=train_secrets or None,
         ephemeral_disk=train_ephemeral_disk,
-        timeout=24 * 60 * 60,
+        timeout=48 * 60 * 60,  # 2d — extended-horizon runs
         # Retries exist for transient failures (preemption/NCCL), where a retry
         # resumes from the last checkpoint. But a *deterministic* crash (esp.
         # before the first save_interval checkpoint) re-runs from scratch and

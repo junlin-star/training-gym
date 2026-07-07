@@ -182,6 +182,7 @@ class SlimeRecipe(BaseTrainRecipe):
     global_batch_size: int = 16
     lr: float = 1e-6
     lr_decay_style: str = "constant"
+    min_lr: float = 0.0
     weight_decay: float = 0.1
     adam_beta1: float = 0.9
     adam_beta2: float = 0.98
