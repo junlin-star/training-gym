@@ -901,16 +901,12 @@ def build_slime_app(
         Substep.EVAL_AFTER.value,
     }
 
-    async def write_step_times(
-        run_id: str, num_steps: int
-    ) -> tuple[
-        dict[str, dict[str, float | None]],
-        dict[str, dict[str, dict[str, float | None]]],
-    ]:
-        step_times_dict = ModalDict.from_name(
-            "training-gym-step-times", create_if_missing=True
-        )
-        keys = [
+    # Cap on concurrent ModalDict requests per batch. 13 keys per step means
+    # long runs would otherwise fan out thousands of simultaneous lookups.
+    STEP_TIME_DICT_BATCH_SIZE = 64
+
+    def step_time_keys(run_id: str, num_steps: int) -> list[str]:
+        return [
             f"{run_id}:{step}:{suffix}"
             for step in range(1, num_steps + 1)
             for suffix in (
@@ -921,7 +917,25 @@ def build_slime_app(
                 *(f"substep:{s}" for s in SUBSTEP_ORDER),
             )
         ]
-        values = await asyncio.gather(*(step_times_dict.get.aio(k) for k in keys))
+
+    async def for_each_step_time_key_batch(coro_fn, keys: list[str]) -> list:
+        results = []
+        for offset in range(0, len(keys), STEP_TIME_DICT_BATCH_SIZE):
+            batch = keys[offset : offset + STEP_TIME_DICT_BATCH_SIZE]
+            results.extend(await asyncio.gather(*(coro_fn(k) for k in batch)))
+        return results
+
+    async def write_step_times(
+        run_id: str, num_steps: int
+    ) -> tuple[
+        dict[str, dict[str, float | None]],
+        dict[str, dict[str, dict[str, float | None]]],
+    ]:
+        step_times_dict = ModalDict.from_name(
+            "training-gym-step-times", create_if_missing=True
+        )
+        keys = step_time_keys(run_id, num_steps)
+        values = await for_each_step_time_key_batch(step_times_dict.get.aio, keys)
         snapshot = dict(zip(keys, values))
         return aggregate_step_times(
             snapshot,
@@ -935,18 +949,10 @@ def build_slime_app(
         step_times_dict = ModalDict.from_name(
             "training-gym-step-times", create_if_missing=True
         )
-        keys = [
-            f"{run_id}:{step}:{suffix}"
-            for step in range(1, num_steps + 1)
-            for suffix in (
-                "start",
-                "finish",
-                "substep_start",
-                "substep_finish",
-                *(f"substep:{s}" for s in SUBSTEP_ORDER),
-            )
-        ]
-        await asyncio.gather(*(step_times_dict.pop.aio(k, None) for k in keys))
+        await for_each_step_time_key_batch(
+            lambda k: step_times_dict.pop.aio(k, None),
+            step_time_keys(run_id, num_steps),
+        )
 
     @app.function(
         image=train_image,
