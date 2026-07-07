@@ -10,6 +10,7 @@
   } from "lucide-svelte";
   import ConversationView from "../components/ConversationView.svelte";
   import Drawer from "../components/Drawer.svelte";
+  import FilterBulkActions from "../components/FilterBulkActions.svelte";
   import MinimalTableSkeleton from "../components/MinimalTableSkeleton.svelte";
   import ResizableTable from "../components/ResizableTable.svelte";
   import StatusPill from "../components/StatusPill.svelte";
@@ -564,28 +565,12 @@
       </button>
       {#if statusMenuOpen}
         <div class="status-menu">
-          <div class="filter-actions">
-            <button
-              class="filter-action"
-              disabled={allStatusFiltersActive}
-              onclick={(event) => {
-                event.stopPropagation();
-                selectAllStatusFilters();
-              }}
-            >
-              Select all
-            </button>
-            <button
-              class="filter-action"
-              disabled={activeStatusFilters.size === 0}
-              onclick={(event) => {
-                event.stopPropagation();
-                clearStatusFilters();
-              }}
-            >
-              Deselect all
-            </button>
-          </div>
+          <FilterBulkActions
+            allSelected={allStatusFiltersActive}
+            noneSelected={activeStatusFilters.size === 0}
+            onSelectAll={selectAllStatusFilters}
+            onDeselectAll={clearStatusFilters}
+          />
           <button
             class="status-item"
             onclick={(event) => {
@@ -653,28 +638,12 @@
       </button>
       {#if datasetMenuOpen}
         <div class="status-menu w-[min(320px,calc(100vw_-_2rem))]!">
-          <div class="filter-actions">
-            <button
-              class="filter-action"
-              disabled={allDatasetFiltersActive}
-              onclick={(event) => {
-                event.stopPropagation();
-                selectAllDatasetFilters();
-              }}
-            >
-              Select all
-            </button>
-            <button
-              class="filter-action"
-              disabled={activeDatasetFilters.size === 0}
-              onclick={(event) => {
-                event.stopPropagation();
-                clearDatasetFilters();
-              }}
-            >
-              Deselect all
-            </button>
-          </div>
+          <FilterBulkActions
+            allSelected={allDatasetFiltersActive}
+            noneSelected={activeDatasetFilters.size === 0}
+            onSelectAll={selectAllDatasetFilters}
+            onDeselectAll={clearDatasetFilters}
+          />
           {#each datasetOptions as dataset (dataset)}
             <button
               class="status-item"

@@ -8,6 +8,7 @@
     Search,
   } from "lucide-svelte";
   import Drawer from "../components/Drawer.svelte";
+  import FilterBulkActions from "../components/FilterBulkActions.svelte";
   import MinimalTableSkeleton from "../components/MinimalTableSkeleton.svelte";
   import ResizableTable from "../components/ResizableTable.svelte";
   import StatusPill from "../components/StatusPill.svelte";
@@ -358,28 +359,12 @@
         </button>
         {#if statusMenuOpen}
           <div class="status-menu">
-            <div class="filter-actions">
-              <button
-                class="filter-action"
-                disabled={allStatusesActive}
-                onclick={(event) => {
-                  event.stopPropagation();
-                  selectAllStatuses();
-                }}
-              >
-                Select all
-              </button>
-              <button
-                class="filter-action"
-                disabled={activeStatuses.size === 0}
-                onclick={(event) => {
-                  event.stopPropagation();
-                  clearStatuses();
-                }}
-              >
-                Deselect all
-              </button>
-            </div>
+            <FilterBulkActions
+              allSelected={allStatusesActive}
+              noneSelected={activeStatuses.size === 0}
+              onSelectAll={selectAllStatuses}
+              onDeselectAll={clearStatuses}
+            />
             {#each statusFilters as status (status)}
               <button
                 class="status-item"

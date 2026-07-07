@@ -1,5 +1,6 @@
 <script>
   import { Check, ChevronDown, Filter, Search } from "lucide-svelte";
+  import FilterBulkActions from "./FilterBulkActions.svelte";
 
   let {
     recipes,
@@ -69,28 +70,12 @@
     </button>
     {#if openMenu === "status"}
       <div class="menu">
-        <div class="filter-actions">
-          <button
-            class="filter-action"
-            disabled={allStatusesActive}
-            onclick={(event) => {
-              event.stopPropagation();
-              onSelectAllStatuses();
-            }}
-          >
-            Select all
-          </button>
-          <button
-            class="filter-action"
-            disabled={activeStatuses.size === 0}
-            onclick={(event) => {
-              event.stopPropagation();
-              onClearStatuses();
-            }}
-          >
-            Deselect all
-          </button>
-        </div>
+        <FilterBulkActions
+          allSelected={allStatusesActive}
+          noneSelected={activeStatuses.size === 0}
+          onSelectAll={onSelectAllStatuses}
+          onDeselectAll={onClearStatuses}
+        />
         {#each statuses as st (st)}
           <button
             class="menu-item"
@@ -131,28 +116,12 @@
     </button>
     {#if openMenu === "recipes"}
       <div class="menu">
-        <div class="filter-actions">
-          <button
-            class="filter-action"
-            disabled={allRecipesActive}
-            onclick={(event) => {
-              event.stopPropagation();
-              onSelectAllRecipes();
-            }}
-          >
-            Select all
-          </button>
-          <button
-            class="filter-action"
-            disabled={activeRecipes.size === 0}
-            onclick={(event) => {
-              event.stopPropagation();
-              onClearRecipes();
-            }}
-          >
-            Deselect all
-          </button>
-        </div>
+        <FilterBulkActions
+          allSelected={allRecipesActive}
+          noneSelected={activeRecipes.size === 0}
+          onSelectAll={onSelectAllRecipes}
+          onDeselectAll={onClearRecipes}
+        />
         {#each recipes as recipe (recipe)}
           <button
             class="menu-item"
@@ -193,28 +162,12 @@
     </button>
     {#if openMenu === "groups"}
       <div class="menu">
-        <div class="filter-actions">
-          <button
-            class="filter-action"
-            disabled={allGroupsActive}
-            onclick={(event) => {
-              event.stopPropagation();
-              onSelectAllGroups();
-            }}
-          >
-            Select all
-          </button>
-          <button
-            class="filter-action"
-            disabled={activeGroups.size === 0}
-            onclick={(event) => {
-              event.stopPropagation();
-              onClearGroups();
-            }}
-          >
-            Deselect all
-          </button>
-        </div>
+        <FilterBulkActions
+          allSelected={allGroupsActive}
+          noneSelected={activeGroups.size === 0}
+          onSelectAll={onSelectAllGroups}
+          onDeselectAll={onClearGroups}
+        />
         {#each groups as group (group)}
           <button
             class="menu-item"
