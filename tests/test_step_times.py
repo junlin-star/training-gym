@@ -118,6 +118,27 @@ def test_substep_times_aggregation():
     assert substep_times[str(STEP)][ROLLOUT_LOGGING]["start"] == 2.0
 
 
+def test_in_loop_generate_stamp_splits_eval_before_from_generation():
+    schedule = [
+        (0.0, "substep_window_start"),
+        (0.0, "eval_begin"),
+        (2.0, "step_start"),
+        (2.0, ROLLOUT_LOGGING),
+        (4.0, "offload_rollout"),
+        (6.0, "compute_log_probs"),
+        (10.0, "optimizer_step"),
+        (12.0, "checkpoint_save"),
+        (13.0, "offload_train"),
+        (15.0, "weight_sync"),
+        (16.0, "eval_end"),
+        (18.0, "substep_finish"),
+        (18.0, "step_complete"),
+    ]
+    durations = aggregate_durations(schedule)
+    assert durations[EVAL_BEFORE] == 2.0
+    assert durations[ROLLOUT_LOGGING] == 2.0
+
+
 def test_substep_times_with_missing_substeps():
     schedule_missing_offload_rollout = [
         (0.0, "substep_window_start"),

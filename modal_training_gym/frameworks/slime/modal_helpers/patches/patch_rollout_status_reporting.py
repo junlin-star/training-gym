@@ -112,7 +112,9 @@ def _patch_file(path: Path) -> None:
     step_start_count = 0
     if needs_step_start:
         step_start_pattern = re.compile(
-            r"^(?P<indent>[ \t]*)(?P<line>.*rollout_manager\.generate\.remote\((?P<rollout_id>[^)\n]+)\).*)",
+            r"^(?P<indent>[ \t]*)(?P<line>rollout_data_ref = "
+            r"ray\.get\(rollout_manager\.generate\.remote\("
+            r"(?P<rollout_id>rollout_id)\)\))[ \t]*$",
             re.M,
         )
 
@@ -300,17 +302,20 @@ def _patch_file(path: Path) -> None:
     generate_rollout_count = 0
     if needs_generate_rollout:
         generate_rollout_pattern = re.compile(
-            r"^(?P<indent>[ \t]*)(?P<call>(?:await[ \t]+)?(?:[A-Za-z_][A-Za-z0-9_]*\.)?update_weights\(\))",
+            r"^(?P<indent>[ \t]*)(?P<line>rollout_data_ref = "
+            r"ray\.get\(rollout_manager\.generate\.remote\("
+            r"(?P<rollout_id>rollout_id)\)\))[ \t]*$",
             re.M,
         )
 
         def _generate_rollout_replacement(match: re.Match[str]) -> str:
             indent = match.group("indent")
-            call = match.group("call")
+            line = match.group("line")
+            rollout_id = match.group("rollout_id").strip()
             return (
-                f"{indent}{call}\n"
                 f"{indent}# {GENERATE_ROLLOUT_MARKER}: rollout generation state\n"
-                f"{indent}_tg_report('generate_rollouts', args, getattr(args, 'start_rollout_id', None))"
+                f"{indent}_tg_report('generate_rollouts', args, {rollout_id})\n"
+                f"{indent}{line}"
             )
 
         src, generate_rollout_count = generate_rollout_pattern.subn(
