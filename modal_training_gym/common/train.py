@@ -155,6 +155,7 @@ class _TrainStatusDisplay:
 
     def print_banner(self) -> None:
         from rich.panel import Panel
+        from rich.style import Style
         from rich.table import Table
         from rich.text import Text
 
@@ -173,11 +174,12 @@ class _TrainStatusDisplay:
             base = self.framework_status_url.replace(
                 "/api/framework-status", ""
             ).rstrip("/")
+            run_url = f"{base}/training/{self.run_id}"
             body.add_row(
                 "Dashboard",
                 Text(
-                    f"{base}/training/{self.run_id}",
-                    style="underline blue",
+                    run_url,
+                    style=Style(color="blue", underline=True, link=run_url),
                 ),
             )
         else:
@@ -202,8 +204,16 @@ class _TrainStatusDisplay:
     def set_modal_app_url(self, url: str) -> None:
         if url and url != self._modal_app_url:
             self._modal_app_url = url
+
+            from rich.style import Style
+            from rich.text import Text
+
             self._get_console().print(
-                f"[dim]Modal app:[/dim] [blue underline]{url}[/blue underline]"
+                Text.assemble(
+                    ("Modal app:", "dim"),
+                    " ",
+                    (url, Style(color="blue", underline=True, link=url)),
+                )
             )
 
     def emit_stage(self, stage: str, detail: str = "") -> None:
