@@ -41,6 +41,12 @@ def build_sglang_serve_app(
 
     sglang_port = 8000
 
+    image_env = {
+        "HF_HUB_CACHE": "/root/.cache/huggingface",
+        "HF_XET_HIGH_PERFORMANCE": "1",
+        "HF_HUB_ENABLE_HF_TRANSFER": "1",
+        **(recipe.env_vars or {}),
+    }
     image = (
         Image.from_registry(recipe.sglang_image)
         .entrypoint([])
@@ -51,20 +57,19 @@ def build_sglang_serve_app(
         )
         # pydantic_core in the nightly image needs typing_extensions>=4.13 (Sentinel)
         .uv_pip_install("typing_extensions>=4.13")
-        # Brand-new model architectures (e.g. deepseek_v4) aren't in released
-        # transformers yet; install from git source so AutoConfig recognizes them.
-        .run_commands(
+    )
+    # Brand-new model architectures (e.g. deepseek_v4 on older SGLang tags)
+    # aren't in released transformers yet; install from git so AutoConfig
+    # recognizes them. Skip when the image already ships a compatible
+    # transformers — a second install double-registers configs like
+    # ``qwen3_asr`` and crashloops ``sglang.launch_server`` on import.
+    if recipe.install_transformers_from_git:
+        image = image.run_commands(
             "uv pip install --system --no-build-isolation "
             "'transformers @ git+https://github.com/huggingface/transformers.git'"
         )
-        .env(
-            {
-                "HF_HUB_CACHE": "/root/.cache/huggingface",
-                "HF_XET_HIGH_PERFORMANCE": "1",
-                "HF_HUB_ENABLE_HF_TRANSFER": "1",
-            }
-        )
-        .add_local_python_source("modal_training_gym", copy=True)
+    image = image.env(image_env).add_local_python_source(
+        "modal_training_gym", copy=True
     )
 
     hf_cache_vol = Volume.from_name("huggingface-cache", create_if_missing=True)
