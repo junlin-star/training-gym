@@ -27,7 +27,7 @@ from collections.abc import Callable
 from enum import Enum
 from modal import App, Dict as ModalDict, Image, Secret, Volume, Retries
 
-from modal_training_gym.common import hf_secrets
+from modal_training_gym.common import hf_secrets, proxy_auth_secrets
 
 
 from modal_training_gym.common.dataset import DatasetConfig, HarborDataset
@@ -785,19 +785,9 @@ def build_slime_app(
     train_secrets: list[Secret] = []
     if slime.wandb is not None:
         train_secrets.append(Secret.from_name(slime.wandb.modal_wandb_secret_name))
-    # Forward Modal proxy-auth tokens into train workers so custom_rm /
-    # generate / reward hooks can call DeploymentConfig.serve() endpoints
-    # (teacher /generate, etc.) without each recipe wiring secrets by hand.
-    # Driver-shell env alone does not reach Ray rollout actors.
-    from modal_training_gym.common.config import load_proxy_auth
-
-    load_proxy_auth()
-    _proxy_key = os.environ.get("MODAL_KEY", "").strip()
-    _proxy_secret = os.environ.get("MODAL_SECRET", "").strip()
-    if _proxy_key and _proxy_secret:
-        train_secrets.append(
-            Secret.from_dict({"MODAL_KEY": _proxy_key, "MODAL_SECRET": _proxy_secret})
-        )
+    # Proxy-auth tokens for any custom_rm / generate hook that calls a
+    # DeploymentConfig.serve() endpoint (teacher /generate, etc.).
+    train_secrets.extend(proxy_auth_secrets())
     train_experimental_options: dict[str, Any] = {"efa_enabled": True}
 
     train_function_kwargs = dict(slime.train_function_kwargs or {})
