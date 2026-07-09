@@ -71,10 +71,59 @@ def _coerce_text(value: Any) -> str:
 
 
 def _coerce_score(value: Any) -> float:
-    try:
+    """Coerce a reward-like value to a float score for the dashboard.
+
+    OPD / cross-tokenizer custom RMs stash the teacher ``/generate`` JSON on
+    ``sample.reward`` until post-process; ``float(dict)`` would raise and the
+    old fallback silently wrote ``0.0``, so the dashboard showed all-zero
+    rewards even when training used a real shaped score. Non-numeric rewards
+    therefore return ``0.0`` here — callers should prefer
+    :func:`_sample_score` which also checks metadata.
+    """
+    if isinstance(value, bool):
         return float(value)
-    except (TypeError, ValueError):
-        return 0.0
+    if isinstance(value, (int, float)):
+        return float(value)
+    return 0.0
+
+
+# Metadata keys (first hit wins) that may hold the true task/shaped reward when
+# ``sample.reward`` is still a non-scalar OPD teacher payload.
+_SCORE_METADATA_KEYS = (
+    "shaped_reward",
+    "task_reward",
+    "reward",
+    "score",
+)
+
+
+def _sample_score(sample: Any, reward: Any = None) -> float:
+    """Resolve the dashboard score for a slime sample.
+
+    Prefer a numeric ``sample.reward`` / ``reward`` arg. When that is still the
+    OPD teacher dict (or missing), fall back to scalar fields the generate /
+    post-process hooks stash on ``sample.metadata``.
+    """
+    if reward is None:
+        if isinstance(sample, dict):
+            reward = sample.get("reward")
+        else:
+            reward = getattr(sample, "reward", None)
+    if isinstance(reward, (int, float)) and not isinstance(reward, bool):
+        return float(reward)
+
+    meta: Any = None
+    if isinstance(sample, dict):
+        meta = sample.get("metadata")
+    else:
+        meta = getattr(sample, "metadata", None)
+    if isinstance(meta, dict):
+        for key in _SCORE_METADATA_KEYS:
+            value = meta.get(key)
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                return float(value)
+
+    return 0.0
 
 
 _RESPONSE_PARSER: Any = None
@@ -425,7 +474,7 @@ def _sample_to_dict(
 
     prompt = get("prompt") if attrs is not None else get("prompt", "")
     response = get("response") if attrs is not None else get("response", "")
-    reward = get("reward") if attrs is not None else get("reward", 0.0)
+    reward = get("reward") if attrs is not None else get("reward", None)
 
     metadata: dict[str, Any] = {}
     for key in ("response_length", "prompt_length", "rollout_id", "rollout_idx"):
@@ -443,6 +492,9 @@ def _sample_to_dict(
             "eval_detail",
             "training_response_source",
             "training_assistant_turns",
+            "shaped_reward",
+            "task_reward",
+            "task_passed",
         ):
             if key in sample_meta and sample_meta[key] is not None:
                 metadata[key] = sample_meta[key]
@@ -484,7 +536,7 @@ def _sample_to_dict(
 
     response_text = _coerce_text(response)
     out: dict[str, Any] = {
-        "score": _coerce_score(reward),
+        "score": _sample_score(sample, reward),
         "prompt": _coerce_text(prompt),
         "response": response_text,
         "metadata": metadata,
