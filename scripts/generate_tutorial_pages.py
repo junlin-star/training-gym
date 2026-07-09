@@ -7,6 +7,7 @@ import ast
 import shutil
 import sys
 import textwrap
+import urllib.parse
 from pathlib import Path
 
 from api_reference_manifest import CLASS_REFERENCE_PATHS
@@ -178,7 +179,10 @@ def generate_tutorial_page(
 
     py_path = f"tutorials/{bucket}/{name}/{name}.py"
     nb_path = f"tutorials/{bucket}/{name}/{name}.ipynb"
-    nb_url = f"https://modal.com/notebooks/new/{REPO_URL}/blob/main/{nb_path}"
+    github_nb_url = f"{REPO_URL}/blob/main/{nb_path}"
+    nb_url = (
+        f"https://modal.com/notebooks/new/{urllib.parse.quote(github_nb_url, safe='')}"
+    )
     lines.append(f"**Source:** [`{py_path}`]({REPO_URL}/blob/main/{py_path})")
     lines.append(
         f' | <a href="{nb_url}" target="_blank" rel="noopener noreferrer">Open in Modal Notebook</a>'
