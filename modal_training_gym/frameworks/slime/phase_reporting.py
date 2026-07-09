@@ -69,7 +69,7 @@ from .sample_extraction import (
     _TRAJECTORY_MSG_CHARS_MAX as _TRAJECTORY_MSG_CHARS_MAX,
     _TRAJECTORY_SAMPLE_LIMIT_DEFAULT as _TRAJECTORY_SAMPLE_LIMIT_DEFAULT,
     _coerce_float as _coerce_float,
-    _coerce_score as _coerce_score,
+    _sample_score as _sample_score,
     _coerce_text as _coerce_text,
     _compact_trajectory_messages as _compact_trajectory_messages,
     _extract_audio_from_prompt as _extract_audio_from_prompt,
