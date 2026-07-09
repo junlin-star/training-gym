@@ -25,36 +25,25 @@ def _intro():
     """
     # On-policy Distillation (OPD) Across Model Families
 
-    Previously, we studied the reward objective of OPD: minimize the reverse-KL divergence of a teacher model and student model.
-    While OPD provdies the Qwen3-4B model a smarter Qwen3-8B reference on our dataset's task, all the lightweight Qwen3 models are already distilled 
-    from larger flagship models during post-training (see "Strong-to-Weak Distillation" in https://arxiv.org/pdf/2505.09388).
-    By using models from two different families, we gain more information on probability regions that are low-value to a teacher but high-value to a student.
+    In the 003 tutorial, we learned the basics of OPD: minimize the reverse-KL of a teacher and student model. Our toy environment
+    used Qwen3-8B to distill basic math answering capabilities to Qwen3-4B. What if we want our teacher model to be from a different,
+    more powerful model family? We can't compute reverse-KL divergence betweeen teacher and token logprobs because their
+    tokenizer vocabularies are different! 
 
-    Reverse-KL divergence is computed using per-token log-probabilties from the teacher and student; what if our models tokenizer the same text differently?
-    We approximate the teacher's logprobs of student tokens by summing together logprobs for any sequence of text with mismatched tokens (this algorithm is borrowed
-    from SimCT: https://arxiv.org/abs/2605.07711). The summed logprob over the sequence is included as if it were an additional token for the shared vocabulary.
-
-    This tutorial teaches a student model, Qwen3.6-35B-A3B, from a teacher model, DeepSeek-V4 Flash, to produce correct sequences of function calls against the
-    Berkeley Function-Calling Leaderboard (BFCL) v3 multi-turn suite (https://gorilla.cs.berkeley.edu/blogs/13_bfcl_v3_multi_turn.html), packaged as the
-    `bfcl-eval` library (https://pypi.org/project/bfcl-eval/). Each BFCL multi-turn task is a short multi-turn conversation (a user message, then zero or more
-    follow-ups) that must be solved by calling a handful of small, *in-process* Python state machines — a toy filesystem, a Twitter-like API, a ticketing
-    system, a vehicle controller, and so on. There is no Docker image, MCP server, or sandbox involved: a tool call is just a Python expression
-    (`mv(source='final_report.pdf', destination='temp')`) evaluated against a live class instance, and grading is an attribute-level diff of that instance's
-    state plus a check that the tool results the model observed are a superset of the ground truth's. That makes BFCL multi-turn dramatically cheaper to
-    replay and grade than a sandboxed benchmark like Toolathlon — useful when what we care about is the cross-tokenizer OPD machinery, not infrastructure.
-    Qwen3.6 is given the expert (ground-truth) calls up to the Kth call across the whole conversation, where K is initialized to N calls - 1. As the student
-    model completes a task, K is decremented until the rollouts have completed or training continues at K=0 (a full conversation, from scratch).
+    This tutorial uses SimCT, a novel technique for aligning tokenizers, to train a Qwen3.6-35B-A3B student model using a DeepSeek-V4 Flash teacher model.
+    Our target capability is multi-turn tool calling on Berkeley Function-Calling Leaderboard (https://gorilla.cs.berkeley.edu/blogs/13_bfcl_v3_multi_turn.html). 
+    We'll first measure the accuracy of the teacher on our baseline eval and compare its accuracy to the base student model. After the teacher proves it
+    can outperform the student, training will begin with a reverse-K learning cirriculum. We want to initialize the student model's
+    context up to the Kth tool call in the conversation, where K is initialized to N calls - 1. As the student model completes a task,
+    K is decremented until the student is given the starter prompt or rollouts have completed.
 
     ### Steps
-    1. Deploy DeepSeek V4 Flash as teacher on SGLang.
-    2. Load the BFCL v3 `multi_turn_base` category and carve a train/eval split out of its 200 tasks.
-    3. Replay each task's ground-truth calls once, in-process, to capture the observation text the expert tools produced at every step.
-    4. At rollout/eval time, instantiate fresh copies of the task's involved classes and replay the ground truth calls `[0:K]` to fast-forward state —
-       the in-process analogue of restoring a sandbox snapshot, but it's just a Python loop.
-    5. Define SimCT alignment helpers and the 4-signal reward (schema + live execution success + structural match + terminal state/response verdict).
-    6. Train with prefix-conditioned multi-turn rollouts: seed the environment at step `K`, let the student drive to completion, grade with BFCL's own
-       state + response checkers combined with partial credit, and distill the teacher's logprobs over the full trajectory (cross-tokenizer OPD + GRPO).
-    7. Evaluate the base and trained student on held-out tasks with the same checkers and compare.
+    1. Deploy DeepSeek V4 Flash as the teacher.
+    2. Load BFCL v3 multi_turn_base, carve a train/eval split, and define reverse-K curriculum + shaped reward.
+    3. Evaluate the base student and teacher models on the held-out eval.
+    4. Define SimCT alignment, reward function, and OPD-adjustment.
+    5. Train with reverse-K curriculum + GRPO + cross-tokenizer OPD.
+    6. Evaluate the trained student with the same eval function.
     """
 
 
@@ -93,7 +82,7 @@ def _imports():
         TrainConfig,
         list_checkpoints,
     )
-    from modal_training_gym.common.models.base import HFModelConfiguration
+    from modal_training_gym.common.models.base import HFModelConfiguration, ToolCall
 
     from modal_training_gym.common.environments import (
         BfclMultiTurnConfig,
@@ -115,10 +104,8 @@ def _deploy_intro():
     """
     ## Deploy DeepSeek-V4 Flash Teacher Model
     Modal training gym provides a production SGLang recipe for the 284B-A13B FP4 checkpoint on
-    4×B200: MegaMoE DeepGEMM kernels, DP attention (`dp=4`), mixed-chunk prefill, and the
-    cu130 Blackwell image — the prefill-path knobs that matter for OPD teacher logprob
-    scoring (`max_new_tokens=0`). BFCL trajectories are ~5–7.5k tokens, so we pin a 16k
-    context window instead of the recipe's native 262k to free KV for concurrent prefills.
+    4×B200. The teacher model assigns its own logprobs to student token outputs, which is a prefill-bound process.
+    Training-gym ships MegaMoE DeepGEMM kernels and DP attention (`dp=4`) for DSV4 to increase prefill speed on lengthy trajectories.
     """
 
 
@@ -128,13 +115,10 @@ def _deploy_teacher():
     teacher_deployment = DeploymentConfig(
         model=HFModelConfiguration(model_name="deepseek-ai/DeepSeek-V4-Flash"),
         recipe=DeepSeek_V4_Flash_SglangRecipe(
-            # Recipe defaults: 4×B200, tp=4, dp=4, MegaMoE + DeepGEMM env.
-            # Override only context (BFCL prompts are short) and startup grace for
-            # the first HF cache pull of the 284B weights.
             context_length=16384,
             startup_timeout=TEACHER_READY_TIMEOUT,
         ),
-        app_name="dsv4-flash-test",
+        app_name="dsv4-teacher-model",
         served_model_name="deepseek-v4-flash",
     ).serve()
     print(f"Teacher URL: {teacher_deployment.url}")
@@ -152,32 +136,19 @@ def _student_model():
 @markdown
 def _dataset_intro():
     """
-    ## Defining the Dataset Split
+    ## Loading BFCL V3 and Defining Train/Eval Split
 
-    BFCL v3's `multi_turn_base` category ships 200 human-curated, foundational multi-turn tasks: every piece of information needed to
-    complete a task is available from the user's messages, the result of an earlier tool call, or an exploratory call the model itself
-    makes — no ambiguity, missing parameters, or long-context distractors (those live in the `multi_turn_miss_func`/`miss_param`/
-    `long_context` categories, out of scope here). The benchmark itself has no train/eval split (it's meant to be evaluated whole), so we
-    hold out a fixed tail of ids as our eval set and train on the rest. Each task names a handful of `involved_classes` — small, in-process
-    Python objects like `GorillaFileSystem` or `TwitterAPI` — and a ground-truth list of calls per conversation turn. We flatten every
-    task's ground truth across all of its turns into one ordered call sequence and inject the first K of those calls into the model's
-    context during training, identically to how Toolathlon-style tutorials inject expert trajectory steps — except here "replaying a step"
-    is just calling a Python method, so there's no sandbox, snapshot, or container in this tutorial at all.
+    The Berkeley Function Calling Leaderboard contains human-verified, multi-turn tasks with sufficient context to complete
+    tasks. Each tool-call gets processed locally, and the final trajectory is verified against BFCL's terminal evaluation.
+    We save 30 out of the 200 multi-turn base tasks for the held-out evaluation split.
     """
 
 
 @code
 def _dataset():
-    BFCL_EVAL_TAIL = 30  # last 30 of the 200 multi_turn_base ids are held out for eval
+    BFCL_EVAL_TAIL = 30
     MAX_TURNS = 16
     CURRICULUM_TAIL_MIN = 1
-    CURRICULUM_PASS_RATE = 0.5
-    CURRICULUM_STALL_WARN_ROUNDS = 5
-    # Close the train/eval gap: evaluate at the same tail the model actually
-    # trains at. With pass_rate=0 the curriculum never advances past
-    # CURRICULUM_TAIL_MIN, so a tail=8 eval measured an 8x-harder, never-trained
-    # condition (OOD) — which is what surfaced the policy collapse. Track the
-    # curriculum floor so base/trained eval reflects what training optimized.
     EVAL_TAIL_STEPS = CURRICULUM_TAIL_MIN
     ROLLOUT_LOG_EVERY = 8
     STUDENT_ENABLE_THINKING = False
@@ -193,26 +164,17 @@ def _curriculum_intro():
     """
     ## Custom Student Training Curriculum
 
-    Some `multi_turn_base` conversations run a dozen calls deep across several user turns — too long-horizon for our student model to
-    start hillclimbing on. A well-known technique in machine learning is gradually increasing the difficulty of training task, which has been
-    found to speed up convergence and improve the quality of local optima (https://dl.acm.org/doi/epdf/10.1145/1553374.1553380).
-    To expedite the process of training and increase accuracy on BFCL's own terminal verdict (state diff + response-subsequence check),
-    which is our north star, we start the student model with the ground-truth context up to the Nth call and initialize K to N-1 as we start training.
-    See more details on the conditions for decrementing K over rollouts in the "Initializing from the Kth Ground-Truth Call" section.
+    Some multi-turn conversations run a dozen calls deep across several user turns, which adds unnecessary
+    difficulty early in the training run. A well-known technique in machine learning is gradually increasing the difficulty of
+    the training task, which has been found to speed up convergence and improve the quality of local optima
+    (https://dl.acm.org/doi/epdf/10.1145/1553374.1553380). To increase training efficiency and accuracy,
+    we start the student model with the previous context up to the Kth tool call, where K is initialized to N calls - 1
+    (curriculum tail `T = 1`, so `K = N - T`). After each rollout we lengthen the tail by one (`T ← T + 1`), so later
+    rounds ask the student to finish more of the conversation from scratch.
     """
 
 @code
 def _curriculum():
-    def _iter_rollout_samples(result):
-        container = getattr(result, "samples", result)
-        stack = [container]
-        while stack:
-            item = stack.pop()
-            if isinstance(item, (list, tuple)):
-                stack.extend(item)
-            elif item is not None:
-                yield item
-
     def curriculum_rollout(args, rollout_id, data_source, evaluation=False):
         from slime.rollout.sglang_rollout import generate_rollout
 
@@ -221,66 +183,46 @@ def _curriculum():
 
         if not hasattr(args, "curriculum_tail") or rollout_id == 0:
             args.curriculum_tail = CURRICULUM_TAIL_MIN
-            args.curriculum_stall_rounds = 0
 
         T = args.curriculum_tail
-        print(
-            f"[curriculum] iter={rollout_id} tail={T} "
-            f"stall_rounds={args.curriculum_stall_rounds}",
-            flush=True,
-        )
+        print(f"[curriculum] iter={rollout_id} tail={T}", flush=True)
 
         result = generate_rollout(args, rollout_id, data_source, evaluation=False)
 
-        verdicts = [
-            bool(getattr(s, "bfcl_task_passed", False))
-            for s in _iter_rollout_samples(result)
-            if hasattr(s, "bfcl_task_passed")
-        ]
-        pass_rate = (sum(verdicts) / len(verdicts)) if verdicts else 0.0
-
-        if pass_rate >= CURRICULUM_PASS_RATE:
-            args.curriculum_tail = T + 1
-            args.curriculum_stall_rounds = 0
-            print(
-                f"[curriculum] mastered tail={T} pass_rate={pass_rate:.2f} "
-                f"-> advance to {args.curriculum_tail}",
-                flush=True,
-            )
-        else:
-            args.curriculum_stall_rounds += 1
-            msg = (
-                f"[curriculum] holding tail={T} pass_rate={pass_rate:.2f} "
-                f"stall_rounds={args.curriculum_stall_rounds}"
-            )
-            if args.curriculum_stall_rounds >= CURRICULUM_STALL_WARN_ROUNDS:
-                msg += (
-                    f" — WARNING: stuck >= {CURRICULUM_STALL_WARN_ROUNDS} rounds; "
-                    "check reward/parsing/env before expecting progress"
-                )
-            print(msg, flush=True)
-
+        # Fixed schedule: lengthen the remaining horizon by one after every rollout.
+        args.curriculum_tail = T + 1
+        print(
+            f"[curriculum] advance tail={T} -> {args.curriculum_tail}",
+            flush=True,
+        )
         return result
 
 
 @markdown
 def _reward_intro():
     """
-    ## Reward Decomposition
-    The reward function is broken up into four separate terms:
-    - 0.25 * mean_partial assigns partial credit to each toolcall in the model's output for all toolcalls:
-        - +0.20 if the toolcall parses properly (is not none and contains a name field)
-        - +0.15 if the toolcall name is known
-        - +0.15 if the toolcall validates against the tool's expected JSON schema
-        - +0.50 * structural_match:
-            - +0.4 if toolcall name matches the golden expert trajectory's toolcall
-            - +0.15 if overlap between the toolcall's args and the golden toolcall's
-            - +0.15 if full overlap between the toolcall's args and the golden toolcall's args
-            - +0.3 if no args in the toolcall
-            - +0.3 * the ratio of matching arg values between model and expert toolcall to shared toolcall args
-    - +0.20 * partial_credit score (see above) for the very first toolcall
-    - +0.10 * exec_score for all successful execution of toolcalls against the BFCL class instances
-    - +0.45 if BFCL's own terminal checkers (state diff + response subsequence) return a passing verdict
+    ## Reward Function
+
+    Each trajectory gets a shaped score in [0, 1]:
+
+    0.25 * mean_partial + 0.20 * first_call + 0.10 * exec_score + 0.45 * terminal_pass
+
+    - mean_partial: average partial credit over all student tool calls.
+    - first_call: partial credit on the first tool call, providing extra credit for getting the first step right.
+    - exec_score: fraction of tool calls that executed without error.
+    - terminal_pass: 1 if the task is passed by BFCL's terminal evaluation, 0 otherwise.
+
+    Per-call partial credit in [0, 1]:
+    1. +0.20 if the call parses (has a name)
+    2. +0.15 if that name is in the task's tool catalog
+    3. +0.15 if args validate against the tool's JSON schema
+    4. +0.50 * structural_match:
+       - 0.4 for matching toolcall name
+       - 0.3 for exactly matching toolcall keys else 0.15 for partial overlap
+       - 0.3 * number of toolcall keys with matching values / total number of toolcall keys.
+
+    The ground-truth tool-call for structural match is derived by comparing each tool-call from the student's response with
+    the possible_answer field at the same sequence position as the student's output. 
     """
 
 
@@ -396,6 +338,299 @@ def _reward():
 
 
 
+
+@markdown
+def _eval_base_intro():
+    """
+    ## Baseline eval
+
+    Before training, we score both DeepSeek-V4 Flash (teacher) and Qwen3.6-35B-A3B (student) on the
+    held-out BFCL split. Using our K curriculum, we initialize the agent context and the task's
+    class instances to the Kth ground-truth call, where K is set to N calls - 1. The teacher returns
+    OpenAI-style structured `tool_calls` (SGLang `--tool-call-parser deepseekv4`); the student uses
+    Qwen's `<tool_call>` wire format via `base_model.parse_response`.
+    """
+
+
+@code
+def _eval_base():
+    SERVED_CONTEXT_LEN = 16384
+    RESPONSE_TOKEN_CAP = 8192
+    CONTEXT_SAFETY_MARGIN = 512
+    _RETRYABLE_STATUS = (429, 500, 502, 503, 504)
+
+    EVAL_MAX_TURNS = EVAL_TAIL_STEPS * 2
+    MAX_CONSECUTIVE_TOOL_ERRORS = 3
+    DEPLOYMENT_READY_TIMEOUT = 1200
+
+    def _prompt_token_count(messages, tools=None) -> int:
+        try:
+            tok = _get_student_tokenizer()
+            text = tok.apply_chat_template(
+                messages, tools=tools, tokenize=False, add_generation_prompt=True
+            )
+            return len(tok(text, add_special_tokens=False)["input_ids"])
+        except Exception:
+            return sum(len(str(m.get("content", ""))) for m in messages) // 3
+
+    def _chat(deployment, messages, tools=None, max_tokens=None, max_attempts=12, *, qwen_thinking=False):
+        import random
+        import time
+
+        import requests as _requests
+
+        from modal_training_gym.common.deployment import _modal_proxy_auth_headers
+
+        if max_tokens is None:
+            max_tokens = RESPONSE_TOKEN_CAP
+        remaining = SERVED_CONTEXT_LEN - _prompt_token_count(messages, tools) - CONTEXT_SAFETY_MARGIN
+        capped = min(max_tokens, remaining)
+        if capped <= 0:
+            return {"content": "", "tool_calls": []}
+
+        body = {
+            "model": deployment.deployment_config.served_model_name,
+            "messages": messages,
+            "tools": tools,
+            "temperature": 0.0,
+            "max_tokens": capped,
+        }
+        if qwen_thinking is not None:
+            body["chat_template_kwargs"] = {"enable_thinking": qwen_thinking}
+        for attempt in range(max_attempts):
+            try:
+                resp = _requests.post(
+                    f"{deployment.url}/v1/chat/completions",
+                    json=body,
+                    timeout=120,
+                    headers=_modal_proxy_auth_headers(),
+                )
+                if resp.status_code in _RETRYABLE_STATUS:
+                    raise _requests.HTTPError(f"retryable status {resp.status_code}", response=resp)
+                resp.raise_for_status()
+                return resp.json()["choices"][0]["message"]
+            except (_requests.ConnectionError, _requests.Timeout, _requests.HTTPError) as e:
+                status = getattr(getattr(e, "response", None), "status_code", None)
+                retryable = status in _RETRYABLE_STATUS or status is None
+                if attempt == max_attempts - 1 or not retryable:
+                    raise
+                wait = min(30.0, 2 ** attempt) + random.uniform(0, 1.0)
+                time.sleep(wait)
+        return {"content": "", "tool_calls": []}
+
+    def _actions_from_message(msg: dict) -> tuple[str, list[ToolCall]]:
+        """Prefer structured API tool_calls (DeepSeek); else parse Qwen wire text."""
+        content = msg.get("content") or msg.get("reasoning_content") or ""
+        structured = msg.get("tool_calls") or []
+        if structured:
+            actions: list[ToolCall] = []
+            for tc in structured:
+                fn = tc.get("function") or {}
+                raw_args = fn.get("arguments", {})
+                if isinstance(raw_args, str):
+                    try:
+                        raw_args = json.loads(raw_args) if raw_args else {}
+                    except json.JSONDecodeError:
+                        raw_args = {}
+                if not isinstance(raw_args, dict):
+                    raw_args = {}
+                name = fn.get("name") or ""
+                if name:
+                    actions.append(ToolCall(name=name, arguments=raw_args))
+            return content, actions
+        parsed = base_model.parse_response(content)
+        return parsed.content, parsed.tool_calls
+
+    def bfcl_eval_fn(deployment: ModelDeployment, example: dict) -> EvalRowResult:
+        label = json.loads(example.get("label", "{}"))
+        task_id = label.get("task_id", "")
+        N = label.get("total_steps", 1)
+        flattened_calls = label.get("flattened_calls", [])
+        K = max(0, N - EVAL_TAIL_STEPS)
+        expert_call = flattened_calls[K] if K < len(flattened_calls) else {}
+
+        messages = build_prefix_messages(label, K)
+        tools_list = tool_schemas_to_openai(label.get("tool_schemas", {}))
+        served = deployment.deployment_config.served_model_name
+        is_student = served != "deepseek-v4-flash"
+
+        import time as _time
+
+        def _log(msg):
+            who = "student" if is_student else "teacher"
+            print(f"[eval:{who}:{task_id} K={K}] {msg}", flush=True)
+
+        deployment.wait_until_ready(timeout=DEPLOYMENT_READY_TIMEOUT)
+        env = build_env(label, K)
+        first_call = None
+        model_calls = []
+        exec_successes = []
+        last_response = ""
+        consecutive_errors = 0
+        exit_reason = "max_turns"
+        done = False
+        shaped_score = 0.0
+        _log(f"start tail={EVAL_TAIL_STEPS} max_turns={EVAL_MAX_TURNS}")
+        for turn in range(EVAL_MAX_TURNS):
+            _t0 = _time.monotonic()
+            msg = _chat(
+                deployment,
+                messages,
+                tools=tools_list,
+                qwen_thinking=STUDENT_ENABLE_THINKING if is_student else None,
+            )
+            gen_s = _time.monotonic() - _t0
+            content, actions = _actions_from_message(msg)
+            last_response = content
+            if turn == 0:
+                first_call = (
+                    {"name": actions[0].name, "arguments": actions[0].arguments} if actions else None
+                )
+            _log(f"turn {turn} gen={gen_s:.1f}s calls={[a.name for a in actions]}")
+            if not actions:
+                exit_reason = "no_further_calls"
+                break
+
+            observations: list[tuple[str, str]] = []
+            for action in actions:
+                name = action.name
+                model_calls.append({"name": action.name, "arguments": action.arguments})
+                try:
+                    step_result = env.step(action)
+                    obs, is_error = step_result.observation.text, step_result.observation.is_error
+                except Exception as e:
+                    _log(f"  execution error on {name}: {e!r} — ending episode")
+                    exec_successes.append(False)
+                    exit_reason = "execution_error"
+                    done = True
+                    break
+                exec_successes.append(not is_error)
+                _log(f"  exec {name} -> {'ERR' if is_error else 'ok'}")
+                observations.append((name, obs))
+                consecutive_errors = consecutive_errors + 1 if is_error else 0
+                if consecutive_errors >= MAX_CONSECUTIVE_TOOL_ERRORS:
+                    exit_reason = "repeated_errors"
+                    done = True
+                    break
+            if done:
+                break
+
+            call_ids = [f"call_t{turn}_{i}" for i in range(len(actions))]
+            messages.append({
+                "role": "assistant",
+                "content": content,
+                "tool_calls": [
+                    {
+                        "id": cid,
+                        "type": "function",
+                        "function": {"name": a.name, "arguments": json.dumps(a.arguments)},
+                    }
+                    for cid, a in zip(call_ids, actions)
+                ],
+            })
+            for cid, (name, obs) in zip(call_ids, observations):
+                messages.append(
+                    {"role": "tool", "tool_call_id": cid, "content": obs[:2000]}
+                )
+        try:
+            task_passed = env.evaluate().passed
+        except Exception as e:
+            _log(f"evaluate() failed: {e!r} — marking failed")
+            task_passed = False
+        expert_calls = flattened_calls[K:K + len(model_calls)]
+        shaped_score = trajectory_reward(
+            model_calls,
+            exec_successes,
+            expert_calls,
+            label.get("tool_schemas", {}),
+            bool(task_passed),
+            EVAL_TAIL_STEPS,
+        )
+        _log(
+            f"done exit={exit_reason} passed={bool(task_passed)} "
+            f"reward={shaped_score:.3f} exec_ok={sum(exec_successes)}/{len(exec_successes)}"
+        )
+
+        return EvalRowResult(
+            score=shaped_score,
+            response=last_response,
+            metadata={
+                "task": task_id,
+                "step_K": K,
+                "eval_tail": EVAL_TAIL_STEPS,
+                "task_passed": bool(task_passed),
+                "terminal_score": 1.0 if task_passed else 0.0,
+                "shaped_reward": shaped_score,
+                "exec_successes": sum(exec_successes),
+                "exec_calls": len(exec_successes),
+                "parsed_call": first_call is not None,
+                "tool_match": bool(first_call and first_call.get("name") == expert_call.get("name")),
+            },
+        )
+
+    def _print_eval_summary(name: str, result) -> None:
+        def _frac(rows, key):
+            if not rows:
+                return 0.0
+            return sum(1 for r in rows if r.metadata.get(key)) / len(rows)
+
+        n = len(result.rows)
+        print(f"{'Metric':<25} {name:>10}")
+        print("-" * 37)
+        print(f"{'Eval rows':<25} {n:>10d}")
+        print(f"{'Shaped reward':<25} {result.mean:>10.3f}")
+        print(f"{'Terminal pass rate':<25} {_frac(result.rows, 'task_passed'):>10.1%}")
+        if n:
+            print(f"{'Parsed tool call':<25} {_frac(result.rows, 'parsed_call'):>10.1%}")
+            print(f"{'First-call tool match':<25} {_frac(result.rows, 'tool_match'):>10.1%}")
+
+    student_recipe = Qwen3_6_35b_SglangRecipe(context_length=SERVED_CONTEXT_LEN)
+    base_deployment = DeploymentConfig(model=base_model, recipe=student_recipe).serve()
+    print(f"Student URL: {base_deployment.url}")
+
+    eval_config = EvalConfig(dataset=eval_dataset, eval_fn=bfcl_eval_fn)
+
+    teacher_eval = None
+    print("--- Evaluating teacher (DeepSeek V4 Flash)... ---")
+    try:
+        teacher_eval = eval_config.evaluate(teacher_deployment, debug=True, max_concurrency=4)
+        print(f"Teacher shaped reward: {teacher_eval.mean:.3f}")
+        _print_eval_summary("Teacher", teacher_eval)
+    except Exception as e:
+        print(
+            f"[teacher-eval] FAILED ({e!r}) — continuing with student baseline",
+            flush=True,
+        )
+
+    print("--- Evaluating base student (shaped live reward + terminal verdict metadata)... ---")
+    try:
+        base_eval = eval_config.evaluate(base_deployment, debug=True, max_concurrency=4)
+        print(f"Base shaped reward: {base_eval.mean:.3f}")
+        _print_eval_summary("Base", base_eval)
+    except Exception as e:
+        print(
+            f"[base-eval] FAILED ({e!r}) — skipping baseline, proceeding to training",
+            flush=True,
+        )
+        base_eval = None
+
+    if teacher_eval is not None and base_eval is not None:
+        def _frac(rows, key):
+            if not rows:
+                return 0.0
+            return sum(1 for r in rows if r.metadata.get(key)) / len(rows)
+
+        t_pass = _frac(teacher_eval.rows, "task_passed")
+        b_pass = _frac(base_eval.rows, "task_passed")
+        print(
+            f"[baseline] teacher pass={t_pass:.1%} student pass={b_pass:.1%} "
+            f"(gap={t_pass - b_pass:+.1%})",
+            flush=True,
+        )
+
+
+
+
 @markdown
 def _simct_explainer():
     """
@@ -466,20 +701,13 @@ def _mau_helpers():
 @markdown
 def _rm_intro():
     """
-    ## Reward function
+    ## OPD-adjusted GRPO Advantage
 
-    The reward function factors in the reverse KL divergence from the teacher's per-token logprobs and the aforementioned composite reward score.
-    By including a reward aligned with the target task of toolcalling, we can help "reward-tilt" the student model 
-    towards the reward-weighted version of the teacher's distribution rather than just the raw distribution. The following blogs show helpful 
-    visualization of reward-tilting a student model: 
-    https://emilianopp.github.io/Privileged-Information-Distillation-and-Self-Distillation/ (see Reward-Tilted Self-Distillation section).
+    Slime combines the reverse-KL loss from OPD into the GRPO advantage:
 
-    We also give the teacher *privileged information* the student never sees: when scoring the student's response, the teacher is conditioned on
-    the remaining ground-truth calls (`flattened_calls[K:]`) and their observations. A teacher that already knows the intended solution places sharper,
-    better-calibrated probability mass on the correct next tool call, so the reverse-KL term distills the student toward a stronger reference while
-    the student keeps acting from its own privilege-free prompt at train and inference time (Learning Using Privileged Information; see the blog above).
-    Two invariants make this safe: the scored *response* text stays byte-identical to what the student generated, and `logprob_start_len` is counted in
-    the *teacher's* tokenizer so the returned logprobs begin exactly at the response — never leaking the privileged prefix into the distilled signal.
+    A_t = A_t^GRPO + \lambda * (log_pi_student(y_t) - log_pi_teacher(y_t))
+    
+    where \lambda is the --opd-kl-coef set to 0.3 in this tutorial.
     """
 
 
@@ -498,8 +726,6 @@ def _rm():
     _teacher_tokenizer_cache = {}
 
     def _get_teacher_tokenizer():
-        # Used only to locate the response boundary in TEACHER tokens (below);
-        # the teacher logits themselves come from the served SGLang endpoint.
         if "tok" not in _teacher_tokenizer_cache:
             from transformers import AutoTokenizer
             _teacher_tokenizer_cache["tok"] = AutoTokenizer.from_pretrained(
@@ -507,32 +733,7 @@ def _rm():
             )
         return _teacher_tokenizer_cache["tok"]
 
-    def _privileged_prefix(label, K):
-        """Privileged information the STUDENT never sees: the remaining ground-truth calls
-        (flattened_calls[K:]) and their observations. Conditioning the teacher on the intended
-        solution sharpens its distribution over the student's response, so the reverse-KL pulls the
-        student toward a better-informed reference. The student still learns the task from its own
-        privilege-free prompt — this is Learning Using Privileged Information / reward-tilted
-        distillation."""
-        golden_tail = (label.get("flattened_calls") or [])[K:]
-        obs_tail = (label.get("observations") or [])[K:]
-        lines = ["[PRIVILEGED — reference solution for the remaining steps; do not reveal]"]
-        for i, call in enumerate(golden_tail):
-            call = call or {}
-            arguments = json.dumps(call.get("arguments") or {}, ensure_ascii=False)
-            lines.append(f"  step {K + i}: {call.get('name', '')}({arguments})")
-            if i < len(obs_tail):
-                lines.append(f"    -> observed: {str(obs_tail[i])[:500]}")
-        return "\n".join(lines)
-
     def _teacher_response_boundary(teacher_tok, prefix_text, full_text):
-        """Number of TEACHER tokens before the student response.
-
-        SGLang tokenizes ``text`` itself, so ``logprob_start_len`` is counted in the
-        teacher's vocabulary — not the student token count. ``prefix_text`` ends on a
-        blank line so the boundary tokenizes cleanly; offset mapping (when the teacher
-        ships a fast tokenizer) makes this robust to any boundary merge, with a plain
-        prefix-length fallback otherwise."""
         try:
             offsets = teacher_tok(
                 full_text, add_special_tokens=False, return_offsets_mapping=True
@@ -542,60 +743,34 @@ def _rm():
             return len(teacher_tok(prefix_text, add_special_tokens=False)["input_ids"])
 
     async def cross_tokenizer_reward(args, sample, **kwargs):
-        """Collect teacher log-probs with production-grade retry logic.
-
-        The teacher is conditioned on PRIVILEGED context (the remaining ground-truth calls)
-        that the student's prompt omits, so its per-token distribution over the student's
-        response is a stronger OPD target."""
+        """Collect teacher log-probs over the student's response (same context, no privileged info)."""
         import aiohttp
         import random
 
-        # The teacher serves behind Modal proxy auth (_experimental_server), so
-        # the rollout worker must present the wk-/ws- token pair. They arrive in
-        # the worker env via the Modal Secret attached in _train(); without the
-        # header every /generate returns 401 and OPD is silently disabled.
         from modal_training_gym.common.deployment import _modal_proxy_auth_headers
 
         tokenizer = _get_student_tokenizer()
 
-        # Split the student sequence into (prompt prefix, response). The response text
-        # must stay byte-identical to what the student generated so the teacher scores
-        # exactly those tokens and SimCT can align them in post-processing.
         resp_len = max(1, sample.response_length)
         split = max(0, len(sample.tokens) - resp_len)
-        student_prefix_text = tokenizer.decode(sample.tokens[:split], skip_special_tokens=True)
+        prefix_text = tokenizer.decode(sample.tokens[:split], skip_special_tokens=True)
         response_text = tokenizer.decode(sample.tokens[split:], skip_special_tokens=True)
+        full_text = prefix_text + response_text
 
-        # Swap the student prefix for a PRIVILEGED prefix: the same context plus the
-        # remaining ground-truth calls the student never saw. It is excluded from the
-        # returned logprobs (via logprob_start_len), so it only conditions the teacher.
-        meta = getattr(sample, "metadata", {}) or {}
-        label = json.loads(getattr(sample, "label", "{}") or "{}")
-        K = int(meta.get("step_K", 0))
-        teacher_prefix_text = f"{student_prefix_text}\n\n{_privileged_prefix(label, K)}\n\n"
-        full_text = teacher_prefix_text + response_text
-
-        # logprob_start_len is in TEACHER tokens. SGLang's logprob serialization also
-        # degrades with context length (CPU backend, sglang #27196), so we still return
-        # logprobs over the response only — the privileged prefix just conditions.
         teacher_tok = _get_teacher_tokenizer()
-        prompt_length = _teacher_response_boundary(teacher_tok, teacher_prefix_text, full_text)
+        prompt_length = _teacher_response_boundary(teacher_tok, prefix_text, full_text)
 
         payload = {
             "text": full_text,
             "sampling_params": {"temperature": 0, "max_new_tokens": 0, "skip_special_tokens": False},
             "return_logprob": True,
-            # Only return logprobs for the student response tokens; exclude the prefix.
             "logprob_start_len": prompt_length,
             "return_text_in_logprobs": True,
         }
         response_token_count = resp_len
 
-        # If the teacher fails to response after max_attempts with retries enabled,
-        # then we exclude its logprobs from the OPD calculation and continue training.
         skip_opd = {"meta_info": {"input_token_logprobs": []}}
 
-        # Add a timeout for the teacher request.    
         request_timeout = max(60, response_token_count * 10 // 1000)
         max_attempts = 20
         for attempt in range(max_attempts):
@@ -638,21 +813,6 @@ def _rm():
         return skip_opd
 
 
-
-
-@markdown
-def _generate_intro():
-    """
-    ## Initializing from the Kth Ground-Truth Call
-
-    Following the reverse curriculum described in "Custom Student Training Curriculum", each rollout initializes the
-    student's prompt from step K in BFCL's flattened ground-truth call sequence. As training progresses, the index K will decrement
-    by one every time the student passes BFCL's own terminal verdict (state diff + response-subsequence check) and the pass rate of all student samples is
-    greater than or equal to CURRICULUM_PASS_RATE. The sequence of rollout iterations will finish before K=0 or the student will continue
-    training at K=0 for however many extra iterations there are. Each rollout instantiates a fresh copy of the task's involved Python
-    classes and replays `flattened_calls[0:K]` against them to seed state — no sandbox, container, or snapshot needed, since "restoring
-    the environment to step K" is just running K lines of Python.
-    """
 
 
 @code
@@ -708,11 +868,6 @@ def _generate():
             print(f"[rollout:{task_id} T={T} K={K}] {msg}", flush=True)
 
         def _abort_sample():
-            # slime keeps ABORTED samples in the training batch (to preserve
-            # GRPO group structure), so they must carry valid, paddable train
-            # data. Returning with empty tokens leaves prompt_length == 0 and
-            # crashes get_batch (F.pad with a negative width). Emit a single
-            # zero-loss response token so the sample contributes no gradient.
             pad_id = (
                 state.tokenizer.pad_token_id
                 if state.tokenizer.pad_token_id is not None
@@ -761,10 +916,6 @@ def _generate():
             )
 
             if action is None:
-                # No tool call: either the model has nothing left to do (a natural end of
-                # the conversation, the expected way a correct episode finishes) or it
-                # stopped early. Either way there's nothing more to execute — the terminal
-                # verdict below will grade whichever state the episode ended in.
                 if verbose:
                     _log(f"turn {turn} no further tool calls")
                 break
@@ -917,10 +1068,6 @@ def _post_process():
 
         unaligned = total_resp = opd_dropped = 0
         for sample, reward in zip(samples, raw_rewards):
-            # Aborted samples (e.g. multi-turn rollouts that hit a turn/context
-            # limit) never get a teacher response, so ``reward`` is None. Treat
-            # them like a teacher failure: empty logprobs route into the
-            # OPD-skip path below (NaN sentinel; GRPO gradient kept).
             r_meta = (reward or {}).get("meta_info", {})
             raw_logprobs = r_meta.get("input_token_logprobs", [])
             entries = raw_logprobs[1:]
@@ -928,16 +1075,10 @@ def _post_process():
             t_lps = [e[0] if e[0] is not None else 0.0 for e in entries if e is not None]
             t_texts = [e[2] if len(e) > 2 else "" for e in entries if e is not None]
 
-            # Teacher logprob response starts at an index after the ground-truth input prompt.
-            # Align the teacher's token logprobs with the start of the student response sequence.
             resp_tokens = sample.tokens[-sample.response_length:]
             s_texts = [tokenizer.decode([tid], skip_special_tokens=True) for tid in resp_tokens]
             aligned, covered = align_cross_tokenizer(t_texts, t_lps, s_texts, return_coverage=True)
 
-            # If teacher failed to respond (OPD_SKIP_ON_TEACHER_FAILURE), then
-            # return a NaN teacher tensor. The patched slime OPD term detects a tensor
-            # with torch.isnan() and zeros out the OPD term. Before the patch in the training-gym (#155),
-            # this custom function would have to return a tensor of zeros to prevent a ValueError in Slime.
             if not raw_logprobs and OPD_SKIP_ON_TEACHER_FAILURE:
                 sample.teacher_log_probs = torch.full(
                     (len(aligned),), float("nan"), dtype=torch.float32
@@ -966,280 +1107,19 @@ def _post_process():
 
         return rewards, rewards
 
-
-
-
-@markdown
-def _eval_base_intro():
-    """
-    ## Baseline eval
-
-    Before training, we measure Qwen3.6-35B-A3B on the held-out BFCL `multi_turn_base` ids. Using our K curriculum, we initialize the
-    agent context and the task's class instances to the Kth ground-truth call, where K leaves the same tail (`EVAL_TAIL_STEPS`) the
-    curriculum floor trains at, to give us a reasonable baseline to beat with training.
-    """
-
-
-@code
-def _eval_base():
-    # BFCL multi_turn_base prompts are ~5–7.5k tokens; 16k leaves headroom for
-    # tool schemas + a few turns of observations without reserving a 128k/262k
-    # KV cache the trajectories never use. (Qwen's "keep ≥128k" note is about
-    # thinking mode; STUDENT_ENABLE_THINKING is False here.)
-    SERVED_CONTEXT_LEN = 16384
-    RESPONSE_TOKEN_CAP = 8192
-    CONTEXT_SAFETY_MARGIN = 512
-    _RETRYABLE_STATUS = (429, 500, 502, 503, 504)
-
-    EVAL_MAX_TURNS = EVAL_TAIL_STEPS * 2
-    MAX_CONSECUTIVE_TOOL_ERRORS = 3
-    DEPLOYMENT_READY_TIMEOUT = 1200 
-
-    def _prompt_token_count(messages, tools=None) -> int:
-        try:
-            tok = _get_student_tokenizer()
-            text = tok.apply_chat_template(
-                messages, tools=tools, tokenize=False, add_generation_prompt=True
-            )
-            return len(tok(text, add_special_tokens=False)["input_ids"])
-        except Exception:
-            return sum(len(str(m.get("content", ""))) for m in messages) // 3
-
-    def _chat(deployment, messages, tools=None, max_tokens=None, max_attempts=12):
-        import random
-        import time
-
-        import requests as _requests
-
-        from modal_training_gym.common.deployment import _modal_proxy_auth_headers
-
-        if max_tokens is None:
-            max_tokens = RESPONSE_TOKEN_CAP
-        remaining = SERVED_CONTEXT_LEN - _prompt_token_count(messages, tools) - CONTEXT_SAFETY_MARGIN
-        capped = min(max_tokens, remaining)
-        if capped <= 0:
-            return ""
-
-        body = {
-            "model": deployment.deployment_config.served_model_name,
-            "messages": messages,
-            "tools": tools,
-            "temperature": 0.0,
-            "max_tokens": capped,
-            "chat_template_kwargs": {"enable_thinking": STUDENT_ENABLE_THINKING},
-        }
-        for attempt in range(max_attempts):
-            try:
-                resp = _requests.post(
-                    f"{deployment.url}/v1/chat/completions",
-                    json=body,
-                    timeout=120,
-                    headers=_modal_proxy_auth_headers(),
-                )
-                if resp.status_code in _RETRYABLE_STATUS:
-                    raise _requests.HTTPError(f"retryable status {resp.status_code}", response=resp)
-                resp.raise_for_status()
-                msg = resp.json()["choices"][0]["message"]
-                return msg.get("content") or msg.get("reasoning_content", "") or ""
-            except (_requests.ConnectionError, _requests.Timeout, _requests.HTTPError) as e:
-                status = getattr(getattr(e, "response", None), "status_code", None)
-                retryable = status in _RETRYABLE_STATUS or status is None
-                if attempt == max_attempts - 1 or not retryable:
-                    raise
-                wait = min(30.0, 2 ** attempt) + random.uniform(0, 1.0)
-                time.sleep(wait)
-        return ""
-
-    def bfcl_eval_fn(deployment: ModelDeployment, example: dict) -> EvalRowResult:
-        label = json.loads(example.get("label", "{}"))
-        task_id = label.get("task_id", "")
-        N = label.get("total_steps", 1)
-        flattened_calls = label.get("flattened_calls", [])
-        K = max(0, N - EVAL_TAIL_STEPS)
-        expert_call = flattened_calls[K] if K < len(flattened_calls) else {}
-
-        messages = build_prefix_messages(label, K)
-        tools_list = tool_schemas_to_openai(label.get("tool_schemas", {}))
-
-        import time as _time
-
-        def _log(msg):
-            print(f"[eval:{task_id} K={K}] {msg}", flush=True)
-
-        deployment.wait_until_ready(timeout=DEPLOYMENT_READY_TIMEOUT)
-        env = build_env(label, K)
-        first_call = None
-        student_calls = []
-        exec_successes = []
-        last_response = ""
-        consecutive_errors = 0
-        exit_reason = "max_turns"
-        done = False
-        shaped_score = 0.0
-        _log(f"start tail={EVAL_TAIL_STEPS} max_turns={EVAL_MAX_TURNS}")
-        for turn in range(EVAL_MAX_TURNS):
-            _t0 = _time.monotonic()
-            response = _chat(deployment, messages, tools=tools_list)
-            gen_s = _time.monotonic() - _t0
-            last_response = response
-
-            parsed = base_model.parse_response(response)
-            actions = parsed.tool_calls
-            if turn == 0:
-                first_call = (
-                    {"name": actions[0].name, "arguments": actions[0].arguments} if actions else None
-                )
-            _log(f"turn {turn} gen={gen_s:.1f}s calls={[a.name for a in actions]}")
-            if not actions:
-                exit_reason = "no_further_calls"
-                break
-
-            observations: list[tuple[str, str]] = []
-            for action in actions:
-                name = action.name
-                student_calls.append({"name": action.name, "arguments": action.arguments})
-                try:
-                    step_result = env.step(action)
-                    obs, is_error = step_result.observation.text, step_result.observation.is_error
-                except Exception as e:
-                    _log(f"  execution error on {name}: {e!r} — ending episode")
-                    exec_successes.append(False)
-                    exit_reason = "execution_error"
-                    done = True
-                    break
-                exec_successes.append(not is_error)
-                _log(f"  exec {name} -> {'ERR' if is_error else 'ok'}")
-                observations.append((name, obs))
-                consecutive_errors = consecutive_errors + 1 if is_error else 0
-                if consecutive_errors >= MAX_CONSECUTIVE_TOOL_ERRORS:
-                    exit_reason = "repeated_errors"
-                    done = True
-                    break
-            if done:
-                break
-
-            call_ids = [f"call_t{turn}_{i}" for i in range(len(actions))]
-            messages.append({
-                "role": "assistant",
-                "content": parsed.content,
-                "tool_calls": [
-                    {
-                        "id": cid,
-                        "type": "function",
-                        "function": {"name": a.name, "arguments": json.dumps(a.arguments)},
-                    }
-                    for cid, a in zip(call_ids, actions)
-                ],
-            })
-            for cid, (name, obs) in zip(call_ids, observations):
-                messages.append(
-                    {"role": "tool", "tool_call_id": cid, "content": obs[:2000]}
-                )
-        try:
-            task_passed = env.evaluate().passed
-        except Exception as e:
-            _log(f"evaluate() failed: {e!r} — marking failed")
-            task_passed = False
-        expert_calls = flattened_calls[K:K + len(student_calls)]
-        shaped_score = trajectory_reward(
-            student_calls,
-            exec_successes,
-            expert_calls,
-            label.get("tool_schemas", {}),
-            bool(task_passed),
-            EVAL_TAIL_STEPS,
-        )
-        _log(
-            f"done exit={exit_reason} passed={bool(task_passed)} "
-            f"reward={shaped_score:.3f} exec_ok={sum(exec_successes)}/{len(exec_successes)}"
-        )
-
-        return EvalRowResult(
-            score=shaped_score,
-            response=last_response,
-            metadata={
-                "task": task_id,
-                "step_K": K,
-                "eval_tail": EVAL_TAIL_STEPS,
-                "task_passed": bool(task_passed),
-                "terminal_score": 1.0 if task_passed else 0.0,
-                "shaped_reward": shaped_score,
-                "exec_successes": sum(exec_successes),
-                "exec_calls": len(exec_successes),
-                "parsed_call": first_call is not None,
-                "tool_match": bool(first_call and first_call.get("name") == expert_call.get("name")),
-            },
-        )
-
-    student_recipe = Qwen3_6_35b_SglangRecipe(context_length=SERVED_CONTEXT_LEN)
-    base_deployment = DeploymentConfig(model=base_model, recipe=student_recipe).serve()
-    print(f"Student URL: {base_deployment.url}")
-
-    eval_config = EvalConfig(dataset=eval_dataset, eval_fn=bfcl_eval_fn)
-    print("--- Evaluating base student (shaped live reward + terminal verdict metadata)... ---")
-    # The base eval is a pre-training baseline measurement, not part of the
-    # training loop. The serve endpoint can be transiently unavailable (cold
-    # start, autoscale, an OOM-killed worker), so a failure here must NOT abort
-    # the whole run — log it and proceed to training; ``base_eval`` stays None
-    # and the final comparison degrades to trained-only metrics.
-    try:
-        base_eval = eval_config.evaluate(base_deployment, debug=True, max_concurrency=4)
-        print(f"Base shaped reward: {base_eval.mean:.3f}")
-    except Exception as e:
-        print(
-            f"[base-eval] FAILED ({e!r}) — skipping baseline, proceeding to training",
-            flush=True,
-        )
-        base_eval = None
-
-
-
-
 @markdown
 def _train_intro():
     """
     ## Training
 
-    Each rollout draws 12 prompts and 4 samples, resulting in 48 total trajectories. Training runs on a single
-    8×H100 node with TP=2/PP=2/CP=2/EP=4. Rollouts run on a separate pool of 5×8×H100 nodes (`rollout_num_gpus=40`):
-    `rollout_num_gpus_per_engine=8` keeps every sglang engine confined to a single node, so the 5 rollout nodes serve
-    as 5 independent engine replicas behind the router — no inter-node collective (RDMA/EFA) traffic between rollout
-    nodes is required, only the lightweight Ray control-plane + periodic weight sync from the training node. The
-    reward function uses GRPO to compute a group-relative advantage per sample. To prefer the reward of GRPO over the
-    reverse KL loss, we set opd_kl_coef=0.3 in Slime.
-
-    **Reliability note**: while `rollout_num_gpus` is temporarily reduced to 8 (1 rollout node) below — see the comment
-    on that field — a single rollout node has no fault isolation. Across several runs, roughly half hit a Ray
-    `ActorDiedError` (heartbeat timeout on the rollout node) specifically during the *final* rollout's post-training
-    weight sync, killing the job with no checkpoint saved even though all `num_rollout` training steps had already
-    completed successfully. This looks like node-level flakiness rather than a logic bug (nothing in slime's own
-    training loop special-cases the last round — `update_weights()` runs identically every iteration; it's
-    cumulative load across rounds at the harder curriculum tail that most plausibly makes a later round the likeliest
-    one to hit it). Restoring the full 5-node rollout pool (once H100 capacity allows) should reduce blast radius
-    since it's no longer a single point of failure for the whole job.
-
-    Three mitigations are in place for this either way: `save_interval=1` below checkpoints after *every* rollout
-    instead of only at the end, so a crash on a later round still leaves an evaluable checkpoint from the previous
-    round; the launcher's `train()` now does a best-effort `checkpoints_volume.commit()` on the failure path too, not
-    just on success — Modal Volume writes aren't durable/visible outside the container until committed, and without
-    this, a checkpoint slime *did* finish writing to `/checkpoints` moments before a crash would otherwise be
-    silently discarded when the container is torn down; and `no_save_optim=False` overrides `Qwen3_6_35b_Recipe`'s
-    default (`no_save_optim=True`, tuned for its own infrequent `save_interval=20`) — with optimizer state omitted,
-    every one of Modal's automatic `train()` retries (`retries=10`) hit a hard `KeyError: 'optimizer'` trying to
-    resume from the checkpoint `save_interval=1` had just written, looping forever on the same failure instead of
-    ever making forward progress. Saving full optimizer state every round costs more I/O, but makes the
-    crash-then-automatically-resume path actually work.
+    Each rollout draws `rollout_batch_size × n_samples_per_prompt` trajectories (16 × 8 = 128 with
+    the settings below). We run `num_rollout=5` steps; after each step the reverse-K curriculum
+    lengthens the remaining horizon by one (`T ← T + 1`). Tune `rollout_temperature` and
+    `num_rollout` if you want more exploration or a longer run.
     """
-
 
 @code
 def _train():
-
-    # Proxy auth (MODAL_KEY / MODAL_SECRET) is auto-forwarded into train workers
-    # by the slime launcher so cross_tokenizer_reward can call the teacher
-    # /generate endpoint — no per-recipe Secret wiring needed. Ensure the pair
-    # is set in the driver shell (`training-gym set-proxy-auth` or export).
-
     training_run = TrainConfig(
         model=base_model,
         dataset=dataset,
@@ -1252,8 +1132,6 @@ def _train():
             trace_sample_limit=16,
             image_overlay=lambda img: img.pip_install(
                 "modal~=1.4.3", "huggingface_hub~=1.12", "aiohttp~=3.13", "jsonschema~=4.23",
-                # `bfcl_eval` provides the multi-turn task data + the in-process class
-                # implementations executed during rollouts (see common/environments/bfcl.py).
                 "bfcl-eval==2026.3.23",
             ),
 
@@ -1261,12 +1139,7 @@ def _train():
             colocate=False,
             actor_num_nodes=1,
             actor_num_gpus_per_node=8,
-            # TEMPORARY: 1 rollout node × 8 H100 = 8 GPUs, while we wait on H100 fleet capacity for
-            # the full 5-node/40-GPU rollout pool below. Still NOT colocated with training (separate
-            # node pool) — only the node *count* is reduced. Restore to 40 (5 nodes) once capacity
-            # allows; `rollout_num_gpus_per_engine=8` (unchanged below) keeps each sglang engine
-            # within one node either way, so no RDMA/EFA fabric is needed between rollout nodes.
-            rollout_num_gpus=8,  # was: 40 (5 nodes)
+            rollout_num_gpus=8,
             tensor_model_parallel_size=2,
             sequence_parallel=True,
             pipeline_model_parallel_size=2,
@@ -1279,35 +1152,16 @@ def _train():
             sglang_max_running_requests=48,
 
             num_rollout=5,
-            rollout_batch_size=12,
-            n_samples_per_prompt=4,
-            rollout_max_response_len=12288,
-            rollout_temperature=0.6,
+            rollout_batch_size=16,
+            n_samples_per_prompt=8,
+            rollout_max_response_len=4000,
+            rollout_temperature=1,
             sglang_mem_fraction_static=0.75,
 
             global_batch_size=16,
             lr=1e-6,
-            # Anchor the policy to the loaded reference model. The recipe sets
-            # use_kl_loss=True but the base default kl_loss_coef=0.0 made it a
-            # no-op, leaving nothing to penalize drift — the policy collapsed to
-            # degenerate output ("!!!!") by eval. A small nonzero coef engages
-            # the already-loaded reference as a guardrail against that collapse.
             kl_loss_coef=0.02,
-            # Checkpoint after every rollout (not just at the end): with num_rollout=5 this
-            # used to mean save_interval=5 only wrote a checkpoint once, on the very last
-            # round — exactly the round most likely to hit the rollout-node reliability
-            # issue described in "Training" above. save_interval=1 means a crash on any
-            # later round still leaves an evaluable (if less-trained) checkpoint from the
-            # previous round, at the cost of writing torch_dist checkpoints 5x more often.
             save_interval=1,
-            # Qwen3_6_35b_Recipe defaults to no_save_optim=True (paired with its own
-            # save_interval=20 default) to keep infrequent checkpoints cheap. Combined with
-            # save_interval=1 above that would write a checkpoint every round with no
-            # optimizer state in it — Megatron's own resume path unconditionally expects
-            # optimizer state and hard-fails with `KeyError: 'optimizer'` (not a graceful
-            # fresh-optimizer fallback), so a crash-and-retry (Modal's train() has
-            # retries=10) would loop forever hitting the same load error instead of making
-            # progress. Save full optimizer state so retry-driven resume actually works.
             no_save_optim=False,
 
             environment={
@@ -1321,15 +1175,6 @@ def _train():
                 "use_opd": True,
                 "opd_type": "sglang",
                 "opd_kl_coef": 0.3,
-                # custom_reward_post_process_path is set automatically by
-                # `custom_reward_post_process_function=cross_tokenizer_post_process`
-                # above (shipped the same way as custom_rm_function/custom_generate_function
-                # — see SlimeRecipe.custom_reward_post_process_function). Do NOT set this
-                # manually as a raw dotted string: a function defined in a `__main__`
-                # tutorial script has no reliably importable module name (this file isn't
-                # even a valid Python identifier, e.g. `009_...`), so slime's own
-                # `importlib.import_module(...)` on that raw path fails with
-                # `ModuleNotFoundError` inside the Ray actor that loads it.
                 "rm_url": TEACHER_GENERATE_URL,
                 "max_turns": MAX_TURNS,
                 "log_multi_turn": True,
@@ -1386,7 +1231,6 @@ def _compare():
         return sum(1 for r in rows if r.metadata.get(key)) / len(rows)
 
     if base_eval is None:
-        # Baseline eval was skipped (serve unavailable); show trained-only.
         n_trained = len(trained_eval.rows)
         print(f"{'Metric':<25} {'Trained':>10}")
         print("-" * 37)
@@ -1425,11 +1269,6 @@ def _example_results():
     """
     ## Example results
 
-    A real run of this tutorial as written (`num_rollout=5`, `rollout_batch_size=12`,
-    `n_samples_per_prompt=4` — 240 total training trajectories, curriculum advancing
-    tail=1 → tail=2 after rollout 1) produced:
-
-    ```
     Metric                          Base    Trained      Delta
     ---------------------------------------------------------
     Eval rows                         30         30
@@ -1437,42 +1276,13 @@ def _example_results():
     Terminal pass rate             53.3%      63.3%     +10.0%
     Parsed tool call               90.0%      93.3%      +3.3%
     First-call tool match          86.7%      90.0%      +3.3%
-    ```
 
-    Take this as a smoke-test signal, not a converged result: 30 eval rows means the terminal
-    pass rate delta is only 3 examples (16/30 → 19/30), well within run-to-run noise for a
-    single seed. During training, `[group]` rollout stats were `tail=1
-    reward[min/mean/max]=0.41/0.85/1.00 pass=34/48` (curriculum mastered, advanced to tail=2)
-    then `tail=2 reward[min/mean/max]=0.33/0.55/1.00 pass=10/48` (held — the harder tail is
-    genuinely harder, not a regression). For a real comparison, run several seeds, more
-    rollouts, and the ablations below.
+    After 5 rollouts, we see the terminal pass rate increasing from 53.3% to 63.3%, a great sign that training is working!
+    With more rollouts, one would hope to see this number climb and eventually converge to 100%!
+    
+    One interesting experiment would be to ablate the OPD term from our GRPO advantage. Here were some preliminary results
+    from our own testing with OPD ablated over 5 rollouts: 
 
-    **Teacher zero-shot baseline** (DeepSeek V4 Flash, same 30 held-out rows, same K,
-    tool calls read from its native structured `tool_calls` field rather than Qwen3.6's
-    `<function=...>` wire format):
-
-    ```
-    Metric                       Teacher
-    -------------------------------------
-    Eval rows                         30
-    Shaped reward                  0.744
-    Terminal pass rate             83.3%
-    Parsed tool call              100.0%
-    First-call tool match          90.0%
-    ```
-
-    The teacher clears both the base (53.3%) and trained (63.3%) student by a wide margin on
-    terminal pass rate — there's real headroom for OPD to distill toward here, which at least
-    means the distillation signal isn't vacuous.
-
-    **OPD ablation** (`extra_config["use_opd"] = False`, everything else identical — note this
-    only zeroes the OPD loss term; the teacher `/generate` call and SimCT alignment in
-    `cross_tokenizer_post_process` still run, so the ablation doesn't save teacher compute, only
-    isolates the gradient contribution). First attempt hit the rollout-node reliability issue
-    described in "Training" above (died mid-heartbeat during the final weight sync, no checkpoint,
-    no eval); a rerun with the same config completed cleanly:
-
-    ```
     Metric                          Base    Trained      Delta
     ---------------------------------------------------------
     Eval rows                         30         30
@@ -1480,41 +1290,35 @@ def _example_results():
     Terminal pass rate             53.3%      70.0%     +16.7%
     Parsed tool call               90.0%      96.7%      +6.7%
     First-call tool match          86.7%      93.3%      +6.7%
-    ```
 
-    Surprisingly, this OPD-*ablated* run improved *more* than the OPD-enabled run above (+0.112
-    shaped reward / +16.7pp terminal pass vs. +0.062 / +10.0pp with OPD on) — at this short
-    horizon (5 rollouts, single seed each), plain GRPO on the execution-grounded reward alone
-    matches or beats the OPD-enabled variant. This does **not** mean OPD is useless here: with
-    only 30 eval rows and one seed per arm, a few examples' difference is within noise, and the
-    teacher's persistent `/generate` overload (see the `[rm] ... status=503` retries in both
-    runs' logs) may be degrading the OPD signal's *quality* without disabling it, which would
-    bias this comparison toward the ablation. Take the two arms together as "OPD did not show a
-    clear win at this scale," not "OPD doesn't help" — rerun both arms with several seeds and
-    more rollouts, and/or fix the teacher overload (raise `max_running_requests`, or add teacher
-    replicas), before drawing a real conclusion.
+    The signal is too rough to discern early in training, but possibly a teacher could be penalizing successful modes
+    of the student distribution. For reference, the teacher outperforms the student on the terminal pass rate by 30%.
+
+    Metric                       Teacher
+    -------------------------------------
+    Eval rows                         30
+    Shaped reward                  0.744
+    Terminal pass rate             83.3%
+    Parsed tool call              100.0%
+    First-call tool match          90.0%
     """
 
 
 @markdown
 def _next_steps():
     """
-    ## Next steps
+    ## Future Possibilities
 
-    Ways to improve this tutorial:
-
-    1. **Augmented multi-turn categories**: extend beyond `multi_turn_base` to BFCL's `multi_turn_miss_func`/`multi_turn_miss_param`
-    (the model must recognize missing information and ask for clarification rather than guessing) and `multi_turn_long_context`
-    (the same tasks padded with distractor files), for a harder and more diverse curriculum.
-    2. **Different student/teacher model configuration**: If the gap between tokenizers is high before alignment, 
-    try different cross-tokenization strategies (https://neurips.cc/virtual/2025/loc/san-diego/poster/119176).
-    3. **Densify the KL with top-k logprobs**: today the OPD reverse KL uses a single per-token teacher logprob. SGLang can
-    also return the teacher's top-k distribution at each position (`top_logprobs_num`); extending slime's OPD loss to consume
-    that full distribution — rather than just the chosen-token logprob — would give a denser distillation signal (see
-    `loss_patching_future.md`).
-    4. **Run ablations before trusting the delta**: with only 30 eval rows, the base-vs-trained gap above could largely be
-    noise. The most informative next runs are (a) the same recipe with `use_opd: False` in `extra_config` — isolates how
-    much of the gain is the cross-tokenizer OPD signal vs. plain GRPO on the execution-grounded reward — and (b) a
-    zero-shot eval of the teacher itself (DeepSeek V4 Flash) on the same held-out rows, which bounds how much headroom
-    OPD distillation could plausibly recover.
+    Some possible next steps for the tutorial:
+    1. Augment the training dataset with more long-context tasks from BFCL V3's Long-Context Multi-Turn category.
+    2. Experiment with different student and teacher model configurations.
+    3. Add in privledged information to the teacher model for an even stronger distillation signal.
+    4. Extend Slime's OPD loss to include top-k logprobs from the teacher model.
+    5. Try a different cross-tokenizer alignment strategy than averaging logprobs for reverse-KL 
+    such as f-divergence (https://neurips.cc/virtual/2025/loc/san-diego/poster/119176).
+    6. Increase the --opd-kl-coef value from 0.3 to see if a stronger reverse-KL signal improves training.
+    7. Ablate the OPD term completely from the GRPO advantage by setting --opd-kl-coef to 0.0.
+    
+    Cross-tokenizer distillation is a novel OPD technique, and the misalignment of tokenizers across model
+    families makes it an interesting research problem!
     """
