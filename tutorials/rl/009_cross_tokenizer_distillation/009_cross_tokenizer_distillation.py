@@ -567,8 +567,21 @@ def _teacher_response_boundary(teacher_tok, prefix_text, full_text):
     except (TypeError, KeyError, NotImplementedError, ValueError):
         return len(teacher_tok(prefix_text, add_special_tokens=False)["input_ids"])
 
+_teacher_rm_sem: asyncio.Semaphore | None = None
+
+def _get_teacher_rm_sem(limit: int) -> asyncio.Semaphore:
+    global _teacher_rm_sem
+    if _teacher_rm_sem is None:
+        _teacher_rm_sem = asyncio.Semaphore(max(1, int(limit)))
+    return _teacher_rm_sem
+
 async def cross_tokenizer_reward(args, sample, **kwargs):
-    """Collect teacher log-probs over the student's response (same context, no privileged info)."""
+    """Collect teacher log-probs over the student's response (same context, no privileged info).
+
+    Returns the teacher /generate JSON (logprobs for OPD). The BFCL *task* reward is
+    computed later in ``cross_tokenizer_post_process`` — slime's rollout dump of
+    ``reward: {'text': '', ...}`` is this payload, not a zero task score.
+    """
     import aiohttp
     import random
 
@@ -596,43 +609,47 @@ async def cross_tokenizer_reward(args, sample, **kwargs):
 
     skip_opd = {"meta_info": {"input_token_logprobs": []}}
 
-    request_timeout = max(60, response_token_count * 10 // 1000)
-    max_attempts = 20
-    for attempt in range(max_attempts):
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    args.rm_url, json=payload,
-                    headers=_modal_proxy_auth_headers(),
-                    timeout=aiohttp.ClientTimeout(total=request_timeout),
-                ) as resp:
-                    resp.raise_for_status()
-                    return await resp.json()
-        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-            status = getattr(e, "status", None)
-            if status == 400:
+    # Prefill-bound; long BFCL prefixes need more than a flat 60s.
+    request_timeout = max(180, 60 + response_token_count // 20)
+    max_attempts = 8
+    rm_limit = int(getattr(args, "teacher_rm_concurrency", 24) or 24)
+    sem = _get_teacher_rm_sem(rm_limit)
+    async with sem:
+        for attempt in range(max_attempts):
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(
+                        args.rm_url, json=payload,
+                        headers=_modal_proxy_auth_headers(),
+                        timeout=aiohttp.ClientTimeout(total=request_timeout),
+                    ) as resp:
+                        resp.raise_for_status()
+                        return await resp.json()
+            except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                status = getattr(e, "status", None)
+                if status == 400:
+                    print(
+                        f"[rm] OPD skipped: 400 for {len(sample.tokens)}-token sample",
+                        flush=True,
+                    )
+                    return skip_opd
+                is_retryable = status in (503, 502, 504, 429, None)
+                if attempt == max_attempts - 1 or not is_retryable:
+                    print(
+                        f"[rm] OPD skipped: teacher /generate failed after {attempt + 1} "
+                        f"attempts (status={status}, tokens={len(sample.tokens)}); "
+                        "continuing training without OPD for this trajectory",
+                        flush=True,
+                    )
+                    return skip_opd
+                base = min(30.0, 2 ** min(attempt, 5))
+                wait = base + random.uniform(0, base * 0.25)
                 print(
-                    f"[rm] OPD skipped: 400 for {len(sample.tokens)}-token sample",
+                    f"[rm] teacher /generate attempt {attempt + 1}/{max_attempts} "
+                    f"status={status}; retry in {wait:.1f}s",
                     flush=True,
                 )
-                return skip_opd
-            is_retryable = status in (503, 502, 504, 429, None)
-            if attempt == max_attempts - 1 or not is_retryable:
-                print(
-                    f"[rm] OPD skipped: teacher /generate failed after {attempt + 1} "
-                    f"attempts (status={status}, tokens={len(sample.tokens)}); "
-                    "continuing training without OPD for this trajectory",
-                    flush=True,
-                )
-                return skip_opd
-            base = min(60.0, 2 ** min(attempt, 6))
-            wait = base + random.uniform(0, base * 0.25)
-            print(
-                f"[rm] teacher /generate attempt {attempt + 1}/{max_attempts} status={status}; "
-                f"retry in {wait:.1f}s",
-                flush=True,
-            )
-            await asyncio.sleep(wait)
+                await asyncio.sleep(wait)
 
     print("[rm] OPD skipped: teacher /generate exhausted all retries", flush=True)
     return skip_opd
@@ -769,11 +786,19 @@ async def tool_step_generate(args, sample, sampling_params):
         task_passed = False
 
     expert_calls = flattened_calls[K:K + len(student_calls)]
+    shaped = trajectory_reward(
+        student_calls,
+        exec_successes,
+        expert_calls,
+        tool_schemas,
+        bool(task_passed),
+        T,
+    )
 
     _log(
         f"done turns={len(student_calls)} "
         f"exec_ok={sum(exec_successes)}/{len(exec_successes)} "
-        f"finish={finish_type} passed={bool(task_passed)}"
+        f"finish={finish_type} passed={bool(task_passed)} reward={shaped:.3f}"
     )
 
     response_token_ids: list[int] = []
@@ -800,6 +825,11 @@ async def tool_step_generate(args, sample, sampling_params):
         "tail_len": T,
         "curriculum_tail": T,
         "step_K": K,
+        # Stash before custom_rm overwrites sample.reward with the teacher
+        # /generate dict — dashboard rollout logging reads this when reward
+        # is still non-scalar (OPD).
+        "shaped_reward": shaped,
+        "task_reward": shaped,
     }
 
     sample.bfcl_student_calls = student_calls
@@ -861,6 +891,15 @@ def cross_tokenizer_post_process(args, samples, **kwargs):
             sample.reward = r
         except Exception:
             pass
+        # Keep metadata in sync so dashboard extraction still works if
+        # something re-reads samples after post-process.
+        if isinstance(meta, dict):
+            meta["shaped_reward"] = r
+            meta["task_reward"] = r
+            try:
+                sample.metadata = meta
+            except Exception:
+                pass
 
     cur_tail = getattr(args, "curriculum_tail", None)
     hit_rate = (first_call_hits / len(samples)) if samples else 0.0
@@ -995,11 +1034,15 @@ def _main_impl() -> None:
     # Training-gym ships MegaMoE DeepGEMM kernels and DP attention (`dp=4`) for DSV4 to increase prefill speed on lengthy trajectories.
 
     TEACHER_READY_TIMEOUT = 30 * 60
+    # OPD fires one /generate prefill per trajectory. With 16×8=128 traj/step, the
+    # default max_running_requests=16 saturates and returns 503s for minutes — raise
+    # the teacher queue and throttle client-side (see TEACHER_RM_CONCURRENCY below).
     teacher_deployment = DeploymentConfig(
         model=HFModelConfiguration(model_name="deepseek-ai/DeepSeek-V4-Flash"),
         recipe=DeepSeek_V4_Flash_SglangRecipe(
             context_length=16384,
             startup_timeout=TEACHER_READY_TIMEOUT,
+            max_running_requests=64,
         ),
         app_name="dsv4-teacher-model",
         served_model_name="deepseek-v4-flash",
@@ -1009,6 +1052,7 @@ def _main_impl() -> None:
     teacher_deployment.wait_until_ready(timeout=TEACHER_READY_TIMEOUT)
 
     TEACHER_GENERATE_URL = f"{teacher_deployment.url}/generate"
+    TEACHER_RM_CONCURRENCY = 24
 
     # ## Loading BFCL V3 and Defining Train/Eval Split
     #
@@ -1129,6 +1173,7 @@ def _main_impl() -> None:
                 "opd_type": "sglang",
                 "opd_kl_coef": 0.3,
                 "rm_url": TEACHER_GENERATE_URL,
+                "teacher_rm_concurrency": TEACHER_RM_CONCURRENCY,
                 "max_turns": MAX_TURNS,
                 "log_multi_turn": True,
                 "save_debug_rollout_data": "/checkpoints/debug/rollout_{rollout_id}.pt",
