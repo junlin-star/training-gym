@@ -44,8 +44,7 @@ JsonDict = dict[str, object]
 SummaryLoader = Callable[[], Awaitable[list[JsonDict]]]
 
 
-# A single historical log line from ``AppFetchLogs``. ``ts`` and ``ts_ns`` are
-# only present when the source carries a timestamp.
+# A single historical log line from ``AppFetchLogs``
 class LogEntry(TypedDict):
     task_id: str
     line: str
