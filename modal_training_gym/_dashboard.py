@@ -14,7 +14,7 @@ import re
 import secrets as _secrets
 import time
 from pathlib import Path
-from typing import Awaitable, Callable
+from typing import Awaitable, Callable, NotRequired, TypedDict
 from datetime import datetime, timezone
 
 import modal
@@ -38,6 +38,16 @@ from modal_training_gym.common.training_rollout import TrainingRolloutResult
 # payloads). ``object`` values — not ``Any`` — so readers must narrow.
 JsonDict = dict[str, object]
 SummaryLoader = Callable[[], Awaitable[list[JsonDict]]]
+
+
+# A single historical log line from ``AppFetchLogs``
+class LogEntry(TypedDict):
+    task_id: str
+    line: str
+    fd: int
+    ts: NotRequired[float]
+    ts_ns: NotRequired[int]
+
 
 REPO_URL = "https://github.com/modal-projects/training-gym.git"
 REPO_BRANCH = "main"
@@ -887,27 +897,16 @@ def fastapi_app():
         Query params:
           - ``since`` / ``until``: window bounds as epoch seconds, ISO 8601, or a
             relative age (``30m`` / ``2h`` / ``1d`` / ``45s`` = "N ago").
-            ``since`` and ``until`` are both inclusive. Defaults to the run's
+            ``since`` is exclusive and ``until`` is inclusive. Defaults to the run's
             lifetime.
           - ``tail``: max entries to return (clamped to 1..20000, default 100).
             These are the newest entries in the window (ClickHouse caps a single
             fetch at 20000).
           - ``search``: case-insensitive substring filter.
-        
+
         Returns a JSON object with the following fields:
-          - ``training_run_id``: the training run ID
-          - ``modal_app_id``: the Modal app ID
           - ``logs``: a list of log entries
-          - ``count``: the total number of log entries
-          - ``tail``: the number of log entries returned
           - ``has_more``: whether there are more log entries to fetch
-          - ``app_done``: whether the Modal app is done
-          - ``since``: the start time of the log window
-          - ``until``: the end time of the log window
-          - ``oldest_ts``: the timestamp of the oldest log entry
-          - ``newest_ts``: the timestamp of the newest log entry
-          - ``oldest_ts_ns``: the timestamp of the oldest log entry in nanoseconds
-          - ``newest_ts_ns``: the timestamp of the newest log entry in nanoseconds
           - ``next_until``: the timestamp of the next log entry to fetch
         """
         from google.protobuf.timestamp_pb2 import Timestamp
@@ -930,7 +929,7 @@ def fastapi_app():
         now = time.time()
         since_ts = _parse_log_time(since, now)
         until_ts = _parse_log_time(until, now)
-        
+
         if since_ts is None:
             since_ts = float(run.started_at or run.created_at or 0)
         if until_ts is None:
@@ -971,15 +970,12 @@ def fastapi_app():
         except Exception as exc:
             raise HTTPException(status_code=502, detail=f"AppFetchLogs: {exc!s}")
 
-        logs: list[JsonDict] = []
-        app_done = False
+        logs: list[LogEntry] = []
         for batch in resp.batches:
-            if batch.app_done:
-                app_done = True
             for item in batch.items:
                 if not item.data:
                     continue
-                entry: JsonDict = {
+                entry: LogEntry = {
                     "task_id": batch.task_id,
                     "line": item.data,
                     "fd": int(getattr(item, "file_descriptor", 0) or 0),
@@ -992,60 +988,27 @@ def fastapi_app():
                     entry["ts_ns"] = ts_ns
                 logs.append(entry)
 
-        # AppFetchLogs already returns oldest-first, but sort defensively so the
-        # cursor math below is correct regardless of batch/item ordering.
-        def _sort_key(entry: JsonDict) -> tuple[int, float]:
-            ns = entry.get("ts_ns")
-            ts = entry.get("ts")
-            return (
-                int(ns) if isinstance(ns, int) else 0,
-                float(ts) if isinstance(ts, (int, float)) else 0.0,
-            )
+        # An entry's time in nanoseconds: prefer the exact `ts_ns`, else scale
+        # the second-resolution `ts`.
+        def _entry_ns(e: LogEntry) -> int:
+            return e.get("ts_ns") or int((e.get("ts") or 0.0) * 1_000_000_000)
 
-        logs.sort(key=_sort_key)
+        # AppFetchLogs already returns oldest-first, but sort defensively.
+        logs.sort(key=_entry_ns)
 
-        count = len(logs)
-        has_more = count >= limit
+        has_more = len(logs) >= limit
 
-        def _entry_ts(entry: JsonDict) -> float | None:
-            ts = entry.get("ts")
-            return float(ts) if isinstance(ts, (int, float)) else None
-
-        def _entry_ts_ns(entry: JsonDict) -> int | None:
-            ns = entry.get("ts_ns")
-            return int(ns) if isinstance(ns, int) else None
-
-        oldest_ts = _entry_ts(logs[0]) if logs else None
-        newest_ts = _entry_ts(logs[-1]) if logs else None
-        oldest_ts_ns = _entry_ts_ns(logs[0]) if logs else None
-        newest_ts_ns = _entry_ts_ns(logs[-1]) if logs else None
-
-        # Cursor to fetch the next older page: one microsecond before the oldest
-        # entry (ClickHouse's `until` is inclusive and stores microseconds, so
-        # this excludes the boundary entry we already returned).
+        # Cursor to fetch the next older page: one nanosecond before the oldest
+        # entry.
         next_until: float | None = None
-        if has_more and (oldest_ts is not None or oldest_ts_ns is not None):
-            if oldest_ts_ns is not None:
-                oldest_us = oldest_ts_ns // 1_000
-            else:
-                oldest_us = int((oldest_ts or 0.0) * 1_000_000)
-            next_until = (oldest_us - 1) / 1_000_000
+        if has_more and logs:
+            oldest_ns = _entry_ns(logs[0])
+            next_until = (oldest_ns - 1) / 1_000_000_000
 
         return JSONResponse(
             {
-                "training_run_id": training_run_id,
-                "modal_app_id": app_id,
                 "logs": logs,
-                "count": count,
-                "tail": limit,
                 "has_more": has_more,
-                "app_done": app_done,
-                "since": since_ts,
-                "until": until_ts,
-                "oldest_ts": oldest_ts,
-                "newest_ts": newest_ts,
-                "oldest_ts_ns": oldest_ts_ns,
-                "newest_ts_ns": newest_ts_ns,
                 "next_until": next_until,
             }
         )
