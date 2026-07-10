@@ -985,7 +985,9 @@ def fastapi_app():
 
         # AppFetchLogs already returns oldest-first, but sort defensively so the
         # cursor math below is correct regardless of batch/item ordering.
-        logs.sort(key=lambda e: e.get("ts_ns") or int((e.get("ts") or 0.0) * 1_000_000_000))
+        logs.sort(
+            key=lambda e: e.get("ts_ns") or int((e.get("ts") or 0.0) * 1_000_000_000)
+        )
 
         has_more = len(logs) >= limit
 
