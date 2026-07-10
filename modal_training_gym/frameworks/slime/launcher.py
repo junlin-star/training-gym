@@ -284,12 +284,14 @@ def aggregate_step_times(
         start_key = f"{run_id}:{current_step_num}:start"
         finish_key = f"{run_id}:{current_step_num}:finish"
 
-        start_time = step_times_dict.get(start_key)
-        end_time = step_times_dict.get(finish_key)
-        if start_time is not None:
-            start_time = float(start_time)
-        if end_time is not None:
-            end_time = float(end_time)
+        raw_start_time = step_times_dict.get(start_key)
+        raw_end_time = step_times_dict.get(finish_key)
+        precise_start_time = (
+            float(raw_start_time) if raw_start_time is not None else None
+        )
+        precise_end_time = float(raw_end_time) if raw_end_time is not None else None
+        start_time = int(precise_start_time) if precise_start_time is not None else None
+        end_time = int(precise_end_time) if precise_end_time is not None else None
 
         duration = None
         if start_time is not None and end_time is not None:
@@ -307,7 +309,7 @@ def aggregate_step_times(
         full_step_start_time = (
             float(substep_start_boundary)
             if substep_start_boundary is not None
-            else start_time
+            else precise_start_time
         )
         full_step_end_time = step_times_dict.get(
             f"{run_id}:{current_step_num}:substep_finish"
@@ -315,7 +317,7 @@ def aggregate_step_times(
         if full_step_end_time is not None:
             full_step_end_time = float(full_step_end_time)
         else:
-            full_step_end_time = end_time
+            full_step_end_time = precise_end_time
 
         substep_times[f"{current_step_num}"] = {}
         eval_before = Substep.EVAL_BEFORE.value
