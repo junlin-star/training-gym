@@ -282,7 +282,19 @@ def run_base_training_on_slime(
     )
 
 
-def summarize_results(results_dir: str) -> str:
+def _format_duration_delta(result: TutorialResult, baseline_path: Path) -> str:
+    """Format the duration change vs a baseline result, e.g. "+500.0s (+33%)"."""
+    if not baseline_path.is_file():
+        return "—"
+    baseline = TutorialResult.from_dict(json.loads(baseline_path.read_text()))
+    delta_s = result.total_duration_s - baseline.total_duration_s
+    if baseline.total_duration_s <= 0:
+        return f"{delta_s:+.1f}s"
+    percent = delta_s / baseline.total_duration_s * 100
+    return f"{delta_s:+.1f}s ({percent:+.0f}%)"
+
+
+def summarize_results(results_dir: str, baseline_dir: str | None) -> str:
     rows = []
     for path in sorted(Path(results_dir).glob("*.json")):
         result = TutorialResult.from_dict(json.loads(path.read_text()))
@@ -291,20 +303,33 @@ def summarize_results(results_dir: str) -> str:
             if result.succeeded
             else f"❌ {result.training_run_status.value}"
         )
-        rows.append(
+        row = (
             f"| {result.base_model_name} | {status} "
             f"| {result.total_duration_s:.1f}s | {result.step_count} "
             f"| `{result.training_run_id}` |"
         )
+        if baseline_dir is not None:
+            row += (
+                f" {_format_duration_delta(result, Path(baseline_dir) / path.name)} |"
+            )
+        rows.append(row)
+
+    header = "| Model | Status | Duration | Steps | Run |"
+    divider = "| --- | --- | --- | --- | --- |"
+    empty = "| _no results_ | | | | |"
+    if baseline_dir is not None:
+        header += " Delta |"
+        divider += " --- |"
+        empty += " |"
 
     lines = [
         "<!-- validate-models-comment -->",
         "## Model Validation Results",
         "",
-        "| Model | Status | Duration | Steps | Run |",
-        "| --- | --- | --- | --- | --- |",
+        header,
+        divider,
     ]
-    lines.extend(rows or ["| _no results_ | | | | |"])
+    lines.extend(rows or [empty])
     return "\n".join(lines)
 
 
@@ -393,6 +418,11 @@ def __main__():
         required=True,
         help="Directory containing result JSON files written by `check --output`.",
     )
+    summarize_parser.add_argument(
+        "-b",
+        "--baseline-dir",
+        help="Directory containing baseline result JSON files to compare against",
+    )
 
     args = parser.parse_args()
 
@@ -401,7 +431,7 @@ def __main__():
         return
 
     if args.command == "summarize":
-        print(summarize_results(args.results_dir))
+        print(summarize_results(args.results_dir, args.baseline_dir))
         return
 
     tutorial_result = run_base_training_on_slime(
