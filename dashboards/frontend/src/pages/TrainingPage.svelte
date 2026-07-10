@@ -154,8 +154,6 @@
     }
   });
 
-  const groupByLabels = { group: "Group", dataset: "Dataset", model: "Model" };
-
   // Inverted vs. evals' expanded set so groups default to expanded, including
   // ones that appear later via auto-refresh.
   let collapsedGroupKeys = $state(new Set());

@@ -815,6 +815,37 @@ table.resizable-table.sticky-first-column tr.row-selected td:first-child {
   font-variant-numeric: tabular-nums;
 }
 
+.menu.menu-right {
+  left: auto;
+  right: 0;
+}
+
+.group-by-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  padding: 6px 8px;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.group-by-button:focus {
+  outline: none;
+}
+
+.group-by-button:focus-visible {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--border-strong) 55%, transparent);
+}
+
+.group-by-value {
+  color: var(--text-bright);
+}
+
 @media (max-width: 980px) {
   .menu {
     min-width: 180px;
