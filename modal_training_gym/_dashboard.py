@@ -895,19 +895,9 @@ def fastapi_app():
           - ``search``: case-insensitive substring filter.
         
         Returns a JSON object with the following fields:
-          - ``training_run_id``: the training run ID
-          - ``modal_app_id``: the Modal app ID
           - ``logs``: a list of log entries
-          - ``count``: the total number of log entries
           - ``tail``: the number of log entries returned
           - ``has_more``: whether there are more log entries to fetch
-          - ``app_done``: whether the Modal app is done
-          - ``since``: the start time of the log window
-          - ``until``: the end time of the log window
-          - ``oldest_ts``: the timestamp of the oldest log entry
-          - ``newest_ts``: the timestamp of the newest log entry
-          - ``oldest_ts_ns``: the timestamp of the oldest log entry in nanoseconds
-          - ``newest_ts_ns``: the timestamp of the newest log entry in nanoseconds
           - ``next_until``: the timestamp of the next log entry to fetch
         """
         from google.protobuf.timestamp_pb2 import Timestamp
@@ -972,10 +962,7 @@ def fastapi_app():
             raise HTTPException(status_code=502, detail=f"AppFetchLogs: {exc!s}")
 
         logs: list[JsonDict] = []
-        app_done = False
         for batch in resp.batches:
-            if batch.app_done:
-                app_done = True
             for item in batch.items:
                 if not item.data:
                     continue
@@ -1004,8 +991,7 @@ def fastapi_app():
 
         logs.sort(key=_sort_key)
 
-        count = len(logs)
-        has_more = count >= limit
+        has_more = len(logs) >= limit
 
         def _entry_ts(entry: JsonDict) -> float | None:
             ts = entry.get("ts")
@@ -1016,9 +1002,7 @@ def fastapi_app():
             return int(ns) if isinstance(ns, int) else None
 
         oldest_ts = _entry_ts(logs[0]) if logs else None
-        newest_ts = _entry_ts(logs[-1]) if logs else None
         oldest_ts_ns = _entry_ts_ns(logs[0]) if logs else None
-        newest_ts_ns = _entry_ts_ns(logs[-1]) if logs else None
 
         # Cursor to fetch the next older page: one microsecond before the oldest
         # entry (ClickHouse's `until` is inclusive and stores microseconds, so
@@ -1033,19 +1017,8 @@ def fastapi_app():
 
         return JSONResponse(
             {
-                "training_run_id": training_run_id,
-                "modal_app_id": app_id,
                 "logs": logs,
-                "count": count,
-                "tail": limit,
                 "has_more": has_more,
-                "app_done": app_done,
-                "since": since_ts,
-                "until": until_ts,
-                "oldest_ts": oldest_ts,
-                "newest_ts": newest_ts,
-                "oldest_ts_ns": oldest_ts_ns,
-                "newest_ts_ns": newest_ts_ns,
                 "next_until": next_until,
             }
         )
