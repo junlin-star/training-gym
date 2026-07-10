@@ -18,6 +18,10 @@ from typing import Awaitable, Callable
 from datetime import datetime, timezone
 
 import modal
+import json
+from google.protobuf.timestamp_pb2 import Timestamp
+from modal.client import _Client
+from modal_proto import api_pb2
 
 # Imported at module scope so FastAPI can resolve the ``request: Request``
 # annotation in stream_run_logs(). Under ``from __future__ import
@@ -738,11 +742,6 @@ def fastapi_app():
             in any 1-second window are dropped; a single ``dropped`` event
             is emitted per second summarizing the count.
         """
-        import json
-
-        from modal.client import _Client
-        from modal_proto import api_pb2
-
         run = await _get_run_or_404(training_run_id)
 
         app_id = (run.modal_app_id or "").strip()
@@ -893,17 +892,12 @@ def fastapi_app():
             These are the newest entries in the window (ClickHouse caps a single
             fetch at 20000).
           - ``search``: case-insensitive substring filter.
-        
+
         Returns a JSON object with the following fields:
           - ``logs``: a list of log entries
           - ``has_more``: whether there are more log entries to fetch
           - ``next_until``: the timestamp of the next log entry to fetch
         """
-        from google.protobuf.timestamp_pb2 import Timestamp
-
-        from modal.client import _Client
-        from modal_proto import api_pb2
-
         run = await _get_run_or_404(training_run_id)
 
         app_id = (run.modal_app_id or "").strip()
@@ -919,7 +913,7 @@ def fastapi_app():
         now = time.time()
         since_ts = _parse_log_time(since, now)
         until_ts = _parse_log_time(until, now)
-        
+
         if since_ts is None:
             since_ts = float(run.started_at or run.created_at or 0)
         if until_ts is None:
