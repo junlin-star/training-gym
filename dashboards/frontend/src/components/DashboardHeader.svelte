@@ -17,7 +17,7 @@
   });
 </script>
 
-<header class="flex justify-between items-center mb-[24px]">
+<header class="flex justify-between items-center p-[16px_24px_0] mb-[24px] max-[900px]:p-[24px_24px_0]">
   <h1 class="text-(--text) text-[24px] font-medium leading-[36px]">{title}</h1>
   <div class="flex items-center gap-[0.7rem]">
     {#if statusText}

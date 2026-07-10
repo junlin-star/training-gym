@@ -152,7 +152,7 @@
   });
 </script>
 
-<section class="summary-sticky grid grid-cols-5 gap-[14px] mb-[24px] max-[900px]:grid-cols-2 max-[640px]:grid-cols-1">
+<section class="summary-sticky grid grid-cols-5 gap-[14px] p-[0_24px] mb-[24px] max-[900px]:grid-cols-2 max-[640px]:grid-cols-1">
   <article class="summary-card">
     <span class="summary-label">Total runs</span>
     <strong>{allRuns.length}</strong>
@@ -175,7 +175,7 @@
   </article>
 </section>
 
-<section class="[border:0] [background:transparent] flex flex-col gap-[24px] p-0">
+<section class="[border:0] [background:transparent] flex flex-col gap-[24px] p-[0_24px_16px] max-[900px]:pb-[24px]">
   <div class="m-0">
     <FilterBar
       {recipes}

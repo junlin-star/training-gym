@@ -721,7 +721,7 @@
 
 <section class="detail" class:embedded>
   {#if !embedded}
-    <header class="flex items-center justify-between mb-[16px]">
+    <header class="flex items-center justify-between p-[0_24px] mb-[16px]">
       <button class="inline-flex items-center gap-[6px] [background:none] [border:0] text-(--muted) cursor-pointer text-[13px] p-[4px_8px] rounded-[6px] hover:text-(--text) hover:bg-(--color-c-gray-10,#2f2f2f)" onclick={onBack}>
         <ArrowLeft size={14} strokeWidth={2.1} />
         <span>Back to runs</span>
@@ -760,10 +760,10 @@
   {/if}
 
   {#if !run}
-    <div class="detail-empty">Loading run {runId}…</div>
+    <div class="detail-empty px-[24px]">Loading run {runId}…</div>
   {:else}
     {#if !embedded}
-    <div class="flex items-center gap-[16px] mb-[16px]">
+    <div class="flex items-center gap-[16px] p-[0_24px] mb-[16px]">
       <h1 class="text-[22px] font-[600] text-(--text-bright) m-0 overflow-hidden text-ellipsis whitespace-nowrap" title={run.run_id}>{run.run_id}</h1>
       <StatusPill status={getStatus(run)} />
       {#if resumeBadge(run)}
