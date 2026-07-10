@@ -896,7 +896,6 @@ def fastapi_app():
         
         Returns a JSON object with the following fields:
           - ``logs``: a list of log entries
-          - ``tail``: the number of log entries returned
           - ``has_more``: whether there are more log entries to fetch
           - ``next_until``: the timestamp of the next log entry to fetch
         """
