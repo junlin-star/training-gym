@@ -1026,7 +1026,19 @@ def _generate():
         return sample
 
 
+@markdown
+def _cross_tokenizer_post_process_intro():
+    """
+    ## Cross-tokenizer post-process
+    Upon successful completion of a response from the student trainer node, we take the raw prompt prefix + response
+    token IDs and decode these (Qwen tokenizer) into the raw text. This raw text is posted to the teacher /generate endpoint
+    for logprob computation. Upon successful logprob computation, the student receives a response from the teacher that contains
+    the logprob, token ID, and decoded text (DeepSeek tokenizer).
 
+    To align the text, we create two arrays that contain the start and end character boundaries for teacher and student tokens.
+    The intersection of start and end boundaries between the teacher and student arrays is the aligned text, and any tokens that
+    are in between these two boundaries are used for the SimCT MAU calculation described above.
+    """
 
 @code
 def _post_process():
@@ -1081,8 +1093,6 @@ def _post_process():
                 sample.reward = r
             except Exception:
                 pass
-            # Keep metadata in sync so dashboard extraction still works if
-            # something re-reads samples after post-process.
             if isinstance(meta, dict):
                 meta["shaped_reward"] = r
                 meta["task_reward"] = r
@@ -1111,16 +1121,35 @@ def _post_process():
             )
 
         unaligned = total_resp = opd_dropped = 0
+        stream_mismatch_example = None
         for sample, reward in zip(samples, raw_rewards):
             r_meta = (reward or {}).get("meta_info", {})
             raw_logprobs = r_meta.get("input_token_logprobs", [])
-            entries = raw_logprobs[1:]
+            entries = raw_logprobs
 
             t_lps = [e[0] if e[0] is not None else 0.0 for e in entries if e is not None]
             t_texts = [e[2] if len(e) > 2 else "" for e in entries if e is not None]
 
             resp_tokens = sample.tokens[-sample.response_length:]
             s_texts = [tokenizer.decode([tid], skip_special_tokens=True) for tid in resp_tokens]
+            join_t, join_s = "".join(t_texts), "".join(s_texts)
+            if stream_mismatch_example is None and join_t != join_s:
+                import difflib
+
+                bits = []
+                for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(
+                    a=join_s, b=join_t
+                ).get_opcodes():
+                    if tag == "equal":
+                        continue
+                    bits.append(
+                        f"{tag}: S[{i1}:{i2}]={join_s[i1:i2]!r} T[{j1}:{j2}]={join_t[j1:j2]!r}"
+                    )
+                    if len(bits) >= 3:
+                        break
+                stream_mismatch_example = (
+                    f"len_s={len(join_s)} len_t={len(join_t)}; " + " | ".join(bits)
+                )
             aligned, covered = align_cross_tokenizer(t_texts, t_lps, s_texts, return_coverage=True)
 
             if not raw_logprobs and OPD_SKIP_ON_TEACHER_FAILURE:
@@ -1142,6 +1171,11 @@ def _post_process():
                 f"({gap_frac:.1%}) response tokens unaligned — high => cross-tokenizer misalignment",
                 flush=True,
             )
+            if stream_mismatch_example is not None:
+                print(
+                    f"[align] teacher/student char-stream mismatch: {stream_mismatch_example}",
+                    flush=True,
+                )
         if opd_dropped:
             print(
                 f"[opd] disabled OPD for {opd_dropped}/{len(samples)} trajectories "
