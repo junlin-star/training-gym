@@ -438,5 +438,10 @@ def _patch_file(path: Path) -> None:
     print(f"Patched {path.name} with rollout status reporting")
 
 
-_patch_file(Path("/root/slime/train.py"))
-_patch_file(Path("/root/slime/train_async.py"))
+def main() -> None:
+    _patch_file(Path("/root/slime/train.py"))
+    _patch_file(Path("/root/slime/train_async.py"))
+
+
+if __name__ == "__main__":
+    main()
