@@ -265,6 +265,11 @@ h6 {
   font-feature-settings: "ss01" on;
 }
 
+button,
+input {
+  font: inherit;
+}
+
 /* ============================================================
    Component styles (moved from per-component <style> blocks)
    ============================================================ */
@@ -606,7 +611,6 @@ table.resizable-table.sticky-first-column tr.row-selected td:first-child {
   color: var(--text);
   text-decoration: none;
   text-align: left;
-  font: inherit;
   font-size: 14px;
   font-weight: 500;
   line-height: 20px;
@@ -641,7 +645,6 @@ table.resizable-table.sticky-first-column tr.row-selected td:first-child {
   border-bottom: 2px solid transparent;
   background: none;
   color: var(--muted);
-  font: inherit;
   font-size: 14px;
   font-weight: 500;
   cursor: pointer;
@@ -706,7 +709,6 @@ table.resizable-table.sticky-first-column tr.row-selected td:first-child {
   border-radius: 6px;
   background: var(--bg);
   color: var(--text);
-  font: inherit;
   font-size: 14px;
   font-weight: 500;
   padding: 6px 8px;
@@ -772,7 +774,6 @@ table.resizable-table.sticky-first-column tr.row-selected td:first-child {
   border: 0;
   background: transparent;
   color: var(--text);
-  font: inherit;
   font-size: 0.73rem;
   text-align: left;
   padding: 0.3rem 0.38rem;
@@ -1430,7 +1431,6 @@ tr.framework-run-row:last-child td {
   background: transparent;
   color: color-mix(in srgb, var(--text) 86%, white);
   padding: 0;
-  font: inherit;
   font-size: 0.74rem;
   cursor: pointer;
   text-align: left;
@@ -1477,7 +1477,6 @@ tr.framework-run-row:last-child td {
   margin: 0;
   background: transparent;
   color: var(--muted);
-  font: inherit;
   font-size: 0.68rem;
   cursor: pointer;
 }
@@ -1506,7 +1505,6 @@ tr.framework-run-row:last-child td {
   grid-template-columns: 16px minmax(0, 1fr) auto;
   align-items: center;
   gap: 0.42rem;
-  font: inherit;
   font-size: 0.74rem;
   text-align: left;
   cursor: pointer;
@@ -1534,7 +1532,6 @@ tr.framework-run-row:last-child td {
   color: var(--text);
   width: 100%;
   min-width: 0;
-  font: inherit;
   font-size: 14px;
 }
 
@@ -1640,7 +1637,6 @@ table.training-runs-table td.row-open-cell {
   border: 0;
   background: transparent;
   color: var(--text);
-  font: inherit;
   font-size: 14px;
   line-height: 20px;
   cursor: pointer;
@@ -2109,7 +2105,6 @@ table.rollout-table td {
     border-radius: 7px;
     background: var(--panel);
     color: var(--text);
-    font: inherit;
     font-size: 0.76rem;
     padding: 0.25rem 0.58rem;
     cursor: pointer;
@@ -2282,7 +2277,6 @@ table.rollout-table td {
   border-radius: 6px;
   background: var(--bg);
   color: var(--text);
-  font: inherit;
   font-size: 14px;
   font-weight: 500;
   padding: 6px 8px;
@@ -2369,7 +2363,6 @@ table.deployments-table tr.row-selected td {
   align-items: center;
   justify-content: space-between;
   padding: 6px 8px;
-  font: inherit;
   font-size: 14px;
   font-weight: 500;
   cursor: pointer;
