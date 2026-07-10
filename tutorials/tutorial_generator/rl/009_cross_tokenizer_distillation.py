@@ -3,7 +3,7 @@
 
 TUTORIAL_METADATA = {
     "framework": "`slime`",
-    "cluster_shape": "1 × 4×B200 (teacher) + 1 × 8×H100 (train) + 5 × 8×H100 (rollout)",
+    "cluster_shape": "1 × 4×B200 (teacher) + 2 × 8×H100 (train) + 1 × 8×H100 (rollout)",
     "summary": "Cross-tokenizer agentic distillation on BFCL v3 multi-turn with live, execution-grounded rewards — DeepSeek V4 Flash teacher, Qwen3.6-35B-A3B student",
     "difficulty": "Advanced",
     "order": 60,
@@ -1160,6 +1160,10 @@ def _train_intro():
     the settings below). We run `num_rollout=5` steps; after each step the reverse-K curriculum
     lengthens the remaining horizon by one (`T ← T + 1`). Tune `rollout_temperature` and
     `num_rollout` if you want more exploration or a longer run.
+
+    Training uses **2×8 H100** actor nodes. Checkpoints keep the recipe defaults
+    (`save_interval=20`, `no_save_optim=True`) — saving Adam every step on one node
+    previously OOMed Ray host RAM (~1 TB) during `save_model`.
     """
 
 @code
@@ -1181,7 +1185,7 @@ def _train():
 
             gpu_type="H100",
             colocate=False,
-            actor_num_nodes=1,
+            actor_num_nodes=2,
             actor_num_gpus_per_node=8,
             rollout_num_gpus=8,
             tensor_model_parallel_size=2,
@@ -1205,8 +1209,9 @@ def _train():
             global_batch_size=16,
             lr=1e-6,
             kl_loss_coef=0.02,
-            save_interval=1,
-            no_save_optim=False,
+            # Keep recipe defaults: every-step + optimizer dumps OOM the 1TB train node.
+            save_interval=20,
+            no_save_optim=True,
 
             environment={
                 "PYTHONPATH": "/root/Megatron-LM/:/root",
@@ -1223,7 +1228,6 @@ def _train():
                 "teacher_rm_concurrency": TEACHER_RM_CONCURRENCY,
                 "max_turns": MAX_TURNS,
                 "log_multi_turn": True,
-                "save_debug_rollout_data": "/checkpoints/debug/rollout_{rollout_id}.pt",
             },
         ),
     )
