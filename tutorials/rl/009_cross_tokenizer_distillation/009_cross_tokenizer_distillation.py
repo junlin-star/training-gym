@@ -1116,6 +1116,10 @@ def _main_impl() -> None:
     # the settings below). We run `num_rollout=5` steps; after each step the reverse-K curriculum
     # lengthens the remaining horizon by one (`T ← T + 1`). Tune `rollout_temperature` and
     # `num_rollout` if you want more exploration or a longer run.
+    #
+    # Training uses **2×8 H100** actor nodes. Checkpoints keep the recipe defaults
+    # (`save_interval=20`, `no_save_optim=True`) — saving Adam every step on one node
+    # previously OOMed Ray host RAM (~1 TB) during `save_model`.
 
     training_run = TrainConfig(
         model=base_model,
@@ -1134,7 +1138,7 @@ def _main_impl() -> None:
 
             gpu_type="H100",
             colocate=False,
-            actor_num_nodes=1,
+            actor_num_nodes=2,
             actor_num_gpus_per_node=8,
             rollout_num_gpus=8,
             tensor_model_parallel_size=2,
@@ -1158,8 +1162,9 @@ def _main_impl() -> None:
             global_batch_size=16,
             lr=1e-6,
             kl_loss_coef=0.02,
-            save_interval=1,
-            no_save_optim=False,
+            # Keep recipe defaults: every-step + optimizer dumps OOM the 1TB train node.
+            save_interval=20,
+            no_save_optim=True,
 
             environment={
                 "PYTHONPATH": "/root/Megatron-LM/:/root",
@@ -1176,7 +1181,6 @@ def _main_impl() -> None:
                 "teacher_rm_concurrency": TEACHER_RM_CONCURRENCY,
                 "max_turns": MAX_TURNS,
                 "log_multi_turn": True,
-                "save_debug_rollout_data": "/checkpoints/debug/rollout_{rollout_id}.pt",
             },
         ),
     )
