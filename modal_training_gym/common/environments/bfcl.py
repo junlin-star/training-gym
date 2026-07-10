@@ -595,6 +595,15 @@ class BfclMultiTurnDataset(DatasetConfig):
         return self._load_split()
 
     def prepare(self, path: str, eval_paths: dict | None = None) -> None:
+        """Write this instance's split to ``path``.
+
+        ``eval_paths`` is ignored on purpose: BFCL training and offline eval each
+        use their own ``BfclMultiTurnDataset(split=...)`` instance. Recipe
+        resolvers still invent an ``eval.*`` companion path; callers must not
+        require that file (see ``run_prepare_dataset`` / slime-miles ``exists``
+        guards).
+        """
+        del eval_paths  # train/eval are separate DatasetConfig instances
         rows = self._load_split()
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w") as f:
