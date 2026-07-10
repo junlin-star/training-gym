@@ -14,7 +14,7 @@ import re
 import secrets as _secrets
 import time
 from pathlib import Path
-from typing import Awaitable, Callable
+from typing import Awaitable, Callable, NotRequired, TypedDict
 from datetime import datetime, timezone
 
 import modal
@@ -42,6 +42,17 @@ from modal_training_gym.common.training_rollout import TrainingRolloutResult
 # payloads). ``object`` values — not ``Any`` — so readers must narrow.
 JsonDict = dict[str, object]
 SummaryLoader = Callable[[], Awaitable[list[JsonDict]]]
+
+
+# A single historical log line from ``AppFetchLogs``. ``ts`` and ``ts_ns`` are
+# only present when the source carries a timestamp.
+class LogEntry(TypedDict):
+    task_id: str
+    line: str
+    fd: int
+    ts: NotRequired[float]
+    ts_ns: NotRequired[int]
+
 
 REPO_URL = "https://github.com/modal-projects/training-gym.git"
 REPO_BRANCH = "main"
@@ -954,12 +965,12 @@ def fastapi_app():
         except Exception as exc:
             raise HTTPException(status_code=502, detail=f"AppFetchLogs: {exc!s}")
 
-        logs: list[JsonDict] = []
+        logs: list[LogEntry] = []
         for batch in resp.batches:
             for item in batch.items:
                 if not item.data:
                     continue
-                entry: JsonDict = {
+                entry: LogEntry = {
                     "task_id": batch.task_id,
                     "line": item.data,
                     "fd": int(getattr(item, "file_descriptor", 0) or 0),
@@ -974,39 +985,22 @@ def fastapi_app():
 
         # AppFetchLogs already returns oldest-first, but sort defensively so the
         # cursor math below is correct regardless of batch/item ordering.
-        def _sort_key(entry: JsonDict) -> tuple[int, float]:
-            ns = entry.get("ts_ns")
-            ts = entry.get("ts")
-            return (
-                int(ns) if isinstance(ns, int) else 0,
-                float(ts) if isinstance(ts, (int, float)) else 0.0,
-            )
-
-        logs.sort(key=_sort_key)
+        logs.sort(key=lambda e: e.get("ts_ns") or int((e.get("ts") or 0.0) * 1_000_000_000))
 
         has_more = len(logs) >= limit
 
-        def _entry_ts(entry: JsonDict) -> float | None:
-            ts = entry.get("ts")
-            return float(ts) if isinstance(ts, (int, float)) else None
-
-        def _entry_ts_ns(entry: JsonDict) -> int | None:
-            ns = entry.get("ts_ns")
-            return int(ns) if isinstance(ns, int) else None
-
-        oldest_ts = _entry_ts(logs[0]) if logs else None
-        oldest_ts_ns = _entry_ts_ns(logs[0]) if logs else None
-
-        # Cursor to fetch the next older page: one microsecond before the oldest
-        # entry (ClickHouse's `until` is inclusive and stores microseconds, so
-        # this excludes the boundary entry we already returned).
+        # Cursor to fetch the next older page: one microsecond before the oldest entry
         next_until: float | None = None
-        if has_more and (oldest_ts is not None or oldest_ts_ns is not None):
-            if oldest_ts_ns is not None:
-                oldest_us = oldest_ts_ns // 1_000
+        if has_more and logs:
+            oldest = logs[0]
+            if oldest_ns := oldest.get("ts_ns"):
+                oldest_us = oldest_ns // 1_000
+            elif oldest_ts := oldest.get("ts"):
+                oldest_us = int(oldest_ts * 1_000_000)
             else:
-                oldest_us = int((oldest_ts or 0.0) * 1_000_000)
-            next_until = (oldest_us - 1) / 1_000_000
+                oldest_us = 0
+            if oldest_us:
+                next_until = (oldest_us - 1) / 1_000_000
 
         return JSONResponse(
             {
