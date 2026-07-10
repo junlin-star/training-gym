@@ -545,6 +545,7 @@
   let histNextUntil = $state(null); // `until` cursor for the next older page
   let histTailEl = $state(null); // scroll container
   let histSeq = 0; // monotonic id for stable keying across prepends
+  let histController = null; // aborts in-flight hist fetches when filters change
 
   // Time-window filters, driven by a custom (fully themed) date-time picker.
   // The picker emits epoch seconds; those are debounced into the values the
@@ -644,6 +645,9 @@
     const el = histTailEl;
     const prevScrollHeight = el ? el.scrollHeight : 0;
     const prevScrollTop = el ? el.scrollTop : 0;
+    // Share the current view's controller so a filter change mid-flight aborts
+    // this fetch instead of prepending stale lines to the fresh results.
+    const signal = histController?.signal;
     try {
       const data = await fetchRunLogs(runId, {
         // Page below the oldest row we have, but keep the user's `since` floor
@@ -652,7 +656,9 @@
         until: histNextUntil,
         tail: HIST_PAGE,
         search: logSearch,
+        signal,
       });
+      if (signal?.aborted) return;
       const older = [];
       pushHistRows(older, data.logs);
       histLines = older.concat(histLines);
@@ -662,9 +668,10 @@
         if (el) el.scrollTop = el.scrollHeight - prevScrollHeight + prevScrollTop;
       });
     } catch (err) {
+      if (signal?.aborted) return;
       histError = String(err?.message || err);
     } finally {
-      histLoadingOlder = false;
+      if (!signal?.aborted) histLoadingOlder = false;
     }
   }
 
@@ -696,8 +703,12 @@
     if (tab !== "logs" || !id || running) return;
 
     const controller = new AbortController();
+    histController = controller;
     void loadHistInitial(id, { search, since, until }, controller.signal);
-    return () => controller.abort();
+    return () => {
+      controller.abort();
+      if (histController === controller) histController = null;
+    };
   });
 
   function _seriesStats(getY) {
