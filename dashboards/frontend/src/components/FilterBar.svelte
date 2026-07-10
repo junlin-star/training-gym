@@ -16,6 +16,7 @@
     activeGroups,
     allGroupsActive,
     search = $bindable(),
+    groupBy = $bindable(),
     onToggleRecipe,
     onSelectAllRecipes,
     onClearRecipes,
@@ -188,4 +189,14 @@
       </div>
     {/if}
   </div>
+
+  <label class="ml-auto inline-flex items-center gap-[6px] text-(--muted) text-[12px] whitespace-nowrap">
+    Group by:
+    <select class="filter-button ghost-hover" bind:value={groupBy}>
+      <option value="none">None</option>
+      <option value="group">Group</option>
+      <option value="dataset">Dataset</option>
+      <option value="model">Model</option>
+    </select>
+  </label>
 </nav>

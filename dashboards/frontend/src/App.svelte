@@ -25,6 +25,7 @@
   let activeRecipes = $state(new Set());
   let activeStatuses = $state(new Set());
   let activeGroups = $state(new Set());
+  let trainingGroupBy = $state("none");
   // Recipe/status/group values we've seen across loads. New ones are
   // auto-enabled in the filters once; the user's selections are never reset by
   // a refresh.
@@ -432,6 +433,30 @@
       })
       .sort((a, b) => (b.created_at || 0) - (a.created_at || 0)),
   );
+
+  function trainingGroupKey(run, groupBy) {
+    if (groupBy === "group") return getGroup(run);
+    if (groupBy === "dataset") return safeText(run.config_summary?.dataset_name) || "(no dataset)";
+    if (groupBy === "model") return modelName(run);
+    return "";
+  }
+
+  // Buckets inherit filteredRuns' recency sort: groups come out ordered by
+  // newest member and runs stay sorted within each group.
+  let trainingRunGroups = $derived.by(() => {
+    if (trainingGroupBy === "none") return [];
+    const buckets = new Map();
+    for (const run of filteredRuns) {
+      const key = trainingGroupKey(run, trainingGroupBy);
+      if (!buckets.has(key)) buckets.set(key, []);
+      buckets.get(key).push(run);
+    }
+    return [...buckets].map(([key, runs]) => ({
+      key,
+      runs,
+      latestCreatedAt: runs[0]?.created_at || null,
+    }));
+  });
 
   let completedTotal = $derived(allRuns.filter((run) => run.train_result).length);
   let cancelledTotal = $derived(allRuns.filter((run) => getStatus(run) === "Cancelled").length);
@@ -882,6 +907,8 @@
         {groupCounts}
         {activeGroups}
         {filteredRuns}
+        runGroups={trainingRunGroups}
+        bind:groupBy={trainingGroupBy}
         {loading}
         {error}
         {modelName}
