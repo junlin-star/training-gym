@@ -405,12 +405,8 @@ export async function fetchRunLogs(
   const data = await res.json();
   return {
     logs: Array.isArray(data.logs) ? data.logs : [],
-    count: Number(data.count) || 0,
     hasMore: !!data.has_more,
     nextUntil: data.next_until ?? null,
-    oldestTs: data.oldest_ts ?? null,
-    newestTs: data.newest_ts ?? null,
-    appDone: !!data.app_done,
   };
 }
 

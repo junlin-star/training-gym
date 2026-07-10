@@ -12,7 +12,6 @@
   import ChartSkeleton from "../components/ChartSkeleton.svelte";
   import LineChart from "../components/LineChart.svelte";
   import ResizableTable from "../components/ResizableTable.svelte";
-  import DateTimePicker from "../components/DateTimePicker.svelte";
   import {
     fetchRunRollouts,
     fetchRollout,
@@ -353,6 +352,12 @@
     }
   }
 
+  // Ray wraps its `(Actor pid=N)` worker prefixes in ANSI color codes for the
+  // terminal; the dashboard renders plain text, so strip the escapes (keeping
+  // the prefix itself) before display.
+  const ANSI_RE = /\x1b\[[0-9;]*m/g;
+  const stripAnsi = (s) => s.replace(ANSI_RE, "");
+
   // ── Live Modal log stream (SSE, pure pass-through) ───────────────────
   const LOG_BUFFER_MAX = 2000;
   let logLines = $state([]); // [{task_id, line, ts}]
@@ -467,7 +472,7 @@
         const ts = payload.ts || Date.now();
         for (const p of parts) {
           if (!p.length) continue;
-          pendingLogLines.push({ id: logSeq++, task_id, line: p, ts });
+          pendingLogLines.push({ id: logSeq++, task_id, line: stripAnsi(p), ts });
         }
         if (pendingLogLines.length > LOG_BUFFER_MAX) {
           pendingLogLines = pendingLogLines.slice(-LOG_BUFFER_MAX);
@@ -537,7 +542,7 @@
   let isRunning = $derived(runStatus === "running");
 
   const HIST_PAGE = 500; // lines fetched per page
-  let histLines = $state([]); // [{id, task_id, line, ts, ts_ns}], oldest-first
+  let histLines = $state([]); // [{id, task_id, line}], oldest-first
   let histLoading = $state(false); // initial (newest) page in flight
   let histLoadingOlder = $state(false); // "load older" page in flight
   let histError = $state("");
@@ -547,20 +552,47 @@
   let histSeq = 0; // monotonic id for stable keying across prepends
   let histController = null; // aborts in-flight hist fetches when filters change
 
-  // Time-window filters, driven by a custom (fully themed) date-time picker.
-  // The picker emits epoch seconds; those are debounced into the values the
-  // fetch uses so nudging the time doesn't fire a request per change.
-  let histSinceEpoch = $state(null); // epoch seconds | null, bound to picker
-  let histUntilEpoch = $state(null);
-  let histSince = $state(""); // debounced string passed to the fetch
+  // Time-window filters. Plain inline text inputs (local time, "YYYY-MM-DD
+  // HH:MM") are the source of truth so typing is never reformatted mid-keystroke;
+  // quick-range buttons and the prefill write into them too. The text is
+  // debounced + parsed into the epoch-second values the fetch uses.
+  let histSinceText = $state(""); // free-text local datetime | ""
+  let histUntilText = $state("");
+  let histSince = $state(""); // debounced epoch-seconds string for the fetch
   let histUntil = $state("");
 
+  const _pad = (x) => String(x).padStart(2, "0");
+  function epochToLocalInput(epoch) {
+    if (epoch == null || epoch === "") return "";
+    const d = new Date(Number(epoch) * 1000);
+    return (
+      `${d.getFullYear()}-${_pad(d.getMonth() + 1)}-${_pad(d.getDate())} ` +
+      `${_pad(d.getHours())}:${_pad(d.getMinutes())}`
+    );
+  }
+  function localInputToEpoch(str) {
+    if (!str || !str.trim()) return null;
+    const ms = new Date(str.trim().replace(" ", "T")).getTime();
+    return Number.isNaN(ms) ? null : Math.floor(ms / 1000);
+  }
+
+  // Format timestamp for log display: HH:MM:SS.mmm
+  function formatLogTimestamp(entry) {
+    const ts = entry.ts_ns ? entry.ts_ns / 1_000_000_000 : (entry.ts || 0);
+    if (!ts) return "";
+    const d = new Date(ts * 1000);
+    const ms = String(d.getMilliseconds()).padStart(3, "0");
+    return `${_pad(d.getHours())}:${_pad(d.getMinutes())}:${_pad(d.getSeconds())}.${ms}`;
+  }
+
   $effect(() => {
-    const since = histSinceEpoch;
-    const until = histUntilEpoch;
+    const since = histSinceText;
+    const until = histUntilText;
     const handle = window.setTimeout(() => {
-      histSince = since != null ? String(since) : "";
-      histUntil = until != null ? String(until) : "";
+      const s = localInputToEpoch(since);
+      const u = localInputToEpoch(until);
+      histSince = s != null ? String(s) : "";
+      histUntil = u != null ? String(u) : "";
     }, 350);
     return () => window.clearTimeout(handle);
   });
@@ -578,8 +610,8 @@
     // Wait until the run's timestamps are actually loaded.
     if (!startedAt && !endedAt) return;
     histPrefilledFor = id;
-    histSinceEpoch = startedAt || null;
-    histUntilEpoch = endedAt || null;
+    histSinceText = startedAt ? epochToLocalInput(startedAt) : "";
+    histUntilText = endedAt ? epochToLocalInput(endedAt) : "";
   });
 
   // Expand server entries into per-line rows (a single ClickHouse entry can
@@ -587,11 +619,11 @@
   function pushHistRows(target, entries) {
     for (const entry of entries) {
       const task_id = entry.task_id || "";
-      const ts = entry.ts;
-      const ts_ns = entry.ts_ns;
+      const ts = entry.ts || 0;
+      const ts_ns = entry.ts_ns || 0;
       for (const part of String(entry.line ?? "").split(/\r?\n/)) {
         if (!part.length) continue;
-        target.push({ id: histSeq++, task_id, line: part, ts, ts_ns });
+        target.push({ id: histSeq++, task_id, line: stripAnsi(part), ts, ts_ns });
       }
     }
   }
@@ -683,9 +715,13 @@
     if (el.scrollTop <= 40) void loadHistOlder();
   }
 
-  function clearHistRange() {
-    histSinceEpoch = null;
-    histUntilEpoch = null;
+  // Reset the range back to the run's lifetime (the same defaults the prefill
+  // seeds), rather than clearing it to an empty/unbounded window.
+  function resetHistRange() {
+    const startedAt = run?.started_at || run?.created_at || 0;
+    const endedAt = run?.ended_at || run?.completed_at || 0;
+    histSinceText = startedAt ? epochToLocalInput(startedAt) : "";
+    histUntilText = endedAt ? epochToLocalInput(endedAt) : "";
   }
 
   // Load the newest page when the Logs tab opens on a finished run, and reload
@@ -1363,7 +1399,7 @@
         <div class="bg-(--color-c-gray-08,#0e0e0e) rounded-[6px] p-[8px_12px] max-h-[420px] overflow-y-auto overflow-x-auto [font-family:ui-monospace,SFMono-Regular,Menlo,monospace] text-[12px] leading-[1.45] text-(--text)" bind:this={logTailEl}>
           {#each logLines as entry (entry.id)}
             <div class="flex gap-[10px] whitespace-pre">
-              <span class="shrink-0 text-(--muted) text-[10px] min-w-[64px] overflow-hidden text-ellipsis">{entry.task_id || ""}</span>
+              <span class="shrink-0 text-(--muted) text-[10px] min-w-[80px] [font-variant-numeric:tabular-nums]" title="{entry.task_id || ''}">{formatLogTimestamp(entry)}</span>
               <span class="flex-1 whitespace-pre-wrap break-all">{entry.line}</span>
             </div>
           {/each}
@@ -1394,30 +1430,29 @@
               <span class="dot dot-dim"></span> stored logs
             </span>
           </div>
-          <div class="flex flex-wrap items-center gap-[16px]">
-            <label class="inline-flex items-center gap-[8px]">
-              <span class="text-(--muted) text-[11px] uppercase tracking-[0.04em]">since</span>
-              <DateTimePicker
-                bind:value={histSinceEpoch}
-                placeholder="run start"
-                ariaLabel="Show logs since"
-              />
-            </label>
-            <label class="inline-flex items-center gap-[8px]">
-              <span class="text-(--muted) text-[11px] uppercase tracking-[0.04em]">until</span>
-              <DateTimePicker
-                bind:value={histUntilEpoch}
-                placeholder="run end"
-                ariaLabel="Show logs until"
-              />
-            </label>
+          <div class="flex flex-wrap items-center gap-[10px]">
+            <span class="text-(--muted) text-[11px] uppercase tracking-[0.04em]">Time range</span>
+            <input
+              class="w-[160px] bg-(--color-c-gray-10,#1c1c1c) text-(--text) [border:1px_solid_var(--border,#3a3a3a)] rounded-[5px] p-[5px_8px] text-[12px] [font-family:inherit] [font-variant-numeric:tabular-nums] focus:outline-none focus:[border-color:color-mix(in_srgb,var(--accent)_55%,transparent)]"
+              type="text"
+              placeholder="YYYY-MM-DD HH:MM"
+              bind:value={histSinceText}
+              aria-label="Show logs since"
+            />
+            <span class="text-(--muted-strong) text-[13px]">→</span>
+            <input
+              class="w-[160px] bg-(--color-c-gray-10,#1c1c1c) text-(--text) [border:1px_solid_var(--border,#3a3a3a)] rounded-[5px] p-[5px_8px] text-[12px] [font-family:inherit] [font-variant-numeric:tabular-nums] focus:outline-none focus:[border-color:color-mix(in_srgb,var(--accent)_55%,transparent)]"
+              type="text"
+              placeholder="YYYY-MM-DD HH:MM"
+              bind:value={histUntilText}
+              aria-label="Show logs until"
+            />
             <button
-              class="log-button"
-              onclick={clearHistRange}
-              disabled={histSinceEpoch == null && histUntilEpoch == null}
-              title="Clear the time range"
+              class="log-button text-[11px] px-[10px] py-[4px]"
+              onclick={resetHistRange}
+              title="Reset to the run's time range"
             >
-              Clear range
+              Reset
             </button>
           </div>
         </div>
@@ -1445,15 +1480,13 @@
             {/if}
             {#each histLines as entry (entry.id)}
               <div class="flex gap-[10px] whitespace-pre">
-                <span class="shrink-0 text-(--muted) text-[10px] min-w-[64px] overflow-hidden text-ellipsis">{entry.task_id || ""}</span>
+                <span class="shrink-0 text-(--muted) text-[10px] min-w-[80px] [font-variant-numeric:tabular-nums]" title="{entry.task_id || ''}">{formatLogTimestamp(entry)}</span>
                 <span class="flex-1 whitespace-pre-wrap break-all">{entry.line}</span>
               </div>
             {/each}
           </div>
-          <div class="mt-[6px] text-[11px] text-(--muted) [font-variant-numeric:tabular-nums] flex gap-[6px]">
-            <span>
-              Showing {histLines.length} line{histLines.length === 1 ? "" : "s"}
-            </span>
+          <div class="mt-[6px] text-[11px] text-(--muted) [font-variant-numeric:tabular-nums]">
+            Showing {histLines.length} line{histLines.length === 1 ? "" : "s"}
           </div>
         {/if}
       {/if}
