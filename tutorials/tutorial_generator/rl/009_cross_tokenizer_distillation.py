@@ -1321,35 +1321,24 @@ def _example_results():
     Metric                          Base    Trained      Delta
     ---------------------------------------------------------
     Eval rows                         30         30
-    Shaped reward                  0.707      0.769     +0.062
+    Shaped reward                  0.707      0.789     +0.082
     Terminal pass rate             53.3%      63.3%     +10.0%
-    Parsed tool call               90.0%      93.3%      +3.3%
-    First-call tool match          86.7%      90.0%      +3.3%
-
-    After 5 rollouts, we see the terminal pass rate increasing from 53.3% to 63.3%, a great sign that training is working!
-    With more rollouts, one would hope to see this number climb and eventually converge to 100%!
-    
-    One interesting experiment would be to ablate the OPD term from our GRPO advantage. Here were some preliminary results
-    from our own testing with OPD ablated over 5 rollouts: 
-
-    Metric                          Base    Trained      Delta
-    ---------------------------------------------------------
-    Eval rows                         30         30
-    Shaped reward                  0.707      0.819     +0.112
-    Terminal pass rate             53.3%      70.0%     +16.7%
     Parsed tool call               90.0%      96.7%      +6.7%
-    First-call tool match          86.7%      93.3%      +6.7%
+    First-call tool match          86.7%      93.3%      +6.6%
 
-    The signal is too rough to discern early in training, but possibly a teacher could be penalizing successful modes
-    of the student distribution. For reference, the teacher outperforms the student on the terminal pass rate by 30%.
+    After only 5 rollouts, shaped reward rose from 0.707 → 0.789 and terminal pass
+    rate from 53.3% → 63.3%, with parsed tool calls and first-call match also up. Still well below the teacher's
+    83.3% pass rate. More rollouts would likely see further improvement.
+
+    For reference, the teacher outperforms the base student on terminal pass rate by 30%:
 
     Metric                       Teacher
     -------------------------------------
     Eval rows                         30
-    Shaped reward                  0.744
+    Shaped reward                  0.751
     Terminal pass rate             83.3%
     Parsed tool call              100.0%
-    First-call tool match          90.0%
+    First-call tool match          93.3%
     """
 
 
