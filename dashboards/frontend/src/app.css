@@ -1599,13 +1599,12 @@ table.training-runs-table tr.run-row:hover:not(.row-selected) td:first-child {
 }
 
 table.training-runs-table td.row-open-cell {
+  position: relative;
   padding: 0;
 }
 
 .cell-open-button {
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
+  display: block;
   box-sizing: border-box;
   border: 0;
   background: transparent;
@@ -1630,7 +1629,18 @@ table.training-runs-table td.row-open-cell {
   color: var(--text-bright);
 }
 
+/* Make the entire table cell clickable */
+.cell-open-button::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+}
+
 .cell-open-button:focus-visible {
+  outline: none;
+}
+
+.cell-open-button:focus-visible::after {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
 }
