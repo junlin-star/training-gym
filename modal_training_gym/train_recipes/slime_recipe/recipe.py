@@ -51,6 +51,7 @@ _SLIME_SKIP = {
     "checkpoint",
     "custom_rm_function",
     "custom_generate_function",
+    "custom_reward_post_process_function",
     "custom_rollout_log_function",
     "custom_eval_rollout_log_function",
     "rollout_function",
@@ -245,6 +246,15 @@ class SlimeRecipe(BaseTrainRecipe):
     # See https://github.com/THUDM/slime/blob/0988f0f4a0ab55d1bb3ce6285a597d912144fa80/docs/en/get_started/customization.md#1-rollout-function---rollout-function-path
     custom_rm_function: Callable | None = None
     custom_generate_function: Callable | None = None
+    # Ships a callable the same way `custom_rm_function`/`custom_generate_function`
+    # do (see `build_slime_app`'s `_ship_callable`), writing the resulting import
+    # path into `extra_config["custom_reward_post_process_path"]`. Prefer this over
+    # setting `custom_reward_post_process_path` directly with a raw dotted string:
+    # a function defined in a `__main__` tutorial script has no reliably importable
+    # module name (its file may not even be a valid Python identifier, e.g.
+    # `007_my_tutorial.py`), so slime's own `importlib.import_module(...)` on that
+    # raw path fails with `ModuleNotFoundError` inside the Ray actor that loads it.
+    custom_reward_post_process_function: Callable | None = None
     custom_rollout_log_function: Callable | str | None = None
     custom_eval_rollout_log_function: Callable | str | None = None
     rollout_function: Callable | str | None = None

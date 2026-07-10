@@ -440,6 +440,11 @@ def build_slime_app(
         set_path=_set_custom_generate_path,
     )
     _ship_callable(
+        slime.custom_reward_post_process_function,
+        fallback_name="custom_reward_post_process",
+        set_path=_set_extra_config_path("custom_reward_post_process_path"),
+    )
+    _ship_callable(
         slime.rollout_function if callable(slime.rollout_function) else None,
         fallback_name="rollout_function",
         set_path=lambda path: object.__setattr__(slime, "rollout_function", path),
@@ -479,6 +484,8 @@ def build_slime_app(
         object.__setattr__(slime, "custom_rm_function", None)
     if slime.custom_generate_function is not None and _get_custom_generate_path():
         object.__setattr__(slime, "custom_generate_function", None)
+    if slime.custom_reward_post_process_function is not None:
+        object.__setattr__(slime, "custom_reward_post_process_function", None)
 
     # ── SGLang request params auto-wiring ─────────────────────────────────
     if slime.sglang_request_params:
