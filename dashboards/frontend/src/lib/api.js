@@ -373,6 +373,47 @@ export async function fetchRollout(trainingRunId, rolloutId) {
   return await res.json();
 }
 
+// Historical Modal logs for a run, served from the durable ClickHouse copy via
+// the backend's AppFetchLogs endpoint.
+//
+// Returns the newest `tail` lines within the (since, until] window, oldest
+// first, plus a `nextUntil` cursor for paging further back through history.
+export async function fetchRunLogs(
+  trainingRunId,
+  { since, until, tail, search, signal } = {},
+) {
+  const params = new URLSearchParams();
+  if (since != null && since !== "") params.set("since", String(since));
+  if (until != null && until !== "") params.set("until", String(until));
+  if (tail != null) params.set("tail", String(tail));
+  if (search) params.set("search", search);
+  const qs = params.toString();
+  const res = await fetch(
+    `${SERVER}/runs/${encodeURIComponent(trainingRunId)}/logs` + (qs ? `?${qs}` : ""),
+    { signal },
+  );
+  if (!res.ok) {
+    let detail = `HTTP ${res.status}`;
+    try {
+      const body = await res.json();
+      if (body?.detail) detail = String(body.detail);
+    } catch {
+      // non-JSON error body — keep the status-code message
+    }
+    throw new Error(detail);
+  }
+  const data = await res.json();
+  return {
+    logs: Array.isArray(data.logs) ? data.logs : [],
+    count: Number(data.count) || 0,
+    hasMore: !!data.has_more,
+    nextUntil: data.next_until ?? null,
+    oldestTs: data.oldest_ts ?? null,
+    newestTs: data.newest_ts ?? null,
+    appDone: !!data.app_done,
+  };
+}
+
 // Per-step advantage distribution summaries (one row per training step, each
 // carrying that step's overall stats + quantiles). Drives the fan chart that
 // shows how the advantage distribution shifts/spreads over training.

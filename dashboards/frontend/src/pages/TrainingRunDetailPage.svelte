@@ -12,11 +12,13 @@
   import ChartSkeleton from "../components/ChartSkeleton.svelte";
   import LineChart from "../components/LineChart.svelte";
   import ResizableTable from "../components/ResizableTable.svelte";
+  import DateTimePicker from "../components/DateTimePicker.svelte";
   import {
     fetchRunRollouts,
     fetchRollout,
     fetchRunAdvantages,
     fetchRunAdvantageStep,
+    fetchRunLogs,
   } from "../lib/api.js";
 
   let {
@@ -530,6 +532,173 @@
     logLines = [];
     logDropped = 0;
   }
+
+  // ── Historical logs (finished runs) ─────
+  let isRunning = $derived(runStatus === "running");
+
+  const HIST_PAGE = 500; // lines fetched per page
+  let histLines = $state([]); // [{id, task_id, line, ts, ts_ns}], oldest-first
+  let histLoading = $state(false); // initial (newest) page in flight
+  let histLoadingOlder = $state(false); // "load older" page in flight
+  let histError = $state("");
+  let histHasMore = $state(false); // older lines exist before the first row
+  let histNextUntil = $state(null); // `until` cursor for the next older page
+  let histTailEl = $state(null); // scroll container
+  let histSeq = 0; // monotonic id for stable keying across prepends
+
+  // Time-window filters, driven by a custom (fully themed) date-time picker.
+  // The picker emits epoch seconds; those are debounced into the values the
+  // fetch uses so nudging the time doesn't fire a request per change.
+  let histSinceEpoch = $state(null); // epoch seconds | null, bound to picker
+  let histUntilEpoch = $state(null);
+  let histSince = $state(""); // debounced string passed to the fetch
+  let histUntil = $state("");
+
+  $effect(() => {
+    const since = histSinceEpoch;
+    const until = histUntilEpoch;
+    const handle = window.setTimeout(() => {
+      histSince = since != null ? String(since) : "";
+      histUntil = until != null ? String(until) : "";
+    }, 350);
+    return () => window.clearTimeout(handle);
+  });
+
+  // Seed the pickers with the run's lifetime the first time we view a finished
+  // run. Guarded to once-per-run (via a non-reactive marker) so the 5s runs
+  // refresh — or the user's own edits/"Clear range" — aren't overwritten.
+  let histPrefilledFor = null;
+  $effect(() => {
+    const id = runId;
+    const running = isRunning;
+    const startedAt = run?.started_at || run?.created_at || 0;
+    const endedAt = run?.ended_at || run?.completed_at || 0;
+    if (!id || running || histPrefilledFor === id) return;
+    // Wait until the run's timestamps are actually loaded.
+    if (!startedAt && !endedAt) return;
+    histPrefilledFor = id;
+    histSinceEpoch = startedAt || null;
+    histUntilEpoch = endedAt || null;
+  });
+
+  // Expand server entries into per-line rows (a single ClickHouse entry can
+  // carry an embedded newline), matching how the live stream splits lines.
+  function pushHistRows(target, entries) {
+    for (const entry of entries) {
+      const task_id = entry.task_id || "";
+      const ts = entry.ts;
+      const ts_ns = entry.ts_ns;
+      for (const part of String(entry.line ?? "").split(/\r?\n/)) {
+        if (!part.length) continue;
+        target.push({ id: histSeq++, task_id, line: part, ts, ts_ns });
+      }
+    }
+  }
+
+  function resetHist() {
+    histLines = [];
+    histError = "";
+    histHasMore = false;
+    histNextUntil = null;
+    histLoading = false;
+    histLoadingOlder = false;
+  }
+
+  async function loadHistInitial(id, { search, since, until }, signal) {
+    histLoading = true;
+    histError = "";
+    try {
+      const data = await fetchRunLogs(id, {
+        tail: HIST_PAGE,
+        search,
+        since,
+        until,
+        signal,
+      });
+      if (signal?.aborted) return;
+      const rows = [];
+      pushHistRows(rows, data.logs);
+      histLines = rows;
+      histHasMore = data.hasMore;
+      histNextUntil = data.nextUntil;
+      // Land on the newest line, like the live tail does.
+      queueMicrotask(() => {
+        if (histTailEl) histTailEl.scrollTop = histTailEl.scrollHeight;
+      });
+    } catch (err) {
+      if (signal?.aborted) return;
+      histError = String(err?.message || err);
+    } finally {
+      if (!signal?.aborted) histLoading = false;
+    }
+  }
+
+  async function loadHistOlder() {
+    if (!histHasMore || histNextUntil == null || histLoadingOlder || histLoading) {
+      return;
+    }
+    histLoadingOlder = true;
+    histError = "";
+    // Anchor the viewport on the current top row: after prepending older
+    // lines we restore the scroll offset so the reader doesn't jump.
+    const el = histTailEl;
+    const prevScrollHeight = el ? el.scrollHeight : 0;
+    const prevScrollTop = el ? el.scrollTop : 0;
+    try {
+      const data = await fetchRunLogs(runId, {
+        // Page below the oldest row we have, but keep the user's `since` floor
+        // so we never fetch before their chosen start.
+        since: histSince,
+        until: histNextUntil,
+        tail: HIST_PAGE,
+        search: logSearch,
+      });
+      const older = [];
+      pushHistRows(older, data.logs);
+      histLines = older.concat(histLines);
+      histHasMore = data.hasMore;
+      histNextUntil = data.nextUntil;
+      queueMicrotask(() => {
+        if (el) el.scrollTop = el.scrollHeight - prevScrollHeight + prevScrollTop;
+      });
+    } catch (err) {
+      histError = String(err?.message || err);
+    } finally {
+      histLoadingOlder = false;
+    }
+  }
+
+  // Auto-load the next older page as the reader scrolls near the top, so the
+  // window grows backward through history without a button press.
+  function onHistScroll() {
+    const el = histTailEl;
+    if (!el) return;
+    if (el.scrollTop <= 40) void loadHistOlder();
+  }
+
+  function clearHistRange() {
+    histSinceEpoch = null;
+    histUntilEpoch = null;
+  }
+
+  // Load the newest page when the Logs tab opens on a finished run, and reload
+  // when the debounced search/since/until change. Running runs are handled by
+  // the SSE effect above, which no-ops for terminal runs.
+  $effect(() => {
+    const id = runId;
+    const tab = activeTab;
+    const running = isRunning;
+    const search = logSearch;
+    const since = histSince;
+    const until = histUntil;
+
+    resetHist();
+    if (tab !== "logs" || !id || running) return;
+
+    const controller = new AbortController();
+    void loadHistInitial(id, { search, since, until }, controller.signal);
+    return () => controller.abort();
+  });
 
   function _seriesStats(getY) {
     if (!rolloutSummaries.length) return null;
@@ -1108,6 +1277,7 @@
       </div>
     {:else if activeTab === "logs"}
       <div class="tab-panel">
+      {#if isRunning}
       <div class="flex justify-end mb-[8px]">
         <span class="inline-flex items-center gap-[6px] text-[11px] text-(--muted) uppercase tracking-[0.04em]">
           {#if logState === "streaming"}
@@ -1197,6 +1367,84 @@
             </span>
           {/if}
         </div>
+      {/if}
+      {:else}
+        <!-- Finished run: page through the durable ClickHouse copy on demand. -->
+        <div class="flex flex-col gap-[12px] mb-[12px] p-[12px_14px] rounded-[8px] bg-(--color-c-gray-08,#161616) [border:1px_solid_var(--border,#2f2f2f)]">
+          <div class="flex items-center gap-[12px]">
+            <input
+              class="flex-1 min-w-0 bg-(--color-c-gray-10,#1c1c1c) text-(--text) [border:1px_solid_var(--border,#3a3a3a)] rounded-[5px] p-[6px_10px] text-[12px] [font-family:inherit] focus:outline-none focus:[border-color:color-mix(in_srgb,var(--accent)_55%,transparent)]"
+              type="search"
+              placeholder="filter substring…"
+              bind:value={logSearchInput}
+              aria-label="Filter log lines"
+            />
+            <span class="inline-flex items-center gap-[6px] text-[11px] text-(--muted) uppercase tracking-[0.04em] shrink-0">
+              <span class="dot dot-dim"></span> stored logs
+            </span>
+          </div>
+          <div class="flex flex-wrap items-center gap-[16px]">
+            <label class="inline-flex items-center gap-[8px]">
+              <span class="text-(--muted) text-[11px] uppercase tracking-[0.04em]">since</span>
+              <DateTimePicker
+                bind:value={histSinceEpoch}
+                placeholder="run start"
+                ariaLabel="Show logs since"
+              />
+            </label>
+            <label class="inline-flex items-center gap-[8px]">
+              <span class="text-(--muted) text-[11px] uppercase tracking-[0.04em]">until</span>
+              <DateTimePicker
+                bind:value={histUntilEpoch}
+                placeholder="run end"
+                ariaLabel="Show logs until"
+              />
+            </label>
+            <button
+              class="log-button"
+              onclick={clearHistRange}
+              disabled={histSinceEpoch == null && histUntilEpoch == null}
+              title="Clear the time range"
+            >
+              Clear range
+            </button>
+          </div>
+        </div>
+
+        {#if histError}
+          <div class="detail-empty">Failed to load logs: {histError}</div>
+        {/if}
+
+        {#if histLoading && !histLines.length}
+          <div class="detail-empty">Loading logs…</div>
+        {:else if !histLines.length}
+          <div class="detail-empty">
+            {#if logSearch}
+              No log lines matching "{logSearch}".
+            {:else}
+              No logs recorded for this run.
+            {/if}
+          </div>
+        {:else}
+          <div class="bg-(--color-c-gray-08,#0e0e0e) rounded-[6px] p-[8px_12px] max-h-[420px] overflow-y-auto overflow-x-auto [font-family:ui-monospace,SFMono-Regular,Menlo,monospace] text-[12px] leading-[1.45] text-(--text)" bind:this={histTailEl} onscroll={onHistScroll}>
+            {#if histHasMore}
+              <div class="text-center text-[10px] text-(--muted) pb-[6px]">
+                {histLoadingOlder ? "Loading older lines…" : "Scroll up for older lines"}
+              </div>
+            {/if}
+            {#each histLines as entry (entry.id)}
+              <div class="flex gap-[10px] whitespace-pre">
+                <span class="shrink-0 text-(--muted) text-[10px] min-w-[64px] overflow-hidden text-ellipsis">{entry.task_id || ""}</span>
+                <span class="flex-1 whitespace-pre-wrap break-all">{entry.line}</span>
+              </div>
+            {/each}
+          </div>
+          <div class="mt-[6px] text-[11px] text-(--muted) [font-variant-numeric:tabular-nums] flex gap-[6px]">
+            <span>
+              Showing {histLines.length} line{histLines.length === 1 ? "" : "s"}
+            </span>
+          </div>
+        {/if}
       {/if}
       </div>
     {/if}
