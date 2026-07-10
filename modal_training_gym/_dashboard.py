@@ -897,7 +897,7 @@ def fastapi_app():
         Query params:
           - ``since`` / ``until``: window bounds as epoch seconds, ISO 8601, or a
             relative age (``30m`` / ``2h`` / ``1d`` / ``45s`` = "N ago").
-            ``since`` and ``until`` are both inclusive. Defaults to the run's
+            ``since`` is exclusive and ``until`` is inclusive. Defaults to the run's
             lifetime.
           - ``tail``: max entries to return (clamped to 1..20000, default 100).
             These are the newest entries in the window (ClickHouse caps a single
@@ -973,7 +973,7 @@ def fastapi_app():
                 entry: LogEntry = {
                     "task_id": batch.task_id,
                     "line": item.data,
-                    "fd": int(getattr(item, "file_descriptor", 0) or 0),
+                    "fd": item.file_descriptor,
                 }
                 ts = float(getattr(item, "timestamp", 0) or 0)
                 ts_ns = int(getattr(item, "timestamp_ns", 0) or 0)
