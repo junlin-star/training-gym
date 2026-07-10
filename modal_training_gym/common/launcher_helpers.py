@@ -224,8 +224,13 @@ def run_prepare_dataset(
         shutil.rmtree(data_dir, ignore_errors=True)
     dataset.prepare(prompt_data, eval_paths)
     dataset.validate_prepared(prompt_data)
+    # Resolvers always invent an ``eval.*`` path; some datasets (Toolathlon,
+    # BFCL) only materialize the train split and use a separate DatasetConfig
+    # for offline eval. Match slime/miles train prepare: validate only what
+    # actually exists.
     for ep in (eval_paths or {}).values():
-        dataset.validate_prepared(ep)
+        if os.path.exists(ep):
+            dataset.validate_prepared(ep)
     data_volume.commit()
 
 

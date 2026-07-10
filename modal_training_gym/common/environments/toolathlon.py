@@ -821,8 +821,15 @@ class ToolathlonTrajectoryDataset(DatasetConfig):
         }
 
     def prepare(self, path: str, eval_paths: dict | None = None) -> None:
+        """Write this instance's split to ``path``.
+
+        ``eval_paths`` is ignored: train vs eval are separate dataset instances,
+        not companion files from one ``prepare()``. Recipe resolvers still invent
+        an ``eval.*`` path; validation skips missing files.
+        """
         import os
 
+        del eval_paths
         rows = self._load_split()
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w") as f:
