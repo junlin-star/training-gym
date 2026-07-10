@@ -1054,6 +1054,15 @@ def build_slime_app(
                     "resuming training from last saved iteration."
                 )
                 object.__setattr__(slime, "load", save_root)
+                # Weights-only checkpoints (``no_save_optim``) have no Adam state;
+                # Megatron will KeyError on state_dict["optimizer"] unless we skip it.
+                if getattr(slime, "no_save_optim", False) and not getattr(
+                    slime, "no_load_optim", False
+                ):
+                    print(
+                        "WARNING: no_save_optim=True — enabling no_load_optim for resume."
+                    )
+                    object.__setattr__(slime, "no_load_optim", True)
             elif (
                 slime.megatron_to_hf_mode == "bridge" and not slime.ref_load and _hf_ref
             ):
