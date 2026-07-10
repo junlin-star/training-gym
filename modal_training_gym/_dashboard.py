@@ -978,7 +978,7 @@ def fastapi_app():
                 entry: LogEntry = {
                     "task_id": batch.task_id,
                     "line": item.data,
-                    "fd": item.file_descriptor,
+                    "fd": int(getattr(item, "file_descriptor", 0) or 0),
                 }
                 ts = float(getattr(item, "timestamp", 0) or 0)
                 ts_ns = int(getattr(item, "timestamp_ns", 0) or 0)
