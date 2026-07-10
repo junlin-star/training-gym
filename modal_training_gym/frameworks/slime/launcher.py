@@ -274,10 +274,10 @@ def aggregate_step_times(
     SUBSTEP_ORDER: list[str],
     OPTIONAL_SUBSTEPS: set[str],
 ) -> tuple[
-    dict[str, dict[str, float | None]],
+    dict[str, dict[str, int | None]],
     dict[str, dict[str, dict[str, float | None]]],
 ]:
-    step_times: dict[str, dict[str, float | None]] = {}
+    step_times: dict[str, dict[str, int | None]] = {}
     substep_times: dict[str, dict[str, dict[str, float | None]]] = {}
 
     for current_step_num in range(1, num_steps + 1):
@@ -293,7 +293,7 @@ def aggregate_step_times(
 
         duration = None
         if start_time is not None and end_time is not None:
-            duration = round(end_time - start_time, 2)
+            duration = end_time - start_time
 
         step_times[f"{current_step_num}"] = {
             "start": start_time,
