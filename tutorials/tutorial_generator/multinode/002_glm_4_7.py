@@ -184,6 +184,7 @@ def _serve_checkpoint():
         recipe=GLM_4_7_SglangRecipe(),
         app_name="glm-4-7-serve",
         served_model_name="glm-4-7",
+        unauthenticated=True,
     ).serve()
     print(f"Deployed to {deployment.url}")
 

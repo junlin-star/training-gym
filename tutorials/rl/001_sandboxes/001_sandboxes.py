@@ -127,7 +127,10 @@ def _main_impl() -> None:
         ),
     )
 
-    base_deployment = DeploymentConfig(model=base_model).serve()
+    base_deployment = DeploymentConfig(
+        model=base_model,
+        unauthenticated=True,
+    ).serve()
     print(f"Base model URL: {base_deployment.url}")
 
     eval_config = HarborEval(
@@ -179,6 +182,7 @@ def _main_impl() -> None:
         checkpoint=checkpoint,
         app_name="qwen3-4b-hello-world-serve",
         served_model_name="qwen3-4b-hello-world",
+        unauthenticated=True,
     ).serve()
     print(f"Trained model URL: {trained_deployment.url}")
 
