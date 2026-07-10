@@ -15,6 +15,7 @@ import secrets as _secrets
 import time
 from pathlib import Path
 from typing import Awaitable, Callable
+from datetime import datetime, timezone
 
 import modal
 
@@ -106,6 +107,45 @@ PASSWORD_EXEMPT_PATHS = frozenset(
 def _is_local() -> bool:
     """True when we're not running inside a Modal container."""
     return not os.environ.get("MODAL_IS_REMOTE")
+
+
+def _parse_log_time(value: str, now: float) -> float | None:
+    """Parse a log time bound into epoch seconds, or ``None`` if unset.
+
+    It accepts the following formats:
+
+      - empty string → ``None`` (caller supplies a default)
+      - a relative age like ``30m`` / ``2h`` / ``1d`` / ``45s`` → ``now`` minus
+        that duration (i.e. "N ago")
+      - epoch seconds, e.g. ``1720557600`` or ``1720557600.5``
+      - ISO 8601, e.g. ``2026-07-09T18:00:00Z`` (naive values are read as UTC)
+
+    Returns ``None`` for anything unparseable so the caller falls back to its
+    default rather than 400-ing on a slightly-off timestamp.
+    """
+    text = (value or "").strip()
+    if not text:
+        return None
+
+    relative = re.fullmatch(r"(\d+)\s*([smhd])", text)
+    if relative:
+        amount = int(relative.group(1))
+        unit_secs = {"s": 1, "m": 60, "h": 3600, "d": 86400}[relative.group(2)]
+        return now - amount * unit_secs
+
+    try:
+        return float(text)
+    except ValueError:
+        pass
+
+    iso = text[:-1] + "+00:00" if text.endswith("Z") else text
+    try:
+        parsed = datetime.fromisoformat(iso)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.timestamp()
 
 
 def ensure_creds_secret(interactive: bool = False) -> bool:
@@ -827,6 +867,187 @@ def fastapi_app():
                 "Connection": "keep-alive",
                 "X-Accel-Buffering": "no",
             },
+        )
+
+    # ── Historical Modal logs ──────────────
+
+    @web.get("/api/runs/{training_run_id}/logs")
+    async def get_run_logs(
+        training_run_id: str,
+        since: str = "",
+        until: str = "",
+        tail: int = 100,
+        search: str = "",
+    ):
+        """Historical log fetch for a run, backed by Modal's ``AppFetchLogs``.
+
+        Returns the most recent ``tail`` entries within the ``[since, until]``
+        window, oldest-first.
+
+        Query params:
+          - ``since`` / ``until``: window bounds as epoch seconds, ISO 8601, or a
+            relative age (``30m`` / ``2h`` / ``1d`` / ``45s`` = "N ago").
+            ``since`` and ``until`` are both inclusive. Defaults to the run's
+            lifetime.
+          - ``tail``: max entries to return (clamped to 1..20000, default 100).
+            These are the newest entries in the window (ClickHouse caps a single
+            fetch at 20000).
+          - ``search``: case-insensitive substring filter.
+        
+        Returns a JSON object with the following fields:
+          - ``training_run_id``: the training run ID
+          - ``modal_app_id``: the Modal app ID
+          - ``logs``: a list of log entries
+          - ``count``: the total number of log entries
+          - ``tail``: the number of log entries returned
+          - ``has_more``: whether there are more log entries to fetch
+          - ``app_done``: whether the Modal app is done
+          - ``since``: the start time of the log window
+          - ``until``: the end time of the log window
+          - ``oldest_ts``: the timestamp of the oldest log entry
+          - ``newest_ts``: the timestamp of the newest log entry
+          - ``oldest_ts_ns``: the timestamp of the oldest log entry in nanoseconds
+          - ``newest_ts_ns``: the timestamp of the newest log entry in nanoseconds
+          - ``next_until``: the timestamp of the next log entry to fetch
+        """
+        from google.protobuf.timestamp_pb2 import Timestamp
+
+        from modal.client import _Client
+        from modal_proto import api_pb2
+
+        run = await _get_run_or_404(training_run_id)
+
+        app_id = (run.modal_app_id or "").strip()
+        if not app_id:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"TrainingRun {training_run_id!r} has no modal_app_id "
+                    "yet — logs not available."
+                ),
+            )
+
+        now = time.time()
+        since_ts = _parse_log_time(since, now)
+        until_ts = _parse_log_time(until, now)
+        
+        if since_ts is None:
+            since_ts = float(run.started_at or run.created_at or 0)
+        if until_ts is None:
+            until_ts = float(run.ended_at or run.completed_at or 0) or now
+        if until_ts <= 0:
+            until_ts = now
+        since_ts = max(0.0, since_ts)
+
+        limit = max(1, min(int(tail or 100), 20_000))
+
+        token_id = os.environ.get("MODAL_TOKEN_ID", "")
+        token_secret = os.environ.get("MODAL_TOKEN_SECRET", "")
+        if not token_id or not token_secret:
+            raise HTTPException(
+                status_code=503,
+                detail="No Modal credentials configured. Run training-gym setup.",
+            )
+        try:
+            client = await _Client.from_credentials(token_id, token_secret)
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"Modal auth: {exc!s}")
+
+        def _to_timestamp(secs: float) -> Timestamp:
+            ts = Timestamp()
+            ts.seconds = int(secs)
+            ts.nanos = int((secs - int(secs)) * 1e9)
+            return ts
+
+        req = api_pb2.AppFetchLogsRequest(
+            app_id=app_id,
+            since=_to_timestamp(since_ts),
+            until=_to_timestamp(until_ts),
+            limit=limit,
+            search_text=search.strip(),
+        )
+        try:
+            resp = await client.stub.AppFetchLogs(req)
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"AppFetchLogs: {exc!s}")
+
+        logs: list[JsonDict] = []
+        app_done = False
+        for batch in resp.batches:
+            if batch.app_done:
+                app_done = True
+            for item in batch.items:
+                if not item.data:
+                    continue
+                entry: JsonDict = {
+                    "task_id": batch.task_id,
+                    "line": item.data,
+                    "fd": int(getattr(item, "file_descriptor", 0) or 0),
+                }
+                ts = float(getattr(item, "timestamp", 0) or 0)
+                ts_ns = int(getattr(item, "timestamp_ns", 0) or 0)
+                if ts:
+                    entry["ts"] = ts
+                if ts_ns:
+                    entry["ts_ns"] = ts_ns
+                logs.append(entry)
+
+        # AppFetchLogs already returns oldest-first, but sort defensively so the
+        # cursor math below is correct regardless of batch/item ordering.
+        def _sort_key(entry: JsonDict) -> tuple[int, float]:
+            ns = entry.get("ts_ns")
+            ts = entry.get("ts")
+            return (
+                int(ns) if isinstance(ns, int) else 0,
+                float(ts) if isinstance(ts, (int, float)) else 0.0,
+            )
+
+        logs.sort(key=_sort_key)
+
+        count = len(logs)
+        has_more = count >= limit
+
+        def _entry_ts(entry: JsonDict) -> float | None:
+            ts = entry.get("ts")
+            return float(ts) if isinstance(ts, (int, float)) else None
+
+        def _entry_ts_ns(entry: JsonDict) -> int | None:
+            ns = entry.get("ts_ns")
+            return int(ns) if isinstance(ns, int) else None
+
+        oldest_ts = _entry_ts(logs[0]) if logs else None
+        newest_ts = _entry_ts(logs[-1]) if logs else None
+        oldest_ts_ns = _entry_ts_ns(logs[0]) if logs else None
+        newest_ts_ns = _entry_ts_ns(logs[-1]) if logs else None
+
+        # Cursor to fetch the next older page: one microsecond before the oldest
+        # entry (ClickHouse's `until` is inclusive and stores microseconds, so
+        # this excludes the boundary entry we already returned).
+        next_until: float | None = None
+        if has_more and (oldest_ts is not None or oldest_ts_ns is not None):
+            if oldest_ts_ns is not None:
+                oldest_us = oldest_ts_ns // 1_000
+            else:
+                oldest_us = int((oldest_ts or 0.0) * 1_000_000)
+            next_until = (oldest_us - 1) / 1_000_000
+
+        return JSONResponse(
+            {
+                "training_run_id": training_run_id,
+                "modal_app_id": app_id,
+                "logs": logs,
+                "count": count,
+                "tail": limit,
+                "has_more": has_more,
+                "app_done": app_done,
+                "since": since_ts,
+                "until": until_ts,
+                "oldest_ts": oldest_ts,
+                "newest_ts": newest_ts,
+                "oldest_ts_ns": oldest_ts_ns,
+                "newest_ts_ns": newest_ts_ns,
+                "next_until": next_until,
+            }
         )
 
     # ── Train results ────────────────────────────────────────────────────
