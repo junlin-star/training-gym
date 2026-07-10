@@ -18,10 +18,6 @@ from typing import Awaitable, Callable, NotRequired, TypedDict
 from datetime import datetime, timezone
 
 import modal
-import json
-from google.protobuf.timestamp_pb2 import Timestamp
-from modal.client import _Client
-from modal_proto import api_pb2
 
 # Imported at module scope so FastAPI can resolve the ``request: Request``
 # annotation in stream_run_logs(). Under ``from __future__ import
@@ -752,6 +748,11 @@ def fastapi_app():
             in any 1-second window are dropped; a single ``dropped`` event
             is emitted per second summarizing the count.
         """
+        import json
+
+        from modal.client import _Client
+        from modal_proto import api_pb2
+
         run = await _get_run_or_404(training_run_id)
 
         app_id = (run.modal_app_id or "").strip()
@@ -908,6 +909,11 @@ def fastapi_app():
           - ``has_more``: whether there are more log entries to fetch
           - ``next_until``: the timestamp of the next log entry to fetch
         """
+        from google.protobuf.timestamp_pb2 import Timestamp
+
+        from modal.client import _Client
+        from modal_proto import api_pb2
+
         run = await _get_run_or_404(training_run_id)
 
         app_id = (run.modal_app_id or "").strip()
@@ -982,26 +988,22 @@ def fastapi_app():
                     entry["ts_ns"] = ts_ns
                 logs.append(entry)
 
-        # AppFetchLogs already returns oldest-first, but sort defensively so the
-        # cursor math below is correct regardless of batch/item ordering.
-        logs.sort(
-            key=lambda e: e.get("ts_ns") or int((e.get("ts") or 0.0) * 1_000_000_000)
-        )
+        # An entry's time in nanoseconds: prefer the exact `ts_ns`, else scale
+        # the second-resolution `ts`.
+        def _entry_ns(e: LogEntry) -> int:
+            return e.get("ts_ns") or int((e.get("ts") or 0.0) * 1_000_000_000)
+
+        # AppFetchLogs already returns oldest-first, but sort defensively.
+        logs.sort(key=_entry_ns)
 
         has_more = len(logs) >= limit
 
-        # Cursor to fetch the next older page: one microsecond before the oldest entry
+        # Cursor to fetch the next older page: one nanosecond before the oldest
+        # entry.
         next_until: float | None = None
         if has_more and logs:
-            oldest = logs[0]
-            if oldest_ns := oldest.get("ts_ns"):
-                oldest_us = oldest_ns // 1_000
-            elif oldest_ts := oldest.get("ts"):
-                oldest_us = int(oldest_ts * 1_000_000)
-            else:
-                oldest_us = 0
-            if oldest_us:
-                next_until = (oldest_us - 1) / 1_000_000
+            oldest_ns = _entry_ns(logs[0])
+            next_until = (oldest_ns - 1) / 1_000_000_000
 
         return JSONResponse(
             {
