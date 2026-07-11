@@ -628,7 +628,7 @@ def _render_launch_cell(bucket: str, name: str) -> str:
         f"/tutorials/{bucket}/{name}/{name}.ipynb"
     )
     launch_url = (
-        f"https://modal.com/notebooks/new/{urllib.parse.quote(notebook_url, safe=':/')}"
+        f"https://modal.com/notebooks/new/{urllib.parse.quote(notebook_url, safe='')}"
     )
     # Explicit `rel="nofollow noopener noreferrer"` matches GitHub's own
     # auto-added rel, which ensures GitHub's markdown sanitizer preserves
