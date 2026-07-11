@@ -473,7 +473,7 @@
         if (!line) return;
         const parts = line.split(/\r?\n/);
         const task_id = payload.task_id || "";
-        const ts = payload.ts || Date.now();
+        const ts = payload.ts || Date.now() / 1000;
         for (const p of parts) {
           if (!p.length) continue;
           pendingLogLines.push({ id: logSeq++, task_id, line: stripAnsi(p), ts });
