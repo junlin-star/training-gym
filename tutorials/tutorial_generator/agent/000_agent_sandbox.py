@@ -211,7 +211,7 @@ def _sandbox_section():
 def _create_sandbox():
     sandbox_app = modal.App.lookup("agent-sandbox-tutorial", create_if_missing=True)
 
-    sandbox = modal.Sandbox.create(
+    sandbox = modal.Sandbox._experimental_create(
         "sleep", "infinity",
         app=sandbox_app,
         image=modal.Image.debian_slim(python_version="3.12"),
