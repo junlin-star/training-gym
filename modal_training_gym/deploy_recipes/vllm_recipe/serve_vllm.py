@@ -39,6 +39,7 @@ def build_vllm_serve_app(
     deployment_id: str | None = None,
 ) -> "App":
     import modal
+    import modal.experimental
     from modal import App, Image, Volume
 
     from modal_training_gym.common import hf_secrets
@@ -99,7 +100,7 @@ def build_vllm_serve_app(
         startup_timeout=10 * 60,
         proxy_regions=["us-east"],
     )
-    @modal.concurrent(max_inputs=32)
+    @modal.concurrent(target_inputs=32)
     class Server:
         @modal.enter()
         def startup(self):
