@@ -1,5 +1,5 @@
 <script>
-  import { ArrowLeft, ChevronLeft, ChevronRight, Download, ExternalLink, Minimize2, X } from "lucide-svelte";
+  import { ArrowLeft, Check, ChevronLeft, ChevronRight, Download, ExternalLink, Minimize2, X } from "lucide-svelte";
   import Tabs from "../components/Tabs.svelte";
   import RunSummary from "../components/RunSummary.svelte";
   import StatusPill from "../components/StatusPill.svelte";
@@ -373,6 +373,10 @@
   let logRateCap = $state(0); // 0 = no cap
   let logFollow = $state(true); // auto-scroll to bottom
 
+  // Column visibility toggles, shared by the live + historical log views.
+  let showTimestamps = $state(true);
+  let showTaskIds = $state(false);
+
   // The backend emits one SSE event per log line. Mutating `logLines` (and
   // auto-scrolling) on every message means hundreds of synchronous reactive
   // updates per second under a chatty run, which freezes the tab. Instead we
@@ -612,6 +616,8 @@
     histPrefilledFor = id;
     histSinceText = startedAt ? epochToLocalInput(startedAt) : "";
     histUntilText = endedAt ? epochToLocalInput(endedAt) : "";
+    histSince = startedAt ? String(startedAt) : "";
+    histUntil = endedAt ? String(endedAt) : "";
   });
 
   // Expand server entries into per-line rows (a single ClickHouse entry can
@@ -1324,6 +1330,14 @@
       </div>
     {:else if activeTab === "logs"}
       <div class="tab-panel">
+      {#snippet displayToggle(label, checked, toggle)}
+        <button type="button" class="inline-flex items-center gap-[6px] bg-transparent [border:0] p-0 cursor-pointer text-(--muted) text-[11px] [font:inherit]" onclick={toggle}>
+          <span class="checkmark" class:checked>
+            {#if checked}<Check size={11} />{/if}
+          </span>
+          <span>{label}</span>
+        </button>
+      {/snippet}
       {#if isRunning}
       <div class="flex justify-end mb-[8px]">
         <span class="inline-flex items-center gap-[6px] text-[11px] text-(--muted) uppercase tracking-[0.04em]">
@@ -1373,10 +1387,9 @@
             <option value={1000}>1000/s</option>
           </select>
         </label>
-        <label class="inline-flex items-center gap-[6px] text-(--muted) text-[11px]">
-          <input type="checkbox" bind:checked={logFollow} />
-          <span>Follow tail</span>
-        </label>
+        {@render displayToggle("Follow tail", logFollow, () => (logFollow = !logFollow))}
+        {@render displayToggle("Timestamps", showTimestamps, () => (showTimestamps = !showTimestamps))}
+        {@render displayToggle("Task IDs", showTaskIds, () => (showTaskIds = !showTaskIds))}
       </div>
 
       {#if logState === "error" && logError}
@@ -1399,7 +1412,12 @@
         <div class="bg-(--color-c-gray-08,#0e0e0e) rounded-[6px] p-[8px_12px] max-h-[420px] overflow-y-auto overflow-x-auto [font-family:ui-monospace,SFMono-Regular,Menlo,monospace] text-[12px] leading-[1.45] text-(--text)" bind:this={logTailEl}>
           {#each logLines as entry (entry.id)}
             <div class="flex gap-[10px] whitespace-pre">
-              <span class="shrink-0 text-(--muted) text-[10px] min-w-[80px] [font-variant-numeric:tabular-nums]" title="{entry.task_id || ''}">{formatLogTimestamp(entry)}</span>
+              {#if showTimestamps}
+                <span class="shrink-0 text-(--muted) text-[10px] min-w-[80px] [font-variant-numeric:tabular-nums]">{formatLogTimestamp(entry)}</span>
+              {/if}
+              {#if showTaskIds}
+                <span class="shrink-0 text-(--muted) text-[10px]">{entry.task_id || ""}</span>
+              {/if}
               <span class="flex-1 whitespace-pre-wrap break-all">{entry.line}</span>
             </div>
           {/each}
@@ -1454,6 +1472,10 @@
             >
               Reset
             </button>
+            <div class="ml-auto inline-flex items-center gap-[12px]">
+              {@render displayToggle("Timestamps", showTimestamps, () => (showTimestamps = !showTimestamps))}
+              {@render displayToggle("Task IDs", showTaskIds, () => (showTaskIds = !showTaskIds))}
+            </div>
           </div>
         </div>
 
@@ -1480,7 +1502,12 @@
             {/if}
             {#each histLines as entry (entry.id)}
               <div class="flex gap-[10px] whitespace-pre">
-                <span class="shrink-0 text-(--muted) text-[10px] min-w-[80px] [font-variant-numeric:tabular-nums]" title="{entry.task_id || ''}">{formatLogTimestamp(entry)}</span>
+                {#if showTimestamps}
+                  <span class="shrink-0 text-(--muted) text-[10px] min-w-[80px] [font-variant-numeric:tabular-nums]">{formatLogTimestamp(entry)}</span>
+                {/if}
+                {#if showTaskIds}
+                  <span class="shrink-0 text-(--muted) text-[10px]">{entry.task_id || ""}</span>
+                {/if}
                 <span class="flex-1 whitespace-pre-wrap break-all">{entry.line}</span>
               </div>
             {/each}
