@@ -98,13 +98,13 @@ def _modal_proxy_auth_headers() -> dict[str, str]:
 def _raise_for_proxy_auth(status_code: int, url: str) -> None:
     """Turn a 401 into an actionable proxy-auth hint.
 
-    Served endpoints (``DeploymentConfig.serve()``) require Modal proxy auth
-    by default. For SGLang, ``DeploymentConfig(unauthenticated=True)`` opts
-    out. A 401 almost always means the ``MODAL_KEY`` / ``MODAL_SECRET``
-    proxy-auth token pair is missing from the environment (so
-    :func:`_modal_proxy_auth_headers` returned no headers) rather than a real
-    authorization problem — surface that instead of a bare
-    ``HTTPError``/``TimeoutError``. No-op for any other status.
+    SGLang endpoints are public by default (``unauthenticated=True``). When
+    an endpoint was served with ``unauthenticated=False``, a 401 almost
+    always means the ``MODAL_KEY`` / ``MODAL_SECRET`` proxy-auth token pair
+    is missing from the environment (so :func:`_modal_proxy_auth_headers`
+    returned no headers) rather than a real authorization problem — surface
+    that instead of a bare ``HTTPError``/``TimeoutError``. No-op for any
+    other status.
     """
     if status_code != 401:
         return
@@ -121,8 +121,9 @@ def _raise_for_proxy_auth(status_code: int, url: str) -> None:
         "https://modal.com/settings/proxy-auth-tokens and export MODAL_KEY (wk-…) "
         "and MODAL_SECRET (ws-…) in the shell that runs the eval/serve. For calls "
         "issued from remote workers (e.g. a custom rm/reward function), also "
-        "forward the pair into the worker via a modal.Secret. For SGLang "
-        "endpoints, pass DeploymentConfig(unauthenticated=True) for a public endpoint."
+        "forward the pair into the worker via a modal.Secret. SGLang endpoints "
+        "are public by default; pass DeploymentConfig(unauthenticated=False) to "
+        "require proxy auth."
     )
 
 
@@ -165,7 +166,7 @@ class DeploymentConfig:
 
     app_name: str | None = None
     served_model_name: str | None = None
-    unauthenticated: bool = False
+    unauthenticated: bool = True
 
     def _checkpoints_volume_name(self) -> str | None:
         if self.checkpoint is not None and self.checkpoint.checkpoints_volume_name:
@@ -253,12 +254,8 @@ class DeploymentConfig:
                 unauthenticated=self.unauthenticated,
             )
         elif isinstance(recipe, VllmRecipe):
-            if self.unauthenticated:
-                raise TrainingGymConfigError(
-                    "unauthenticated=True is only supported for SGLang "
-                    "(SglangRecipe). vLLM uses modal.experimental.http_server, "
-                    "which has no proxy-auth knob yet."
-                )
+            # unauthenticated is SGLang-only; vLLM's http_server has no
+            # proxy-auth knob, so the flag is ignored here.
             from modal_training_gym.deploy_recipes.vllm_recipe.serve_vllm import (
                 build_vllm_serve_app,
             )
@@ -428,6 +425,7 @@ class ModelDeployment(BaseModel):
         model = deployment_config.get("model")
         if isinstance(model, dict):
             deployment_config["model"] = ModelConfig(**model)
+        deployment_config.setdefault("unauthenticated", True)
         return DeploymentConfig(**deployment_config)
 
     @field_serializer("deployment_config")

@@ -5,10 +5,7 @@ from __future__ import annotations
 import inspect
 from unittest.mock import MagicMock, patch
 
-import pytest
-
-from modal_training_gym.common.deployment import DeploymentConfig
-from modal_training_gym.common.errors import TrainingGymConfigError
+from modal_training_gym.common.deployment import DeploymentConfig, ModelDeployment
 from modal_training_gym.common.models.base import ModelConfig
 from modal_training_gym.deploy_recipes.sglang_recipe.serve_sglang import (
     build_sglang_serve_app,
@@ -27,9 +24,9 @@ def test_vllm_builder_rejects_unauthenticated_param() -> None:
     assert "unauthenticated" not in inspect.signature(build_vllm_serve_app).parameters
 
 
-def test_default_unauthenticated_is_false() -> None:
+def test_default_unauthenticated_is_true() -> None:
     cfg = DeploymentConfig(model=ModelConfig(model_name="test/model"))
-    assert cfg.unauthenticated is False
+    assert cfg.unauthenticated is True
 
 
 def test_sglang_serve_forwards_unauthenticated() -> None:
@@ -68,11 +65,62 @@ def test_sglang_serve_forwards_unauthenticated() -> None:
     assert captured.get("unauthenticated") is True
 
 
-def test_vllm_serve_rejects_unauthenticated() -> None:
+def _serve_vllm(cfg: DeploymentConfig) -> tuple[object, MagicMock]:
+    fake_app = MagicMock()
+    fake_app.app_id = "ap-test"
+    fake_app.serve.get_web_url.return_value = "https://example.modal.run"
+    with (
+        patch(
+            "modal_training_gym.deploy_recipes.vllm_recipe.serve_vllm.build_vllm_serve_app",
+            return_value=fake_app,
+        ) as mock_build,
+        patch(
+            "modal_training_gym.common.deployment.ModelDeployment.save",
+            return_value=None,
+        ),
+        patch(
+            "modal_training_gym.common.deployment.modal_app_dashboard_url",
+            return_value="https://modal.com/apps/ap-test",
+        ),
+    ):
+        deployment = cfg.serve()
+    return deployment, mock_build
+
+
+def test_vllm_serve_ignores_unauthenticated_true() -> None:
     cfg = DeploymentConfig(
         model=ModelConfig(model_name="test/model"),
         recipe=VllmRecipe(),
         unauthenticated=True,
     )
-    with pytest.raises(TrainingGymConfigError, match="only supported for SGLang"):
-        cfg.serve()
+    deployment, mock_build = _serve_vllm(cfg)
+    assert deployment.url == "https://example.modal.run"
+    mock_build.assert_called_once()
+    assert "unauthenticated" not in mock_build.call_args.kwargs
+
+
+def test_vllm_serve_ignores_default_unauthenticated() -> None:
+    cfg = DeploymentConfig(
+        model=ModelConfig(model_name="test/model"),
+        recipe=VllmRecipe(),
+    )
+    assert cfg.unauthenticated is True
+    deployment, mock_build = _serve_vllm(cfg)
+    assert deployment.url == "https://example.modal.run"
+    mock_build.assert_called_once()
+    assert "unauthenticated" not in mock_build.call_args.kwargs
+
+
+def test_from_config_missing_unauthenticated_defaults_true() -> None:
+    md = ModelDeployment.model_validate(
+        {
+            "deployment_id": "dep-1",
+            "url": "https://example.modal.run",
+            "deployment_config": {
+                "model": {"model_name": "test/model"},
+                "app_name": "test-serve",
+                "served_model_name": "model",
+            },
+        }
+    )
+    assert md.deployment_config.unauthenticated is True
