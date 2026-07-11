@@ -15,6 +15,8 @@ import json
 import os
 from typing import Any
 
+from modal_training_gym.common.sample import Sample
+
 # Import path of the run model's response parser (a (str) -> ParsedResponse
 # callable). The launcher exports it; the recorder resolves and applies it.
 RESPONSE_PARSER_PATH_ENV = "TRAINING_GYM_RESPONSE_PARSER_PATH"
@@ -76,36 +78,27 @@ def _coerce_text(value: Any) -> str:
 #
 #   sample.metadata["shaped_reward"] = float(task_score)
 #
+# Extraction maps that onto gym ``Sample.score``; do not grow gym Sample with
+# slime/OPD fields like ``reward: dict``.
 _SHAPED_REWARD_KEY = "shaped_reward"
 
 
-def _sample_score(sample: Any, reward: Any = None) -> float:
-    """Dashboard score for a slime sample.
+def _sample_score(sample: Sample, reward: float | None = None) -> float:
+    """Resolve gym :class:`~modal_training_gym.common.sample.Sample.score`.
 
     Resolution order:
 
-    1. Numeric ``reward`` / ``sample.reward`` (normal GRPO / post-process).
+    1. Numeric ``reward`` (normal GRPO / post-process).
     2. ``sample.metadata["shaped_reward"]`` — set this in custom generate/RM
-       when ``sample.reward`` must stay non-scalar until later (OPD teachers).
+       when the framework reward must stay non-scalar until later (OPD).
     3. ``0.0``.
     """
-    if reward is None:
-        if isinstance(sample, dict):
-            reward = sample.get("reward")
-        else:
-            reward = getattr(sample, "reward", None)
-    if isinstance(reward, (int, float)) and not isinstance(reward, bool):
+    if reward is not None:
         return float(reward)
 
-    meta: Any = None
-    if isinstance(sample, dict):
-        meta = sample.get("metadata")
-    else:
-        meta = getattr(sample, "metadata", None)
-    if isinstance(meta, dict):
-        value = meta.get(_SHAPED_REWARD_KEY)
-        if isinstance(value, (int, float)) and not isinstance(value, bool):
-            return float(value)
+    value = sample.metadata.get(_SHAPED_REWARD_KEY)
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
 
     return 0.0
 
@@ -518,8 +511,15 @@ def _sample_to_dict(
         metadata["image"] = image_uri
 
     response_text = _coerce_text(response)
+    # Score via gym Sample: numeric reward, else metadata["shaped_reward"] (OPD).
+    numeric_reward = (
+        float(reward)
+        if isinstance(reward, (int, float)) and not isinstance(reward, bool)
+        else None
+    )
+    score = _sample_score(Sample(metadata=metadata), numeric_reward)
     out: dict[str, Any] = {
-        "score": _sample_score(sample, reward),
+        "score": score,
         "prompt": _coerce_text(prompt),
         "response": response_text,
         "metadata": metadata,
