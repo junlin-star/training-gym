@@ -1,34 +1,17 @@
 """In-process Berkeley Function Calling Leaderboard (BFCL) v3/v4 multi-turn environment.
 
-BFCL's multi-turn categories
-(https://gorilla.cs.berkeley.edu/blogs/13_bfcl_v3_multi_turn.html) grade agents against small,
-*in-process* Python state machines (``GorillaFileSystem``, ``TwitterAPI``, ``TicketAPI``,
-``TravelAPI``, ``VehicleControlAPI``, ...) rather than live sandboxes or MCP servers: a tool call is a
-Python expression (``mv(source='a', destination='b')``) evaluated against the live instance, and
-grading is an attribute-level state diff plus a response-subsequence check. This means the Modal
-sandbox / directory-snapshot apparatus in :mod:`.toolathlon` is unnecessary here — replaying ground
-truth and grading both happen in plain Python, in milliseconds, with no container or network involved.
+BFCL grades agents against in-process Python state machines (``GorillaFileSystem``,
+``TwitterAPI``, etc.): tool calls are Python expressions evaluated against live
+instances, and grading is a state diff plus a response-subsequence check. This
+module wraps ``bfcl_eval`` (imported lazily) into the same ``step``/``evaluate``
+shape as :mod:`.base`.
 
-This module is a thin, RL-rollout-friendly wrapper around the upstream ``bfcl_eval`` package
-(https://pypi.org/project/bfcl-eval/). It is *not* vendored — ``bfcl_eval`` is imported lazily (see
-:func:`_bfcl_eval`) so importing :mod:`modal_training_gym` doesn't pick up its large, mostly-unrelated
-dependency closure (sentence-transformers, faiss, several model-vendor SDKs, ...). Callers must
-``pip install bfcl-eval`` themselves (the tutorial's image/install cells do this).
-
-Three pieces, mirroring :mod:`.toolathlon`'s shape:
-
-- **Data** — :class:`BfclMultiTurnDataset` loads a BFCL multi-turn category (default:
-  ``BFCL_v4_multi_turn_base``) plus its ``possible_answer`` ground truth straight out of the installed
-  ``bfcl_eval`` package, flattens each task's per-turn ground-truth calls into one ordered sequence,
-  and replays it once (in-process) to capture the observation text for every step — the BFCL analogue
-  of Toolathlon's expert trajectory.
-- **Environment** — :class:`BfclTurnEnvironment` holds one fresh set of live class instances per
-  episode (no global/module-level caching, unlike upstream's own
-  ``execute_multi_turn_func_call`` — that caching is unsafe for concurrent online rollouts of the same
-  task) and exposes the same ``step``/``evaluate`` shape as :mod:`.base`. Grading reuses ``bfcl_eval``'s
-  own ``state_checker``/``response_checker`` rather than reimplementing them.
-- **Prompting** — :func:`build_prefix_messages` / :func:`tool_schemas_to_openai` mirror the Toolathlon
-  helpers of the same name, so a caller can swap one environment for the other with minimal churn.
+- **Data** — :class:`BfclMultiTurnDataset` loads a multi-turn category and flattens
+  per-turn ground-truth calls into an ordered sequence.
+- **Environment** — :class:`BfclTurnEnvironment` holds fresh class instances per
+  episode (no module-level caching) and reuses ``bfcl_eval``'s checkers.
+- **Prompting** — :func:`build_prefix_messages` / :func:`tool_schemas_to_openai`
+  mirror the Toolathlon helpers of the same name.
 """
 
 from __future__ import annotations
@@ -50,13 +33,10 @@ from modal_training_gym.common.environments.base import (
     ToolCall,
 )
 
-DEFAULT_CATEGORY = "BFCL_v4_multi_turn_base"
-# The leaderboard ships no train/eval split (it's a benchmark, not a training set), so we carve our
-# own: the last N ids of the category are held out for eval.
+# Last N ids held out for eval (BFCL has no official train/eval split).
 DEFAULT_EVAL_TAIL = 30
 
-# BFCL has no explicit "done" tool — a turn simply ends when the model stops emitting calls. Kept
-# (empty) for interface parity with callers that special-case Toolathlon's ``DONE_TOOLS``.
+# Empty for interface parity with Toolathlon's DONE_TOOLS.
 DONE_TOOLS: frozenset[str] = frozenset()
 
 _JSON_TYPE_MAP = {
@@ -71,7 +51,7 @@ _JSON_TYPE_MAP = {
 
 
 def _bfcl_eval():
-    """Import ``bfcl_eval`` lazily (see module docstring)."""
+    """Import ``bfcl_eval`` lazily so the package isn't a hard dep of modal_training_gym."""
     try:
         import bfcl_eval
     except ImportError as e:
@@ -106,12 +86,9 @@ def _load_jsonl(path: str) -> list[dict]:
 
 
 def parse_call_string(call: str) -> dict[str, Any]:
-    """Parse a BFCL ground-truth call string (e.g. ``"mv(source='a', destination='b')"`` or the
-    positional ``"cd('archives')"``) into ``{"name": str, "arguments": dict}``.
+    """Parse a BFCL call string into ``{"name": str, "arguments": dict}``.
 
-    Ground-truth call strings are always a single call with literal/keyword arguments, so
-    ``ast.literal_eval`` per-argument is sufficient — and, unlike upstream's ``eval()``-based
-    execution helpers, this never executes arbitrary code.
+    Uses ``ast.literal_eval`` — never executes arbitrary code.
     """
     node = ast.parse(call.strip(), mode="eval").body
     if not isinstance(node, ast.Call):
@@ -128,9 +105,7 @@ def parse_call_string(call: str) -> dict[str, Any]:
 def _normalize_arguments(
     owner: Any, name: str, arguments: dict[str, Any]
 ) -> dict[str, Any]:
-    """Resolve ``_posN`` placeholders (from positional ground-truth calls) to real keyword names
-    using ``owner``'s live method signature, so stored calls are always keyword-args (clean to show
-    a model in a tool-call message and to re-execute later)."""
+    """Resolve ``_posN`` placeholders to keyword names via ``owner``'s method signature."""
     positional = sorted(
         ((k, v) for k, v in arguments.items() if k.startswith("_pos")),
         key=lambda kv: int(kv[0][4:]),
@@ -169,13 +144,7 @@ def _instantiate(
 def build_instances(
     involved_classes: list[str], initial_config: dict
 ) -> dict[str, Any]:
-    """One fresh instance per involved class.
-
-    Unlike upstream's ``execute_multi_turn_func_call`` — which memoizes instances in module
-    ``globals()`` keyed by ``(model_name, test_entry_id, class_name)`` for its offline batch-eval
-    harness — this always builds fresh instances, which is the correct (and only safe) behavior for
-    concurrent online rollouts that may replay the same task at the same time.
-    """
+    """One fresh instance per involved class (safe for concurrent rollouts)."""
     return {name: _instantiate(name, initial_config) for name in involved_classes}
 
 
@@ -200,14 +169,9 @@ def _stringify(result: Any) -> str:
 
 
 def execute_call(instances: dict[str, Any], call: dict[str, Any]) -> tuple[str, bool]:
-    """Run one ``{"name", "arguments"}`` call against ``instances``. Returns ``(result_text,
-    is_error)``. ``arguments`` must already be a plain keyword dict (no ``_posN`` placeholders) —
-    student-generated calls always are; ground-truth calls are normalized once during :func:`replay`.
+    """Run one ``{"name", "arguments"}`` call. Returns ``(result_text, is_error)``.
 
-    Arguments are deep-copied before the call: some upstream BFCL methods store a list/dict argument
-    by reference into instance state (e.g. ``TwitterAPI.post_tweet``'s ``mentions=[]`` default), so a
-    caller that reuses the same argument object across multiple ``step()`` calls (or across two
-    environments) would otherwise silently corrupt unrelated state through that aliasing.
+    Arguments are deep-copied before the call to avoid aliasing into instance state.
     """
     owner = _method_owner(instances, call["name"])
     if owner is None:
@@ -222,11 +186,9 @@ def execute_call(instances: dict[str, Any], call: dict[str, Any]) -> tuple[str, 
 def replay(
     involved_classes: list[str], initial_config: dict, calls: list[dict[str, Any]]
 ) -> tuple[dict[str, Any], list[str]]:
-    """Fresh instances + the observation text for each of ``calls``, executed in order.
+    """Fresh instances + observation text for each of ``calls``, executed in order.
 
-    Mutates each ``call["arguments"]`` in place to resolve any ``_posN`` placeholders to real keyword
-    names (see :func:`_normalize_arguments`), so callers that pass in freshly-parsed ground-truth
-    calls get back clean, display-ready call dicts as a side effect.
+    Mutates each ``call["arguments"]`` in place to resolve any ``_posN`` placeholders.
     """
     instances = build_instances(involved_classes, initial_config)
     observations = []
@@ -245,8 +207,7 @@ def replay(
 
 
 def to_json_schema(node: Any) -> Any:
-    """Recursively convert a BFCL func-doc schema fragment (``dict``/``list`` typed) to JSON-Schema
-    typing (``object``/``array``), e.g. for use with the ``jsonschema`` package."""
+    """Convert a BFCL func-doc schema fragment to JSON-Schema typing."""
     if isinstance(node, dict):
         out = {k: to_json_schema(v) for k, v in node.items() if k != "default"}
         if out.get("type") in _JSON_TYPE_MAP:
@@ -258,9 +219,7 @@ def to_json_schema(node: Any) -> Any:
 
 
 def tool_schemas_to_openai(tool_schemas: dict) -> list[dict]:
-    """Render ``{name: {"description", "parameters"}}`` (BFCL's func-doc shape) as the OpenAI
-    ``tools=`` list a chat template expects, converting BFCL's ``dict``/``list`` JSON types to
-    JSON-Schema's ``object``/``array``."""
+    """Render BFCL func-docs as an OpenAI ``tools=`` list."""
     return [
         {
             "type": "function",
@@ -277,9 +236,7 @@ def tool_schemas_to_openai(tool_schemas: dict) -> list[dict]:
 def load_func_docs(
     involved_classes: list[str], excluded_function: list[str] | None = None
 ) -> dict:
-    """The BFCL function docs for ``involved_classes``, minus any ``excluded_function`` (BFCL omits
-    these from the offered catalog when an equivalent function already covers the same ground truth,
-    e.g. excluding ``cp`` when the task is solved with ``mv``)."""
+    """BFCL function docs for ``involved_classes``, minus any ``excluded_function``."""
     _, doc_file_mapping, _ = _backend_mappings()
     excluded = set(excluded_function or [])
     data_dir = _data_dir()
@@ -326,7 +283,7 @@ Use the actual tool name, parameters, and full (untruncated) values required by 
 
 
 def render_tool_catalog(tool_schemas: dict, desc_chars: int = 160) -> str:
-    """Render the available-tools catalog as ``name(arg, required*)`` lines + a short description."""
+    """Render available tools as ``name(arg, required*)`` lines + a short description."""
     lines = []
     for name in sorted(tool_schemas or {}):
         spec = tool_schemas[name]
@@ -343,17 +300,13 @@ def render_tool_catalog(tool_schemas: dict, desc_chars: int = 160) -> str:
 
 
 def default_system_prompt(tool_schemas: dict) -> str:
-    return f"{DEFAULT_SYSTEM_PROMPT}\n\nAvailable tools:\n{render_tool_catalog(tool_schemas)}"
+    """Behavioral rules only — the tool catalog travels via the chat template's
+    ``tools=`` parameter (see :func:`tool_schemas_to_openai`), not prompt text."""
+    return DEFAULT_SYSTEM_PROMPT
 
 
 def build_prefix_messages(label: dict, K: int, *, obs_limit: int = 1500) -> list[dict]:
-    """Reconstruct the chat-message prefix after the first ``K`` ground-truth calls have happened.
-
-    Walks BFCL's turns in order, emitting each turn's user message followed by an assistant
-    tool-call + tool-result pair for every ground-truth call in that turn that falls within the
-    first ``K`` calls overall. Stops as soon as ``K`` calls have been shown — which may land exactly
-    on a fresh, not-yet-acted-on user turn, or mid-turn.
-    """
+    """Reconstruct the chat-message prefix after the first ``K`` ground-truth calls."""
     observations = label.get("observations")
     if observations is None:
         _, observations = replay(
@@ -383,12 +336,7 @@ def build_prefix_messages(label: dict, K: int, *, obs_limit: int = 1500) -> list
                             "type": "function",
                             "function": {
                                 "name": call["name"],
-                                # A raw dict, not a JSON string: this prefix is fed straight to
-                                # ``tokenizer.apply_chat_template`` (not an OpenAI-compatible HTTP
-                                # API layer that would parse a JSON string first), and Qwen3.6's
-                                # chat template iterates arguments with Jinja's ``|items`` filter,
-                                # which requires an actual mapping (mirrors
-                                # ``.toolathlon.build_prefix_messages``'s convention).
+                                # Raw dict (not JSON string) for chat-template |items.
                                 "arguments": call["arguments"],
                             },
                         }
@@ -407,13 +355,16 @@ def build_prefix_messages(label: dict, K: int, *, obs_limit: int = 1500) -> list
 
 
 def prune_prefix(messages: list[dict], max_messages: int) -> list[dict]:
-    """Keep the system + first user message and the most recent ``max_messages`` exchanges —
-    mirrors :func:`.toolathlon.prune_prefix`'s role, for callers that need to budget context length."""
+    """Keep system + first user message and fill the rest with the most recent messages."""
+    if max_messages <= 0:
+        return []
     if len(messages) <= max_messages:
         return messages
     head = messages[:2]
-    tail = messages[-(max_messages - len(head)) :]
-    return head + tail
+    tail_n = max_messages - len(head)
+    if tail_n <= 0:
+        return messages[:max_messages]
+    return head + messages[-tail_n:]
 
 
 # ── Environment ──────────────────────────────────────────────────────────────
@@ -421,16 +372,12 @@ def prune_prefix(messages: list[dict], max_messages: int) -> list[dict]:
 
 @dataclass
 class BfclTurnEnvironment(Environment):
-    """One live multi-turn BFCL episode: a set of in-process class instances seeded by replaying the
-    first ``K`` ground-truth calls, then driven forward by an agent's own tool calls via :meth:`step`.
-    """
+    """One live multi-turn BFCL episode, seeded by replaying the first ``K`` ground-truth calls."""
 
     label: dict
     instances: dict[str, Any] = field(default_factory=dict)
     exec_results: list[str] = field(default_factory=list)
-    # How many ground-truth calls were already replayed to seed `instances` before this episode
-    # started (see `build_env`). Only the *remaining* ground-truth responses (from this index
-    # onward) need to show up in `exec_results` — the prefix was identical by construction.
+    # Ground-truth calls already replayed to seed `instances`.
     K: int = 0
 
     def step(self, action: ToolCall) -> StepResult:
@@ -442,9 +389,7 @@ class BfclTurnEnvironment(Environment):
         )
 
     def evaluate(self) -> EvalVerdict:
-        """Grade the episode: deep state diff (``state_checker``) + response-subsequence check
-        (``response_checker``) against a freshly-replayed copy of the *full* ground-truth trajectory —
-        reusing ``bfcl_eval``'s own checkers rather than reimplementing them."""
+        """Grade via ``state_checker`` + ``response_checker`` against the full ground-truth trajectory."""
         from bfcl_eval.eval_checker.multi_turn_eval.multi_turn_checker import (
             response_checker,
             state_checker,
@@ -458,8 +403,7 @@ class BfclTurnEnvironment(Environment):
         state_result = state_checker(self.instances, ground_truth_instances)
         if not state_result["valid"]:
             return EvalVerdict(passed=False, detail=state_result["error_message"])
-        # The prefix (calls [0:K]) is identical for the model and ground truth by construction
-        # (both replayed it to seed state) — only what the agent did from K onward needs checking.
+        # Only check agent responses from K onward (prefix is identical by construction).
         response_result = response_checker(
             self.exec_results, ground_truth_results[self.K :], 0
         )
@@ -469,8 +413,7 @@ class BfclTurnEnvironment(Environment):
 
 
 def build_env(label: dict, K: int) -> BfclTurnEnvironment:
-    """Build a fresh :class:`BfclTurnEnvironment` with state fast-forwarded through the first ``K``
-    ground-truth calls — the in-process analogue of restoring a Toolathlon directory snapshot."""
+    """Fresh environment with state fast-forwarded through the first ``K`` ground-truth calls."""
     calls = deepcopy(label["flattened_calls"][:K])
     instances, _ = replay(label["involved_classes"], label["initial_config"], calls)
     return BfclTurnEnvironment(label=label, instances=instances, K=K)
@@ -488,9 +431,13 @@ def _first_user_text(turn_messages: list[dict]) -> str:
 
 @dataclass(frozen=True)
 class BfclMultiTurnConfig:
-    """Which BFCL multi-turn category to load and how to carve a train/eval split out of it."""
+    """Which BFCL multi-turn category to load and how to carve a train/eval split.
 
-    category: str = DEFAULT_CATEGORY
+    ``category`` is the bfcl_eval name (e.g. ``multi_turn_base``); the installed
+    package's ``VERSION_PREFIX`` is prepended when resolving data files.
+    """
+
+    category: str = "multi_turn_base"
     eval_tail: int = DEFAULT_EVAL_TAIL
     obs_limit: int = 1500
 
@@ -498,24 +445,23 @@ class BfclMultiTurnConfig:
 DEFAULT_CONFIG = BfclMultiTurnConfig()
 
 
-class BfclMultiTurnDataset(DatasetConfig):
-    """Loads a BFCL multi-turn category straight out of the installed ``bfcl_eval`` package.
+def _category_filename(category: str) -> str:
+    from bfcl_eval.constants.category_mapping import VERSION_PREFIX
 
-    Each row's ``label`` carries everything the curriculum/rollout/reward code needs: the per-turn
-    user text, the (keyword-normalized) ground-truth calls flattened across all turns, the observation
-    text for each of those calls (so the K-step prefix never needs to re-execute anything), the tool
-    catalog for the task's involved classes, and the raw ``initial_config``/``involved_classes`` so an
-    episode can be rebuilt at any step. There is no train/eval split upstream (BFCL is a benchmark,
-    not a training set) — :attr:`config`.eval_tail ids are held out as eval.
+    return f"{VERSION_PREFIX}_{category}.json"
+
+
+class BfclMultiTurnDataset(DatasetConfig):
+    """Loads a BFCL multi-turn category from the installed ``bfcl_eval`` package.
+
+    Last :attr:`config`.eval_tail ids are held out as eval.
     """
 
     input_key: str = "messages"
     label_key: str = "label"
-    # `prepare()` writes JSON-lines (below); tell the launcher's data-path
-    # resolver (`SlimeRecipe._resolve_data_paths`, default: "parquet") to name
-    # the on-volume file `*.jsonl` accordingly — otherwise slime tries to read
-    # a JSON-lines file as Parquet and fails with "Parquet magic bytes not found".
+    # JSON-lines output (slime default is parquet).
     output_format: str = "jsonl"
+    writes_eval_paths: bool = False
 
     def __init__(
         self,
@@ -529,11 +475,15 @@ class BfclMultiTurnDataset(DatasetConfig):
             setattr(self, k, v)
 
     def _entries(self) -> list[dict]:
-        return _load_jsonl(os.path.join(_data_dir(), f"{self.config.category}.json"))
+        return _load_jsonl(
+            os.path.join(_data_dir(), _category_filename(self.config.category))
+        )
 
     def _ground_truths(self) -> dict[str, list[list[str]]]:
         path = os.path.join(
-            _data_dir(), "possible_answer", f"{self.config.category}.json"
+            _data_dir(),
+            "possible_answer",
+            _category_filename(self.config.category),
         )
         return {e["id"]: e["ground_truth"] for e in _load_jsonl(path)}
 
@@ -595,14 +545,7 @@ class BfclMultiTurnDataset(DatasetConfig):
         return self._load_split()
 
     def prepare(self, path: str, eval_paths: dict | None = None) -> None:
-        """Write this instance's split to ``path``.
-
-        ``eval_paths`` is ignored on purpose: BFCL training and offline eval each
-        use their own ``BfclMultiTurnDataset(split=...)`` instance. Recipe
-        resolvers still invent an ``eval.*`` companion path; callers must not
-        require that file (see ``run_prepare_dataset`` / slime-miles ``exists``
-        guards).
-        """
+        """Write this instance's split to ``path``. ``eval_paths`` is ignored."""
         del eval_paths  # train/eval are separate DatasetConfig instances
         rows = self._load_split()
         os.makedirs(os.path.dirname(path), exist_ok=True)

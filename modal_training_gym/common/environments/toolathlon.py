@@ -676,6 +676,7 @@ class ToolathlonTrajectoryDataset(DatasetConfig):
     label_key = "label"
     output_format = "jsonl"
     apply_chat_template = True
+    writes_eval_paths = False
 
     hf_repo: str = "hkust-nlp/Toolathlon-Trajectories"
     source_file: str = "deepseek-v3.2-exp_1.jsonl"
@@ -821,12 +822,7 @@ class ToolathlonTrajectoryDataset(DatasetConfig):
         }
 
     def prepare(self, path: str, eval_paths: dict | None = None) -> None:
-        """Write this instance's split to ``path``.
-
-        ``eval_paths`` is ignored: train vs eval are separate dataset instances,
-        not companion files from one ``prepare()``. Recipe resolvers still invent
-        an ``eval.*`` path; validation skips missing files.
-        """
+        """Write this instance's split to ``path``. ``eval_paths`` is ignored."""
         import os
 
         del eval_paths
