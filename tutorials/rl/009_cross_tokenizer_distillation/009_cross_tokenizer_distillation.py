@@ -17,7 +17,7 @@
 #
 # ### Steps
 # 1. Deploy DeepSeek V4 Flash as the teacher.
-# 2. Load BFCL v3 multi_turn_base, carve a train/eval split, and define reverse-K curriculum + shaped reward.
+# 2. Load BFCL multi_turn_base, carve a train/eval split, and define reverse-K curriculum + shaped reward.
 # 3. Evaluate the base student and teacher models on the held-out eval.
 # 4. Define SimCT alignment, reward function, and OPD-adjustment.
 # 5. Train with reverse-K curriculum + GRPO + cross-tokenizer OPD.
@@ -1024,7 +1024,7 @@ def _frac(rows, key):
 # ## Future Possibilities
 #
 # Some possible next steps for the tutorial:
-# 1. Augment the training dataset with more long-context tasks from BFCL V3's Long-Context Multi-Turn category.
+# 1. Augment the training dataset with more long-context tasks from BFCL's Long-Context Multi-Turn category.
 # 2. Experiment with different student and teacher model configurations.
 # 3. Add in privledged information to the teacher model for an even stronger distillation signal.
 # 4. Extend Slime's OPD loss to include top-k logprobs from the teacher model.
@@ -1209,7 +1209,7 @@ def _main_impl() -> None:
     print("--- Starting GRPO + cross-tokenizer OPD training... ---")
     print(f"  Teacher: DeepSeek V4 Flash")
     print(f"  Student: Qwen3.6-35B-A3B")
-    print(f"  Dataset: BFCL v3 multi_turn_base, prefix-conditioned (task, K) rows")
+    print(f"  Dataset: BFCL multi_turn_base, prefix-conditioned (task, K) rows")
     print(f"  Reward: schema + live exec + structural match + terminal state/response verdict")
     train_result = training_run.train()
     print(f"Training run id: {train_result.training_run_id}")
