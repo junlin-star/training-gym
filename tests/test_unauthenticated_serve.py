@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import inspect
+import warnings
 from unittest.mock import MagicMock, patch
 
+import pytest
 from modal_training_gym.common.deployment import DeploymentConfig, ModelDeployment
 from modal_training_gym.common.models.base import ModelConfig
 from modal_training_gym.deploy_recipes.sglang_recipe.serve_sglang import (
@@ -93,10 +95,18 @@ def test_vllm_serve_ignores_unauthenticated_true() -> None:
         recipe=VllmRecipe(),
         unauthenticated=True,
     )
-    deployment, mock_build = _serve_vllm(cfg)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        deployment, mock_build = _serve_vllm(cfg)
     assert deployment.url == "https://example.modal.run"
     mock_build.assert_called_once()
     assert "unauthenticated" not in mock_build.call_args.kwargs
+    assert not [
+        w
+        for w in caught
+        if issubclass(w.category, UserWarning)
+        and "unauthenticated=False" in str(w.message)
+    ]
 
 
 def test_vllm_serve_ignores_default_unauthenticated() -> None:
@@ -105,7 +115,28 @@ def test_vllm_serve_ignores_default_unauthenticated() -> None:
         recipe=VllmRecipe(),
     )
     assert cfg.unauthenticated is True
-    deployment, mock_build = _serve_vllm(cfg)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        deployment, mock_build = _serve_vllm(cfg)
+    assert deployment.url == "https://example.modal.run"
+    mock_build.assert_called_once()
+    assert "unauthenticated" not in mock_build.call_args.kwargs
+    assert not [
+        w
+        for w in caught
+        if issubclass(w.category, UserWarning)
+        and "unauthenticated=False" in str(w.message)
+    ]
+
+
+def test_vllm_serve_warns_on_unauthenticated_false() -> None:
+    cfg = DeploymentConfig(
+        model=ModelConfig(model_name="test/model"),
+        recipe=VllmRecipe(),
+        unauthenticated=False,
+    )
+    with pytest.warns(UserWarning, match="unauthenticated=False"):
+        deployment, mock_build = _serve_vllm(cfg)
     assert deployment.url == "https://example.modal.run"
     mock_build.assert_called_once()
     assert "unauthenticated" not in mock_build.call_args.kwargs

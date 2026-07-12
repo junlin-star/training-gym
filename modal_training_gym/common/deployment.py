@@ -11,14 +11,16 @@ the live endpoint URL and convenience methods for generation and eval.
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
-from enum import Enum
 import inspect
 import json
 import os
 import threading
+import warnings
+from dataclasses import dataclass
+from enum import Enum
 from typing import Any
 
+from modal.experimental import list_deployed_apps
 from pydantic import BaseModel, ConfigDict, field_serializer, field_validator
 
 from modal_training_gym.common.checkpoint import (
@@ -28,12 +30,11 @@ from modal_training_gym.common.checkpoint import (
 )
 from modal_training_gym.common.errors import TrainingGymConfigError
 from modal_training_gym.common.ids import create_hash
-from modal_training_gym.common.models import ModelConfig
 from modal_training_gym.common.modal_urls import modal_app_dashboard_url
+from modal_training_gym.common.models import ModelConfig
+from modal_training_gym.deploy_recipes.base import DeployRecipeType
 from modal_training_gym.deploy_recipes.sglang_recipe import SglangRecipe
 from modal_training_gym.deploy_recipes.vllm_recipe import VllmRecipe
-from modal_training_gym.deploy_recipes.base import DeployRecipeType
-from modal.experimental import list_deployed_apps
 from modal_training_gym.utils.metadata import (
     MetadataStore,
     vol_get,
@@ -255,7 +256,15 @@ class DeploymentConfig:
             )
         elif isinstance(recipe, VllmRecipe):
             # unauthenticated is SGLang-only; vLLM's http_server has no
-            # proxy-auth knob, so the flag is ignored here.
+            # proxy-auth. Default True is a silent no-op; warn only
+            # when the caller explicitly requests authenticated access.
+            if self.unauthenticated is False:
+                warnings.warn(
+                    "DeploymentConfig(unauthenticated=False) is not supported for "
+                    "VllmRecipe: modal.experimental.http_server has no proxy-auth, so the endpoint remains publicly reachable. Use "
+                    "SglangRecipe if you need Modal proxy auth.",
+                    stacklevel=2,
+                )
             from modal_training_gym.deploy_recipes.vllm_recipe.serve_vllm import (
                 build_vllm_serve_app,
             )
