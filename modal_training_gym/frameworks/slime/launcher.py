@@ -1056,9 +1056,7 @@ def build_slime_app(
                 object.__setattr__(slime, "load", save_root)
                 # Weights-only checkpoints (``no_save_optim``) have no Adam state;
                 # Megatron will KeyError on state_dict["optimizer"] unless we skip it.
-                if getattr(slime, "no_save_optim", False) and not getattr(
-                    slime, "no_load_optim", False
-                ):
+                if slime.no_save_optim and not slime.no_load_optim:
                     print(
                         "WARNING: no_save_optim=True — enabling no_load_optim for resume."
                     )
