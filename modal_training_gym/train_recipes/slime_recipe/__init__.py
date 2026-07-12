@@ -1,5 +1,9 @@
 from modal_training_gym.train_recipes.slime_recipe.recipe import SlimeRecipe
 from modal_training_gym.train_recipes.slime_recipe.glm_4_7 import GLM_4_7_Recipe
+from modal_training_gym.train_recipes.slime_recipe.megagem_qwen3_4b_stage_c import (
+    MegaGem_Qwen3_4B_StageC_Recipe,
+    MegaGemStageCDataset,
+)
 from modal_training_gym.train_recipes.slime_recipe.qwen3_0_6b import Qwen3_0_6b_Recipe
 from modal_training_gym.train_recipes.slime_recipe.qwen3_1_7b import Qwen3_1_7b_Recipe
 from modal_training_gym.train_recipes.slime_recipe.qwen3_8b import Qwen3_8b_Recipe
@@ -18,6 +22,8 @@ from modal_training_gym.train_recipes.slime_recipe.qwen3_vl_8b import (
 __all__ = [
     "SlimeRecipe",
     "GLM_4_7_Recipe",
+    "MegaGem_Qwen3_4B_StageC_Recipe",
+    "MegaGemStageCDataset",
     "Qwen3_0_6b_Recipe",
     "Qwen3_1_7b_Recipe",
     "Qwen3_4b_Recipe",

@@ -495,6 +495,12 @@ class SlimeRecipe(BaseTrainRecipe):
         from modal_training_gym.train_recipes.slime_recipe.glm_4_7 import (
             GLM_4_7_Recipe,
         )
+        from modal_training_gym.common.models.megagem_qwen3_4b_sft import (
+            MEGAGEM_QWEN3_4B_SFT_MODEL,
+        )
+        from modal_training_gym.train_recipes.slime_recipe.megagem_qwen3_4b_stage_c import (
+            MegaGem_Qwen3_4B_StageC_Recipe,
+        )
         from modal_training_gym.train_recipes.slime_recipe.qwen3_0_6b import (
             Qwen3_0_6b_Recipe,
         )
@@ -524,6 +530,8 @@ class SlimeRecipe(BaseTrainRecipe):
             return Qwen3_ASR_1_7b_Recipe()
         if model_config.model_name == "zai-org/GLM-4.7":
             return GLM_4_7_Recipe()
+        if model_config.model_name == MEGAGEM_QWEN3_4B_SFT_MODEL:
+            return MegaGem_Qwen3_4B_StageC_Recipe()
         if model_config.model_name == "Qwen/Qwen3-0.6B":
             return Qwen3_0_6b_Recipe()
         if model_config.model_name == "Qwen/Qwen3-1.7B":

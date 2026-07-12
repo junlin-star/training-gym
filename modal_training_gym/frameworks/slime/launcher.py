@@ -102,7 +102,6 @@ _PATCH_GDN_PACKED_SEQ_B64 = encode_patch("patch_gdn_packed_seq", _SLIME_PATCHES)
 _PATCH_BRIDGE_PER_TOKEN_LOSS_B64 = encode_patch(
     "patch_bridge_provider_per_token_loss", _SLIME_PATCHES
 )
-_PATCH_STOP_TOKEN_DIAG_B64 = encode_patch("patch_stop_token_diagnostic", _SLIME_PATCHES)
 # The Qwen3-ASR Megatron->HF converter (registers the qwen3_asr mapping incl. the
 # audio tower). It lives in the base image — not the ASR recipe — because torch_dist
 # -> HF conversion runs in the shared convert_checkpoint_to_hf path (deploy/eval),
@@ -138,6 +137,9 @@ _PATCH_DIST_CKPT_QUANTIZED_B64 = encode_patch(
 )
 # USACO VPO patch: threads the per-test reward vector into rollout_data for the VPO custom advantage fn.
 _PATCH_VPO_ROLLOUT_DATA_B64 = encode_patch("patch_vpo_rollout_data", _SLIME_PATCHES)
+_PATCH_MEGAGEM_ROLLOUT_DATA_B64 = encode_patch(
+    "patch_megagem_rollout_data", _SLIME_PATCHES
+)
 
 
 def _build_slime_base_image() -> "Image":
@@ -149,7 +151,6 @@ def _build_slime_base_image() -> "Image":
             f"echo {_PATCH_MEGATRON_BRIDGE_B64} | base64 -d | python3",
             f"echo {_PATCH_ADVANTAGES_B64} | base64 -d | python3",
             f"echo {_PATCH_BRIDGE_NONE_TASK_B64} | base64 -d | python3",
-            f"echo {_PATCH_STOP_TOKEN_DIAG_B64} | base64 -d | python3",
             f"echo {_PATCH_QWEN3_ASR_EXPORT_B64} | base64 -d | python3",
             f"echo {_PATCH_QWEN3_VL_EXPORT_B64} | base64 -d | python3",
             f"echo {_PATCH_QWEN3_VL_TORCH_DIST_B64} | base64 -d | python3",
@@ -158,6 +159,7 @@ def _build_slime_base_image() -> "Image":
             f"echo {_PATCH_LOG_ELIDE_B64} | base64 -d | python3",
             f"echo {_PATCH_DIST_CKPT_QUANTIZED_B64} | base64 -d | python3",
             f"echo {_PATCH_VPO_ROLLOUT_DATA_B64} | base64 -d | python3",
+            f"echo {_PATCH_MEGAGEM_ROLLOUT_DATA_B64} | base64 -d | python3",
         )
     )
 
@@ -909,7 +911,13 @@ def build_slime_app(
         os.environ["SGLANG_HOST_IP"] = cluster.node_ip
         os.environ["HOST_IP"] = cluster.node_ip
 
-        cluster.start_ray()
+        ray_worker_wait_retries = int(
+            (slime.environment or {}).get(
+                "TRAINING_GYM_RAY_WORKER_WAIT_RETRIES",
+                os.environ.get("TRAINING_GYM_RAY_WORKER_WAIT_RETRIES", "60"),
+            )
+        )
+        cluster.start_ray(worker_wait_retries=ray_worker_wait_retries)
 
         if not cluster.is_head:
             await cluster.wait_forever()

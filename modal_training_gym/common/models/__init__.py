@@ -10,6 +10,7 @@ from .base import (
     parse_qwen3_response,
 )
 from .glm_4_7 import GLM_4_7
+from .megagem_qwen3_4b_sft import MegaGem_Qwen3_4B_SFT
 from .qwen3_0_6b import Qwen3_0_6B
 from .qwen3_1_7b import Qwen3_1_7B
 from .qwen3_4b import Qwen3_4B
@@ -28,6 +29,7 @@ __all__ = [
     "ModelConfig",
     "ParsedResponse",
     "GLM_4_7",
+    "MegaGem_Qwen3_4B_SFT",
     "Qwen3_0_6B",
     "Qwen3_1_7B",
     "Qwen3_4B",

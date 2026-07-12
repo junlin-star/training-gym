@@ -36,6 +36,18 @@ _EXPORTS = {
     "ModelArchitecture": ("modal_training_gym.common.models", "ModelArchitecture"),
     "ModelConfig": ("modal_training_gym.common.models", "ModelConfig"),
     "ModelDeployment": ("modal_training_gym.common.deployment", "ModelDeployment"),
+    "MegaGem_Qwen3_4B_SFT": (
+        "modal_training_gym.common.models",
+        "MegaGem_Qwen3_4B_SFT",
+    ),
+    "MegaGem_Qwen3_4B_StageC_Recipe": (
+        "modal_training_gym.train_recipes.slime_recipe",
+        "MegaGem_Qwen3_4B_StageC_Recipe",
+    ),
+    "MegaGemStageCDataset": (
+        "modal_training_gym.train_recipes.slime_recipe",
+        "MegaGemStageCDataset",
+    ),
     "Kimi_K2_5": ("modal_training_gym.common.models", "Kimi_K2_5"),
     "Kimi_K2_6": ("modal_training_gym.common.models", "Kimi_K2_6"),
     "Kimi_K2_5_LoRA_Recipe": (
@@ -116,6 +128,9 @@ __all__ = [
     "ModelArchitecture",
     "ModelConfig",
     "ModelDeployment",
+    "MegaGem_Qwen3_4B_SFT",
+    "MegaGem_Qwen3_4B_StageC_Recipe",
+    "MegaGemStageCDataset",
     "MilesConfig",
     "parse_qwen3_response",
     "ParsedResponse",
