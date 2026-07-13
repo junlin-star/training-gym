@@ -114,7 +114,9 @@ def report_phase(
     args: Any = None,
     **extra: Any,
 ) -> None:
-    _enqueue({**_run_context(args), "phase": status.value, **extra})
+    _enqueue(
+        {**_run_context(args), "phase": status.value, "event_ts": time.time(), **extra}
+    )
 
 
 def report_rollout_samples(
@@ -230,11 +232,9 @@ def log_eval_rollout_data(
 
 
 def before_log_prob_hook(args: Any, model: Any, store_prefix: str) -> None:
-    report_phase(
-        SlimeStatus.COMPUTE_LOG_PROBS,
-        args,
-        store_prefix=store_prefix,
-    )
+    # NOTE: this hook runs in the Megatron train actor, which has no current
+    # rollout_id, so the compute_log_probs substep is reported (id-tagged) from
+    # the driver loop right before actor_model.async_train(); see the patch.
     _call_hook(
         CUSTOM_BEFORE_LOG_PROB_HOOK_PATH_KEY,
         args,
@@ -271,67 +271,43 @@ def before_train_step_hook(
     )
 
 
-def report_rollout_initializing(args: Any) -> None:
-    report_phase(
-        SlimeStatus.ROLLOUT_INITIALIZING,
-        args,
-        **_step_progress(args),
-    )
+def report_step_event(
+    status: SlimeStatus | str,
+    args: Any = None,
+    rollout_id: int | None = None,
+    step_event: str = "",
+) -> None:
+    """Report one step/substep event tagged with the ``status`` phase.
 
-
-def report_step_start(args: Any, rollout_id: int | None = None) -> None:
-    _post_framework_status(
-        {
-            **_run_context(args),
-            "phase": SlimeStatus.ROLLOUT_LOGGING.value,
-            **_step_progress(args, rollout_id),
-            "rollout_id": rollout_id,
-            "step_event": "start",
-        },
-        _STEP_EVENT_TIMEOUT_SECONDS,
-    )
-
-
-def report_weight_sync(args: Any) -> None:
-    report_phase(
-        SlimeStatus.WEIGHT_SYNC,
-        args,
-    )
-
-
-def report_generate_rollouts(args: Any) -> None:
-    report_phase(
-        SlimeStatus.ROLLOUT_LOGGING,
-        args,
-    )
-
-
-def report_step_complete(args: Any, rollout_id: int | None = None) -> None:
-    if rollout_id is None:
-        return
-    _post_framework_status(
-        {
-            **_run_context(args),
-            "phase": SlimeStatus.WEIGHT_SYNC.value,
-            **_step_progress(args, rollout_id),
-            "rollout_id": rollout_id,
-            "step_event": "finish",
-        },
-        _STEP_EVENT_TIMEOUT_SECONDS,
-    )
+    ``status`` may be a plain string — the patched slime train.py passes phase
+    names as literals so the injected code stays stdlib-only.
+    """
+    payload = {
+        **_run_context(args),
+        "phase": status.value if isinstance(status, SlimeStatus) else str(status),
+        **_step_progress(args, rollout_id),
+        "rollout_id": rollout_id,
+        "event_ts": time.time(),
+    }
+    if step_event:
+        payload["step_event"] = step_event
+    match step_event:
+        case "start":
+            _post_framework_status(payload, _STEP_EVENT_TIMEOUT_SECONDS)
+        case "finish":
+            if rollout_id is not None:
+                _post_framework_status(payload, _STEP_EVENT_TIMEOUT_SECONDS)
+        case _:
+            _enqueue(payload)
 
 
 __all__ = [
     "before_log_prob_hook",
     "before_train_step_hook",
     "report_advantage_distribution",
-    "report_generate_rollouts",
     "report_phase",
-    "report_rollout_initializing",
     "report_rollout_samples",
-    "report_step_start",
-    "report_step_complete",
-    "report_weight_sync",
+    "report_step_event",
     "log_eval_rollout_data",
     "log_rollout_data",
 ]

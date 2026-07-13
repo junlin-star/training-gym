@@ -224,6 +224,8 @@ def run_base_training_on_slime(
     wandb_project: str | None = None,
     wandb_group: str | None = None,
     wandb_secret_name: str = "wandb-secret",
+    eval_interval: int | None = None,
+    save_interval: int | None = None,
 ) -> TutorialResult:
     model_config = get_model_config_from_model_name(model_name)
     if not _supports_slime(model_config):
@@ -238,6 +240,10 @@ def run_base_training_on_slime(
     model_short_name = model_config.model_name.rsplit("/", 1)[-1]
     train_recipe = SlimeRecipe.get_base_recipe(model_config)
     train_recipe.num_rollout = step_count
+    if eval_interval is not None:
+        train_recipe.eval_interval = eval_interval
+    if save_interval is not None:
+        train_recipe.save_interval = save_interval
     train_recipe.rm_type = "deepscaler"
     train_recipe.train_function_kwargs = {
         **dict(train_recipe.train_function_kwargs or {}),
@@ -318,6 +324,18 @@ def __main__():
         help="Number of training steps (rollouts) to run. Defaults to 1.",
     )
     check_parser.add_argument(
+        "--eval-interval",
+        type=int,
+        default=None,
+        help="Override the recipe eval_interval (eval every N rollouts).",
+    )
+    check_parser.add_argument(
+        "--save-interval",
+        type=int,
+        default=None,
+        help="Override the recipe save_interval (checkpoint every N rollouts).",
+    )
+    check_parser.add_argument(
         "-o",
         "--output",
         help="Write the result as JSON to this file path.",
@@ -380,6 +398,8 @@ def __main__():
         None if args.no_wandb else args.wandb_project,
         args.wandb_group,
         args.wandb_secret_name,
+        eval_interval=args.eval_interval,
+        save_interval=args.save_interval,
     )
     tutorial_result.format_tutorial_result()
 
