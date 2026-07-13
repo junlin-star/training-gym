@@ -246,16 +246,18 @@ class DeploymentConfig:
         )
 
         if recipe.recipe_type == DeployRecipeType.SGLANG:
-            server = getattr(app, "SGLangEndpoint", None)
-            if server is None and hasattr(app, "registered_functions"):
-                server = app.registered_functions.get("SGLangEndpoint")
-            if server is None:
-                raise RuntimeError(
-                    f"Deployed {self.app_name!r} but could not resolve SGLang endpoint server handle."
-                )
-            url = _run_coro(server.get_url())
+            server_attr = "SGLangEndpoint"
         else:
-            url = app.serve.get_web_url()
+            server_attr = "Server"
+        server = getattr(app, server_attr, None)
+        if server is None and hasattr(app, "registered_functions"):
+            server = app.registered_functions.get(server_attr)
+        if server is None:
+            raise RuntimeError(
+                f"Deployed {self.app_name!r} but could not resolve "
+                f"{server_attr} server handle."
+            )
+        url = _run_coro(server.get_url())
         modal_app_id = app.app_id
         modal_app_url = modal_app_dashboard_url(modal_app_id)
         if not url:

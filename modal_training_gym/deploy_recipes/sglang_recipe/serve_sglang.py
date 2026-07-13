@@ -1,7 +1,7 @@
 """SGLang serving helper — builds a Modal app that hosts a model via SGLang.
 
 The model is served by ``SGLangEndpoint``, a Modal *server* class registered
-with ``@app._experimental_server`` (Modal's low-latency routing service for
+with ``@app.server`` (Modal's low-latency routing service for
 inference workloads). The endpoint is the Modal class itself — its
 ``@modal.enter()`` starts the ``sglang.launch_server`` subprocess, waits for
 the health endpoint, and runs a couple of warmup requests; its
@@ -104,7 +104,7 @@ def build_sglang_serve_app(
     _dp = recipe.dp
     _deployment_id = deployment_id
 
-    @app._experimental_server(
+    @app.server(
         image=image,
         gpu=gpu_spec,
         scaledown_window=10 * 60,
