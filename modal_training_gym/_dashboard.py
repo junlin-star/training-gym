@@ -1023,21 +1023,17 @@ def fastapi_app():
                     entry["ts_ns"] = ts_ns
                 logs.append(entry)
 
-        # An entry's time in nanoseconds: prefer the exact `ts_ns`, else scale
-        # the second-resolution `ts`.
-        def _entry_ns(e: LogEntry) -> int:
-            return e.get("ts_ns") or int((e.get("ts") or 0.0) * 1_000_000_000)
-
-        # AppFetchLogs already returns oldest-first, but sort defensively.
-        logs.sort(key=_entry_ns)
-
         has_more = len(logs) >= limit
 
         # Cursor to fetch the next older page: one nanosecond before the oldest
-        # entry.
+        # entry. An entry's time in nanoseconds prefers the exact `ts_ns`, else
+        # scales the second-resolution `ts`.
         next_until: float | None = None
         if has_more and logs:
-            oldest_ns = _entry_ns(logs[0])
+            oldest = logs[0]
+            oldest_ns = oldest.get("ts_ns") or int(
+                (oldest.get("ts") or 0.0) * 1_000_000_000
+            )
             next_until = (oldest_ns - 1) / 1_000_000_000
 
         return JSONResponse(
