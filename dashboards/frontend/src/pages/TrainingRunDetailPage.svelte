@@ -1,5 +1,5 @@
 <script>
-  import { ArrowLeft, Check, ChevronLeft, ChevronRight, Download, ExternalLink, Minimize2, X } from "lucide-svelte";
+  import { ArrowLeft, ChevronLeft, ChevronRight, Download, ExternalLink, Minimize2, X } from "lucide-svelte";
   import Tabs from "../components/Tabs.svelte";
   import RunSummary from "../components/RunSummary.svelte";
   import StatusPill from "../components/StatusPill.svelte";
@@ -463,7 +463,7 @@
         if (!line) return;
         const parts = line.split(/\r?\n/);
         const task_id = payload.task_id || "";
-        const ts = payload.ts || Date.now() / 1000;
+        const ts = payload.ts || Date.now();
         for (const p of parts) {
           if (!p.length) continue;
           pendingLogLines.push({ id: logSeq++, task_id, line: p, ts });
@@ -532,38 +532,36 @@
     logDropped = 0;
   }
 
-  // ── Historical logs (finished runs) ─────
+  // ── Historical logs ─────
   let isRunning = $derived(runStatus === "running");
 
   const HIST_PAGE = 500; // lines fetched per page
   let histLines = $state([]); // [{id, task_id, line}], oldest-first
-  let histLoading = $state(false); // initial (newest) page in flight
+  let histLoading = $state(false); // initial page in flight
   let histLoadingOlder = $state(false); // "load older" page in flight
   let histError = $state("");
   let histHasMore = $state(false); // older lines exist before the first row
   let histNextUntil = $state(null); // `until` cursor for the next older page
   let histTailEl = $state(null); // scroll container
   let histSeq = 0; // monotonic id for stable keying across prepends
-  let histController = null; // aborts in-flight hist fetches when filters change
+  let histController = null; // aborts in-flight fetches when filters change
 
-  // Time-window filters. Plain inline text inputs (local time, "YYYY-MM-DD
-  // HH:MM") are the source of truth so typing is never reformatted mid-keystroke;
-  // quick-range buttons and the prefill write into them too. The text is
-  // debounced + parsed into the epoch-second values the fetch uses.
-  let histSinceText = $state(""); // free-text local datetime | ""
+  // Time-window filters
+  let histSinceText = $state("");
   let histUntilText = $state("");
   let histSince = $state(""); // debounced epoch-seconds string for the fetch
   let histUntil = $state("");
 
   const _pad = (x) => String(x).padStart(2, "0");
   function epochToLocalInput(epoch) {
-    if (epoch == null || epoch === "") return "";
+    if (!epoch) return "";
     const d = new Date(Number(epoch) * 1000);
     return (
       `${d.getFullYear()}-${_pad(d.getMonth() + 1)}-${_pad(d.getDate())} ` +
       `${_pad(d.getHours())}:${_pad(d.getMinutes())}`
     );
   }
+  const epochToParam = (epoch) => (epoch ? String(epoch) : "");
   function localInputToEpoch(str) {
     if (!str || !str.trim()) return null;
     const ms = new Date(str.trim().replace(" ", "T")).getTime();
@@ -583,8 +581,7 @@
   });
 
   // Seed the pickers with the run's lifetime the first time we view a finished
-  // run. Guarded to once-per-run (via a non-reactive marker) so the 5s runs
-  // refresh — or the user's own edits/"Clear range" — aren't overwritten.
+  // run.
   let histPrefilledFor = null;
   $effect(() => {
     const id = runId;
@@ -595,10 +592,10 @@
     // Wait until the run's timestamps are actually loaded.
     if (!startedAt && !endedAt) return;
     histPrefilledFor = id;
-    histSinceText = startedAt ? epochToLocalInput(startedAt) : "";
-    histUntilText = endedAt ? epochToLocalInput(endedAt) : "";
-    histSince = startedAt ? String(startedAt) : "";
-    histUntil = endedAt ? String(endedAt) : "";
+    histSinceText = epochToLocalInput(startedAt);
+    histUntilText = epochToLocalInput(endedAt);
+    histSince = epochToParam(startedAt);
+    histUntil = epochToParam(endedAt);
   });
 
   // Expand server entries into per-line rows (a single ClickHouse entry can
@@ -659,18 +656,13 @@
     }
     histLoadingOlder = true;
     histError = "";
-    // Anchor the viewport on the current top row: after prepending older
-    // lines we restore the scroll offset so the reader doesn't jump.
+    // Anchor the viewport on the current top row so reader doesn't jump.
     const el = histTailEl;
     const prevScrollHeight = el ? el.scrollHeight : 0;
     const prevScrollTop = el ? el.scrollTop : 0;
-    // Share the current view's controller so a filter change mid-flight aborts
-    // this fetch instead of prepending stale lines to the fresh results.
     const signal = histController?.signal;
     try {
       const data = await fetchRunLogs(runId, {
-        // Page below the oldest row we have, but keep the user's `since` floor
-        // so we never fetch before their chosen start.
         since: histSince,
         until: histNextUntil,
         tail: HIST_PAGE,
@@ -694,26 +686,23 @@
     }
   }
 
-  // Auto-load the next older page as the reader scrolls near the top, so the
-  // window grows backward through history without a button press.
+  // Auto-load the next older page as the reader scrolls near the top
   function onHistScroll() {
     const el = histTailEl;
     if (!el) return;
     if (el.scrollTop <= 40) void loadHistOlder();
   }
 
-  // Reset the range back to the run's lifetime (the same defaults the prefill
-  // seeds), rather than clearing it to an empty/unbounded window.
+  // Reset the range back to the run's lifetime
   function resetHistRange() {
     const startedAt = run?.started_at || run?.created_at || 0;
     const endedAt = run?.ended_at || run?.completed_at || 0;
-    histSinceText = startedAt ? epochToLocalInput(startedAt) : "";
-    histUntilText = endedAt ? epochToLocalInput(endedAt) : "";
+    histSinceText = epochToLocalInput(startedAt);
+    histUntilText = epochToLocalInput(endedAt);
   }
 
   // Load the newest page when the Logs tab opens on a finished run, and reload
-  // when the debounced search/since/until change. Running runs are handled by
-  // the SSE effect above, which no-ops for terminal runs.
+  // when the debounced search/since/until change.
   $effect(() => {
     const id = runId;
     const tab = activeTab;
@@ -1311,14 +1300,6 @@
       </div>
     {:else if activeTab === "logs"}
       <div class="tab-panel">
-      {#snippet displayToggle(label, checked, toggle)}
-        <button type="button" class="inline-flex items-center gap-[6px] bg-transparent [border:0] p-0 cursor-pointer text-(--muted) text-[11px] [font:inherit]" onclick={toggle}>
-          <span class="checkmark" class:checked>
-            {#if checked}<Check size={11} />{/if}
-          </span>
-          <span>{label}</span>
-        </button>
-      {/snippet}
       {#if isRunning}
       <div class="flex justify-end mb-[8px]">
         <span class="inline-flex items-center gap-[6px] text-[11px] text-(--muted) uppercase tracking-[0.04em]">
@@ -1368,7 +1349,10 @@
             <option value={1000}>1000/s</option>
           </select>
         </label>
-        {@render displayToggle("Follow tail", logFollow, () => (logFollow = !logFollow))}
+        <label class="inline-flex items-center gap-[6px] text-(--muted) text-[11px]">
+          <input type="checkbox" bind:checked={logFollow} />
+          <span>Follow tail</span>
+        </label>
       </div>
 
       {#if logState === "error" && logError}
