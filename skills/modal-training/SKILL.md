@@ -95,7 +95,7 @@ modal app stop <app-id>
 modal app logs <app-id> --tail 500 | rg "error|CUDA|OOM|loss"
 
 # Fetch only stderr from a particular function call
-modal app logs <app-id> --source stderr --function-call-id <function-call-id>
+modal app logs <app-id> --source stderr --function-call <function-call-id>
 
 # Search for specific keywords in logs
 modal app logs <app-id> --search "error"
