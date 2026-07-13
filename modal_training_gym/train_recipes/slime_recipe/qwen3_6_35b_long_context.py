@@ -1,4 +1,5 @@
 from dataclasses import field
+from typing import Any
 
 from pydantic import ConfigDict
 from pydantic.dataclasses import dataclass
@@ -13,7 +14,7 @@ class Qwen3_6_35b_Recipe_Long_Context(SlimeRecipe):
     gpu_type: str = "H200"
     slime_model_script: str = "scripts/models/qwen3.5-35B-A3B.sh"
     hf_checkpoint: str = "Qwen/Qwen3.6-35B-A3B"
-    train_function_kwargs: dict[str, int] = field(
+    train_function_kwargs: dict[str, Any] = field(
         default_factory=lambda: {"ephemeral_disk": 1_048_576}
     )
 

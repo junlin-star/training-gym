@@ -524,12 +524,31 @@ def build_slime_app(
     metadata_volume = Volume.from_name("training-gym-metadata", create_if_missing=True)
     if checkpoint is not None and checkpoint.path and not model.model_path:
         model.model_path = checkpoint.path
-    all_volumes: dict[str | PurePosixPath, Any] = {
+    all_volumes: dict[str, Volume] = {
         str(HF_CACHE_PATH): hf_cache_volume,
         str(DATA_PATH): data_volume,
         checkpoints_mount_path: checkpoints_volume,
         "/metadata": metadata_volume,
     }
+    train_function_kwargs = dict(slime.train_function_kwargs or {})
+    user_volumes = train_function_kwargs.pop("volumes", None) or {}
+    if not isinstance(user_volumes, dict):
+        raise TypeError(
+            "train_function_kwargs['volumes'] must be a dict of "
+            f"{{mount_path: modal.Volume}}, got {type(user_volumes).__name__}"
+        )
+    conflicts = sorted(path for path in user_volumes if path in all_volumes)
+    if conflicts:
+        raise ValueError(
+            "train_function_kwargs volumes cannot override reserved mounts: "
+            + ", ".join(conflicts)
+        )
+    for path, volume in user_volumes.items():
+        if not isinstance(volume, Volume):
+            raise TypeError(
+                "train_function_kwargs['volumes'] values must be modal.Volume, "
+                f"got {type(volume).__name__} for mount {path}"
+            )
 
     # ── App ──────────────────────────────────────────────────────────────────
     tags = build_app_tags(
@@ -568,13 +587,15 @@ def build_slime_app(
 
     @app.function(
         image=image,
-        volumes={str(DATA_PATH): data_volume},
+        volumes={str(DATA_PATH): data_volume, **user_volumes},
         timeout=2 * 60 * 60,
         secrets=hf_secrets(),
         serialized=True,
         name="prepare_dataset",
     )
     def prepare_dataset():
+        for volume in user_volumes.values():
+            volume.reload()
         run_prepare_dataset(dataset, data_volume, SlimeRecipe._resolve_data_paths)
 
     convert_nnodes = get_checkpoint_conversion_policy(slime, model=model)[0]
@@ -790,7 +811,6 @@ def build_slime_app(
     train_secrets.extend(proxy_auth_secrets())
     train_experimental_options: dict[str, Any] = {"efa_enabled": True}
 
-    train_function_kwargs = dict(slime.train_function_kwargs or {})
     user_secrets = train_function_kwargs.pop("secrets", None)
     if user_secrets is not None:
         if not isinstance(user_secrets, (list, tuple)):
@@ -862,7 +882,7 @@ def build_slime_app(
         memory=slime.memory,
         cloud=slime.cloud,
         region=slime.region,
-        volumes=all_volumes,
+        volumes={**all_volumes, **user_volumes},
         secrets=train_secrets or None,
         ephemeral_disk=train_ephemeral_disk,
         timeout=24 * 60 * 60,
@@ -900,6 +920,7 @@ def build_slime_app(
             hf_cache_volume.reload.aio(),
             data_volume.reload.aio(),
             checkpoints_volume.reload.aio(),
+            *(volume.reload.aio() for volume in user_volumes.values()),
         )
 
         cluster = ModalRayCluster()
