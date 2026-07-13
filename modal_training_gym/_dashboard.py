@@ -14,10 +14,13 @@ import re
 import secrets as _secrets
 import time
 from pathlib import Path
-from typing import Awaitable, Callable, NotRequired, TypedDict
+from typing import TYPE_CHECKING, Awaitable, Callable, NotRequired, TypedDict
 from datetime import datetime, timezone
 
 import modal
+
+if TYPE_CHECKING:
+    from modal.client import _Client
 
 # Imported at module scope so FastAPI can resolve the ``request: Request``
 # annotation in stream_run_logs(). Under ``from __future__ import
@@ -371,6 +374,44 @@ def fastapi_app():
     # Hold strong refs to background refresh tasks so they aren't GC'd mid-flight.
     refresh_tasks: set[asyncio.Task[list[JsonDict]]] = set()
     web.mount("/assets", StaticFiles(directory=f"{STATIC_DIR}/assets"), name="assets")
+
+    # ── Shared Modal client ───────────────────────────────────────────────
+    # Opens a client at startup and reuses it across all requests.
+    modal_client_box: dict[str, _Client | None] = {"client": None}
+    modal_client_lock = asyncio.Lock()
+
+    async def get_modal_client() -> _Client | None:
+        """Return the shared, connection-open Modal client.
+
+        Creates it once (guarded by a lock) and reuses it thereafter. Returns
+        ``None`` when no credentials are configured.
+        """
+        client = modal_client_box["client"]
+        if client is not None:
+            return client
+
+        token_id = os.environ.get("MODAL_TOKEN_ID", "")
+        token_secret = os.environ.get("MODAL_TOKEN_SECRET", "")
+        if not token_id or not token_secret:
+            return None
+
+        from modal.client import _Client
+
+        async with modal_client_lock:
+            if modal_client_box["client"] is None:
+                modal_client_box["client"] = await _Client.from_credentials(
+                    token_id, token_secret
+                )
+            return modal_client_box["client"]
+
+    @web.on_event("startup")
+    async def _open_modal_client() -> None:
+        # Warm the shared client at startup. Failures here are non-fatal: 
+        # endpoints fall back to lazy init and surface error if creds are missing.
+        try:
+            await get_modal_client()
+        except Exception:
+            pass
 
     async def refresh_cache(key: str, loader: SummaryLoader) -> list[JsonDict]:
         async with cache_locks[key]:
@@ -750,7 +791,6 @@ def fastapi_app():
         """
         import json
 
-        from modal.client import _Client
         from modal_proto import api_pb2
 
         run = await _get_run_or_404(training_run_id)
@@ -770,19 +810,17 @@ def fastapi_app():
 
         async def event_stream():
             try:
-                token_id = os.environ.get("MODAL_TOKEN_ID", "")
-                token_secret = os.environ.get("MODAL_TOKEN_SECRET", "")
-                if not token_id or not token_secret:
-                    yield (
-                        "event: error\n"
-                        f"data: {json.dumps({'error': 'No Modal credentials configured. Run training-gym setup.'})}\n\n"
-                    )
-                    return
-                client = await _Client.from_credentials(token_id, token_secret)
+                client = await get_modal_client()
             except Exception as exc:
                 yield (
                     "event: error\n"
                     f"data: {json.dumps({'error': f'auth failed: {exc!s}'})}\n\n"
+                )
+                return
+            if client is None:
+                yield (
+                    "event: error\n"
+                    f"data: {json.dumps({'error': 'No Modal credentials configured. Run training-gym setup.'})}\n\n"
                 )
                 return
 
@@ -911,7 +949,6 @@ def fastapi_app():
         """
         from google.protobuf.timestamp_pb2 import Timestamp
 
-        from modal.client import _Client
         from modal_proto import api_pb2
 
         run = await _get_run_or_404(training_run_id)
@@ -940,17 +977,15 @@ def fastapi_app():
 
         limit = max(1, min(int(tail or 100), 20_000))
 
-        token_id = os.environ.get("MODAL_TOKEN_ID", "")
-        token_secret = os.environ.get("MODAL_TOKEN_SECRET", "")
-        if not token_id or not token_secret:
+        try:
+            client = await get_modal_client()
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"Modal auth: {exc!s}")
+        if client is None:
             raise HTTPException(
                 status_code=503,
                 detail="No Modal credentials configured. Run training-gym setup.",
             )
-        try:
-            client = await _Client.from_credentials(token_id, token_secret)
-        except Exception as exc:
-            raise HTTPException(status_code=502, detail=f"Modal auth: {exc!s}")
 
         def _to_timestamp(secs: float) -> Timestamp:
             ts = Timestamp()
