@@ -15,6 +15,7 @@ from modal.experimental import clustered
 
 from modal_training_gym.common import (
     hf_secrets,
+    proxy_auth_secrets,
 )
 from modal_training_gym.common.checkpoint import Checkpoint
 from modal_training_gym.common.dataset import DatasetConfig, HarborDataset
@@ -385,6 +386,7 @@ def build_miles_app(
                 if miles.wandb is None
                 else [Secret.from_name(miles.wandb.modal_wandb_secret_name)]
             ),
+            *proxy_auth_secrets(),
         ],
         timeout=24 * 60 * 60,
         retries=Retries(max_retries=10, initial_delay=0.0),
