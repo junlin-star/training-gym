@@ -373,10 +373,6 @@
   let logRateCap = $state(0); // 0 = no cap
   let logFollow = $state(true); // auto-scroll to bottom
 
-  // Column visibility toggles, shared by the live + historical log views.
-  let showTimestamps = $state(true);
-  let showTaskIds = $state(false);
-
   // The backend emits one SSE event per log line. Mutating `logLines` (and
   // auto-scrolling) on every message means hundreds of synchronous reactive
   // updates per second under a chatty run, which freezes the tab. Instead we
@@ -578,15 +574,6 @@
     if (!str || !str.trim()) return null;
     const ms = new Date(str.trim().replace(" ", "T")).getTime();
     return Number.isNaN(ms) ? null : Math.floor(ms / 1000);
-  }
-
-  // Format timestamp for log display: HH:MM:SS.mmm
-  function formatLogTimestamp(entry) {
-    const ts = entry.ts_ns ? entry.ts_ns / 1_000_000_000 : (entry.ts || 0);
-    if (!ts) return "";
-    const d = new Date(ts * 1000);
-    const ms = String(d.getMilliseconds()).padStart(3, "0");
-    return `${_pad(d.getHours())}:${_pad(d.getMinutes())}:${_pad(d.getSeconds())}.${ms}`;
   }
 
   $effect(() => {
@@ -1388,8 +1375,6 @@
           </select>
         </label>
         {@render displayToggle("Follow tail", logFollow, () => (logFollow = !logFollow))}
-        {@render displayToggle("Timestamps", showTimestamps, () => (showTimestamps = !showTimestamps))}
-        {@render displayToggle("Task IDs", showTaskIds, () => (showTaskIds = !showTaskIds))}
       </div>
 
       {#if logState === "error" && logError}
@@ -1412,12 +1397,7 @@
         <div class="bg-(--color-c-gray-08,#0e0e0e) rounded-[6px] p-[8px_12px] max-h-[420px] overflow-y-auto overflow-x-auto [font-family:ui-monospace,SFMono-Regular,Menlo,monospace] text-[12px] leading-[1.45] text-(--text)" bind:this={logTailEl}>
           {#each logLines as entry (entry.id)}
             <div class="flex gap-[10px] whitespace-pre">
-              {#if showTimestamps}
-                <span class="shrink-0 text-(--muted) text-[10px] min-w-[80px] [font-variant-numeric:tabular-nums]">{formatLogTimestamp(entry)}</span>
-              {/if}
-              {#if showTaskIds}
-                <span class="shrink-0 text-(--muted) text-[10px]">{entry.task_id || ""}</span>
-              {/if}
+              <span class="shrink-0 text-(--muted) text-[10px] min-w-[64px] overflow-hidden text-ellipsis">{entry.task_id || ""}</span>
               <span class="flex-1 whitespace-pre-wrap break-all">{entry.line}</span>
             </div>
           {/each}
@@ -1472,10 +1452,6 @@
             >
               Reset
             </button>
-            <div class="ml-auto inline-flex items-center gap-[12px]">
-              {@render displayToggle("Timestamps", showTimestamps, () => (showTimestamps = !showTimestamps))}
-              {@render displayToggle("Task IDs", showTaskIds, () => (showTaskIds = !showTaskIds))}
-            </div>
           </div>
         </div>
 
@@ -1502,12 +1478,7 @@
             {/if}
             {#each histLines as entry (entry.id)}
               <div class="flex gap-[10px] whitespace-pre">
-                {#if showTimestamps}
-                  <span class="shrink-0 text-(--muted) text-[10px] min-w-[80px] [font-variant-numeric:tabular-nums]">{formatLogTimestamp(entry)}</span>
-                {/if}
-                {#if showTaskIds}
-                  <span class="shrink-0 text-(--muted) text-[10px]">{entry.task_id || ""}</span>
-                {/if}
+                <span class="shrink-0 text-(--muted) text-[10px] min-w-[64px] overflow-hidden text-ellipsis">{entry.task_id || ""}</span>
                 <span class="flex-1 whitespace-pre-wrap break-all">{entry.line}</span>
               </div>
             {/each}
