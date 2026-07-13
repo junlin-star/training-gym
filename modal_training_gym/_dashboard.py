@@ -1011,7 +1011,7 @@ def fastapi_app():
             relative age (``30m`` / ``2h`` / ``1d`` / ``45s`` = "N ago").
             ``since`` is exclusive and ``until`` is inclusive. Defaults to the run's
             lifetime.
-          - ``tail``: max entries to return (clamped to 1..20000, default 100).
+          - ``tail``: max entries to return (default 100). Throws if negative or too large.
             These are the newest entries in the window (ClickHouse caps a single
             fetch at 20000).
           - ``search``: case-insensitive substring filter.
@@ -1022,6 +1022,9 @@ def fastapi_app():
           - ``next_until``: the timestamp of the next log entry to fetch
         """
         from modal_proto import api_pb2
+
+        if tail < 0:
+            raise HTTPException(status_code=400, detail="Tail must be positive")
 
         run = await _get_run_or_404(training_run_id)
 
