@@ -118,6 +118,28 @@ def test_substep_times_aggregation():
     assert substep_times[str(STEP)][ROLLOUT_LOGGING]["start"] == 2.0
 
 
+def test_fractional_events_preserve_integer_step_format():
+    step_times, substep_times = aggregate_step_times(
+        {
+            f"{RUN_ID}:1:start": 2.875,
+            f"{RUN_ID}:1:finish": 18.999,
+            f"{RUN_ID}:1:substep:{ROLLOUT_LOGGING}": 2.875,
+            f"{RUN_ID}:1:substep:{OFFLOAD_ROLLOUT}": 4.125,
+        },
+        RUN_ID,
+        1,
+        SUBSTEP_ORDER,
+        OPTIONAL_SUBSTEPS,
+    )
+
+    assert step_times["1"] == {"start": 2, "end": 18, "duration_s": 16}
+    assert all(type(value) is int for value in step_times["1"].values())
+    assert substep_times["1"][ROLLOUT_LOGGING] == {
+        "start": 2.875,
+        "duration_s": 1.25,
+    }
+
+
 def test_in_loop_generate_stamp_splits_eval_before_from_generation():
     schedule = [
         (0.0, "substep_window_start"),
