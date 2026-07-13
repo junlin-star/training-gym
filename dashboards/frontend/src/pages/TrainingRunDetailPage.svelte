@@ -352,12 +352,6 @@
     }
   }
 
-  // Ray wraps its `(Actor pid=N)` worker prefixes in ANSI color codes for the
-  // terminal; the dashboard renders plain text, so strip the escapes (keeping
-  // the prefix itself) before display.
-  const ANSI_RE = /\x1b\[[0-9;]*m/g;
-  const stripAnsi = (s) => s.replace(ANSI_RE, "");
-
   // ── Live Modal log stream (SSE, pure pass-through) ───────────────────
   const LOG_BUFFER_MAX = 2000;
   let logLines = $state([]); // [{task_id, line, ts}]
@@ -472,7 +466,7 @@
         const ts = payload.ts || Date.now() / 1000;
         for (const p of parts) {
           if (!p.length) continue;
-          pendingLogLines.push({ id: logSeq++, task_id, line: stripAnsi(p), ts });
+          pendingLogLines.push({ id: logSeq++, task_id, line: p, ts });
         }
         if (pendingLogLines.length > LOG_BUFFER_MAX) {
           pendingLogLines = pendingLogLines.slice(-LOG_BUFFER_MAX);
@@ -616,7 +610,7 @@
       const ts_ns = entry.ts_ns || 0;
       for (const part of String(entry.line ?? "").split(/\r?\n/)) {
         if (!part.length) continue;
-        target.push({ id: histSeq++, task_id, line: stripAnsi(part), ts, ts_ns });
+        target.push({ id: histSeq++, task_id, line: part, ts, ts_ns });
       }
     }
   }
