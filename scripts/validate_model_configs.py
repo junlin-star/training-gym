@@ -282,19 +282,35 @@ def run_base_training_on_slime(
     )
 
 
-def _format_duration_delta(result: TutorialResult, baseline_path: Path) -> str:
-    """Format the duration change vs a baseline result, e.g. "+500.0s (+33%)"."""
+def _training_run_link(training_run_id: str, dashboard_url: str | None) -> str:
+    """Training run id in backticks, linked to the dashboard if a base URL is given."""
+    if dashboard_url is None:
+        return f"`{training_run_id}`"
+    base = dashboard_url.rstrip("/")
+    return f"[`{training_run_id}`]({base}/training/{training_run_id})"
+
+
+def _format_duration_delta(
+    result: TutorialResult, baseline_path: Path, dashboard_url: str | None
+) -> str:
+    """Format the duration change vs a baseline result, naming the baseline
+    run, e.g. "+500.0s (+33%) from [`run-id`](https://…/training/run-id)".
+    """
     if not baseline_path.is_file():
         return "—"
     baseline = TutorialResult.from_dict(json.loads(baseline_path.read_text()))
     delta_s = result.total_duration_s - baseline.total_duration_s
     if baseline.total_duration_s <= 0:
-        return f"{delta_s:+.1f}s"
-    percent = delta_s / baseline.total_duration_s * 100
-    return f"{delta_s:+.1f}s ({percent:+.0f}%)"
+        delta = f"{delta_s:+.1f}s"
+    else:
+        percent = delta_s / baseline.total_duration_s * 100
+        delta = f"{delta_s:+.1f}s ({percent:+.0f}%)"
+    return f"{delta} from {_training_run_link(baseline.training_run_id, dashboard_url)}"
 
 
-def summarize_results(results_dir: str, baseline_dir: str | None) -> str:
+def summarize_results(
+    results_dir: str, baseline_dir: str | None, dashboard_url: str | None = None
+) -> str:
     rows = []
     for path in sorted(Path(results_dir).glob("*.json")):
         result = TutorialResult.from_dict(json.loads(path.read_text()))
@@ -306,12 +322,13 @@ def summarize_results(results_dir: str, baseline_dir: str | None) -> str:
         row = (
             f"| {result.base_model_name} | {status} "
             f"| {result.total_duration_s:.1f}s | {result.step_count} "
-            f"| `{result.training_run_id}` |"
+            f"| {_training_run_link(result.training_run_id, dashboard_url)} |"
         )
         if baseline_dir is not None:
-            row += (
-                f" {_format_duration_delta(result, Path(baseline_dir) / path.name)} |"
+            delta = _format_duration_delta(
+                result, Path(baseline_dir) / path.name, dashboard_url
             )
+            row += f" {delta} |"
         rows.append(row)
 
     header = "| Model | Status | Duration | Steps | Run |"
@@ -423,6 +440,10 @@ def __main__():
         "--baseline-dir",
         help="Directory containing baseline result JSON files to compare against",
     )
+    summarize_parser.add_argument(
+        "--dashboard-url",
+        help="Base URL of the training dashboard. If omitted, run ids are not linked.",
+    )
 
     args = parser.parse_args()
 
@@ -431,7 +452,9 @@ def __main__():
         return
 
     if args.command == "summarize":
-        print(summarize_results(args.results_dir, args.baseline_dir))
+        print(
+            summarize_results(args.results_dir, args.baseline_dir, args.dashboard_url)
+        )
         return
 
     tutorial_result = run_base_training_on_slime(
