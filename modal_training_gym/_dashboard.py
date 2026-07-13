@@ -228,7 +228,9 @@ def _compute_next_page(logs: list[LogEntry], limit: int) -> tuple[bool, float | 
     next_until: float | None = None
     if has_more and logs:
         oldest = logs[0]
-        oldest_ns = oldest.get("ts_ns") or int((oldest.get("ts") or 0.0) * 1_000_000_000)
+        oldest_ns = oldest.get("ts_ns") or int(
+            (oldest.get("ts") or 0.0) * 1_000_000_000
+        )
         next_until = (oldest_ns - 1) / 1_000_000_000
     return has_more, next_until
 
@@ -478,7 +480,7 @@ def fastapi_app():
 
     @web.on_event("startup")
     async def _open_modal_client() -> None:
-        # Warm the shared client at startup. Failures here are non-fatal: 
+        # Warm the shared client at startup. Failures here are non-fatal:
         # endpoints fall back to lazy init and surface error if creds are missing.
         try:
             await get_modal_client()

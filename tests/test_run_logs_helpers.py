@@ -219,7 +219,9 @@ def test_parse_time_empty_or_blank_returns_none(value: str) -> None:
         ("30 m", PARSE_NOW - 30 * 60),
     ],
 )
-def test_parse_time_relative_age_subtracts_from_now(value: str, expected: float) -> None:
+def test_parse_time_relative_age_subtracts_from_now(
+    value: str, expected: float
+) -> None:
     assert _parse_log_time(value, PARSE_NOW) == expected
 
 
