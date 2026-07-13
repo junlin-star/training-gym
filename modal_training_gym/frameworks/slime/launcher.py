@@ -312,19 +312,22 @@ def aggregate_step_times(
             "duration_s": duration,
         }
 
-        substep_start_boundary = step_times_dict.get(
+        raw_step_window_start = step_times_dict.get(
             f"{run_id}:{current_step_num}:substep_start"
         )
+        step_window_start = (
+            float(raw_step_window_start) if raw_step_window_start is not None else None
+        )
         full_step_start_time = (
-            float(substep_start_boundary)
-            if substep_start_boundary is not None
-            else precise_start_time
+            step_window_start if step_window_start is not None else precise_start_time
         )
         full_step_end_time = step_times_dict.get(
             f"{run_id}:{current_step_num}:substep_finish"
         )
         if full_step_end_time is not None:
             full_step_end_time = float(full_step_end_time)
+            if step_window_start is not None and full_step_end_time < step_window_start:
+                full_step_end_time = precise_end_time
         else:
             full_step_end_time = precise_end_time
 
@@ -339,6 +342,12 @@ def aggregate_step_times(
             if substep_start is None:
                 continue
             substep_start = float(substep_start)
+            if (
+                step_window_start is not None
+                and substep_start < step_window_start
+                and substep != eval_before
+            ):
+                continue
             if full_step_start_time is not None and substep != eval_before:
                 substep_start = max(substep_start, full_step_start_time)
             if full_step_end_time is not None:

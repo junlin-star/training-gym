@@ -118,6 +118,49 @@ def test_substep_times_aggregation():
     assert substep_times[str(STEP)][ROLLOUT_LOGGING]["start"] == 2.0
 
 
+def test_replayed_step_replaces_stale_substep_times():
+    step_times_dict = build_step_times_dict(STEP_SCHEDULE)
+    retry_schedule = [
+        (0.0, "substep_window_start"),
+        (0.5, "eval_begin"),
+        (2.0, "step_start"),
+        (4.0, "offload_rollout"),
+        (6.0, "compute_log_probs"),
+        (10.0, "optimizer_step"),
+        (11.0, "optimizer_step"),
+        (13.0, "offload_train"),
+        (15.0, "weight_sync"),
+        (16.0, "eval_end"),
+        (18.0, "substep_finish"),
+        (18.0, "step_complete"),
+    ]
+    build_step_times_dict(retry_schedule, offset=100.0, into=step_times_dict)
+
+    step_times, substep_times = aggregate_step_times(
+        step_times_dict,
+        RUN_ID,
+        STEP,
+        SUBSTEP_ORDER,
+        OPTIONAL_SUBSTEPS,
+    )
+
+    assert step_times[str(STEP)] == {
+        "start": 102,
+        "end": 118,
+        "duration_s": 16,
+    }
+    assert substep_times[str(STEP)] == {
+        EVAL_BEFORE: {"start": 100.5, "duration_s": 1.5},
+        ROLLOUT_LOGGING: {"start": 102.0, "duration_s": 2.0},
+        OFFLOAD_ROLLOUT: {"start": 104.0, "duration_s": 2.0},
+        COMPUTE_LOG_PROBS: {"start": 106.0, "duration_s": 4.0},
+        OPTIMIZER_STEP: {"start": 110.0, "duration_s": 3.0},
+        OFFLOAD_TRAIN: {"start": 113.0, "duration_s": 2.0},
+        WEIGHT_SYNC: {"start": 115.0, "duration_s": 1.0},
+        EVAL_AFTER: {"start": 116.0, "duration_s": 2.0},
+    }
+
+
 def test_fractional_events_preserve_integer_step_format():
     step_times, substep_times = aggregate_step_times(
         {
