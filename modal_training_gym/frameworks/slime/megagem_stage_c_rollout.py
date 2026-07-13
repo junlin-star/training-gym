@@ -19,6 +19,7 @@ import math
 import os
 import random
 import re
+import statistics
 import sys
 import time
 import traceback
@@ -41,6 +42,10 @@ MEGAGEM_STAGE_C_REWARD_PATH = (
     "modal_training_gym.frameworks.slime.megagem_stage_c_rollout."
     "megagem_precomputed_reward"
 )
+MEGAGEM_STAGE_C_ROLLOUT_LOG_PATH = (
+    "modal_training_gym.frameworks.slime.megagem_stage_c_rollout."
+    "megagem_stage_c_rollout_log"
+)
 
 _TRAINABLE_ACTOR_ID = "trainable"
 _DEFAULT_OPPONENT_ACTOR_ID = "current_self"
@@ -55,6 +60,7 @@ _GROUP_STATES: dict[str, "_GroupState"] = {}
 _GENERATE_STATES: dict[int, Any] = {}
 _GAME_SEMAPHORES: dict[tuple[int, int], asyncio.Semaphore] = {}
 _SIGNAL_SHIM_INSTALLED = False
+_GROUP_START_COUNTS: dict[str, int] = {}
 
 
 @dataclass
@@ -209,6 +215,18 @@ def _int_setting(args: Any, env_name: str, attr_name: str, default: int) -> int:
         return default
 
 
+def _float_setting(args: Any, env_name: str, attr_name: str, default: float) -> float:
+    raw = os.environ.get(env_name)
+    if raw is None:
+        raw = getattr(args, attr_name, None)
+    if raw is None:
+        raw = default
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return default
+
+
 def _max_extra_games_per_group(args: Any, k: int) -> int:
     default = max(2, int(math.ceil(k * 0.25)))
     return max(
@@ -250,7 +268,7 @@ def _fail_open_groups(args: Any) -> bool:
         args,
         "MEGAGEM_STAGE_C_FAIL_OPEN_GROUPS",
         "megagem_fail_open_groups",
-        True,
+        False,
     )
 
 
@@ -268,6 +286,45 @@ def _min_success_games(args: Any, k: int) -> int:
             ),
         ),
     )
+
+
+def _length_penalty_config(args: Any) -> tuple[int, float, float]:
+    target = max(
+        0,
+        _int_setting(
+            args,
+            "MEGAGEM_STAGE_C_LENGTH_PENALTY_TARGET_TOKENS",
+            "megagem_length_penalty_target_tokens",
+            512,
+        ),
+    )
+    per_100 = max(
+        0.0,
+        _float_setting(
+            args,
+            "MEGAGEM_STAGE_C_LENGTH_PENALTY_PER_100_TOKENS",
+            "megagem_length_penalty_per_100_tokens",
+            0.01,
+        ),
+    )
+    cap = max(
+        0.0,
+        _float_setting(
+            args,
+            "MEGAGEM_STAGE_C_LENGTH_PENALTY_CAP",
+            "megagem_length_penalty_cap",
+            0.20,
+        ),
+    )
+    return target, per_100, cap
+
+
+def _length_penalty(args: Any, response_tokens: int) -> float:
+    target, per_100, cap = _length_penalty_config(args)
+    if per_100 <= 0 or cap <= 0 or response_tokens <= target:
+        return 0.0
+    penalty = ((response_tokens - target) / 100.0) * per_100
+    return min(cap, penalty)
 
 
 def _game_semaphore(args: Any) -> asyncio.Semaphore:
@@ -765,6 +822,70 @@ def _filter_games_with_valid_rows(
     return good, bad
 
 
+def _score_map(game: dict[str, Any]) -> dict[int, float]:
+    finals = ((game.get("final_results") or {}).get("final_scores") or [])
+    out: dict[int, float] = {}
+    for item in finals:
+        if not isinstance(item, dict):
+            continue
+        if "player_id" not in item or "final_score" not in item:
+            continue
+        try:
+            out[int(item["player_id"])] = float(item["final_score"])
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def _outcome_summary(games: list[dict[str, Any]], trainable_seat: int) -> dict[str, Any]:
+    wins = 0
+    score_values: list[float] = []
+    margin_best_values: list[float] = []
+    margin_avg_values: list[float] = []
+    rounds_values: list[float] = []
+    for game in games:
+        scores = _score_map(game)
+        if trainable_seat not in scores:
+            continue
+        score = scores[trainable_seat]
+        others = [v for pid, v in scores.items() if pid != trainable_seat]
+        if not others:
+            continue
+        score_values.append(score)
+        margin_best_values.append(score - max(others))
+        margin_avg_values.append(score - statistics.fmean(others))
+        if (game.get("final_results") or {}).get("winner_id") == trainable_seat:
+            wins += 1
+        rounds = (game.get("final_results") or {}).get("num_rounds")
+        try:
+            rounds_values.append(float(rounds))
+        except (TypeError, ValueError):
+            pass
+    n = len(score_values)
+
+    def mean(xs: list[float]) -> float | None:
+        return float(statistics.fmean(xs)) if xs else None
+
+    return {
+        "outcome_games": n,
+        "outcome_win_rate": (wins / n) if n else None,
+        "outcome_wins": wins,
+        "outcome_score_mean": mean(score_values),
+        "outcome_margin_vs_best_mean": mean(margin_best_values),
+        "outcome_margin_vs_avg_mean": mean(margin_avg_values),
+        "outcome_num_rounds_mean": mean(rounds_values),
+    }
+
+
+def _fmt_optional(value: Any, digits: int = 3) -> str:
+    if value is None:
+        return "na"
+    try:
+        return f"{float(value):.{digits}f}"
+    except (TypeError, ValueError):
+        return "na"
+
+
 def _fallback_group_rows(
     label: dict[str, Any],
     *,
@@ -904,6 +1025,7 @@ async def _roll_group_rows(
             f"MegaGem Stage C produced no trainable rows for seed={actual_seed}; "
             f"successful_games={len(games)} failures={len(failures)}"
         )
+    outcome = _outcome_summary(games, trainable_seat)
     selected = _balanced_select(rows, rows_per_group, seed=generation)
     wall_s = time.perf_counter() - started
     for i, row in enumerate(selected):
@@ -920,13 +1042,19 @@ async def _roll_group_rows(
                 "k_attempts": len(games) + len(failures),
                 "rows_per_group": rows_per_group,
                 "roll_group_wall_s": wall_s,
+                **outcome,
             }
         )
     print(
         "[megagem-stage-c] group complete "
         f"seed={actual_seed} seat={trainable_seat} generation={generation} "
         f"successes={len(games)}/{k} failures={len(failures)} "
-        f"rows={len(rows)} selected={len(selected)} wall={wall_s:.1f}s",
+        f"rows={len(rows)} selected={len(selected)} "
+        f"win_rate={_fmt_optional(outcome['outcome_win_rate'])} "
+        f"score={_fmt_optional(outcome['outcome_score_mean'], 2)} "
+        f"margin_best={_fmt_optional(outcome['outcome_margin_vs_best_mean'], 2)} "
+        f"margin_avg={_fmt_optional(outcome['outcome_margin_vs_avg_mean'], 2)} "
+        f"wall={wall_s:.1f}s",
         file=sys.stderr,
         flush=True,
     )
@@ -960,6 +1088,23 @@ async def _rows_for_sample(
             state.generation += 1
             state.rows = None
             state.assigned_slots = set()
+            _GROUP_START_COUNTS[key] = _GROUP_START_COUNTS.get(key, 0) + 1
+            worker_hint = (
+                getattr(args, "rank", None)
+                or getattr(args, "rollout_id", None)
+                or getattr(args, "actor_id", None)
+                or "unknown"
+            )
+            print(
+                "[megagem-stage-c] starting group task "
+                f"pid={os.getpid()} worker={worker_hint} "
+                f"group_starts_in_process={_GROUP_START_COUNTS[key]} "
+                f"generation={state.generation} rows_per_group={rows_per_group} "
+                f"explicit_slot={explicit_slot} assigned_before={len(assigned)} "
+                f"group_key={key}",
+                file=sys.stderr,
+                flush=True,
+            )
             state.task = asyncio.create_task(
                 _roll_group_rows(args, label, state.generation, sampling_params)
             )
@@ -1029,6 +1174,65 @@ def _fill_rollout_compat_fields(sample: Any, response_ids: list[int]) -> None:
     """
 
 
+def _validate_rollout_probability_contract(
+    args: Any, sampling_params: dict[str, Any] | None
+) -> None:
+    """Fail before self-play if sampling support needs uncollected tensors."""
+
+    raw_values = [getattr(args, "rollout_top_p", None)]
+    if isinstance(sampling_params, dict):
+        raw_values.append(sampling_params.get("top_p"))
+    for raw in raw_values:
+        if raw is None:
+            continue
+        try:
+            top_p = float(raw)
+        except (TypeError, ValueError):
+            raise RuntimeError(
+                f"MegaGem Stage C received non-numeric rollout top_p={raw!r}; "
+                "custom rollouts require rollout_top_p=1.0."
+            ) from None
+        if not math.isclose(top_p, 1.0, rel_tol=0.0, abs_tol=1e-9):
+            raise RuntimeError(
+                "MegaGem Stage C custom rollouts require rollout_top_p=1.0. "
+                "Slime requires rollout_top_p_token_ids when top_p < 1.0, "
+                "and the MegaGem bridge does not yet collect faithful top-p "
+                "candidate sets from SGLang."
+            )
+    if not isinstance(sampling_params, dict):
+        return
+    min_p = sampling_params.get("min_p")
+    if min_p not in (None, 0, 0.0):
+        try:
+            min_p_value = float(min_p)
+        except (TypeError, ValueError):
+            raise RuntimeError(
+                f"MegaGem Stage C received non-numeric min_p={min_p!r}; "
+                "custom rollouts do not support min_p."
+            ) from None
+        if min_p_value != 0.0:
+            raise RuntimeError(
+                "MegaGem Stage C custom rollouts do not support min_p until the "
+                "bridge collects faithful truncated candidate sets from SGLang."
+            )
+    top_k = sampling_params.get("top_k")
+    if top_k is not None:
+        try:
+            k = int(top_k)
+        except (TypeError, ValueError):
+            raise RuntimeError(
+                f"MegaGem Stage C received non-integer top_k={top_k!r}; "
+                "custom rollouts require top_k<=0."
+            ) from None
+        # SGLang treats non-positive/absent top_k as disabled; positive values
+        # truncate support just like top_p and need candidate-set metadata.
+        if k > 0:
+            raise RuntimeError(
+                "MegaGem Stage C custom rollouts do not support top_k until "
+                "the bridge collects faithful truncated candidate sets from SGLang."
+            )
+
+
 def _fill_sample_from_row(args: Any, sample: Any, row: dict[str, Any]) -> Any:
     _ensure_megagem_path()
     from slime.utils.types import Sample
@@ -1043,13 +1247,18 @@ def _fill_sample_from_row(args: Any, sample: Any, row: dict[str, Any]) -> Any:
     response_text = str(row["completion"])
     prompt_ids = _token_ids(state.tokenizer, prompt_text)
     response_ids = _token_ids(state.tokenizer, response_text)
+    raw_reward = float(row["precomputed_reward"])
+    raw_advantage = float(row["precomputed_advantage"])
+    length_penalty = _length_penalty(args, len(response_ids))
+    adjusted_reward = raw_reward - length_penalty
+    adjusted_advantage = raw_advantage - length_penalty
 
     sample.prompt = str(row["prompt"])
     sample.tokens = prompt_ids + response_ids
     sample.response_length = len(response_ids)
     sample.response = response_text
     sample.loss_mask = [1] * len(response_ids)
-    sample.reward = float(row["precomputed_reward"])
+    sample.reward = adjusted_reward
     sample.status = Sample.Status.COMPLETED
     _fill_rollout_compat_fields(sample, response_ids)
 
@@ -1058,8 +1267,12 @@ def _fill_sample_from_row(args: Any, sample: Any, row: dict[str, Any]) -> Any:
         metadata = {}
     metadata["megagem"] = {
         "contract": MEGAGEM_STAGE_C_ROLLOUT_CONTRACT,
-        "precomputed_reward": float(row["precomputed_reward"]),
-        "precomputed_advantage": float(row["precomputed_advantage"]),
+        "precomputed_reward": adjusted_reward,
+        "precomputed_advantage": adjusted_advantage,
+        "raw_precomputed_reward": raw_reward,
+        "raw_precomputed_advantage": raw_advantage,
+        "length_penalty": length_penalty,
+        "response_tokens": len(response_ids),
         "group_key": row.get("group_key"),
         "game_id": row.get("game_id"),
         "round_index": row.get("round_index"),
@@ -1091,11 +1304,134 @@ def _sample_debug(sample: Any) -> dict[str, Any]:
     return out
 
 
+def _megagem_meta(sample: Any) -> dict[str, Any]:
+    metadata = getattr(sample, "metadata", None)
+    if not isinstance(metadata, dict):
+        return {}
+    megagem = metadata.get("megagem")
+    return megagem if isinstance(megagem, dict) else {}
+
+
+def _numeric(values: list[Any]) -> list[float]:
+    out = []
+    for value in values:
+        try:
+            x = float(value)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(x):
+            out.append(x)
+    return out
+
+
+def _mean_metric(values: list[Any]) -> float | None:
+    xs = _numeric(values)
+    return float(statistics.fmean(xs)) if xs else None
+
+
+def _std_metric(values: list[Any]) -> float | None:
+    xs = _numeric(values)
+    if len(xs) < 2:
+        return None
+    return float(statistics.pstdev(xs))
+
+
+def megagem_stage_c_rollout_log(
+    rollout_id: int,
+    args: Any,
+    samples: Any,
+    rollout_extra_metrics: Any,
+    rollout_time: Any,
+) -> bool:
+    """Emit MegaGem-specific rollout health metrics to logs and W&B if present."""
+
+    del args, rollout_extra_metrics, rollout_time
+    if samples is None:
+        return False
+    sample_list = list(samples)
+    metas = [_megagem_meta(sample) for sample in sample_list]
+    metas = [m for m in metas if m]
+    if not metas:
+        return False
+
+    stage_by_group: dict[str, dict[str, Any]] = {}
+    for meta in metas:
+        stage = meta.get("stage_c")
+        if not isinstance(stage, dict):
+            continue
+        group_key = str(meta.get("group_key") or "")
+        if group_key and group_key not in stage_by_group:
+            stage_by_group[group_key] = stage
+
+    stages = list(stage_by_group.values())
+    metrics = {
+        "megagem/selected_rows": len(metas),
+        "megagem/groups": len(stages),
+        "megagem/response_tokens_mean": _mean_metric(
+            [m.get("response_tokens") for m in metas]
+        ),
+        "megagem/response_tokens_std": _std_metric(
+            [m.get("response_tokens") for m in metas]
+        ),
+        "megagem/length_penalty_mean": _mean_metric(
+            [m.get("length_penalty") for m in metas]
+        ),
+        "megagem/reward_adjusted_mean": _mean_metric(
+            [m.get("precomputed_reward") for m in metas]
+        ),
+        "megagem/reward_raw_mean": _mean_metric(
+            [m.get("raw_precomputed_reward") for m in metas]
+        ),
+        "megagem/advantage_adjusted_mean": _mean_metric(
+            [m.get("precomputed_advantage") for m in metas]
+        ),
+        "megagem/advantage_raw_mean": _mean_metric(
+            [m.get("raw_precomputed_advantage") for m in metas]
+        ),
+        "megagem/group_win_rate_mean": _mean_metric(
+            [s.get("outcome_win_rate") for s in stages]
+        ),
+        "megagem/group_score_mean": _mean_metric(
+            [s.get("outcome_score_mean") for s in stages]
+        ),
+        "megagem/group_margin_vs_best_mean": _mean_metric(
+            [s.get("outcome_margin_vs_best_mean") for s in stages]
+        ),
+        "megagem/group_margin_vs_avg_mean": _mean_metric(
+            [s.get("outcome_margin_vs_avg_mean") for s in stages]
+        ),
+        "megagem/group_num_rounds_mean": _mean_metric(
+            [s.get("outcome_num_rounds_mean") for s in stages]
+        ),
+    }
+    metrics = {k: v for k, v in metrics.items() if v is not None}
+    print(
+        "[megagem-stage-c] rollout metrics "
+        f"rollout={rollout_id} "
+        + json.dumps(metrics, sort_keys=True),
+        file=sys.stderr,
+        flush=True,
+    )
+    try:
+        import wandb
+
+        if getattr(wandb, "run", None) is not None:
+            wandb.log(metrics, step=int(rollout_id))
+    except Exception as exc:
+        print(
+            f"[megagem-stage-c] wandb metric log skipped: {_exc_summary(exc)}",
+            file=sys.stderr,
+            flush=True,
+        )
+    return False
+
+
 async def megagem_stage_c_rollout(args: Any, sample: Any, sampling_params: dict[str, Any]) -> Any:
     """Slime custom rollout hook returning one selected MegaGem turn row."""
 
     label: dict[str, Any] | None = None
     try:
+        _validate_rollout_probability_contract(args, sampling_params)
         label = _json_label(sample)
         rows, slot, _generation = await _rows_for_sample(
             args, sample, label, sampling_params or {}
@@ -1128,6 +1464,7 @@ def _reset_stage_c_runtime_state() -> None:
     _GROUP_STATES.clear()
     _GENERATE_STATES.clear()
     _GAME_SEMAPHORES.clear()
+    _GROUP_START_COUNTS.clear()
 
 
 async def megagem_precomputed_reward(args: Any, sample: Any, **_: Any) -> float:

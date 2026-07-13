@@ -38,21 +38,42 @@ def parse_args() -> argparse.Namespace:
         help="Round-robin the trainable seat across prompt groups.",
     )
     parser.add_argument("--save-interval", type=int, default=25)
-    parser.add_argument("--lr", type=float, default=2e-5)
-    parser.add_argument("--min-lr", type=float, default=2e-6)
+    parser.add_argument("--lr", type=float, default=6e-6)
+    parser.add_argument("--min-lr", type=float, default=6e-7)
+    parser.add_argument("--kl-loss-coef", type=float, default=0.05)
+    parser.add_argument("--rollout-max-response-len", type=int, default=1024)
+    parser.add_argument("--rollout-temperature", type=float, default=0.85)
+    parser.add_argument("--rollout-top-p", type=float, default=1.0)
     parser.add_argument("--global-batch-size", type=int, default=2048)
     parser.add_argument("--max-parallel-games", type=int, default=256)
     parser.add_argument("--extra-games-per-group", type=int, default=4)
     parser.add_argument("--min-success-games", type=int, default=12)
     parser.add_argument("--game-timeout-s", type=float, default=600.0)
+    parser.add_argument("--length-penalty-target-tokens", type=int, default=512)
+    parser.add_argument("--length-penalty-per-100-tokens", type=float, default=0.01)
+    parser.add_argument("--length-penalty-cap", type=float, default=0.20)
     parser.add_argument(
         "--fail-open-groups",
         action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Use zero-advantage fallback rows when a prompt group fails.",
+        default=False,
+        help=(
+            "Use zero-advantage fallback rows when a prompt group fails. "
+            "Disabled by default so rollout/import/API failures stop Stage C."
+        ),
     )
-    parser.add_argument("--wandb-project", default="")
-    parser.add_argument("--wandb-group", default="megagem-stage-c")
+    parser.add_argument("--wandb-project", default="megagem-stage-c")
+    parser.add_argument("--wandb-group", default="stage-c-stability")
+    parser.add_argument(
+        "--wandb-secret",
+        default="wandb-secret",
+        help="Modal secret containing WANDB_API_KEY.",
+    )
+    parser.add_argument(
+        "--wandb",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Enable W&B logging for Slime/Megatron train metrics.",
+    )
     parser.add_argument(
         "--detach",
         action=argparse.BooleanOptionalAction,
@@ -83,6 +104,11 @@ def main() -> None:
         save_interval=args.save_interval,
         lr=args.lr,
         min_lr=args.min_lr,
+        kl_loss_coef=args.kl_loss_coef,
+        rollout_max_response_len=args.rollout_max_response_len,
+        eval_max_response_len=args.rollout_max_response_len,
+        rollout_temperature=args.rollout_temperature,
+        rollout_top_p=args.rollout_top_p,
         rollout_batch_size=args.rollout_batch_size,
         global_batch_size=args.global_batch_size,
     )
@@ -93,11 +119,18 @@ def main() -> None:
         "megagem_min_success_games": args.min_success_games,
         "megagem_game_timeout_s": args.game_timeout_s,
         "megagem_fail_open_groups": args.fail_open_groups,
+        "megagem_length_penalty_target_tokens": args.length_penalty_target_tokens,
+        "megagem_length_penalty_per_100_tokens": args.length_penalty_per_100_tokens,
+        "megagem_length_penalty_cap": args.length_penalty_cap,
     }
-    if args.wandb_project:
+    if args.wandb:
         from modal_training_gym import WandbConfig
 
-        recipe.wandb = WandbConfig(project=args.wandb_project, group=args.wandb_group)
+        recipe.wandb = WandbConfig(
+            project=args.wandb_project,
+            group=args.wandb_group,
+            modal_wandb_secret_name=args.wandb_secret,
+        )
 
     print(json.dumps(megagem_stage_c_summary(recipe), indent=2))
     training_run = TrainConfig(

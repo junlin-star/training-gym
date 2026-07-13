@@ -7,6 +7,8 @@ import sys
 import types
 from types import SimpleNamespace
 
+import pytest
+
 import modal_training_gym.frameworks.slime.megagem_stage_c_rollout as stage_c_rollout
 from modal_training_gym import (
     MegaGem_Qwen3_4B_SFT,
@@ -20,6 +22,7 @@ from modal_training_gym.train_recipes.slime_recipe.megagem_qwen3_4b_stage_c impo
 )
 from modal_training_gym.frameworks.slime.megagem_stage_c_rollout import (
     MEGAGEM_STAGE_C_ADVANTAGE_PATH,
+    MEGAGEM_STAGE_C_ROLLOUT_LOG_PATH,
     MEGAGEM_STAGE_C_REWARD_PATH,
     MEGAGEM_STAGE_C_ROLLOUT_CONTRACT,
     megagem_precomputed_advantages,
@@ -73,15 +76,71 @@ def test_stage_c_large_rollout_shape_matches_32_rollout_engines() -> None:
     assert summary["games_per_rollout"] == 2048
     assert summary["global_batch_size"] == 2048
     assert summary["updates_per_rollout"] == 1
-    assert recipe.rollout_max_response_len == 2048
-    assert recipe.eval_max_response_len == 2048
+    assert recipe.rollout_max_response_len == 1024
+    assert recipe.eval_max_response_len == 1024
     assert recipe.sglang_max_running_requests == 1024
+
+
+def test_stage_c_stability_defaults_anchor_drift() -> None:
+    recipe = MegaGem_Qwen3_4B_StageC_Recipe()
+    summary = megagem_stage_c_summary(recipe)
+
+    assert recipe.lr == 6e-6
+    assert recipe.min_lr == 6e-7
+    assert recipe.kl_loss_coef == 0.05
+    assert recipe.rollout_temperature == 0.85
+    assert recipe.rollout_top_p == 1.0
+    assert summary["lr"] == 6e-6
+    assert summary["min_lr"] == 6e-7
+    assert summary["kl_loss_coef"] == 0.05
+    assert summary["rollout_temperature"] == 0.85
+    assert summary["rollout_top_p"] == 1.0
+
+
+def test_stage_c_rejects_top_p_without_faithful_candidate_sets() -> None:
+    with pytest.raises(ValueError, match="rollout_top_p=1.0"):
+        MegaGem_Qwen3_4B_StageC_Recipe(rollout_top_p=0.95)
+
+    with pytest.raises(RuntimeError, match="rollout_top_p=1.0"):
+        stage_c_rollout._validate_rollout_probability_contract(
+            SimpleNamespace(rollout_top_p=1.0), {"top_p": 0.95}
+        )
+
+    stage_c_rollout._validate_rollout_probability_contract(
+        SimpleNamespace(rollout_top_p=1.0), {"temperature": 0.85, "top_k": 0}
+    )
+    stage_c_rollout._validate_rollout_probability_contract(
+        SimpleNamespace(rollout_top_p=1.0), {"min_p": "0", "top_k": "-1"}
+    )
+
+    with pytest.raises(RuntimeError, match="non-numeric rollout top_p"):
+        stage_c_rollout._validate_rollout_probability_contract(
+            SimpleNamespace(rollout_top_p="not-a-float"), {"top_p": 1.0}
+        )
+
+    with pytest.raises(RuntimeError, match="top_k"):
+        stage_c_rollout._validate_rollout_probability_contract(
+            SimpleNamespace(rollout_top_p=1.0), {"top_k": 40}
+        )
+    with pytest.raises(RuntimeError, match="non-integer top_k"):
+        stage_c_rollout._validate_rollout_probability_contract(
+            SimpleNamespace(rollout_top_p=1.0), {"top_k": "bad"}
+        )
+
+    with pytest.raises(RuntimeError, match="min_p"):
+        stage_c_rollout._validate_rollout_probability_contract(
+            SimpleNamespace(rollout_top_p=1.0), {"min_p": 0.05}
+        )
+    with pytest.raises(RuntimeError, match="non-numeric min_p"):
+        stage_c_rollout._validate_rollout_probability_contract(
+            SimpleNamespace(rollout_top_p=1.0), {"min_p": "bad"}
+        )
 
 
 def test_stage_c_uses_current_phase3_reward_env_defaults() -> None:
     recipe = MegaGem_Qwen3_4B_StageC_Recipe()
 
-    assert "/" not in recipe.app_tags["base_model"]
+    assert recipe.app_tags == {"megagem": "stage-c"}
     assert recipe.environment["PHASE3_REWARD_WIN_BONUS"] == ""
     assert recipe.environment["PHASE3_SHAPING_LAMBDA"] == ""
     assert recipe.environment["PHASE3_ILLEGAL_PENALTY"] == ""
@@ -216,11 +275,22 @@ def test_stage_c_recipe_exposes_kgroup_resilience_defaults() -> None:
     assert recipe.extra_config["megagem_extra_games_per_group"] == 4
     assert recipe.extra_config["megagem_min_success_games"] == 12
     assert recipe.extra_config["megagem_game_timeout_s"] == 600
-    assert recipe.extra_config["megagem_fail_open_groups"] is True
+    assert recipe.extra_config["megagem_fail_open_groups"] is False
+    assert recipe.extra_config["megagem_length_penalty_target_tokens"] == 512
+    assert recipe.extra_config["megagem_length_penalty_per_100_tokens"] == 0.01
+    assert recipe.extra_config["megagem_length_penalty_cap"] == 0.20
+    assert (
+        recipe.extra_config["training_gym_custom_rollout_log_function_path"]
+        == MEGAGEM_STAGE_C_ROLLOUT_LOG_PATH
+    )
     assert summary["megagem_extra_games_per_group"] == 4
     assert summary["megagem_min_success_games"] == 12
     assert summary["megagem_game_timeout_s"] == 600
-    assert summary["megagem_fail_open_groups"] is True
+    assert summary["megagem_fail_open_groups"] is False
+    assert summary["megagem_length_penalty_target_tokens"] == 512
+    assert summary["megagem_length_penalty_per_100_tokens"] == 0.01
+    assert summary["megagem_length_penalty_cap"] == 0.20
+    assert summary["custom_rollout_log_function_path"] == MEGAGEM_STAGE_C_ROLLOUT_LOG_PATH
 
 
 def test_stage_c_game_timeout_can_be_configured(monkeypatch) -> None:
@@ -425,7 +495,7 @@ def test_stage_c_failed_group_task_can_fail_open_with_zero_advantage_rows(monkey
     async def run_failure():
         sample = SimpleNamespace(label=json.dumps(label))
         rows, slot, generation = await stage_c_rollout._rows_for_sample(
-            SimpleNamespace(), sample, label, {}
+            SimpleNamespace(megagem_fail_open_groups=True), sample, label, {}
         )
         return rows, slot, generation
 
@@ -464,7 +534,7 @@ def test_stage_c_failed_group_task_can_fail_closed(monkeypatch) -> None:
         sample = SimpleNamespace(label=json.dumps(label))
         try:
             await stage_c_rollout._rows_for_sample(
-                SimpleNamespace(megagem_fail_open_groups=False), sample, label, {}
+                SimpleNamespace(), sample, label, {}
             )
         except RuntimeError as exc:
             assert "group task failed" in str(exc)
@@ -497,6 +567,8 @@ def test_train_command_uses_async_slime_private_sft_and_megagem_hooks() -> None:
     assert "Qwen/Qwen3-4B" not in cmd
     assert "--rollout-num-gpus 32" in cmd
     assert "--rollout-num-gpus-per-engine 1" in cmd
+    assert "--rollout-top-p 1.0" in cmd
+    assert "--rollout-temperature 0.85" in cmd
     assert "frameworks.slime.megagem_stage_c_rollout.megagem_stage_c_rollout" in cmd
     assert "custom_generate_function_path" in cmd
     assert "--rollout-function-path" not in cmd
@@ -510,7 +582,7 @@ def test_stage_c_rollout_and_advantage_contract_paths_are_live() -> None:
 
     assert recipe.custom_generate_function is megagem_stage_c_rollout
     assert recipe.rollout_function is None
-    assert recipe.app_tags["rollout_contract"] == MEGAGEM_STAGE_C_ROLLOUT_CONTRACT
+    assert recipe.app_tags == {"megagem": "stage-c"}
     assert (
         recipe.extra_config["custom_generate_function_path"]
         == (
@@ -524,7 +596,7 @@ def test_stage_c_rollout_and_advantage_contract_paths_are_live() -> None:
         == MEGAGEM_STAGE_C_ADVANTAGE_PATH
     )
     assert recipe.extra_config["megagem_max_parallel_games"] == 256
-    assert recipe.extra_config["megagem_fail_open_groups"] is True
+    assert recipe.extra_config["megagem_fail_open_groups"] is False
     assert callable(megagem_precomputed_reward)
     assert callable(megagem_precomputed_advantages)
 
@@ -537,8 +609,10 @@ def test_summary_is_json_serializable() -> None:
     assert decoded["custom_rm_path"] == MEGAGEM_STAGE_C_REWARD_PATH
     assert decoded["custom_advantage_function_path"] == MEGAGEM_STAGE_C_ADVANTAGE_PATH
     assert decoded["megagem_max_parallel_games"] == 256
-    assert decoded["megagem_fail_open_groups"] is True
-    assert decoded["lr"] == 2e-5
+    assert decoded["megagem_fail_open_groups"] is False
+    assert decoded["lr"] == 6e-6
+    assert decoded["kl_loss_coef"] == 0.05
+    assert decoded["custom_rollout_log_function_path"] == MEGAGEM_STAGE_C_ROLLOUT_LOG_PATH
 
 
 def test_image_overlay_source_path_exists_for_devbox() -> None:

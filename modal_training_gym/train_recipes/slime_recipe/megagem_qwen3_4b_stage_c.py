@@ -29,6 +29,7 @@ from modal_training_gym.common.models.megagem_qwen3_4b_sft import (
 )
 from modal_training_gym.frameworks.slime.megagem_stage_c_rollout import (
     MEGAGEM_STAGE_C_ADVANTAGE_PATH,
+    MEGAGEM_STAGE_C_ROLLOUT_LOG_PATH,
     MEGAGEM_STAGE_C_REWARD_PATH,
     MEGAGEM_STAGE_C_ROLLOUT_CONTRACT,
     megagem_stage_c_rollout,
@@ -209,9 +210,16 @@ class MegaGem_Qwen3_4B_StageC_Recipe(SlimeRecipe):
     rollout_batch_size: int = 128
     n_samples_per_prompt: int = 16
     global_batch_size: int = 2048
-    rollout_max_response_len: int = 2048
-    eval_max_response_len: int = 2048
-    rollout_temperature: float = 1.0
+    rollout_max_response_len: int = 1024
+    eval_max_response_len: int = 1024
+    rollout_temperature: float = 0.85
+    # Stage C uses a custom MegaGem rollout bridge that returns tokenized rows
+    # with precomputed row rewards/advantages. Slime can train from that data,
+    # but when rollout_top_p < 1.0 its converter requires per-token top-p
+    # candidate vocab sets from the generation engine. The MegaGem bridge does
+    # not faithfully collect those yet, and faking one-token candidate sets
+    # would mask the policy softmax and kill the gradient. Keep top_p full until
+    # the bridge captures real top-p candidates.
     rollout_top_p: float = 1.0
     sglang_mem_fraction_static: float = 0.90
     sglang_max_running_requests: int | None = 1024
@@ -226,13 +234,13 @@ class MegaGem_Qwen3_4B_StageC_Recipe(SlimeRecipe):
     eps_clip_high: float = 0.28
     use_kl_loss: bool = True
     kl_loss_type: str = "low_var_kl"
-    kl_loss_coef: float = 0.01
+    kl_loss_coef: float = 0.05
     kl_coef: float = 0.0
     entropy_coef: float = 0.0
     calculate_per_token_loss: bool = True
-    lr: float = 2e-5
+    lr: float = 6e-6
     lr_decay_style: str = "cosine"
-    min_lr: float = 2e-6
+    min_lr: float = 6e-7
     weight_decay: float = 0.0
     max_tokens_per_gpu: int = 16384
     use_distributed_optimizer: bool = True
@@ -252,21 +260,26 @@ class MegaGem_Qwen3_4B_StageC_Recipe(SlimeRecipe):
         default_factory=lambda: {
             "custom_rm_path": MEGAGEM_STAGE_C_REWARD_PATH,
             "custom_advantage_function_path": MEGAGEM_STAGE_C_ADVANTAGE_PATH,
+            "training_gym_custom_rollout_log_function_path": (
+                MEGAGEM_STAGE_C_ROLLOUT_LOG_PATH
+            ),
             "megagem_max_parallel_games": 256,
             "megagem_extra_games_per_group": 4,
             "megagem_min_success_games": 12,
             "megagem_game_timeout_s": 600,
-            "megagem_fail_open_groups": True,
+            "megagem_fail_open_groups": False,
+            "megagem_length_penalty_target_tokens": 512,
+            "megagem_length_penalty_per_100_tokens": 0.01,
+            "megagem_length_penalty_cap": 0.20,
             "log_multi_turn": False,
         }
     )
     app_tags: dict = field(
         default_factory=lambda: {
             "megagem": "stage-c",
-            "base_model": MEGAGEM_QWEN3_4B_SFT_MODEL_TAG,
-            "rollout_contract": MEGAGEM_STAGE_C_ROLLOUT_CONTRACT,
         }
     )
+
     environment: dict[str, str] = field(
         default_factory=lambda: {
             "PYTHONPATH": (
@@ -290,9 +303,22 @@ class MegaGem_Qwen3_4B_StageC_Recipe(SlimeRecipe):
         }
     )
 
+    def __post_init__(self) -> None:
+        if self.rollout_top_p != 1.0:
+            raise ValueError(
+                "MegaGem Stage C custom rollouts require rollout_top_p=1.0 until "
+                "real rollout_top_p_token_ids are collected from SGLang."
+            )
+
 
 def megagem_stage_c_summary(recipe: SlimeRecipe) -> dict[str, Any]:
     """Stable machine-readable geometry summary for tests and dry runs."""
+
+    if recipe.rollout_top_p != 1.0:
+        raise ValueError(
+            "MegaGem Stage C custom rollouts require rollout_top_p=1.0 until "
+            "real rollout_top_p_token_ids are collected from SGLang."
+        )
 
     actor_gpus = recipe.actor_num_nodes * recipe.actor_num_gpus_per_node
     rollout_gpus = int(recipe.rollout_num_gpus or 0)
@@ -328,12 +354,16 @@ def megagem_stage_c_summary(recipe: SlimeRecipe) -> dict[str, Any]:
         ),
         "kl_loss_coef": recipe.kl_loss_coef,
         "entropy_coef": recipe.entropy_coef,
+        "rollout_temperature": recipe.rollout_temperature,
         "lr": recipe.lr,
         "min_lr": recipe.min_lr,
         "rollout_contract": MEGAGEM_STAGE_C_ROLLOUT_CONTRACT,
         "custom_rm_path": (recipe.extra_config or {}).get("custom_rm_path"),
         "custom_advantage_function_path": (recipe.extra_config or {}).get(
             "custom_advantage_function_path"
+        ),
+        "custom_rollout_log_function_path": (recipe.extra_config or {}).get(
+            "training_gym_custom_rollout_log_function_path"
         ),
         "megagem_max_parallel_games": (recipe.extra_config or {}).get(
             "megagem_max_parallel_games"
@@ -349,5 +379,14 @@ def megagem_stage_c_summary(recipe: SlimeRecipe) -> dict[str, Any]:
         ),
         "megagem_fail_open_groups": (recipe.extra_config or {}).get(
             "megagem_fail_open_groups"
+        ),
+        "megagem_length_penalty_target_tokens": (recipe.extra_config or {}).get(
+            "megagem_length_penalty_target_tokens"
+        ),
+        "megagem_length_penalty_per_100_tokens": (recipe.extra_config or {}).get(
+            "megagem_length_penalty_per_100_tokens"
+        ),
+        "megagem_length_penalty_cap": (recipe.extra_config or {}).get(
+            "megagem_length_penalty_cap"
         ),
     }
