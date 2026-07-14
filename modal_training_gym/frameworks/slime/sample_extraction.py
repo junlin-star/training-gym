@@ -228,6 +228,29 @@ def _extract_trace(sample: Any) -> Any:
     return raw
 
 
+
+def _extract_inference_metadata(sample: Any) -> dict[str, Any] | None:
+    """Extract per-sample inference stats: token counts and prefix cache info."""
+    prefix_info = getattr(sample, "prefix_cache_info", None)
+    if prefix_info is None:
+        return None
+
+    total = int(getattr(prefix_info, "total_prompt_tokens", 0) or 0)
+    cached = int(getattr(prefix_info, "cached_tokens", 0) or 0)
+    resp_len = getattr(sample, "response_length", None)
+    
+    inference: dict[str, Any] = {
+        "tokens_in": total,
+        "cached_tokens": cached,
+        "new_tokens": max(0, total - cached),
+        "cache_hit_rate": cached / total if total else 0.0,
+    }
+    if resp_len is not None:
+        inference["tokens_out"] = int(resp_len)
+
+    return inference
+
+
 def _extract_audio_from_prompt(prompt: Any) -> str | None:
     """Pull a browser-playable audio data-URI out of a conversation-list prompt.
 
@@ -432,6 +455,8 @@ def _sample_to_dict(
         value = get(key) if attrs is not None else get(key, None)
         if value is not None:
             metadata[key] = value
+    if inference := _extract_inference_metadata(sample):
+        metadata["inference"] = inference
 
     # Pull display-relevant fields from the sample's own metadata dict so the
     # dashboard can render exit status, eval checks, etc. without needing the

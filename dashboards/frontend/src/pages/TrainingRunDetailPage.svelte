@@ -5,6 +5,7 @@
   import StepTimings from "../components/StepTimings.svelte";
   import StatusPill from "../components/StatusPill.svelte";
   import TimeAgo from "../components/TimeAgo.svelte";
+  import InferenceStats from "../components/InferenceStats.svelte";
   import SampleTimeline from "../components/SampleTimeline.svelte";
   import ConversationView from "../components/ConversationView.svelte";
   import AdvantageViolins from "../components/AdvantageViolins.svelte";
@@ -1078,6 +1079,10 @@
                               </button>
                             </div>
                           </div>
+                          {#if activeSample.sample.metadata?.inference}
+                            <div class="rollout-sample-label">inference</div>
+                            <InferenceStats inference={activeSample.sample.metadata.inference} />
+                          {/if}
                           {#if activeSample.sample.metadata?._metadata_type === "audio" || activeSample.sample.metadata?.audio}
                             <div class="rollout-sample-label">audio</div>
                             <audio
