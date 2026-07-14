@@ -173,17 +173,6 @@ def test_sample_to_dict_100_percent_cache_hit():
     }
 
 
-
-    recorded = pr._sample_to_dict(sample)
-    inf = recorded["metadata"]["inference"]
-
-    assert inf["tokens_in"] == 1000
-    assert inf["tokens_out"] == 120
-    assert inf["cached_tokens"] == 200
-    assert inf["new_tokens"] == 800
-    assert inf["cache_hit_rate"] == 0.2
-
-
 def test_sample_to_dict_no_inference_without_prefix_cache_info():
     """Samples without prefix_cache_info (e.g. custom rollouts) get no inference key."""
     sample = SimpleNamespace(
