@@ -9,43 +9,39 @@
     return Number.isFinite(value) ? `${(value * 100).toFixed(1)}%` : "—";
   }
 
-  
+  let stats = $derived.by(() => {
+    if (!inference) return [];
+    const items = [
+      { label: "tokens in", value: formatCount(inference.tokens_in) },
+      { label: "tokens out", value: formatCount(inference.tokens_out) },
+    ];
+    if (Number.isFinite(inference.new_tokens)) {
+      items.push({ label: "new tokens", value: formatCount(inference.new_tokens) });
+    }
+    if (Number.isFinite(inference.cached_tokens)) {
+      items.push({
+        label: "cached tokens",
+        value: formatCount(inference.cached_tokens),
+        suffix: `(${formatPercent(inference.cache_hit_rate)})`,
+      });
+    }
+    return items;
+  });
 </script>
 
-{#if inference}
+{#if stats.length}
   <div
     class="grid grid-cols-[repeat(auto-fit,minmax(110px,1fr))] gap-[6px] mb-[10px]"
     aria-label="Inference statistics"
   >
-    <div class="rounded-[4px] [border:1px_solid_var(--border)] p-[6px_8px]">
-      <div class="text-[10px] uppercase tracking-[0.05em] text-(--muted)">tokens in</div>
-      <div class="text-[12px] text-(--text-bright) [font-variant-numeric:tabular-nums]">
-        {formatCount(inference.tokens_in)}
-      </div>
-    </div>
-    <div class="rounded-[4px] [border:1px_solid_var(--border)] p-[6px_8px]">
-      <div class="text-[10px] uppercase tracking-[0.05em] text-(--muted)">tokens out</div>
-      <div class="text-[12px] text-(--text-bright) [font-variant-numeric:tabular-nums]">
-        {formatCount(inference.tokens_out)}
-      </div>
-    </div>
-    {#if Number.isFinite(inference.new_tokens)}
+    {#each stats as stat (stat.label)}
       <div class="rounded-[4px] [border:1px_solid_var(--border)] p-[6px_8px]">
-        <div class="text-[10px] uppercase tracking-[0.05em] text-(--muted)">new tokens</div>
+        <div class="text-[10px] uppercase tracking-[0.05em] text-(--muted)">{stat.label}</div>
         <div class="text-[12px] text-(--text-bright) [font-variant-numeric:tabular-nums]">
-          {formatCount(inference.new_tokens)}
+          {stat.value}
+          {#if stat.suffix}<span class="text-(--muted)">{stat.suffix}</span>{/if}
         </div>
       </div>
-    {/if}
-    {#if Number.isFinite(inference.cached_tokens)}
-      <div class="rounded-[4px] [border:1px_solid_var(--border)] p-[6px_8px]">
-        <div class="text-[10px] uppercase tracking-[0.05em] text-(--muted)">cached tokens</div>
-        <div class="text-[12px] text-(--text-bright) [font-variant-numeric:tabular-nums]">
-          {formatCount(inference.cached_tokens)}
-          <span class="text-(--muted)">({formatPercent(inference.cache_hit_rate)})</span>
-        </div>
-      </div>
-    {/if}
-  
+    {/each}
   </div>
 {/if}
