@@ -165,7 +165,7 @@ def refresh_sandboxes():
             is_open = pr.state == "open"
 
             for deployment in pr_deployments:
-                key = (pr_number, type)
+                key = (pr_number, deployment.type)
                 if is_open:
                     if needs_refresh(deployment):
                         deployment.refresh()
@@ -203,7 +203,7 @@ def preview_redirector():
         if deployment.url is None:
             return PlainTextResponse(
                 content="Deployment is missing a URL",
-                status=503,
+                status_code=503,
             )
 
         url = deployment.url
