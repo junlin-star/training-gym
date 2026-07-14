@@ -14,10 +14,15 @@ from pathlib import Path
 import modal
 import asyncio
 
+
 async def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("pr_number", type=int, help="PR number to deploy the preview for")
-    parser.add_argument("type", choices=["dashboard", "docs"], help="which frontend to deploy")
+    parser.add_argument(
+        "pr_number", type=int, help="PR number to deploy the preview for"
+    )
+    parser.add_argument(
+        "type", choices=["dashboard", "docs"], help="which frontend to deploy"
+    )
     parser.add_argument("artifact", type=Path, help="path to the artifact .tar.gz")
     args = parser.parse_args()
 
@@ -35,6 +40,7 @@ async def main():
 
     print(f"Deploying {args.type} preview for #{args.pr_number}")
     await deploy_preview.remote.aio(args.pr_number, args.type, artifact_name)
+
 
 if __name__ == "__main__":
     asyncio.run(main())

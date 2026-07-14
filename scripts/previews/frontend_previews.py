@@ -16,10 +16,7 @@ image = (
 with image.imports():
     from github import Github
 
-redirector_image = (
-    modal.Image.debian_slim()
-    .pip_install("fastapi[standard]==0.139.0")
-)
+redirector_image = modal.Image.debian_slim().pip_install("fastapi[standard]==0.139.0")
 
 app = modal.App(
     name="training-gym-previews",
@@ -34,10 +31,13 @@ SANDBOX_APP_NAME = "training-gym-preview-sandboxes"
 SANDBOX_PORT = 80
 SANDBOX_TIMEOUT = timedelta(hours=24)
 
+
 def get_mounted_artifact_path(name):
     return MOUNT_POINT / name
 
+
 PreviewType: TypeAlias = Literal["dashboard", "docs"]
+
 
 @dataclass
 class PreviewDeployment:
@@ -73,8 +73,11 @@ class PreviewDeployment:
         self.expiration = datetime.now() + SANDBOX_TIMEOUT
 
         sb = modal.Sandbox.create(
-            "nginx", "-g", "daemon off;",
-            app=sb_app, image=image,
+            "nginx",
+            "-g",
+            "daemon off;",
+            app=sb_app,
+            image=image,
             encrypted_ports=[SANDBOX_PORT],
             idle_timeout=int(SANDBOX_TIMEOUT.total_seconds()),
             timeout=int(SANDBOX_TIMEOUT.total_seconds()),
@@ -89,7 +92,7 @@ class PreviewDeployment:
         sb.detach()
 
         print(f"Deployed {self.type} preview to {self.url} ({self.sandbox_id})")
-    
+
     def refresh(self):
         print(f"Refreshing {self.type} deploy for {self.artifact}")
         self.terminate()
@@ -97,7 +100,7 @@ class PreviewDeployment:
 
     def terminate(self):
         print(f"Terminating {self.type} deploy for {self.artifact} ({self.sandbox_id})")
-        
+
         sb = modal.Sandbox.from_id(self.sandbox_id)
         sb.terminate(wait=False)
 
@@ -106,11 +109,12 @@ class PreviewDeployment:
         self.sandbox_id = None
         self.url = None
         self.expiration = None
-    
+
     def cleanup_artifact(self):
         path = get_mounted_artifact_path(self.artifact)
         path.unlink(missing_ok=True)
         print(f"Removed {path}")
+
 
 @app.function(volumes={MOUNT_POINT: vol})
 def deploy_preview(pr_number: int, type: PreviewType, artifact: str):
@@ -121,12 +125,13 @@ def deploy_preview(pr_number: int, type: PreviewType, artifact: str):
         deployment = PreviewDeployment(**deployment_dict)
         deployment.terminate()
         deployment.cleanup_artifact()
-    
+
     vol.reload()
 
     deployment = PreviewDeployment(type=type, artifact=artifact)
     deployment.deploy()
     deployments[key] = asdict(deployment)
+
 
 def needs_refresh(preview: PreviewDeployment):
     if preview.expiration is not None:
@@ -134,10 +139,12 @@ def needs_refresh(preview: PreviewDeployment):
             return True
     return False
 
+
 def is_expired(preview: PreviewDeployment):
     if preview.expiration is not None:
         return datetime.now() >= preview.expiration
     return False
+
 
 @app.function(schedule=modal.Period(hours=1), volumes={MOUNT_POINT: vol})
 def refresh_sandboxes():
@@ -151,11 +158,11 @@ def refresh_sandboxes():
     prs = defaultdict(list)
     for (pr_number, _), deployment in list(deployments.items()):
         prs[pr_number].append(PreviewDeployment(**deployment))
-    
+
     for pr_number, pr_deployments in prs.items():
         try:
             pr = repo.get_pull(pr_number)
-            is_open = pr.state == "open"        
+            is_open = pr.state == "open"
 
             for deployment in pr_deployments:
                 key = (pr_number, type)
@@ -171,30 +178,34 @@ def refresh_sandboxes():
         except UnknownObjectException:
             print(f"Warning: Unknown PR #{pr_number}")
 
+
 @app.function(image=redirector_image)
 @modal.asgi_app()
 def preview_redirector():
     from fastapi import FastAPI, Request
     from fastapi.responses import PlainTextResponse, RedirectResponse
+
     redirector = FastAPI()
 
     @redirector.get("/{pr_number}/{type}/{path:path}")
     @redirector.get("/{pr_number}/{type}")
-    async def redirect_to_preview(request: Request, pr_number: int, type: PreviewType, path: str = ""):
+    async def redirect_to_preview(
+        request: Request, pr_number: int, type: PreviewType, path: str = ""
+    ):
         deployment_dict = await deployments.get.aio((pr_number, type), None)
         if deployment_dict is None:
             return PlainTextResponse(
                 content="Preview not found",
                 status_code=404,
             )
-    
+
         deployment = PreviewDeployment(**deployment_dict)
         if deployment.url is None:
             return PlainTextResponse(
                 content="Deployment is missing a URL",
                 status=503,
             )
-    
+
         url = deployment.url
         if path:
             url = f"{url}/{path}"
