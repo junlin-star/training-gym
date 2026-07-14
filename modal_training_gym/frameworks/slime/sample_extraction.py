@@ -228,7 +228,6 @@ def _extract_trace(sample: Any) -> Any:
     return raw
 
 
-
 def _extract_inference_metadata(sample: Any) -> dict[str, Any] | None:
     """Extract per-sample inference stats: token counts and prefix cache info."""
     prefix_info = getattr(sample, "prefix_cache_info", None)
@@ -238,7 +237,7 @@ def _extract_inference_metadata(sample: Any) -> dict[str, Any] | None:
     total = int(getattr(prefix_info, "total_prompt_tokens", 0) or 0)
     cached = int(getattr(prefix_info, "cached_tokens", 0) or 0)
     resp_len = getattr(sample, "response_length", None)
-    
+
     inference: dict[str, Any] = {
         "tokens_in": total,
         "cached_tokens": cached,
