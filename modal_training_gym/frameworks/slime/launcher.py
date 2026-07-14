@@ -920,7 +920,9 @@ def build_slime_app(
     SUBSTEP_ORDER = [substep.value for substep in Substep]
     OPTIONAL_SUBSTEPS = {
         Substep.EVAL_BEFORE.value,
+        Substep.OFFLOAD_ROLLOUT.value,
         Substep.CHECKPOINT_SAVE.value,
+        Substep.OFFLOAD_TRAIN.value,
         Substep.EVAL_AFTER.value,
     }
 
