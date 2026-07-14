@@ -226,6 +226,7 @@ def run_base_training_on_slime(
     wandb_secret_name: str = "wandb-secret",
     eval_interval: int | None = None,
     save_interval: int | None = None,
+    colocate: bool | None = None,
 ) -> TutorialResult:
     model_config = get_model_config_from_model_name(model_name)
     if not _supports_slime(model_config):
@@ -240,6 +241,12 @@ def run_base_training_on_slime(
     model_short_name = model_config.model_name.rsplit("/", 1)[-1]
     train_recipe = SlimeRecipe.get_base_recipe(model_config)
     train_recipe.num_rollout = step_count
+    if colocate is not None:
+        train_recipe.colocate = colocate
+    if colocate is False and train_recipe.rollout_num_gpus is None:
+        train_recipe.rollout_num_gpus = (
+            train_recipe.actor_num_nodes * train_recipe.actor_num_gpus_per_node
+        )
     if eval_interval is not None:
         train_recipe.eval_interval = eval_interval
     if save_interval is not None:
@@ -336,6 +343,11 @@ def __main__():
         help="Override the recipe save_interval (checkpoint every N rollouts).",
     )
     check_parser.add_argument(
+        "--non-colocated",
+        action="store_true",
+        help="Allocate rollout GPUs separately from trainer GPUs.",
+    )
+    check_parser.add_argument(
         "-o",
         "--output",
         help="Write the result as JSON to this file path.",
@@ -400,6 +412,7 @@ def __main__():
         args.wandb_secret_name,
         eval_interval=args.eval_interval,
         save_interval=args.save_interval,
+        colocate=False if args.non_colocated else None,
     )
     tutorial_result.format_tutorial_result()
 

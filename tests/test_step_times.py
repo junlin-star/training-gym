@@ -23,7 +23,13 @@ SUBSTEP_ORDER = [
     WEIGHT_SYNC,
     EVAL_AFTER,
 ]
-OPTIONAL_SUBSTEPS = {EVAL_BEFORE, CHECKPOINT_SAVE, EVAL_AFTER}
+OPTIONAL_SUBSTEPS = {
+    EVAL_BEFORE,
+    OFFLOAD_ROLLOUT,
+    CHECKPOINT_SAVE,
+    OFFLOAD_TRAIN,
+    EVAL_AFTER,
+}
 
 RUN_ID = "run-hooks"
 STEP = 1
@@ -220,13 +226,29 @@ def test_substep_times_with_missing_substeps():
     ]
     assert aggregate_durations(schedule_missing_offload_rollout) == {
         EVAL_BEFORE: 1.5,
-        ROLLOUT_LOGGING: None,
+        ROLLOUT_LOGGING: 4.0,
         COMPUTE_LOG_PROBS: 4.0,
         OPTIMIZER_STEP: 2.0,
         CHECKPOINT_SAVE: 1.0,
         OFFLOAD_TRAIN: 2.0,
         WEIGHT_SYNC: 1.0,
         EVAL_AFTER: 2.0,
+    }
+
+    schedule_missing_both_offloads = [
+        (0.0, "substep_window_start"),
+        (2.0, "step_start"),
+        (6.0, "compute_log_probs"),
+        (10.0, "optimizer_step"),
+        (15.0, "weight_sync"),
+        (18.0, "substep_finish"),
+        (18.0, "step_complete"),
+    ]
+    assert aggregate_durations(schedule_missing_both_offloads) == {
+        ROLLOUT_LOGGING: 4.0,
+        COMPUTE_LOG_PROBS: 4.0,
+        OPTIMIZER_STEP: 5.0,
+        WEIGHT_SYNC: 3.0,
     }
 
     schedule_missing_substep_finish = [
