@@ -1,9 +1,10 @@
-"""Download baseline validation results from `main` for perf comparison.
+"""Download baseline validation results from merged PRs for perf comparison.
 
 Runs on a GitHub Actions runner before the summarize step: for each
 validatable model, fetch the most recent `validate-result-<model>` artifact
-produced by a workflow run on `main` and unzip it into the baseline
-directory consumed by `validate_model_configs.py summarize --baseline-dir`.
+that (a) came from a workflow run on a PR that was later merged and (b)
+recorded a successful validation, and unzip it into the baseline directory
+consumed by `validate_model_configs.py summarize --baseline-dir`.
 
 Missing or failing artifacts are skipped with a warning so a stale baseline
 never blocks the comment; the baseline directory is created regardless.
@@ -11,6 +12,7 @@ never blocks the comment; the baseline directory is created regardless.
 
 import argparse
 import io
+import json
 import os
 import zipfile
 from pathlib import Path
@@ -23,7 +25,9 @@ from github.Repository import Repository
 from validate_model_configs import available_model_names
 
 ARTIFACT_PREFIX = "validate-result-"
-BASELINE_BRANCH = "main"
+# Artifacts are inspected newest-first; stop after this many per model so a
+# long streak of unmerged/failed candidates can't stall the whole job.
+MAX_CANDIDATES_PER_MODEL = 25
 
 
 def artifact_name_for_model(model_name: str) -> str:
@@ -31,24 +35,26 @@ def artifact_name_for_model(model_name: str) -> str:
     return ARTIFACT_PREFIX + model_name.replace("/", "-")
 
 
-def find_baseline_artifact(repo: Repository, artifact_name: str) -> Artifact | None:
-    """Latest non-expired artifact with this name from a run on main.
+def _is_from_merged_pr(
+    repo: Repository, artifact: Artifact, merged_sha_cache: dict[str, bool]
+) -> bool:
+    """Whether the artifact's workflow run commit belongs to a merged PR.
 
-    ``get_artifacts`` returns newest-first and paginates transparently, so the
-    first match is the latest baseline.
+    Cached per head SHA: one workflow run uploads an artifact per model, so
+    every model's candidate list revisits the same commits.
     """
-    for artifact in repo.get_artifacts(name=artifact_name):
-        return artifact
-        if artifact.expired:
-            continue
-        run = artifact.workflow_run
-        if run is not None and run.head_branch == BASELINE_BRANCH:
-            return artifact
-    return None
+    run = artifact.workflow_run
+    sha = run.head_sha if run is not None else None
+    if not sha:
+        return False
+    if sha not in merged_sha_cache:
+        pulls = repo.get_commit(sha).get_pulls()
+        merged_sha_cache[sha] = any(pr.merged_at is not None for pr in pulls)
+    return merged_sha_cache[sha]
 
 
-def download_and_extract(artifact: Artifact, token: str, dest_dir: Path) -> None:
-    """Unzip the artifact's files into dest_dir.
+def _fetch_artifact_zip(artifact: Artifact, token: str) -> zipfile.ZipFile:
+    """Download the artifact archive.
 
     ``requests`` follows the API's redirect to blob storage and drops the
     Authorization header across hosts, which the signed URL requires.
@@ -59,8 +65,48 @@ def download_and_extract(artifact: Artifact, token: str, dest_dir: Path) -> None
         timeout=60,
     )
     response.raise_for_status()
-    with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
-        archive.extractall(dest_dir)
+    return zipfile.ZipFile(io.BytesIO(response.content))
+
+
+def download_baseline_for_model(
+    repo: Repository,
+    token: str,
+    model_name: str,
+    baseline_dir: Path,
+    merged_sha_cache: dict[str, bool],
+) -> bool:
+    """Write the latest merged-PR successful result for a model into baseline_dir.
+
+    Walks the model's artifacts newest-first (``get_artifacts`` paginates
+    transparently) and keeps the first candidate whose validation actually
+    succeeded, so a bad run merged to main never poisons the baseline.
+    """
+    artifact_name = artifact_name_for_model(model_name)
+    inspected = 0
+    for artifact in repo.get_artifacts(name=artifact_name):
+        if artifact.expired:
+            continue
+        if inspected >= MAX_CANDIDATES_PER_MODEL:
+            print(
+                f"warning: gave up after inspecting {inspected} "
+                f"{artifact_name!r} candidates"
+            )
+            break
+        inspected += 1
+        if not _is_from_merged_pr(repo, artifact, merged_sha_cache):
+            continue
+        with _fetch_artifact_zip(artifact, token) as archive:
+            result = json.loads(archive.read(f"{artifact_name}.json"))
+            if not result.get("succeeded"):
+                continue
+            archive.extractall(baseline_dir)
+        print(f"downloaded baseline {artifact_name!r} (artifact id {artifact.id})")
+        return True
+    print(
+        f"warning: no successful {artifact_name!r} artifact found from a "
+        f"merged PR; skipping baseline for {model_name}"
+    )
+    return False
 
 
 def download_baselines(baseline_dir: Path) -> None:
@@ -71,33 +117,24 @@ def download_baselines(baseline_dir: Path) -> None:
     repo = Github(auth=Auth.Token(token)).get_repo(repo_name)
 
     downloaded = 0
+    merged_sha_cache: dict[str, bool] = {}
     models = available_model_names()
     for model_name in models:
-        artifact_name = artifact_name_for_model(model_name)
         try:
-            artifact = find_baseline_artifact(repo, artifact_name)
-            if artifact is None:
-                print(
-                    f"warning: no {artifact_name!r} artifact found from a run "
-                    f"on {BASELINE_BRANCH!r}; skipping baseline for {model_name}"
-                )
-                continue
-            download_and_extract(artifact, token, baseline_dir)
-        except Exception as exc:
-            print(
-                f"warning: failed to download baseline {artifact_name!r} "
-                f"for {model_name}: {exc}"
+            downloaded += download_baseline_for_model(
+                repo, token, model_name, baseline_dir, merged_sha_cache
             )
-            continue
-        downloaded += 1
-        print(f"downloaded baseline {artifact_name!r} (artifact id {artifact.id})")
+        except Exception as exc:
+            print(f"warning: failed to download baseline for {model_name}: {exc}")
 
     print(f"downloaded {downloaded}/{len(models)} baselines into {baseline_dir}")
 
 
 def __main__():
     parser = argparse.ArgumentParser(
-        description="Download baseline validation artifacts from main for each model."
+        description=(
+            "Download baseline validation artifacts from merged PRs for each model."
+        )
     )
     parser.add_argument(
         "-d",
