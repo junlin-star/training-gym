@@ -235,18 +235,22 @@ def _extract_trace(sample: Any) -> Any:
     return raw
 
 
+def _duck_get(obj: Any, key: str, default: Any = None) -> Any:
+    """Unified field access for dict or object."""
+    return (
+        obj.get(key, default) if isinstance(obj, dict) else getattr(obj, key, default)
+    )
+
+
 def _extract_inference_metadata(sample: Any) -> dict[str, Any] | None:
     """Extract per-sample inference stats: token counts and prefix cache info."""
-    if isinstance(sample, dict):
-        prefix_info = sample.get("prefix_cache_info")
-    else:
-        prefix_info = getattr(sample, "prefix_cache_info", None)
+    prefix_info = _duck_get(sample, "prefix_cache_info")
     if prefix_info is None:
         return None
 
-    total = _coerce_int(getattr(prefix_info, "total_prompt_tokens", 0))
-    cached = _coerce_int(getattr(prefix_info, "cached_tokens", 0))
-    resp_len = getattr(sample, "response_length", None)
+    total = _coerce_int(_duck_get(prefix_info, "total_prompt_tokens", 0))
+    cached = _coerce_int(_duck_get(prefix_info, "cached_tokens", 0))
+    resp_len = _duck_get(sample, "response_length")
 
     inference: dict[str, Any] = {
         "tokens_in": total,
