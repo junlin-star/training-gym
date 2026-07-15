@@ -18,15 +18,15 @@
     if (Number.isFinite(inference.tokens_out)) {
       items.push({ label: "tokens out", value: formatCount(inference.tokens_out) });
     }
-    if (Number.isFinite(inference.new_tokens)) {
-      items.push({ label: "new tokens", value: formatCount(inference.new_tokens) });
-    }
     if (Number.isFinite(inference.cached_tokens)) {
       items.push({
         label: "cached tokens",
         value: formatCount(inference.cached_tokens),
         suffix: `(${formatPercent(inference.cache_hit_rate)})`,
       });
+    }
+    if (Number.isFinite(inference.new_tokens)) {
+      items.push({ label: "new tokens", value: formatCount(inference.new_tokens) });
     }
     return items;
   });
