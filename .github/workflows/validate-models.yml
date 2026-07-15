@@ -144,6 +144,7 @@ jobs:
         run: >-
           uv run python scripts/validate_model_configs.py summarize
           --results-dir results --baseline-dir baseline
+          --dashboard-url "${{ vars.VALIDATION_DASHBOARD_URL }}"
           > comment.md
 
       - name: Post comment
