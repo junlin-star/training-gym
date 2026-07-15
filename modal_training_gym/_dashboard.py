@@ -249,6 +249,22 @@ def reconcile_orphan_training_runs() -> None:
         print("No orphaned runs to reconcile.")
 
 
+@app.function(schedule=modal.Cron("*/30 * * * *"), secrets=_function_secrets())
+def reconcile_orphan_deployments() -> None:
+    """Reconcile orphaned pending deployments every 30 minutes."""
+    from modal_training_gym.common.deployment_reconciler import (
+        reconcile_orphan_deployments as _reconcile,
+    )
+
+    results = _reconcile()
+    if results:
+        print(f"Reconciled {len(results)} orphaned deployment(s):")
+        for result in results:
+            print(f"  {result.deployment_id}: {result.reason}")
+    else:
+        print("No orphaned deployments to reconcile.")
+
+
 @app.function(
     min_containers=1,
     secrets=_function_secrets(),
