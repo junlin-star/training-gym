@@ -130,6 +130,13 @@ def _trace_sample_limit() -> int:
     return max(0, n)
 
 
+def _coerce_int(value: Any) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
 def _coerce_float(value: Any) -> float | None:
     try:
         return float(value)
@@ -230,12 +237,15 @@ def _extract_trace(sample: Any) -> Any:
 
 def _extract_inference_metadata(sample: Any) -> dict[str, Any] | None:
     """Extract per-sample inference stats: token counts and prefix cache info."""
-    prefix_info = getattr(sample, "prefix_cache_info", None)
+    if isinstance(sample, dict):
+        prefix_info = sample.get("prefix_cache_info")
+    else:
+        prefix_info = getattr(sample, "prefix_cache_info", None)
     if prefix_info is None:
         return None
 
-    total = int(getattr(prefix_info, "total_prompt_tokens", 0) or 0)
-    cached = int(getattr(prefix_info, "cached_tokens", 0) or 0)
+    total = _coerce_int(getattr(prefix_info, "total_prompt_tokens", 0))
+    cached = _coerce_int(getattr(prefix_info, "cached_tokens", 0))
     resp_len = getattr(sample, "response_length", None)
 
     inference: dict[str, Any] = {
@@ -245,7 +255,7 @@ def _extract_inference_metadata(sample: Any) -> dict[str, Any] | None:
         "cache_hit_rate": cached / total if total else 0.0,
     }
     if resp_len is not None:
-        inference["tokens_out"] = int(resp_len)
+        inference["tokens_out"] = _coerce_int(resp_len)
 
     return inference
 
