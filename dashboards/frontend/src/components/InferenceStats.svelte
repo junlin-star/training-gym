@@ -11,10 +11,13 @@
 
   let stats = $derived.by(() => {
     if (!inference) return [];
-    const items = [
-      { label: "tokens in", value: formatCount(inference.tokens_in) },
-      { label: "tokens out", value: formatCount(inference.tokens_out) },
-    ];
+    const items = [];
+    if (Number.isFinite(inference.tokens_in)) {
+      items.push({ label: "tokens in", value: formatCount(inference.tokens_in) });
+    }
+    if (Number.isFinite(inference.tokens_out)) {
+      items.push({ label: "tokens out", value: formatCount(inference.tokens_out) });
+    }
     if (Number.isFinite(inference.new_tokens)) {
       items.push({ label: "new tokens", value: formatCount(inference.new_tokens) });
     }
