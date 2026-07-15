@@ -552,16 +552,12 @@
   let histSince = $state(""); // debounced epoch-seconds string for the fetch
   let histUntil = $state("");
 
-  const _pad = (x) => String(x).padStart(2, "0");
   function epochToLocalInput(epoch) {
     if (!epoch) return "";
     const d = new Date(Number(epoch) * 1000);
-    return (
-      `${d.getFullYear()}-${_pad(d.getMonth() + 1)}-${_pad(d.getDate())} ` +
-      `${_pad(d.getHours())}:${_pad(d.getMinutes())}`
-    );
+    const p = (x) => String(x).padStart(2, "0");
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
   }
-  const epochToParam = (epoch) => (epoch ? String(epoch) : "");
   function localInputToEpoch(str) {
     if (!str || !str.trim()) return null;
     const ms = new Date(str.trim().replace(" ", "T")).getTime();
@@ -594,8 +590,8 @@
     histPrefilledFor = id;
     histSinceText = epochToLocalInput(startedAt);
     histUntilText = epochToLocalInput(endedAt);
-    histSince = epochToParam(startedAt);
-    histUntil = epochToParam(endedAt);
+    histSince = startedAt ? String(startedAt) : "";
+    histUntil = endedAt ? String(endedAt) : "";
   });
 
   // Expand server entries into per-line rows (a single ClickHouse entry can
