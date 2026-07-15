@@ -133,7 +133,7 @@ def _trace_sample_limit() -> int:
 def _coerce_int(value: Any) -> int:
     try:
         return int(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return 0
 
 
