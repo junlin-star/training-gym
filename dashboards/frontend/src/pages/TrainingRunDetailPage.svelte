@@ -1,4 +1,5 @@
 <script>
+  import { tick } from "svelte";
   import { ArrowLeft, ChevronLeft, ChevronRight, Download, ExternalLink, Minimize2, X } from "lucide-svelte";
   import Tabs from "../components/Tabs.svelte";
   import RunSummary from "../components/RunSummary.svelte";
@@ -536,15 +537,20 @@
   let isRunning = $derived(runStatus === "running");
 
   const HIST_PAGE = 500; // lines fetched per page
-  let histLines = $state([]); // [{id, task_id, line}], oldest-first
+  const HIST_BUFFER_MAX = 2000;
+  let histLines = $state([]); // bounded [{id, task_id, line, ts, ts_ns}], oldest-first
   let histLoading = $state(false); // initial page in flight
   let histLoadingOlder = $state(false); // "load older" page in flight
+  let histLoadingNewer = $state(false); // "load newer" page in flight
   let histError = $state("");
   let histHasMore = $state(false); // older lines exist before the first row
+  let histNewerWindows = $state([]); // trimmed (since, until] ranges, nearest last
   let histNextUntil = $state(null); // `until` cursor for the next older page
   let histTailEl = $state(null); // scroll container
   let histSeq = 0; // monotonic id for stable keying across prepends
   let histController = null; // aborts in-flight fetches when filters change
+  let histLastScrollTop = 0;
+  let histRestoringScroll = false;
 
   // Time-window filters
   let histSinceText = $state("");
@@ -612,9 +618,79 @@
     histLines = [];
     histError = "";
     histHasMore = false;
+    histNewerWindows = [];
     histNextUntil = null;
     histLoading = false;
     histLoadingOlder = false;
+    histLoadingNewer = false;
+    histLastScrollTop = 0;
+    histRestoringScroll = false;
+  }
+
+  function histRowTime(row) {
+    if (!row) return 0;
+    if (row.ts_ns) return Number(row.ts_ns) / 1_000_000_000;
+    return Number(row.ts) || 0;
+  }
+
+  function histCursorBefore(row) {
+    if (!row) return null;
+    if (row.ts_ns) return (Number(row.ts_ns) - 1) / 1_000_000_000;
+    const ts = Number(row.ts) || 0;
+    return ts > 0 ? ts - 0.000000001 : null;
+  }
+
+  // Capture a visible row and its exact viewport position. Restoring this
+  // after replacing the bounded window avoids any perceptible jump.
+  function captureHistAnchor() {
+    const el = histTailEl;
+    if (!el) return null;
+    const containerTop = el.getBoundingClientRect().top;
+    const rows = el.querySelectorAll("[data-hist-id]");
+    for (const node of rows) {
+      const rect = node.getBoundingClientRect();
+      if (rect.bottom >= containerTop) {
+        return {
+          id: node.dataset.histId,
+          top: rect.top,
+          scrollTop: el.scrollTop,
+        };
+      }
+    }
+    return null;
+  }
+
+  async function restoreHistAnchor(anchor) {
+    const el = histTailEl;
+    if (!el || !anchor) return;
+    histRestoringScroll = true;
+    await tick();
+    const node = el.querySelector(`[data-hist-id="${anchor.id}"]`);
+    if (node) {
+      el.scrollTop += node.getBoundingClientRect().top - anchor.top;
+    } else {
+      el.scrollTop = anchor.scrollTop;
+    }
+    histLastScrollTop = el.scrollTop;
+    requestAnimationFrame(() => {
+      if (histTailEl) histLastScrollTop = histTailEl.scrollTop;
+      histRestoringScroll = false;
+    });
+  }
+
+  function rememberTrimmedNewer(kept, dropped) {
+    if (!kept.length || !dropped.length) return;
+    const since = histRowTime(kept[kept.length - 1]);
+    const until = histRowTime(dropped[dropped.length - 1]);
+    if (since > 0 && until >= since) {
+      histNewerWindows = [...histNewerWindows, { since, until }];
+    }
+  }
+
+  function markTrimmedOlder(kept, dropped) {
+    if (!kept.length || !dropped.length) return;
+    histHasMore = true;
+    histNextUntil = histCursorBefore(kept[0]);
   }
 
   async function loadHistInitial(id, { search, since, until }, signal) {
@@ -629,14 +705,33 @@
         signal,
       });
       if (signal?.aborted) return;
+      histNewerWindows = [];
       const rows = [];
       pushHistRows(rows, data.logs);
-      histLines = rows;
-      histHasMore = data.hasMore;
-      histNextUntil = data.nextUntil;
+      const droppedOlder =
+        rows.length > HIST_BUFFER_MAX
+          ? rows.slice(0, rows.length - HIST_BUFFER_MAX)
+          : [];
+      histLines =
+        rows.length > HIST_BUFFER_MAX
+          ? rows.slice(-HIST_BUFFER_MAX)
+          : rows;
+      if (droppedOlder.length) {
+        markTrimmedOlder(histLines, droppedOlder);
+      } else {
+        histHasMore = data.hasMore;
+        histNextUntil = data.nextUntil;
+      }
       // Land on the newest line, like the live tail does.
       queueMicrotask(() => {
-        if (histTailEl) histTailEl.scrollTop = histTailEl.scrollHeight;
+        if (histTailEl) {
+          histRestoringScroll = true;
+          histTailEl.scrollTop = histTailEl.scrollHeight;
+          histLastScrollTop = histTailEl.scrollTop;
+          requestAnimationFrame(() => {
+            histRestoringScroll = false;
+          });
+        }
       });
     } catch (err) {
       if (signal?.aborted) return;
@@ -647,15 +742,18 @@
   }
 
   async function loadHistOlder() {
-    if (!histHasMore || histNextUntil == null || histLoadingOlder || histLoading) {
+    if (
+      !histHasMore ||
+      histNextUntil == null ||
+      histLoadingOlder ||
+      histLoadingNewer ||
+      histLoading
+    ) {
       return;
     }
     histLoadingOlder = true;
     histError = "";
-    // Anchor the viewport on the current top row so reader doesn't jump.
-    const el = histTailEl;
-    const prevScrollHeight = el ? el.scrollHeight : 0;
-    const prevScrollTop = el ? el.scrollTop : 0;
+    const anchor = captureHistAnchor();
     const signal = histController?.signal;
     try {
       const data = await fetchRunLogs(runId, {
@@ -668,12 +766,27 @@
       if (signal?.aborted) return;
       const older = [];
       pushHistRows(older, data.logs);
-      histLines = older.concat(histLines);
+      if (!older.length) {
+        histHasMore = false;
+        histNextUntil = null;
+        return;
+      }
+      // A single backend log entry may expand into many rendered lines. Keep
+      // only the rendered page nearest the current window so the existing
+      // visible anchor cannot be evicted by one unusually large response.
+      const adjacentOlder =
+        older.length > HIST_PAGE ? older.slice(-HIST_PAGE) : older;
+      const merged = adjacentOlder.concat(histLines);
+      const droppedNewer =
+        merged.length > HIST_BUFFER_MAX ? merged.slice(HIST_BUFFER_MAX) : [];
+      histLines =
+        merged.length > HIST_BUFFER_MAX
+          ? merged.slice(0, HIST_BUFFER_MAX)
+          : merged;
+      rememberTrimmedNewer(histLines, droppedNewer);
       histHasMore = data.hasMore;
       histNextUntil = data.nextUntil;
-      queueMicrotask(() => {
-        if (el) el.scrollTop = el.scrollHeight - prevScrollHeight + prevScrollTop;
-      });
+      await restoreHistAnchor(anchor);
     } catch (err) {
       if (signal?.aborted) return;
       histError = String(err?.message || err);
@@ -682,11 +795,84 @@
     }
   }
 
-  // Auto-load the next older page as the reader scrolls near the top
+  async function loadHistNewer() {
+    if (
+      !histNewerWindows.length ||
+      histLoadingNewer ||
+      histLoadingOlder ||
+      histLoading
+    ) {
+      return;
+    }
+    histLoadingNewer = true;
+    histError = "";
+    const anchor = captureHistAnchor();
+    const window = histNewerWindows[histNewerWindows.length - 1];
+    const signal = histController?.signal;
+    try {
+      const data = await fetchRunLogs(runId, {
+        since: window.since,
+        until: window.until,
+        tail: HIST_PAGE,
+        search: logSearch,
+        signal,
+      });
+      if (signal?.aborted) return;
+      const newer = [];
+      pushHistRows(newer, data.logs);
+      // Keep the nearest newer rendered rows. This mirrors loadHistOlder and
+      // guarantees the currently visible rows survive the window swap.
+      const adjacentNewer =
+        newer.length > HIST_PAGE ? newer.slice(0, HIST_PAGE) : newer;
+      const merged = histLines.concat(adjacentNewer);
+      const droppedOlder =
+        merged.length > HIST_BUFFER_MAX
+          ? merged.slice(0, merged.length - HIST_BUFFER_MAX)
+          : [];
+      histLines =
+        merged.length > HIST_BUFFER_MAX
+          ? merged.slice(-HIST_BUFFER_MAX)
+          : merged;
+      markTrimmedOlder(histLines, droppedOlder);
+      histNewerWindows = histNewerWindows.slice(0, -1);
+      await restoreHistAnchor(anchor);
+    } catch (err) {
+      if (signal?.aborted) return;
+      histError = String(err?.message || err);
+    } finally {
+      if (!signal?.aborted) histLoadingNewer = false;
+    }
+  }
+
+  // Load only in the direction the user moved. Scroll restoration after a
+  // page swap is ignored, preventing older/newer fetches from ping-ponging.
   function onHistScroll() {
     const el = histTailEl;
-    if (!el) return;
-    if (el.scrollTop <= 40) void loadHistOlder();
+    if (!el || histRestoringScroll) return;
+    const top = el.scrollTop;
+    const delta = top - histLastScrollTop;
+    histLastScrollTop = top;
+    if (delta < 0 && top <= 40) {
+      void loadHistOlder();
+      return;
+    }
+    if (delta > 0) {
+      const distanceFromBottom = el.scrollHeight - top - el.clientHeight;
+      if (distanceFromBottom <= 40) void loadHistNewer();
+    }
+  }
+
+  function jumpHistToLatest() {
+    if (!runId || histLoading || histLoadingOlder || histLoadingNewer) return;
+    void loadHistInitial(
+      runId,
+      {
+        search: logSearch,
+        since: histSince,
+        until: histUntil,
+      },
+      histController?.signal,
+    );
   }
 
   // Reset the range back to the run's lifetime
@@ -1444,21 +1630,36 @@
             {/if}
           </div>
         {:else}
-          <div class="bg-(--color-c-gray-08,#0e0e0e) rounded-[6px] p-[8px_12px] max-h-[420px] overflow-y-auto overflow-x-auto [font-family:ui-monospace,SFMono-Regular,Menlo,monospace] text-[12px] leading-[1.45] text-(--text)" bind:this={histTailEl} onscroll={onHistScroll}>
+          <div class="bg-(--color-c-gray-08,#0e0e0e) rounded-[6px] p-[8px_12px] max-h-[420px] overflow-y-auto overflow-x-auto [overflow-anchor:none] [font-family:ui-monospace,SFMono-Regular,Menlo,monospace] text-[12px] leading-[1.45] text-(--text)" bind:this={histTailEl} onscroll={onHistScroll}>
             {#if histHasMore}
               <div class="text-center text-[10px] text-(--muted) pb-[6px]">
                 {histLoadingOlder ? "Loading older lines…" : "Scroll up for older lines"}
               </div>
             {/if}
             {#each histLines as entry (entry.id)}
-              <div class="flex gap-[10px] whitespace-pre">
+              <div class="flex gap-[10px] whitespace-pre" data-hist-id={entry.id}>
                 <span class="shrink-0 text-(--muted) text-[10px] min-w-[64px] overflow-hidden text-ellipsis">{entry.task_id || ""}</span>
                 <span class="flex-1 whitespace-pre-wrap break-all">{entry.line}</span>
               </div>
             {/each}
+            {#if histNewerWindows.length}
+              <div class="text-center text-[10px] text-(--muted) pt-[6px]">
+                {histLoadingNewer ? "Loading newer lines…" : "Scroll down for newer lines"}
+              </div>
+            {/if}
           </div>
-          <div class="mt-[6px] text-[11px] text-(--muted) [font-variant-numeric:tabular-nums]">
-            Showing {histLines.length} line{histLines.length === 1 ? "" : "s"}
+          <div class="mt-[6px] text-[11px] text-(--muted) [font-variant-numeric:tabular-nums] flex items-center gap-[8px]">
+            <span>Showing {histLines.length} line{histLines.length === 1 ? "" : "s"}</span>
+            {#if histNewerWindows.length}
+              <span class="h-[12px] w-px bg-(--border)"></span>
+              <button
+                type="button"
+                class="text-(--accent) underline-offset-2 hover:underline bg-transparent border-0 p-0 cursor-pointer text-[11px]"
+                onclick={jumpHistToLatest}
+              >
+                Jump to latest
+              </button>
+            {/if}
           </div>
         {/if}
       {/if}
