@@ -1,3 +1,4 @@
+import traceback
 from pathlib import Path
 import modal
 from collections import defaultdict
@@ -166,16 +167,25 @@ def refresh_sandboxes():
             is_open = pr.state == "open"
 
             for deployment in pr_deployments:
-                key = (pr_number, deployment.type)
-                if is_open:
-                    if needs_refresh(deployment):
-                        deployment.refresh()
-                        deployments[key] = asdict(deployment)
-                else:
-                    if is_expired(deployment):
-                        deployment.terminate()
-                        deployment.cleanup_artifact()
-                        deployments.pop(key, None)
+                try:
+                    key = (pr_number, deployment.type)
+                    if is_open:
+                        if needs_refresh(deployment):
+                            deployment.refresh()
+                            deployments[key] = asdict(deployment)
+                    else:
+                        if is_expired(deployment):
+                            deployment.terminate()
+                            deployment.cleanup_artifact()
+                            deployments.pop(key, None)
+                except Exception as e:
+                    action = "refresh" if is_open else "clean up"
+                    print(
+                        f"Error: Failed to {action} {deployment.type} preview for "
+                        f"#{pr_number} (sandbox={deployment.sandbox_id}, "
+                        f"artifact={deployment.artifact}): {e!r}"
+                    )
+                    traceback.print_exc()
         except UnknownObjectException:
             print(f"Warning: Unknown PR #{pr_number}")
 
