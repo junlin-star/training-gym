@@ -1591,7 +1591,7 @@
         </div>
       {/if}
       {:else}
-        <!-- Finished run: page through the durable ClickHouse copy on demand. -->
+        <!-- Finished run: page through the durable copy on demand. -->
         <div class="flex flex-col gap-[12px] mb-[12px] p-[12px_14px] rounded-[8px] bg-(--color-c-gray-08,#161616) [border:1px_solid_var(--border,#2f2f2f)]">
           <div class="flex items-center gap-[12px]">
             <input
