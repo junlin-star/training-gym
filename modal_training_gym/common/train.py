@@ -309,9 +309,7 @@ class TrainConfig:
     group_overrides: dict[str, Any] | None = None
     group_axes: list[str] | None = None
 
-    # ── Public API ────────────────────────────────────────────────────────────
-
-    def generate_training_run_id(self) -> str:
+    def _generate_training_run_id(self) -> str:
         """Mint a new run id. ``launch()`` calls this once per invocation, so
         each launch of the same config gets its own TrainingRun record."""
         return create_hash(
@@ -324,7 +322,7 @@ class TrainConfig:
 
     def _build_app(self, training_run_id: str | None = None):
         if training_run_id is None:
-            training_run_id = self.generate_training_run_id()
+            training_run_id = self._generate_training_run_id()
         recipe_type = self.recipe.recipe_type
         if recipe_type == RecipeType.MILES:
             if not isinstance(self.recipe, MilesConfig):
@@ -519,7 +517,7 @@ class TrainConfig:
         from modal_training_gym.common.status_reporter import enqueue_framework_status
         from modal_training_gym.cli.setup import ensure_dashboard_deployed
 
-        training_run_id = self.generate_training_run_id()
+        training_run_id = self._generate_training_run_id()
         ensure_dashboard_deployed()
         framework_status_url = get_framework_status_url() or ""
         framework_status_token = _secrets.token_urlsafe(32)

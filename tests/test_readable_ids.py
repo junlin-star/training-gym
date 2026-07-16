@@ -62,8 +62,8 @@ def test_train_config_generates_fresh_run_id_per_call(monkeypatch) -> None:
         recipe=DummyRecipe(),
     )
 
-    first = config.generate_training_run_id()
-    second = config.generate_training_run_id()
+    first = config._generate_training_run_id()
+    second = config._generate_training_run_id()
     assert first != second
     assert calls == 2
 
