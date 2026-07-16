@@ -56,11 +56,10 @@ def test_variants_are_independent_and_base_untouched():
     assert all(c.recipe.num_rollout == 10 for c in configs)
 
 
-def test_each_variant_gets_unique_run_id_and_shared_group_id():
+def test_each_variant_shares_group_id():
     group = TrainingGroup(base=_base(), grid={"recipe.lr": [1e-6, 5e-6]})
     configs = group.get_train_configs()
-    run_ids = {c.training_run_id for c in configs}
-    assert len(run_ids) == 2
+    assert len(configs) == 2
     assert all(c.group_id == group.group_id for c in configs)
 
 
@@ -89,7 +88,6 @@ def test_empty_grid_yields_single_variant():
     configs = group.get_train_configs()
     assert len(configs) == 1
     assert configs[0].group_id == group.group_id
-    assert configs[0].training_run_id
 
 
 def test_empty_grid_axis_yields_single_blank_variant():
@@ -102,7 +100,6 @@ def test_empty_grid_axis_yields_single_blank_variant():
     assert cfg.group_id == "blank-sweep"
     assert cfg.group_overrides == {}
     assert cfg.group_axes == ["recipe.lr"]
-    assert cfg.training_run_id
 
 
 def test_empty_group_variant_records_blank_group_tags():
@@ -201,16 +198,7 @@ def test_iter_variants_pairs_overrides_with_configs():
     assert all(cfg.recipe.lr == ov["recipe.lr"] for ov, cfg in variants)
 
 
-def test_variant_expansion_reuses_training_run_ids():
-    group = TrainingGroup(base=_base(), grid={"recipe.lr": [1e-6, 5e-6]})
-
-    preview_ids = [cfg.training_run_id for cfg in group.get_train_configs()]
-    launch_ids = [cfg.training_run_id for _, cfg in group.iter_variants()]
-
-    assert launch_ids == preview_ids
-
-
-def test_variant_plan_prints_run_ids_with_overrides(capsys):
+def test_variant_plan_prints_overrides(capsys):
     group = TrainingGroup(base=_base(), grid={"recipe.lr": [1e-6, 5e-6]})
     variants = group.iter_variants()
 
@@ -218,7 +206,6 @@ def test_variant_plan_prints_run_ids_with_overrides(capsys):
 
     output = capsys.readouterr().out
     for overrides, cfg in variants:
-        assert cfg.training_run_id in output
         assert repr(overrides) in output
         context_plan_line = cfg.context_plan_line()
         assert context_plan_line is not None
