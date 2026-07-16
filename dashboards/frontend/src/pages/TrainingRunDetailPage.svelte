@@ -570,14 +570,23 @@
     return Number.isNaN(ms) ? null : Math.floor(ms / 1000);
   }
 
+  function histRangeFromText(sinceText, untilText) {
+    const since = localInputToEpoch(sinceText);
+    const until = localInputToEpoch(untilText);
+    return {
+      since: since != null ? String(since) : "",
+      // The picker has minute precision, so include the entire final minute.
+      until: until != null ? String(until + 59.999999999) : "",
+    };
+  }
+
   $effect(() => {
     const since = histSinceText;
     const until = histUntilText;
     const handle = window.setTimeout(() => {
-      const s = localInputToEpoch(since);
-      const u = localInputToEpoch(until);
-      histSince = s != null ? String(s) : "";
-      histUntil = u != null ? String(u + 59.999999999) : "";
+      const range = histRangeFromText(since, until);
+      histSince = range.since;
+      histUntil = range.until;
     }, 350);
     return () => window.clearTimeout(handle);
   });
@@ -594,10 +603,13 @@
     // Wait until the run's timestamps are actually loaded.
     if (!startedAt && !endedAt) return;
     histPrefilledFor = id;
-    histSinceText = epochToLocalInput(startedAt);
-    histUntilText = epochToLocalInput(endedAt);
-    histSince = startedAt ? String(startedAt) : "";
-    histUntil = endedAt ? String(endedAt) : "";
+    const sinceText = epochToLocalInput(startedAt);
+    const untilText = epochToLocalInput(endedAt);
+    const range = histRangeFromText(sinceText, untilText);
+    histSinceText = sinceText;
+    histUntilText = untilText;
+    histSince = range.since;
+    histUntil = range.until;
   });
 
   // Expand server entries into per-line rows (a single ClickHouse entry can
