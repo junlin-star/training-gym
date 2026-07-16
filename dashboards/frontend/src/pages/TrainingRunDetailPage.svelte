@@ -577,7 +577,7 @@
       const s = localInputToEpoch(since);
       const u = localInputToEpoch(until);
       histSince = s != null ? String(s) : "";
-      histUntil = u != null ? String(u) : "";
+      histUntil = u != null ? String(u + 59.999999999) : "";
     }, 350);
     return () => window.clearTimeout(handle);
   });
