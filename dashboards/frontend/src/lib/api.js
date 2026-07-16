@@ -373,8 +373,7 @@ export async function fetchRollout(trainingRunId, rolloutId) {
   return await res.json();
 }
 
-// Historical Modal logs for a run, served from the durable ClickHouse copy via
-// the backend's AppFetchLogs endpoint.
+// Historical Modal logs for a run, served from the durable storage.
 //
 // Returns the newest `tail` lines within the (since, until] window, oldest
 // first, plus a `nextUntil` cursor for paging further back through history.
