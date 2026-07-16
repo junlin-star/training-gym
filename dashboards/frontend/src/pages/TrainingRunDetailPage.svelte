@@ -784,8 +784,13 @@
           ? merged.slice(0, HIST_BUFFER_MAX)
           : merged;
       rememberTrimmedNewer(histLines, droppedNewer);
-      histHasMore = data.hasMore;
-      histNextUntil = data.nextUntil;
+      if (older.length > HIST_PAGE) {
+        histHasMore = true;
+        histNextUntil = histCursorBefore(adjacentOlder[0]);
+      } else {
+        histHasMore = data.hasMore;
+        histNextUntil = data.nextUntil;
+      }
       await restoreHistAnchor(anchor);
     } catch (err) {
       if (signal?.aborted) return;
