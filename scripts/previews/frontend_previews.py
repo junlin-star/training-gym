@@ -120,13 +120,14 @@ class PreviewDeployment:
 def deploy_preview(pr_number: int, type: PreviewType, artifact: str):
     print(f"Deploying {type} preview for #{pr_number}")
     key = (pr_number, type)
+
+    vol.reload()
+
     deployment_dict = deployments.get((pr_number, type), None)
     if deployment_dict is not None:
         deployment = PreviewDeployment(**deployment_dict)
         deployment.terminate()
         deployment.cleanup_artifact()
-
-    vol.reload()
 
     deployment = PreviewDeployment(type=type, artifact=artifact)
     deployment.deploy()
