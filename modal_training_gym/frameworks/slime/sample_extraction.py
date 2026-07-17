@@ -130,6 +130,13 @@ def _trace_sample_limit() -> int:
     return max(0, n)
 
 
+def _coerce_int(value: Any) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError, OverflowError):
+        return 0
+
+
 def _coerce_float(value: Any) -> float | None:
     try:
         return float(value)
@@ -226,6 +233,35 @@ def _extract_trace(sample: Any) -> Any:
         if isinstance(meta, dict):
             raw = meta.get("trace")
     return raw
+
+
+def _duck_get(obj: Any, key: str, default: Any = None) -> Any:
+    """Unified field access for dict or object."""
+    return (
+        obj.get(key, default) if isinstance(obj, dict) else getattr(obj, key, default)
+    )
+
+
+def _extract_inference_metadata(sample: Any) -> dict[str, Any] | None:
+    """Extract per-sample inference stats: token counts and prefix cache info."""
+    prefix_info = _duck_get(sample, "prefix_cache_info")
+    if prefix_info is None:
+        return None
+
+    total = _coerce_int(_duck_get(prefix_info, "total_prompt_tokens", 0))
+    cached = _coerce_int(_duck_get(prefix_info, "cached_tokens", 0))
+    resp_len = _duck_get(sample, "response_length")
+
+    inference: dict[str, Any] = {
+        "tokens_in": total,
+        "cached_tokens": cached,
+        "new_tokens": max(0, total - cached),
+        "cache_hit_rate": cached / total if total else 0.0,
+    }
+    if resp_len is not None:
+        inference["tokens_out"] = _coerce_int(resp_len)
+
+    return inference
 
 
 def _extract_audio_from_prompt(prompt: Any) -> str | None:
@@ -432,6 +468,8 @@ def _sample_to_dict(
         value = get(key) if attrs is not None else get(key, None)
         if value is not None:
             metadata[key] = value
+    if inference := _extract_inference_metadata(sample):
+        metadata["inference"] = inference
 
     # Pull display-relevant fields from the sample's own metadata dict so the
     # dashboard can render exit status, eval checks, etc. without needing the
