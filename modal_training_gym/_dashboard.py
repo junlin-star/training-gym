@@ -23,7 +23,6 @@ import modal
 if TYPE_CHECKING:
     from google.protobuf.timestamp_pb2 import Timestamp
     from modal.client import _Client
-    from modal_proto import api_pb2
 
 # Imported at module scope so FastAPI can resolve the ``request: Request``
 # annotation in stream_run_logs(). Under ``from __future__ import
