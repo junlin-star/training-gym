@@ -15,7 +15,7 @@ import re
 import secrets as _secrets
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Awaitable, Callable, TypedDict
+from typing import TYPE_CHECKING, Awaitable, Callable, Iterable, TypedDict
 from datetime import datetime, timezone
 
 import modal
