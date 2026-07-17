@@ -19,7 +19,6 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    if: github.ref == ''
     environment: modal-deploy
     env:
       MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
