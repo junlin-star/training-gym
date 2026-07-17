@@ -134,7 +134,7 @@ def test_parse_skips_empty_data_and_sets_core_fields() -> None:
     ]
 
 
-def test_parse_sets_optional_timestamps() -> None:
+def test_parse_attaches_timestamps_only_when_present() -> None:
     batches = [
         _batch(
             "task-a",
