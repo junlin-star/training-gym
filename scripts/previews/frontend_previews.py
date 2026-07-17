@@ -94,11 +94,6 @@ class PreviewDeployment:
 
         print(f"Deployed {self.type} preview to {self.url} ({self.sandbox_id})")
 
-    def refresh(self):
-        print(f"Refreshing {self.type} deploy for {self.artifact}")
-        self.terminate()
-        self.deploy()
-
     def terminate(self):
         print(f"Terminating {self.type} deploy for {self.artifact} ({self.sandbox_id})")
 
@@ -124,15 +119,17 @@ def deploy_preview(pr_number: int, type: PreviewType, artifact: str):
 
     vol.reload()
 
-    deployment_dict = deployments.get((pr_number, type), None)
-    if deployment_dict is not None:
-        deployment = PreviewDeployment(**deployment_dict)
-        deployment.terminate()
-        deployment.cleanup_artifact()
+    try:
+        deployment_dict = deployments.get((pr_number, type), None)
+        if deployment_dict is not None:
+            deployment = PreviewDeployment(**deployment_dict)
+            deployment.terminate()
+            deployment.cleanup_artifact()
 
-    deployment = PreviewDeployment(type=type, artifact=artifact)
-    deployment.deploy()
-    deployments[key] = asdict(deployment)
+        deployment = PreviewDeployment(type=type, artifact=artifact)
+        deployment.deploy()
+    finally:
+        deployments[key] = asdict(deployment)
 
 
 def needs_refresh(preview: PreviewDeployment):
@@ -171,11 +168,19 @@ def refresh_sandboxes():
                     key = (pr_number, deployment.type)
                     if is_open:
                         if needs_refresh(deployment):
-                            deployment.refresh()
-                            deployments[key] = asdict(deployment)
+                            try:
+                                print(f"Refreshing {deployment.type} deploy for {deployment.artifact}")
+                                deployment.terminate()
+                                deployment.deploy()
+                            finally:
+                                deployments[key] = asdict(deployment)
                     else:
                         if is_expired(deployment):
-                            deployment.terminate()
+                            try:
+                                deployment.terminate()
+                            except:
+                                deployments[key] = asdict(deployment)
+                                raise
                             deployment.cleanup_artifact()
                             deployments.pop(key, None)
                 except Exception as e:
