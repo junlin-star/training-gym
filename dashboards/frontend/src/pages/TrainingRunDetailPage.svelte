@@ -545,7 +545,7 @@
   let histError = $state("");
   let histHasMore = $state(false); // older lines exist before the first row
   let histNewerWindows = $state([]); // trimmed (since, until] ranges, nearest last
-  let histNextUntil = $state(null); // `until` cursor for the next older page
+  let histBeforeCursor = $state(null); // opaque ns cursor for the next older page
   let histTailEl = $state(null); // scroll container
   let histSeq = 0; // monotonic id for stable keying across prepends
   let histController = null; // aborts in-flight fetches when filters change
@@ -618,7 +618,7 @@
     for (const entry of entries) {
       const task_id = entry.task_id || "";
       const ts = entry.ts || 0;
-      const ts_ns = entry.ts_ns || 0;
+      const ts_ns = entry.ts_ns ? BigInt(entry.ts_ns) : 0n;
       for (const part of String(entry.line ?? "").split(/\r?\n/)) {
         if (!part.length) continue;
         target.push({ id: histSeq++, task_id, line: part, ts, ts_ns });
@@ -631,7 +631,7 @@
     histError = "";
     histHasMore = false;
     histNewerWindows = [];
-    histNextUntil = null;
+    histBeforeCursor = null;
     histLoading = false;
     histLoadingOlder = false;
     histLoadingNewer = false;
@@ -645,11 +645,17 @@
     return Number(row.ts) || 0;
   }
 
+  // Returns an opaque before_cursor string: the exact nanosecond position just
+  // before `row`, suitable for passing to fetchRunLogs as `beforeCursor`.
   function histCursorBefore(row) {
     if (!row) return null;
-    if (row.ts_ns) return (Number(row.ts_ns) - 1) / 1_000_000_000;
+    if (row.ts_ns) return String(row.ts_ns - 1n);
     const ts = Number(row.ts) || 0;
-    return ts > 0 ? ts - 0.000000001 : null;
+    if (ts <= 0) return null;
+    // ts is seconds float; split to avoid multiplying a large float by 1e9.
+    const sec = Math.floor(ts);
+    const subsec_ns = Math.round((ts - sec) * 1_000_000_000);
+    return String(BigInt(sec) * 1_000_000_000n + BigInt(subsec_ns) - 1n);
   }
 
   // Capture a visible row and its exact viewport position. Restoring this
@@ -702,7 +708,7 @@
   function markTrimmedOlder(kept, dropped) {
     if (!kept.length || !dropped.length) return;
     histHasMore = true;
-    histNextUntil = histCursorBefore(kept[0]);
+    histBeforeCursor = histCursorBefore(kept[0]);
   }
 
   async function loadHistInitial(id, { search, since, until }, signal) {
@@ -732,7 +738,7 @@
         markTrimmedOlder(histLines, droppedOlder);
       } else {
         histHasMore = data.hasMore;
-        histNextUntil = data.nextUntil;
+        histBeforeCursor = data.beforeCursor;
       }
       // Land on the newest line, like the live tail does.
       queueMicrotask(() => {
@@ -756,7 +762,7 @@
   async function loadHistOlder() {
     if (
       !histHasMore ||
-      histNextUntil == null ||
+      histBeforeCursor == null ||
       histLoadingOlder ||
       histLoadingNewer ||
       histLoading
@@ -770,7 +776,7 @@
     try {
       const data = await fetchRunLogs(runId, {
         since: histSince,
-        until: histNextUntil,
+        beforeCursor: histBeforeCursor,
         tail: HIST_PAGE,
         search: logSearch,
         signal,
@@ -780,7 +786,7 @@
       pushHistRows(older, data.logs);
       if (!older.length) {
         histHasMore = false;
-        histNextUntil = null;
+        histBeforeCursor = null;
         return;
       }
       // A single backend log entry may expand into many rendered lines. Keep
@@ -798,10 +804,10 @@
       rememberTrimmedNewer(histLines, droppedNewer);
       if (older.length > HIST_PAGE) {
         histHasMore = true;
-        histNextUntil = histCursorBefore(adjacentOlder[0]);
+        histBeforeCursor = histCursorBefore(adjacentOlder[0]);
       } else {
         histHasMore = data.hasMore;
-        histNextUntil = data.nextUntil;
+        histBeforeCursor = data.beforeCursor;
       }
       await restoreHistAnchor(anchor);
     } catch (err) {
