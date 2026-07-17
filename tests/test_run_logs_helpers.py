@@ -129,10 +129,12 @@ def test_parse_skips_empty_data_and_sets_core_fields() -> None:
         )
     ]
     logs = _parse_log_batches(batches)
-    assert logs == [{"task_id": "task-a", "line": "hello", "fd": 1}]
+    assert logs == [
+        {"task_id": "task-a", "line": "hello", "fd": 1, "ts": None, "ts_ns": None}
+    ]
 
 
-def test_parse_attaches_timestamps_only_when_present() -> None:
+def test_parse_sets_timestamps_or_none_when_absent() -> None:
     batches = [
         _batch(
             "task-a",
@@ -150,9 +152,13 @@ def test_parse_attaches_timestamps_only_when_present() -> None:
         "ts": 12.5,
         "ts_ns": 12_500_000_000,
     }
-    assert logs[1] == {"task_id": "task-a", "line": "no-ts", "fd": 0}
-    assert "ts" not in logs[1]
-    assert "ts_ns" not in logs[1]
+    assert logs[1] == {
+        "task_id": "task-a",
+        "line": "no-ts",
+        "fd": 0,
+        "ts": None,
+        "ts_ns": None,
+    }
 
 
 def test_parse_flattens_multiple_batches_in_order() -> None:

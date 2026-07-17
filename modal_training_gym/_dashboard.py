@@ -15,7 +15,7 @@ import re
 import secrets as _secrets
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Awaitable, Callable, NotRequired, TypedDict
+from typing import TYPE_CHECKING, Awaitable, Callable, TypedDict
 from datetime import datetime, timezone
 
 import modal
@@ -23,6 +23,7 @@ import modal
 if TYPE_CHECKING:
     from google.protobuf.timestamp_pb2 import Timestamp
     from modal.client import _Client
+    from modal_proto import api_pb2
 
 # Imported at module scope so FastAPI can resolve the ``request: Request``
 # annotation in stream_run_logs(). Under ``from __future__ import
@@ -50,8 +51,8 @@ class LogEntry(TypedDict):
     task_id: str
     line: str
     fd: int
-    ts: NotRequired[float]
-    ts_ns: NotRequired[int]
+    ts: float | None
+    ts_ns: int | None
 
 
 REPO_URL = "https://github.com/modal-projects/training-gym.git"
@@ -200,24 +201,22 @@ def _to_timestamp(secs: float) -> Timestamp:
     return ts
 
 
-def _parse_log_batches(batches) -> list[LogEntry]:
+def _parse_log_batches(batches: Iterable[api_pb2.TaskLogsBatch]) -> list[LogEntry]:
     """Flatten Modal ``AppFetchLogs`` batches into ``LogEntry`` dicts."""
     logs: list[LogEntry] = []
     for batch in batches:
         for item in batch.items:
             if not item.data:
                 continue
+            ts = float(getattr(item, "timestamp", 0) or 0)
+            ts_ns = int(getattr(item, "timestamp_ns", 0) or 0)
             entry: LogEntry = {
                 "task_id": batch.task_id,
                 "line": item.data,
                 "fd": int(getattr(item, "file_descriptor", 0) or 0),
+                "ts": ts or None,
+                "ts_ns": ts_ns or None,
             }
-            ts = float(getattr(item, "timestamp", 0) or 0)
-            ts_ns = int(getattr(item, "timestamp_ns", 0) or 0)
-            if ts:
-                entry["ts"] = ts
-            if ts_ns:
-                entry["ts_ns"] = ts_ns
             logs.append(entry)
     return logs
 
@@ -451,7 +450,7 @@ def fastapi_app():
 
     # ── Shared Modal client ───────────────────────────────────────────────
     # Opens a client at startup and reuses it across all requests.
-    modal_client_box: dict[str, _Client | None] = {"client": None}
+    modal_client: _Client | None = None
     modal_client_lock = asyncio.Lock()
 
     async def get_modal_client() -> _Client | None:
@@ -460,9 +459,9 @@ def fastapi_app():
         Creates it once (guarded by a lock) and reuses it thereafter. Returns
         ``None`` when no credentials are configured.
         """
-        client = modal_client_box["client"]
-        if client is not None:
-            return client
+        nonlocal modal_client
+        if modal_client is not None:
+            return modal_client
 
         token_id = os.environ.get("MODAL_TOKEN_ID", "")
         token_secret = os.environ.get("MODAL_TOKEN_SECRET", "")
@@ -472,11 +471,9 @@ def fastapi_app():
         from modal.client import _Client
 
         async with modal_client_lock:
-            if modal_client_box["client"] is None:
-                modal_client_box["client"] = await _Client.from_credentials(
-                    token_id, token_secret
-                )
-            return modal_client_box["client"]
+            if modal_client is None:
+                modal_client = await _Client.from_credentials(token_id, token_secret)
+            return modal_client
 
     @web.on_event("startup")
     async def _open_modal_client() -> None:
