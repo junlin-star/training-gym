@@ -169,7 +169,9 @@ def refresh_sandboxes():
                     if is_open:
                         if needs_refresh(deployment):
                             try:
-                                print(f"Refreshing {deployment.type} deploy for {deployment.artifact}")
+                                print(
+                                    f"Refreshing {deployment.type} deploy for {deployment.artifact}"
+                                )
                                 deployment.terminate()
                                 deployment.deploy()
                             finally:
