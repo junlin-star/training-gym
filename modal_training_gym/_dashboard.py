@@ -15,7 +15,7 @@ import re
 import secrets as _secrets
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Awaitable, Callable, NotRequired, TypedDict
+from typing import TYPE_CHECKING, Awaitable, Callable, TypedDict
 from datetime import datetime, timezone
 
 import modal
@@ -50,8 +50,10 @@ class LogEntry(TypedDict):
     task_id: str
     line: str
     fd: int
-    ts: NotRequired[float]
-    ts_ns: NotRequired[str]  # nanoseconds as decimal string — preserves precision through JSON
+    ts: float | None
+    ts_ns: (
+        str | None
+    )  # nanoseconds as decimal string — preserves precision through JSON
 
 
 REPO_URL = "https://github.com/modal-projects/training-gym.git"
@@ -221,17 +223,15 @@ def _parse_log_batches(batches) -> list[LogEntry]:
         for item in batch.items:
             if not item.data:
                 continue
+            ts = float(getattr(item, "timestamp", 0) or 0)
+            ts_ns = int(getattr(item, "timestamp_ns", 0) or 0)
             entry: LogEntry = {
                 "task_id": batch.task_id,
                 "line": item.data,
                 "fd": int(getattr(item, "file_descriptor", 0) or 0),
+                "ts": ts or None,
+                "ts_ns": str(ts_ns) if ts_ns else None,
             }
-            ts = float(getattr(item, "timestamp", 0) or 0)
-            ts_ns = int(getattr(item, "timestamp_ns", 0) or 0)
-            if ts:
-                entry["ts"] = ts
-            if ts_ns:
-                entry["ts_ns"] = str(ts_ns)
             logs.append(entry)
     return logs
 
