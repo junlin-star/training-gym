@@ -241,7 +241,7 @@ def _compute_next_page(logs: list[LogEntry], limit: int) -> tuple[bool, str | No
 
     The cursor is returned as a decimal string of integer nanoseconds so it
     survives the Python → JSON → JavaScript round-trip without float64
-    precision loss (a 2026 ns timestamp is ~1.78 × 10¹⁸, well above 2⁵³).
+    precision loss.
     """
     has_more = len(logs) >= limit
     if not (has_more and logs):
