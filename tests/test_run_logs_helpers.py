@@ -129,9 +129,7 @@ def test_parse_skips_empty_data_and_sets_core_fields() -> None:
         )
     ]
     logs = _parse_log_batches(batches)
-    assert logs == [
-        {"task_id": "task-a", "line": "hello", "fd": 1, "ts": None, "ts_ns": None}
-    ]
+    assert logs == [{"task_id": "task-a", "line": "hello", "fd": 1}]
 
 
 def test_parse_attaches_timestamps_only_when_present() -> None:
@@ -150,15 +148,11 @@ def test_parse_attaches_timestamps_only_when_present() -> None:
         "line": "with-ts",
         "fd": 0,
         "ts": 12.5,
-        "ts_ns": "12500000000",
+        "ts_ns": 12_500_000_000,
     }
-    assert logs[1] == {
-        "task_id": "task-a",
-        "line": "no-ts",
-        "fd": 0,
-        "ts": None,
-        "ts_ns": None,
-    }
+    assert logs[1] == {"task_id": "task-a", "line": "no-ts", "fd": 0}
+    assert "ts" not in logs[1]
+    assert "ts_ns" not in logs[1]
 
 
 def test_parse_flattens_multiple_batches_in_order() -> None:
@@ -175,15 +169,7 @@ def test_parse_flattens_multiple_batches_in_order() -> None:
 
 
 def test_next_page_partial_page_has_no_more() -> None:
-    logs = [
-        {
-            "task_id": "t",
-            "line": "x",
-            "fd": 0,
-            "ts": None,
-            "ts_ns": "5000000000",
-        }
-    ]
+    logs = [{"task_id": "t", "line": "x", "fd": 0, "ts_ns": 5_000_000_000}]
     assert _compute_next_page(logs, limit=100) == (False, None)
 
 
@@ -193,34 +179,22 @@ def test_next_page_empty_logs() -> None:
 
 def test_next_page_full_page_uses_ts_ns_of_oldest() -> None:
     logs = [
-        {
-            "task_id": "t",
-            "line": "x",
-            "fd": 0,
-            "ts": None,
-            "ts_ns": "5000000000",
-        },
-        {
-            "task_id": "t",
-            "line": "y",
-            "fd": 0,
-            "ts": None,
-            "ts_ns": "6000000000",
-        },
+        {"task_id": "t", "line": "x", "fd": 0, "ts_ns": 5_000_000_000},
+        {"task_id": "t", "line": "y", "fd": 0, "ts_ns": 6_000_000_000},
     ]
-    has_more, before_cursor = _compute_next_page(logs, limit=2)
+    has_more, next_until = _compute_next_page(logs, limit=2)
     assert has_more is True
-    assert before_cursor == str(5_000_000_000 - 1)
+    assert next_until == (5_000_000_000 - 1) / 1_000_000_000
 
 
 def test_next_page_falls_back_to_scaled_ts() -> None:
     logs = [
-        {"task_id": "t", "line": "x", "fd": 0, "ts": 5.0, "ts_ns": None},
-        {"task_id": "t", "line": "y", "fd": 0, "ts": 6.0, "ts_ns": None},
+        {"task_id": "t", "line": "x", "fd": 0, "ts": 5.0},
+        {"task_id": "t", "line": "y", "fd": 0, "ts": 6.0},
     ]
-    has_more, before_cursor = _compute_next_page(logs, limit=2)
+    has_more, next_until = _compute_next_page(logs, limit=2)
     assert has_more is True
-    assert before_cursor == str(5_000_000_000 - 1)
+    assert next_until == (5_000_000_000 - 1) / 1_000_000_000
 
 
 # ── _parse_log_time ──────────────────────────────────────────────────────

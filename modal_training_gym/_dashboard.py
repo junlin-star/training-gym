@@ -15,7 +15,7 @@ import re
 import secrets as _secrets
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Awaitable, Callable, TypedDict
+from typing import TYPE_CHECKING, Awaitable, Callable, NotRequired, TypedDict
 from datetime import datetime, timezone
 
 import modal
@@ -50,10 +50,8 @@ class LogEntry(TypedDict):
     task_id: str
     line: str
     fd: int
-    ts: float | None
-    ts_ns: (
-        str | None
-    )  # nanoseconds as decimal string — preserves precision through JSON
+    ts: NotRequired[float]
+    ts_ns: NotRequired[int]
 
 
 REPO_URL = "https://github.com/modal-projects/training-gym.git"
@@ -202,20 +200,6 @@ def _to_timestamp(secs: float) -> Timestamp:
     return ts
 
 
-def _to_timestamp_ns(ns: int) -> Timestamp:
-    """Convert integer nanoseconds to a protobuf ``Timestamp`` with exact precision.
-
-    Unlike ``_to_timestamp``, this never converts through float64, so adjacent
-    nanoseconds are always distinguishable regardless of magnitude.
-    """
-    from google.protobuf.timestamp_pb2 import Timestamp
-
-    ts = Timestamp()
-    ts.seconds = ns // 1_000_000_000
-    ts.nanos = ns % 1_000_000_000
-    return ts
-
-
 def _parse_log_batches(batches) -> list[LogEntry]:
     """Flatten Modal ``AppFetchLogs`` batches into ``LogEntry`` dicts."""
     logs: list[LogEntry] = []
@@ -223,34 +207,32 @@ def _parse_log_batches(batches) -> list[LogEntry]:
         for item in batch.items:
             if not item.data:
                 continue
-            ts = float(getattr(item, "timestamp", 0) or 0)
-            ts_ns = int(getattr(item, "timestamp_ns", 0) or 0)
             entry: LogEntry = {
                 "task_id": batch.task_id,
                 "line": item.data,
                 "fd": int(getattr(item, "file_descriptor", 0) or 0),
-                "ts": ts or None,
-                "ts_ns": str(ts_ns) if ts_ns else None,
             }
+            ts = float(getattr(item, "timestamp", 0) or 0)
+            ts_ns = int(getattr(item, "timestamp_ns", 0) or 0)
+            if ts:
+                entry["ts"] = ts
+            if ts_ns:
+                entry["ts_ns"] = ts_ns
             logs.append(entry)
     return logs
 
 
-def _compute_next_page(logs: list[LogEntry], limit: int) -> tuple[bool, str | None]:
-    """Derive ``(has_more, next_until_ns)`` for keyset pagination.
-
-    The cursor is returned as a decimal string of integer nanoseconds so it
-    survives the Python → JSON → JavaScript round-trip without float64
-    precision loss (a 2026 ns timestamp is ~1.78 × 10¹⁸, well above 2⁵³).
-    """
+def _compute_next_page(logs: list[LogEntry], limit: int) -> tuple[bool, float | None]:
+    """Derive ``(has_more, next_until)`` for keyset pagination."""
     has_more = len(logs) >= limit
-    if not (has_more and logs):
-        return has_more, None
-    oldest = logs[0]
-    oldest_ns = int(oldest.get("ts_ns") or 0) or int(
-        (oldest.get("ts") or 0.0) * 1_000_000_000
-    )
-    return has_more, str(oldest_ns - 1)
+    next_until: float | None = None
+    if has_more and logs:
+        oldest = logs[0]
+        oldest_ns = oldest.get("ts_ns") or int(
+            (oldest.get("ts") or 0.0) * 1_000_000_000
+        )
+        next_until = (oldest_ns - 1) / 1_000_000_000
+    return has_more, next_until
 
 
 def ensure_creds_secret(interactive: bool = False) -> bool:
@@ -469,7 +451,7 @@ def fastapi_app():
 
     # ── Shared Modal client ───────────────────────────────────────────────
     # Opens a client at startup and reuses it across all requests.
-    modal_client: _Client | None = None
+    modal_client_box: dict[str, _Client | None] = {"client": None}
     modal_client_lock = asyncio.Lock()
 
     async def get_modal_client() -> _Client | None:
@@ -478,9 +460,9 @@ def fastapi_app():
         Creates it once (guarded by a lock) and reuses it thereafter. Returns
         ``None`` when no credentials are configured.
         """
-        nonlocal modal_client
-        if modal_client is not None:
-            return modal_client
+        client = modal_client_box["client"]
+        if client is not None:
+            return client
 
         token_id = os.environ.get("MODAL_TOKEN_ID", "")
         token_secret = os.environ.get("MODAL_TOKEN_SECRET", "")
@@ -490,9 +472,11 @@ def fastapi_app():
         from modal.client import _Client
 
         async with modal_client_lock:
-            if modal_client is None:
-                modal_client = await _Client.from_credentials(token_id, token_secret)
-            return modal_client
+            if modal_client_box["client"] is None:
+                modal_client_box["client"] = await _Client.from_credentials(
+                    token_id, token_secret
+                )
+            return modal_client_box["client"]
 
     @web.on_event("startup")
     async def _open_modal_client() -> None:
@@ -1014,7 +998,6 @@ def fastapi_app():
         training_run_id: str,
         since: str = "",
         until: str = "",
-        before_cursor: str = "",
         tail: int = 100,
         search: str = "",
     ):
@@ -1036,7 +1019,7 @@ def fastapi_app():
         Returns a JSON object with the following fields:
           - ``logs``: a list of log entries
           - ``has_more``: whether there are more log entries to fetch
-          - ``before_cursor``: opaque ns cursor; pass as ``before_cursor`` to fetch the next older page
+          - ``next_until``: the timestamp of the next log entry to fetch
         """
         from modal_proto import api_pb2
 
@@ -1063,13 +1046,6 @@ def fastapi_app():
             default_until=run.ended_at or run.completed_at or 0,
             now=now,
         )
-        # before_cursor is an exact nanosecond integer produced by _compute_next_page.
-        # It bypasses the float-seconds pipeline entirely so the -1 ns offset is preserved.
-        until_timestamp = (
-            _to_timestamp_ns(int(before_cursor))
-            if before_cursor
-            else _to_timestamp(until_ts)
-        )
 
         try:
             client = await get_modal_client()
@@ -1084,7 +1060,7 @@ def fastapi_app():
         req = api_pb2.AppFetchLogsRequest(
             app_id=app_id,
             since=_to_timestamp(since_ts),
-            until=until_timestamp,
+            until=_to_timestamp(until_ts),
             limit=tail,
             search_text=search.strip(),
         )
@@ -1094,13 +1070,13 @@ def fastapi_app():
             raise HTTPException(status_code=502, detail=f"AppFetchLogs: {exc!s}")
 
         logs = _parse_log_batches(resp.batches)
-        has_more, next_before_cursor = _compute_next_page(logs, tail)
+        has_more, next_until = _compute_next_page(logs, tail)
 
         return JSONResponse(
             {
                 "logs": logs,
                 "has_more": has_more,
-                "before_cursor": next_before_cursor,
+                "next_until": next_until,
             }
         )
 
