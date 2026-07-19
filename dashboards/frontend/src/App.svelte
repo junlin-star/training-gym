@@ -117,7 +117,7 @@
   const NO_GROUP = "(no group)";
 
   function getGroup(run) {
-    return safeText(run.group_id || run.metadata?.group_id) || NO_GROUP;
+    return safeText(run.group_id) || NO_GROUP;
   }
 
   function getStatus(run) {
@@ -145,7 +145,7 @@
   }
 
   function modelName(run) {
-    return run.train_result?.model_name || run.config_summary?.model_name || "—";
+    return run.model || "—";
   }
 
   function safeText(value) {
@@ -415,9 +415,9 @@
             !includesText(run.run_id, q) &&
             !includesText(run.modal_app_id, q) &&
             !includesText(run.group_id, q) &&
-            !includesText(run.metadata?.group_id, q) &&
-            !includesText(JSON.stringify(run.metadata?.group_tags || {}), q) &&
-            !includesText(run.config_summary?.model_name, q) &&
+            !includesText(JSON.stringify(run.group_tags || {}), q) &&
+            !includesText(run.model, q) &&
+            !includesText(run.dataset, q) &&
             !includesText(run.train_result?.training_run_id, q) &&
             !includesText(run.train_result?.checkpoint_dir, q) &&
             !includesText(run.train_result?.model_name, q) &&

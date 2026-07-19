@@ -1,0 +1,539 @@
+"""Typed public representation and compatibility helpers for run lists."""
+
+from __future__ import annotations
+
+import datetime as dt
+import math
+from typing import Any
+from urllib.parse import quote
+
+from pydantic import BaseModel, Field
+
+from modal_training_gym.common.modal_urls import modal_app_dashboard_url
+
+
+JsonDict = dict[str, Any]
+
+
+class FrameworkProgress(BaseModel):
+    current: int | float | None = None
+    total: int | float | None = None
+    unit: str = "step"
+    phase: str = ""
+    is_active: bool | None = None
+    rollout_id: int | float | None = None
+    step_id: int | float | None = None
+    updated_at: int | float = 0
+
+
+class LatestRollout(BaseModel):
+    rollout_id: int | float = 0
+    mean: float = 0.0
+    total: int | float = 0
+    created_at: int | float = 0
+
+
+class WandbLink(BaseModel):
+    label: str
+    url: str
+    run_id: str = ""
+    attempt: int | float | None = None
+
+
+class ConfigSummary(BaseModel):
+    model_name: str = ""
+    dataset_name: str = ""
+    dataset_prompt_data: str = ""
+    gpu_type: str = ""
+    actor_num_nodes: int | float = 0
+    actor_num_gpus_per_node: int | float = 0
+    lr: int | float = 0
+    global_batch_size: int | float = 0
+    wandb_project: str = ""
+    wandb_group: str = ""
+    wandb_entity: str = ""
+    wandb_training_run_id: str = ""
+    wandb_url: str | None = None
+    wandb_links: list[WandbLink] = Field(default_factory=list)
+
+
+class TrainResultSummary(BaseModel):
+    training_run_id: str = ""
+    app_name: str = ""
+    checkpoint_dir: str = ""
+    model_name: str = ""
+    model_path: str = ""
+    wandb_project: str = ""
+    wandb_entity: str = ""
+    wandb_training_run_id: str = ""
+    wandb_url: str | None = None
+    wandb_links: list[WandbLink] = Field(default_factory=list)
+
+
+class ResumeState(BaseModel):
+    attempt_count: int | float = 0
+    resumed_from_checkpoint: bool = False
+    resume_checkpoint_name: str = ""
+    resume_checkpoint_path: str = ""
+    resume_from_iteration: int | float | None = None
+    last_attempt_status: str = ""
+    last_attempt_started_at: int | float = 0
+
+
+class GroupTag(BaseModel):
+    key: str
+    label: str = ""
+    value: Any = None
+
+
+class GroupTags(BaseModel):
+    group_id: str = ""
+    axes: list[str] = Field(default_factory=list)
+    overrides: JsonDict = Field(default_factory=dict)
+    tags: list[GroupTag] = Field(default_factory=list)
+
+
+class RunSummary(BaseModel):
+    """Stable, typed run-list item shared by the dashboard and CLI."""
+
+    training_run_id: str
+    # Transitional alias used by the current dashboard routes.
+    run_id: str
+    status: str = "running"
+    framework: str = ""
+    framework_status: str = ""
+    framework_progress: FrameworkProgress | None = None
+    latest_rollout: LatestRollout | None = None
+    model: str = ""
+    dataset: str = ""
+    recipe: str = ""
+    group_id: str = ""
+    group_tags: GroupTags | None = None
+    modal_app_id: str = ""
+    modal_app_url: str | None = None
+    dataset_id: str = ""
+    deployment_id: str = ""
+    created_at: int | float = 0
+    started_at: int | float = 0
+    updated_at: int | float = 0
+    ended_at: int | float | None = None
+    completed_at: int | float | None = None
+    duration_seconds: int | float | None = None
+    has_train_result: bool = False
+    config_summary: JsonDict | ConfigSummary = Field(default_factory=dict)
+    train_result: TrainResultSummary | None = None
+    wandb_links: list[WandbLink] = Field(default_factory=list)
+    resume_state: ResumeState | None = None
+
+    # Fields consumed by the existing dashboard detail and deployment views.
+    config: JsonDict = Field(default_factory=dict)
+    metadata: JsonDict | None = None
+    error_message: str = ""
+    step_times: dict[str, dict[str, int | None]] | None = None
+    substep_times: dict[str, dict[str, dict[str, float | None]]] | None = None
+
+
+def _unwrap(value: object) -> object:
+    if isinstance(value, dict) and "value" in value:
+        return value["value"]
+    return value
+
+
+def _text(value: object) -> str:
+    value = _unwrap(value)
+    return "" if value is None else str(value)
+
+
+def _mapping(value: object) -> JsonDict:
+    value = _unwrap(value)
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def _number(value: object, default: float = 0.0) -> float:
+    value = _unwrap(value)
+    try:
+        parsed = float(value) if value not in (None, "") else default
+    except (TypeError, ValueError):
+        return default
+    return parsed if math.isfinite(parsed) else default
+
+
+def _optional_number(value: object) -> int | float | None:
+    value = _unwrap(value)
+    if value in (None, ""):
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if not math.isfinite(parsed):
+        return None
+    return int(parsed) if parsed.is_integer() else parsed
+
+
+def _numeric(value: object, default: int | float = 0) -> int | float:
+    parsed = _optional_number(value)
+    return default if parsed is None else parsed
+
+
+def _timestamp(value: object) -> int | float:
+    value = _unwrap(value)
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return value if math.isfinite(value) else 0
+    if not isinstance(value, str) or not value.strip():
+        return 0
+    try:
+        parsed_number = float(value)
+    except ValueError:
+        try:
+            parsed = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return 0
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=dt.UTC)
+        return int(parsed.timestamp())
+    if not math.isfinite(parsed_number):
+        return 0
+    return int(parsed_number) if parsed_number.is_integer() else parsed_number
+
+
+def _modal_app_url(modal_app_id: str) -> str | None:
+    app_id = modal_app_id.strip()
+    if not app_id:
+        return None
+    if app_id.startswith(("http://", "https://")):
+        return app_id
+    return modal_app_dashboard_url(app_id)
+
+
+def _wandb_url(entity: object, project: object, run_id: object) -> str | None:
+    clean_entity = _text(entity).strip()
+    clean_project = _text(project).strip()
+    clean_run_id = _text(run_id).strip()
+    if not clean_entity or not clean_project:
+        return None
+    base = f"https://wandb.ai/{quote(clean_entity, safe='')}/{quote(clean_project, safe='')}"
+    return f"{base}/runs/{quote(clean_run_id, safe='')}" if clean_run_id else base
+
+
+def _wandb_summary(
+    *, entity: object, project: object, group: object = "", run_id: object = ""
+) -> dict[str, Any]:
+    url = _wandb_url(entity, project, run_id)
+    link = (
+        [WandbLink(label="W&B", url=url, run_id=_text(run_id).strip())] if url else []
+    )
+    return {
+        "wandb_project": _text(project),
+        "wandb_group": _text(group),
+        "wandb_entity": _text(entity),
+        "wandb_training_run_id": _text(run_id),
+        "wandb_url": url,
+        "wandb_links": link,
+    }
+
+
+def _config_summary(config: object, training_run_id: str) -> ConfigSummary | JsonDict:
+    if not isinstance(config, dict):
+        return {}
+    model = _mapping(config.get("model"))
+    recipe = _mapping(config.get("recipe")) or _mapping(config.get("preset"))
+    wandb = _mapping(config.get("wandb"))
+    dataset = _mapping(config.get("dataset"))
+    dataset_name = (
+        _text(dataset.get("hf_repo"))
+        or _text(dataset.get("prompt_data"))
+        or _text(dataset.get("name"))
+    )
+    wandb_run_id = _text(wandb.get("run_id")) or training_run_id[:8]
+    return ConfigSummary(
+        model_name=_text(model.get("model_name")),
+        dataset_name=dataset_name,
+        dataset_prompt_data=_text(dataset.get("prompt_data")),
+        gpu_type=_text(recipe.get("gpu_type")),
+        actor_num_nodes=_numeric(recipe.get("actor_num_nodes")),
+        actor_num_gpus_per_node=_numeric(recipe.get("actor_num_gpus_per_node")),
+        lr=_numeric(config.get("lr")),
+        global_batch_size=_numeric(config.get("global_batch_size")),
+        **_wandb_summary(
+            entity=wandb.get("entity"),
+            project=wandb.get("project"),
+            group=wandb.get("group"),
+            run_id=wandb_run_id if wandb.get("project") and wandb.get("entity") else "",
+        ),
+    )
+
+
+def _train_result_summary(result: JsonDict) -> TrainResultSummary:
+    model = _mapping(result.get("model_config"))
+    return TrainResultSummary(
+        training_run_id=_text(result.get("training_run_id")),
+        app_name=_text(result.get("app_name")),
+        checkpoint_dir=_text(result.get("checkpoint_dir")),
+        model_name=_text(model.get("model_name")),
+        model_path=_text(model.get("model_path")),
+        **_wandb_summary(
+            entity=result.get("wandb_entity"),
+            project=result.get("wandb_project"),
+            run_id=result.get("wandb_training_run_id"),
+        ),
+    )
+
+
+def _framework_progress(metadata: JsonDict) -> FrameworkProgress | None:
+    progress = _mapping(metadata.get("framework_progress"))
+    if not progress:
+        return None
+    is_active = progress.get("is_active")
+    return FrameworkProgress(
+        current=_optional_number(progress.get("current")),
+        total=(
+            total
+            if (total := _optional_number(progress.get("total"))) is not None
+            and total > 0
+            else None
+        ),
+        unit=_text(progress.get("unit")) or "step",
+        phase=_text(progress.get("phase")),
+        is_active=is_active if isinstance(is_active, bool) else None,
+        rollout_id=_optional_number(progress.get("rollout_id")),
+        step_id=_optional_number(progress.get("step_id")),
+        updated_at=_timestamp(progress.get("updated_at")),
+    )
+
+
+def _latest_rollout(metadata: JsonDict) -> LatestRollout | None:
+    rollout = _mapping(metadata.get("latest_rollout"))
+    if not rollout:
+        return None
+    return LatestRollout(
+        rollout_id=_numeric(rollout.get("rollout_id")),
+        mean=_number(rollout.get("mean")),
+        total=_numeric(rollout.get("total")),
+        created_at=_timestamp(rollout.get("created_at")),
+    )
+
+
+def _resume_state(metadata: JsonDict) -> ResumeState | None:
+    attempt_count = _numeric(metadata.get("attempt_count"))
+    checkpoint_path = _text(metadata.get("resume_checkpoint_path"))
+    resumed = metadata.get("resumed_from_checkpoint") is True or bool(checkpoint_path)
+    if attempt_count <= 1 and not resumed:
+        return None
+    return ResumeState(
+        attempt_count=attempt_count,
+        resumed_from_checkpoint=resumed,
+        resume_checkpoint_name=_text(metadata.get("resume_checkpoint_name")),
+        resume_checkpoint_path=checkpoint_path,
+        resume_from_iteration=_optional_number(metadata.get("resume_from_iteration")),
+        last_attempt_status=_text(metadata.get("last_attempt_status")),
+        last_attempt_started_at=_timestamp(metadata.get("last_attempt_started_at")),
+    )
+
+
+def _group_tags(metadata: JsonDict, group_id: str) -> GroupTags | None:
+    raw = _mapping(metadata.get("group_tags"))
+    if not raw and not group_id:
+        return None
+    overrides = _mapping(raw.get("overrides"))
+    axes_value = raw.get("axes")
+    axes = (
+        [_text(item) for item in axes_value]
+        if isinstance(axes_value, list)
+        else list(overrides)
+    )
+    raw_tags = raw.get("tags")
+    tags: list[GroupTag] = []
+    if isinstance(raw_tags, list):
+        for item in raw_tags:
+            tag = _mapping(item)
+            key = _text(tag.get("key"))
+            if key:
+                tags.append(
+                    GroupTag(
+                        key=key,
+                        label=_text(tag.get("label"))
+                        or key.rsplit(".", 1)[-1].replace("_", " "),
+                        value=tag.get("value"),
+                    )
+                )
+    if not tags:
+        tags = [
+            GroupTag(
+                key=key,
+                label=key.rsplit(".", 1)[-1].replace("_", " "),
+                value=value,
+            )
+            for key, value in overrides.items()
+        ]
+    return GroupTags(
+        group_id=_text(raw.get("group_id")) or group_id,
+        axes=axes,
+        overrides=overrides,
+        tags=tags,
+    )
+
+
+def _wandb_attempt_links(metadata: JsonDict) -> list[WandbLink]:
+    attempts = metadata.get("wandb_attempts")
+    if not isinstance(attempts, list):
+        return []
+    links: list[WandbLink] = []
+    for raw_attempt in attempts:
+        attempt = _mapping(raw_attempt)
+        attempt_number = _numeric(attempt.get("attempt"))
+        run_id = _text(attempt.get("run_id"))
+        url = _wandb_url(
+            attempt.get("entity"), attempt.get("project"), attempt.get("run_id")
+        )
+        if url:
+            links.append(
+                WandbLink(
+                    label=f"W&B a{attempt_number}" if attempt_number > 1 else "W&B",
+                    url=url,
+                    run_id=run_id,
+                    attempt=attempt_number or None,
+                )
+            )
+    return links
+
+
+def _dedupe_links(*groups: list[WandbLink]) -> list[WandbLink]:
+    seen: set[str] = set()
+    links: list[WandbLink] = []
+    for group in groups:
+        for link in group:
+            if link.url and link.url not in seen:
+                seen.add(link.url)
+                links.append(link)
+    return links
+
+
+def build_run_summary(
+    run: JsonDict, result: JsonDict | None = None, *, fallback_index: int = 0
+) -> RunSummary:
+    """Build one public summary from persisted, potentially historical records."""
+    raw_id = _text(run.get("run_id") or run.get("training_run_id"))
+    modal_app_id = _text(run.get("modal_app_id"))
+    created_at = _timestamp(run.get("created_at") or run.get("started_at"))
+    training_run_id = (
+        raw_id
+        or f"unknown-run-{modal_app_id or 'no-app'}-{created_at}-{fallback_index}"
+    )
+    metadata = _mapping(run.get("metadata"))
+    raw_config = run.get("config")
+    config = _mapping(raw_config)
+    config_summary = _config_summary(raw_config, training_run_id)
+    result_summary = _train_result_summary(result) if result else None
+    group_id = (
+        _text(run.get("group_id"))
+        or _text(metadata.get("group_id"))
+        or _text(_mapping(metadata.get("group_tags")).get("group_id"))
+    )
+    started_at = _timestamp(run.get("started_at")) or created_at
+    ended_at = _timestamp(run.get("ended_at")) or None
+    status = _text(run.get("status")) or "running"
+    completed_at = _timestamp(run.get("completed_at")) or (
+        ended_at if status == "completed" else None
+    )
+    updated_at = (
+        _timestamp(run.get("updated_at"))
+        or completed_at
+        or ended_at
+        or started_at
+        or created_at
+    )
+    raw_duration = _unwrap(run.get("duration_seconds"))
+    duration = (
+        raw_duration
+        if isinstance(raw_duration, (int, float))
+        and not isinstance(raw_duration, bool)
+        and math.isfinite(raw_duration)
+        and raw_duration >= 0
+        else None
+    )
+    if duration is None and started_at and ended_at:
+        duration = max(0, ended_at - started_at)
+    modal_app_url = _modal_app_url(modal_app_id)
+    config_links = (
+        config_summary.wandb_links if isinstance(config_summary, ConfigSummary) else []
+    )
+    links = _dedupe_links(
+        _wandb_attempt_links(metadata),
+        result_summary.wandb_links if result_summary else [],
+        config_links,
+    )
+    config_model = (
+        config_summary.model_name if isinstance(config_summary, ConfigSummary) else ""
+    )
+    config_dataset = (
+        config_summary.dataset_name if isinstance(config_summary, ConfigSummary) else ""
+    )
+    model = (result_summary.model_name if result_summary else "") or config_model
+    framework = _text(run.get("framework")) or "(untagged)"
+    return RunSummary(
+        training_run_id=training_run_id,
+        run_id=training_run_id,
+        status=status,
+        framework=framework,
+        framework_status=_text(run.get("framework_status")),
+        framework_progress=_framework_progress(metadata),
+        latest_rollout=_latest_rollout(metadata),
+        model=model,
+        dataset=config_dataset,
+        recipe=framework,
+        group_id=group_id,
+        group_tags=_group_tags(metadata, group_id),
+        modal_app_id=modal_app_id,
+        modal_app_url=modal_app_url,
+        dataset_id=_text(run.get("dataset_id")),
+        deployment_id=_text(run.get("deployment_id")),
+        created_at=created_at,
+        started_at=started_at,
+        updated_at=updated_at,
+        ended_at=ended_at,
+        completed_at=completed_at,
+        duration_seconds=duration,
+        has_train_result=result_summary is not None,
+        config_summary=config_summary,
+        train_result=result_summary,
+        wandb_links=links,
+        resume_state=_resume_state(metadata),
+        config=config,
+        metadata=metadata or None,
+        error_message=_text(run.get("error_message")),
+        step_times=run.get("step_times")
+        if isinstance(run.get("step_times"), dict)
+        else None,
+        substep_times=run.get("substep_times")
+        if isinstance(run.get("substep_times"), dict)
+        else None,
+    )
+
+
+def build_run_summaries(
+    runs: list[JsonDict], train_results: list[JsonDict] | None = None
+) -> list[RunSummary]:
+    """Join, normalize, de-duplicate, and sort persisted run-list records."""
+    results_by_id = {
+        _text(result.get("training_run_id")): result
+        for result in train_results or []
+        if _text(result.get("training_run_id"))
+    }
+    deduped: dict[str, RunSummary] = {}
+    for index, run in enumerate(runs):
+        run_id = _text(run.get("run_id") or run.get("training_run_id"))
+        summary = build_run_summary(
+            run, results_by_id.get(run_id), fallback_index=index
+        )
+        existing = deduped.get(summary.training_run_id)
+        if existing is None or (summary.created_at, summary.started_at) >= (
+            existing.created_at,
+            existing.started_at,
+        ):
+            deduped[summary.training_run_id] = summary
+    return sorted(
+        deduped.values(),
+        key=lambda item: (item.created_at, item.training_run_id),
+        reverse=True,
+    )
