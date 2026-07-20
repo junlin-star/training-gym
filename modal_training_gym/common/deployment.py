@@ -497,8 +497,11 @@ class ModelDeployment(BaseModel):
         ensure_ready: bool = True,
         **kwargs,
     ) -> str:
+        messages = kwargs.pop("messages", None)
+        if messages is None:
+            messages = [{"role": "user", "content": prompt}]
         message = self.chat(
-            [{"role": "user", "content": prompt}],
+            messages,
             ensure_ready=ensure_ready,
             **kwargs,
         )
