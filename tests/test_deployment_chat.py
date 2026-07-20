@@ -61,3 +61,38 @@ def test_chat_serializes_tool_arguments_without_mutating_messages(monkeypatch) -
         '{"key": "value"}'
     )
     assert messages[0]["tool_calls"][0]["function"]["arguments"] == {"key": "value"}
+
+
+def test_generate_accepts_caller_supplied_messages(monkeypatch) -> None:
+    deployment = ModelDeployment.model_construct(
+        deployment_id="test",
+        deployment_config=SimpleNamespace(served_model_name="test-model"),
+        url="https://example.test",
+    )
+    supplied_messages = [
+        {"role": "system", "content": "Write Python."},
+        {"role": "user", "content": "Return hello world."},
+    ]
+    captured = {}
+
+    def chat(self, messages, ensure_ready=True, **kwargs):
+        captured["messages"] = messages
+        captured["ensure_ready"] = ensure_ready
+        captured["kwargs"] = kwargs
+        return {"content": "print('hello world')"}
+
+    monkeypatch.setattr(ModelDeployment, "chat", chat)
+
+    response = deployment.generate(
+        "unused fallback",
+        ensure_ready=False,
+        messages=supplied_messages,
+        temperature=0,
+    )
+
+    assert response == "print('hello world')"
+    assert captured == {
+        "messages": supplied_messages,
+        "ensure_ready": False,
+        "kwargs": {"temperature": 0},
+    }
