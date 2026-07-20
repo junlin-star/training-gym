@@ -1352,27 +1352,29 @@ def _example_results():
     """
     ## Example results
 
-    Metric                          Base    Trained      Delta
-    ---------------------------------------------------------
-    Eval rows                         30         30
-    Shaped reward                  0.707      0.789     +0.082
-    Terminal pass rate             53.3%      63.3%     +10.0%
-    Parsed tool call               90.0%      96.7%      +6.7%
-    First-call tool match          86.7%      93.3%      +6.6%
+    | Metric | Base | Trained | Delta |
+    | --- | ---: | ---: | ---: |
+    | Eval rows | 30 | 30 | — |
+    | Shaped reward | 0.707 | **0.789** | **+0.082** |
+    | Terminal pass rate | 53.3% | **63.3%** | **+10.0 pp** |
+    | Parsed tool call | 90.0% | **96.7%** | **+6.7 pp** |
+    | First-call tool match | 86.7% | **93.3%** | **+6.6 pp** |
 
     After only 5 rollouts, shaped reward rose from 0.707 → 0.789 and terminal pass
     rate from 53.3% → 63.3%, with parsed tool calls and first-call match also up. Still well below the teacher's
     83.3% pass rate. More rollouts would likely see further improvement.
 
-    For reference, the teacher outperforms the base student on terminal pass rate by 30%:
+    ### Teacher reference
 
-    Metric                       Teacher
-    -------------------------------------
-    Eval rows                         30
-    Shaped reward                  0.751
-    Terminal pass rate             83.3%
-    Parsed tool call              100.0%
-    First-call tool match          93.3%
+    | Metric | Teacher |
+    | --- | ---: |
+    | Eval rows | 30 |
+    | Shaped reward | 0.751 |
+    | Terminal pass rate | **83.3%** |
+    | Parsed tool call | 100.0% |
+    | First-call tool match | 93.3% |
+
+    The teacher's terminal pass rate is 30 percentage points above the base student.
     """
 
 
