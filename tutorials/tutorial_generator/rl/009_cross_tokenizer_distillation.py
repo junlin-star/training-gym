@@ -89,6 +89,7 @@ def _imports():
         BfclMultiTurnDataset,
         build_bfcl_env as build_env,
         build_bfcl_prefix_messages as build_prefix_messages,
+        bfcl_prefix_turn_index,
         bfcl_tool_schemas_to_openai as tool_schemas_to_openai,
         run_bfcl_episode,
         to_json_schema,
@@ -819,6 +820,18 @@ def _generate():
         after_assistant = probe.split("\x01A\x01", 1)[1]
         obs_open, _rest = after_assistant.split("\x00OBS\x00", 1)
         obs_close = _rest[: len(_rest) - len(gen_suffix)]
+        user_probe = state.tokenizer.apply_chat_template(
+            prefix_msgs
+            + [
+                {"role": "assistant", "content": "\x01A\x01"},
+                {"role": "user", "content": "\x00USER\x00"},
+            ],
+            tools=tools_list, tokenize=False,
+            add_generation_prompt=True, enable_thinking=STUDENT_ENABLE_THINKING,
+        )
+        after_assistant = user_probe.split("\x01A\x01", 1)[1]
+        user_open, _rest = after_assistant.split("\x00USER\x00", 1)
+        user_close = _rest[: len(_rest) - len(gen_suffix)]
         stop_tok = obs_open.split("\n", 1)[0]
         verbose = ROLLOUT_LOG_EVERY > 0 and (getattr(sample, "index", 0) % ROLLOUT_LOG_EVERY == 0)
 
@@ -854,6 +867,7 @@ def _generate():
         student_calls: list = []
         exec_successes: list = []
         finish_type = "stop"
+        current_turn = bfcl_prefix_turn_index(label, K)
         for turn in range(max_turns):
             output = await post(url, {
                 "text": prompt_text + trajectory_text,
@@ -869,15 +883,32 @@ def _generate():
 
             actions = base_model.parse_response(model_text).tool_calls
             action = actions[0] if actions else None
-            student_calls.append(
-                {"name": action.name, "arguments": action.arguments} if action else None
-            )
 
             if action is None:
+                next_turn = current_turn + 1
+                turns = label.get("turns", [])
+                if finish_type != "length" and next_turn < len(turns):
+                    seg_open = (
+                        user_open[len(stop_tok):]
+                        if model_text.endswith(stop_tok)
+                        else user_open
+                    )
+                    user_segment = (
+                        seg_open + turns[next_turn]["user"] + user_close + gen_suffix
+                    )
+                    trajectory_text += user_segment
+                    response_segments.append((user_segment, 0))
+                    current_turn = next_turn
+                    if verbose:
+                        _log(f"turn {turn} advancing to user turn {current_turn}")
+                    continue
                 if verbose:
                     _log(f"turn {turn} no further tool calls")
                 break
 
+            student_calls.append(
+                {"name": action.name, "arguments": action.arguments}
+            )
             try:
                 result = await asyncio.to_thread(env.step, action)
                 obs_text, is_error = result.observation.text, result.observation.is_error
