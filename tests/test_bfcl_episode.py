@@ -77,6 +77,56 @@ def test_run_bfcl_episode_executes_calls_and_appends_observations(monkeypatch) -
     }
 
 
+def test_run_bfcl_episode_advances_to_later_user_turns(monkeypatch) -> None:
+    environment = _FakeEnvironment()
+    label = {
+        "turns": [
+            {"user": "first request", "calls": [{"name": "first"}]},
+            {"user": "second request", "calls": [{"name": "second"}]},
+        ]
+    }
+    monkeypatch.setattr(bfcl, "build_env", lambda label, start_step: environment)
+    monkeypatch.setattr(
+        bfcl,
+        "build_prefix_messages",
+        lambda label, start_step: [{"role": "user", "content": "first request"}],
+    )
+    monkeypatch.setattr(bfcl, "tool_schemas_to_openai", lambda schemas: [])
+
+    responses = iter(
+        [
+            {"content": "", "actions": [ToolCall(name="first", arguments={})]},
+            {"content": "first complete", "actions": []},
+            {"content": "", "actions": [ToolCall(name="second", arguments={})]},
+            {"content": "all complete", "actions": []},
+        ]
+    )
+    generated_messages: list[list[dict]] = []
+
+    def generate(messages: list[dict], tools: list[dict]) -> dict:
+        generated_messages.append(list(messages))
+        return next(responses)
+
+    result = bfcl.run_bfcl_episode(
+        label,
+        start_step=0,
+        generate=generate,
+        parse_response=lambda message: (
+            message["content"],
+            message["actions"],
+        ),
+        max_turns=4,
+    )
+
+    assert [action.name for action in environment.actions] == ["first", "second"]
+    assert generated_messages[2][-2:] == [
+        {"role": "assistant", "content": "first complete"},
+        {"role": "user", "content": "second request"},
+    ]
+    assert result.final_response == "all complete"
+    assert result.exit_reason == "no_further_calls"
+
+
 def test_bfcl_prompt_defers_to_model_tool_format() -> None:
     assert "<emoji>" not in bfcl.DEFAULT_SYSTEM_PROMPT
     assert "provided tool-calling interface" in bfcl.DEFAULT_SYSTEM_PROMPT

@@ -23,6 +23,7 @@ from modal_training_gym.common.environments.bfcl import (
     build_env as build_bfcl_env,
     build_prefix_messages as build_bfcl_prefix_messages,
     default_system_prompt as bfcl_default_system_prompt,
+    prefix_turn_index as bfcl_prefix_turn_index,
     prune_prefix as prune_bfcl_prefix,
     run_bfcl_episode,
     to_json_schema,
@@ -84,6 +85,7 @@ __all__ = [
     # bfcl — data + prompts
     "BfclMultiTurnDataset",
     "build_bfcl_prefix_messages",
+    "bfcl_prefix_turn_index",
     "prune_bfcl_prefix",
     "bfcl_default_system_prompt",
     "bfcl_tool_schemas_to_openai",

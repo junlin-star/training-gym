@@ -321,6 +321,19 @@ def build_prefix_messages(label: dict, K: int) -> list[dict]:
     return messages
 
 
+def prefix_turn_index(label: dict, K: int) -> int:
+    """Index of the latest user turn included in the step-``K`` prefix."""
+    latest_turn = -1
+    shown = 0
+    for turn_index, turn in enumerate(label.get("turns", [])):
+        latest_turn = turn_index
+        for _call in turn.get("calls", []):
+            if shown >= K:
+                return turn_index
+            shown += 1
+    return latest_turn
+
+
 def prune_prefix(messages: list[dict], max_messages: int) -> list[dict]:
     """Keep system + first user message and fill the rest with the most recent messages."""
     if max_messages <= 0:
@@ -436,6 +449,7 @@ def run_bfcl_episode(
     final_response = ""
     exit_reason = "max_turns"
     consecutive_errors = 0
+    current_turn = prefix_turn_index(label, start_step)
 
     for turn in range(max_turns):
         started_at = time.monotonic()
@@ -448,6 +462,19 @@ def run_bfcl_episode(
             f"calls={[action.name for action in actions]}"
         )
         if not actions:
+            next_turn = current_turn + 1
+            turns = label.get("turns", [])
+            if next_turn < len(turns):
+                messages.extend(
+                    [
+                        {"role": "assistant", "content": content},
+                        {"role": "user", "content": turns[next_turn]["user"]},
+                    ]
+                )
+                current_turn = next_turn
+                consecutive_errors = 0
+                emit(f"  advancing to user turn {current_turn}")
+                continue
             exit_reason = "no_further_calls"
             break
 
