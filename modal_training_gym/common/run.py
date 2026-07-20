@@ -228,13 +228,12 @@ class TrainingRun(BaseModel):
 
         current_step = progress.get("current")
         record_step_time_event(
-            cast(MutableMapping[Any, Any], _step_times_dict()),
+            cast(MutableMapping[str, float], _step_times_dict()),
             self.training_run_id,
             current_step,
             status.value,
             update.step_event.strip(),
-            update.event_ts if update.event_ts is not None else time.time(),
-            update.step_id,
+            update.event_ts or time.time(),
         )
         return status
 

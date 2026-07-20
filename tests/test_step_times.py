@@ -1,7 +1,7 @@
 from modal_training_gym.common.status import SlimeStatus
 from modal_training_gym.common.step_timing import (
     record_step_time_event,
-    record_step_time_events,
+    reconcile_async_step_time_events,
 )
 from modal_training_gym.frameworks.slime.launcher import aggregate_step_times
 
@@ -37,9 +37,9 @@ RUN_ID = "run-hooks"
 STEP = 1
 
 
-def test_record_step_time_event_batch_uses_structured_events():
+def test_reconcile_async_step_time_events_returns_update_boundaries():
     recorded = {}
-    record_step_time_events(
+    boundaries = reconcile_async_step_time_events(
         recorded,
         RUN_ID,
         [
@@ -62,15 +62,14 @@ def test_record_step_time_event_batch_uses_structured_events():
         ],
     )
 
-    assert recorded[
-        (RUN_ID, "substep_boundary", 1, SlimeStatus.TRAIN_MODEL.value, 2, "start")
-    ] == 10.25
-    assert recorded[
-        (RUN_ID, "substep_boundary", 1, SlimeStatus.TRAIN_MODEL.value, 2, "finish")
-    ] == 12.75
+    assert boundaries[(1, SlimeStatus.TRAIN_MODEL.value)][2] == {
+        "start": 10.25,
+        "finish": 12.75,
+    }
+    assert recorded[f"{RUN_ID}:1:substep:{SlimeStatus.TRAIN_MODEL.value}"] == 10.25
 
 
-def test_record_step_time_events_prefers_latest_attempt_per_phase():
+def test_reconcile_async_step_time_events_prefers_latest_attempt_per_phase():
     recorded = {}
     events = []
     for attempt, start, finish in ((1, 10.0, 11.0), (2, 20.0, 23.0)):
@@ -87,14 +86,12 @@ def test_record_step_time_events_prefers_latest_attempt_per_phase():
                 }
             )
 
-    record_step_time_events(recorded, RUN_ID, reversed(events))
+    boundaries = reconcile_async_step_time_events(recorded, RUN_ID, reversed(events))
 
-    assert recorded[
-        (RUN_ID, "substep_boundary", 1, SlimeStatus.TRAIN_MODEL.value, 0, "start")
-    ] == 20.0
-    assert recorded[
-        (RUN_ID, "substep_boundary", 1, SlimeStatus.TRAIN_MODEL.value, 0, "finish")
-    ] == 23.0
+    assert boundaries[(1, SlimeStatus.TRAIN_MODEL.value)][0] == {
+        "start": 20.0,
+        "finish": 23.0,
+    }
 
 
 EVENT_REPORTS = {
@@ -501,8 +498,9 @@ def test_substep_times_adverse_timings():
     }
 
 
-def test_async_substeps_keep_exact_overlapping_durations():
-    step_times_dict = {}
+def test_async_substeps_keep_explicit_overlapping_durations():
+    step_times_dict: dict[str, float] = {}
+    timing_events = []
 
     def record(
         step: int,
@@ -512,6 +510,18 @@ def test_async_substeps_keep_exact_overlapping_durations():
         *,
         step_id: int | None = None,
     ) -> None:
+        if step_id is not None:
+            timing_events.append(
+                {
+                    "training_run_id": RUN_ID,
+                    "progress_current": step,
+                    "phase": phase,
+                    "step_event": event,
+                    "event_ts": timestamp,
+                    "step_id": step_id,
+                }
+            )
+            return
         record_step_time_event(
             step_times_dict,
             RUN_ID,
@@ -519,7 +529,6 @@ def test_async_substeps_keep_exact_overlapping_durations():
             phase,
             event,
             timestamp,
-            step_id,
         )
 
     record(1, 6.0, ROLLOUT_LOGGING, "phase_start")
@@ -558,19 +567,28 @@ def test_async_substeps_keep_exact_overlapping_durations():
     record(2, 25.0, SlimeStatus.TRAINING.value, "substep_finish")
     record(2, 25.0, SlimeStatus.TRAINING.value, "finish")
 
-    step_times_dict[(RUN_ID, "substep_boundary", 1, OPTIMIZER_STEP, 8, "start")] = 30.0
-    step_times_dict[(RUN_ID, "substep_boundary", 1, OPTIMIZER_STEP, 9, "start")] = 31.0
-    step_times_dict[(RUN_ID, "substep_boundary", 1, OPTIMIZER_STEP, 9, "finish")] = 30.0
-    step_times_dict[(RUN_ID, "substep_boundary", 1, OPTIMIZER_STEP, 10, "start")] = (
-        float("nan")
+    for training_run_id, step_id, event, timestamp in (
+        (RUN_ID, 8, "phase_start", 30.0),
+        (RUN_ID, 9, "phase_start", 31.0),
+        (RUN_ID, 9, "phase_finish", 30.0),
+        (RUN_ID, 10, "phase_start", float("nan")),
+        ("another-run", 0, "phase_start", 1.0),
+        ("another-run", 0, "phase_finish", 100.0),
+    ):
+        timing_events.append(
+            {
+                "training_run_id": training_run_id,
+                "progress_current": 1,
+                "phase": OPTIMIZER_STEP,
+                "step_event": event,
+                "event_ts": timestamp,
+                "step_id": step_id,
+            }
+        )
+
+    interval_boundaries = reconcile_async_step_time_events(
+        step_times_dict, RUN_ID, timing_events
     )
-    step_times_dict[
-        ("another-run", "substep_boundary", 1, OPTIMIZER_STEP, 0, "start")
-    ] = 1.0
-    step_times_dict[
-        ("another-run", "substep_boundary", 1, OPTIMIZER_STEP, 0, "finish")
-    ] = 100.0
-    step_times_dict[f"{RUN_ID}:1:substep:{SlimeStatus.TRAIN_MODEL.value}"] = 13.5
 
     async_order = [
         ROLLOUT_LOGGING,
@@ -587,6 +605,7 @@ def test_async_substeps_keep_exact_overlapping_durations():
         2,
         async_order,
         {CHECKPOINT_SAVE, WEIGHT_SYNC, EVAL_AFTER},
+        interval_boundaries=interval_boundaries,
         include_intervals=True,
     )
 

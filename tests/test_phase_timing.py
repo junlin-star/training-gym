@@ -120,7 +120,7 @@ def test_sync_step_boundaries_keep_direct_delivery(monkeypatch):
 
 def test_async_step_boundaries_are_persisted(monkeypatch):
     reports = []
-    monkeypatch.setattr(phase_reporting, "_record_timing_event", reports.append)
+    monkeypatch.setattr(phase_reporting, "_persist_async_timing_event", reports.append)
 
     phase_reporting.report_step_event(
         SlimeStatus.TRAIN_MODEL,
@@ -136,14 +136,31 @@ def test_async_step_boundaries_are_persisted(monkeypatch):
     assert reports[0]["event_ts"] == 123.0
 
 
+def test_training_attempt_is_only_added_to_async_timing_events(monkeypatch):
+    reports = []
+    monkeypatch.setenv("TRAINING_GYM_TRAINING_ATTEMPT", "2")
+    monkeypatch.setattr(phase_reporting, "_persist_async_timing_event", reports.append)
+
+    phase_reporting.report_step_event(
+        SlimeStatus.TRAINING,
+        SimpleNamespace(num_rollout=1, async_mode=True),
+        rollout_id=0,
+        step_event="phase_start",
+        event_ts=123.0,
+    )
+
+    assert reports[0]["training_attempt"] == "2"
+    assert "training_attempt" not in reporting._run_context(SimpleNamespace())
+
+
 def test_timing_events_use_unique_dict_keys(monkeypatch):
     store = {}
     monkeypatch.setattr(reporting, "_step_times_dict", lambda: store)
 
     first = {"training_run_id": "run-1", "event_ts": 1.0}
     second = {"training_run_id": "run-1", "event_ts": 2.0}
-    reporting._record_timing_event(first)
-    reporting._record_timing_event(second)
+    reporting._persist_async_timing_event(first)
+    reporting._persist_async_timing_event(second)
 
     assert len(store) == 2
     assert {value["event_ts"] for value in store.values()} == {1.0, 2.0}
@@ -165,7 +182,7 @@ def test_timing_event_retry_reuses_the_same_key(monkeypatch):
     monkeypatch.setattr(reporting, "_step_times_dict", lambda: store)
     monkeypatch.setattr(reporting, "_TIMING_RETRY_DELAY_SECONDS", 0)
 
-    reporting._record_timing_event({"training_run_id": "run-1"})
+    reporting._persist_async_timing_event({"training_run_id": "run-1"})
 
     assert len(store.keys) == 3
     assert len(set(store.keys)) == 1
@@ -180,7 +197,7 @@ def test_timing_event_failure_is_not_silent(monkeypatch):
     monkeypatch.setattr(reporting, "_TIMING_DELIVERY_ATTEMPTS", 1)
 
     with pytest.raises(RuntimeError, match="persist async timing event"):
-        reporting._record_timing_event({"training_run_id": "run-1"})
+        reporting._persist_async_timing_event({"training_run_id": "run-1"})
 
 
 def test_optimizer_timing_wrapper_is_reused_across_updates(monkeypatch):

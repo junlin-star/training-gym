@@ -24,7 +24,7 @@ import tempfile
 import time
 from pathlib import Path, PurePosixPath
 from typing import Any
-from collections.abc import Callable, Collection, Mapping, Sequence
+from collections.abc import Callable, Hashable, Mapping
 from enum import Enum
 from modal import App, Dict as ModalDict, Image, Secret, Volume, Retries
 
@@ -65,7 +65,11 @@ from modal_training_gym.common.launcher_helpers import (
 )
 from modal_training_gym.common.wandb import WandbConfig
 from modal_training_gym.common.status import SlimeStatus
-from modal_training_gym.common.step_timing import Substep, record_step_time_events
+from modal_training_gym.common.step_timing import (
+    Substep,
+    SubstepTimingBoundaries,
+    reconcile_async_step_time_events,
+)
 
 from modal_training_gym.train_recipes.slime_recipe.recipe import (
     CHECKPOINTS_PATH,
@@ -92,17 +96,15 @@ SLIME_IMAGE = "slimerl/slime@sha256:269b44b17e3f7136447db4cdaa3bf36ef9e3169f1596
 # actual CPU-/RAM-second usage instead of over-provisioning a static reservation.
 HARBOR_PKG_VERSION = "0.8.0"
 
-_SYNC_SUBSTEP_ORDER = tuple(substep.value for substep in Substep)
-_SYNC_OPTIONAL_SUBSTEPS = frozenset(
-    {
-        Substep.EVAL_BEFORE.value,
-        Substep.OFFLOAD_ROLLOUT.value,
-        Substep.CHECKPOINT_SAVE.value,
-        Substep.OFFLOAD_TRAIN.value,
-        Substep.EVAL_AFTER.value,
-    }
-)
-_ASYNC_SUBSTEP_ORDER = (
+_SYNC_SUBSTEP_ORDER = [substep.value for substep in Substep]
+_SYNC_OPTIONAL_SUBSTEPS = {
+    Substep.EVAL_BEFORE.value,
+    Substep.OFFLOAD_ROLLOUT.value,
+    Substep.CHECKPOINT_SAVE.value,
+    Substep.OFFLOAD_TRAIN.value,
+    Substep.EVAL_AFTER.value,
+}
+_ASYNC_SUBSTEP_ORDER = [
     Substep.GENERATE_ROLLOUTS.value,
     SlimeStatus.TRAINING.value,
     SlimeStatus.TRAIN_MODEL.value,
@@ -110,14 +112,12 @@ _ASYNC_SUBSTEP_ORDER = (
     Substep.CHECKPOINT_SAVE.value,
     Substep.WEIGHT_SYNC.value,
     Substep.EVAL_AFTER.value,
-)
-_ASYNC_OPTIONAL_SUBSTEPS = frozenset(
-    {
-        Substep.CHECKPOINT_SAVE.value,
-        Substep.WEIGHT_SYNC.value,
-        Substep.EVAL_AFTER.value,
-    }
-)
+]
+_ASYNC_OPTIONAL_SUBSTEPS = {
+    Substep.CHECKPOINT_SAVE.value,
+    Substep.WEIGHT_SYNC.value,
+    Substep.EVAL_AFTER.value,
+}
 _SLIME_PATCHES = Path(__file__).parent / "modal_helpers" / "patches"
 _PATCH_VALIDATION_B64 = encode_patch("patch_validation", _SLIME_PATCHES)
 _PATCH_MEGATRON_BRIDGE_B64 = encode_patch("patch_megatron_bridge", _SLIME_PATCHES)
@@ -300,21 +300,26 @@ def _preflight_wandb(wandb_cfg: WandbConfig) -> str:
 
 
 def aggregate_step_times(
-    step_times_dict: Mapping[Any, Any],
+    step_times_dict: Mapping[str, float | None],
     run_id: str,
     num_steps: int,
-    SUBSTEP_ORDER: Sequence[str],
-    OPTIONAL_SUBSTEPS: Collection[str],
+    SUBSTEP_ORDER: list[str],
+    OPTIONAL_SUBSTEPS: set[str],
     *,
+    interval_boundaries: Mapping[tuple[int, str], Mapping[int, Mapping[str, float]]]
+    | None = None,
     include_intervals: bool = False,
-) -> tuple[
-    dict[str, dict[str, int | None]],
-    dict[str, dict[str, dict[str, float | None]]],
-] | tuple[
-    dict[str, dict[str, int | None]],
-    dict[str, dict[str, dict[str, float | None]]],
-    dict[str, dict[str, list[dict[str, int | float]]]],
-]:
+) -> (
+    tuple[
+        dict[str, dict[str, int | None]],
+        dict[str, dict[str, dict[str, float | None]]],
+    ]
+    | tuple[
+        dict[str, dict[str, int | None]],
+        dict[str, dict[str, dict[str, float | None]]],
+        dict[str, dict[str, list[dict[str, int | float]]]],
+    ]
+):
     """Organize step and substep timings from the Modal dict at the end of a run.
 
     Records each step's start/end/duration; missing timestamps become None.
@@ -327,30 +332,7 @@ def aggregate_step_times(
     step_times: dict[str, dict[str, int | None]] = {}
     substep_times: dict[str, dict[str, dict[str, float | None]]] = {}
     substep_timing_intervals: dict[str, dict[str, list[dict[str, int | float]]]] = {}
-    interval_boundaries: dict[tuple[int, str], dict[int, dict[str, float]]] = {}
-    for key, value in step_times_dict.items():
-        match key:
-            case (
-                key_run_id,
-                "substep_boundary",
-                step,
-                phase,
-                update,
-                ("start" | "finish") as boundary,
-            ) if key_run_id == run_id and value is not None:
-                pass
-            case _:
-                continue
-        try:
-            step = int(step)
-            update = int(update)
-            timestamp = float(value)
-        except (TypeError, ValueError):
-            continue
-        if step <= 0 or update < 0 or not math.isfinite(timestamp):
-            continue
-        updates = interval_boundaries.setdefault((step, str(phase)), {})
-        updates.setdefault(update, {})[str(boundary)] = timestamp
+    interval_boundaries = interval_boundaries or {}
 
     for current_step_num in range(1, num_steps + 1):
         start_key = f"{run_id}:{current_step_num}:start"
@@ -436,22 +418,17 @@ def aggregate_step_times(
                 substep_finish = float(substep_finish)
                 if substep_finish < substep_start:
                     substep_finish = None
-            exact = substep_finish is not None
-            if (
-                step_window_start is not None
-                and substep_start < step_window_start
-                and substep != eval_before
-                and not exact
-            ):
-                continue
-            if (
-                full_step_start_time is not None
-                and substep != eval_before
-                and not exact
-            ):
-                substep_start = max(substep_start, full_step_start_time)
-            if full_step_end_time is not None and not exact:
-                substep_start = min(substep_start, full_step_end_time)
+            if substep_finish is None:
+                if (
+                    step_window_start is not None
+                    and substep_start < step_window_start
+                    and substep != eval_before
+                ):
+                    continue
+                if full_step_start_time is not None and substep != eval_before:
+                    substep_start = max(substep_start, full_step_start_time)
+                if full_step_end_time is not None:
+                    substep_start = min(substep_start, full_step_end_time)
             present.add(substep)
             recorded.append(
                 (substep_start, order_idx, substep, substep_finish, intervals)
@@ -1066,16 +1043,23 @@ def build_slime_app(
             f"substep:{substep}:finish" for substep in SUBSTEP_ORDER
         )
 
-    async def step_time_keys(
-        step_times_dict: ModalDict, run_id: str, num_steps: int
-    ) -> list[Any]:
-        keys = [
+    async def write_step_times(
+        run_id: str, num_steps: int
+    ) -> tuple[
+        dict[str, dict[str, int | None]],
+        dict[str, dict[str, dict[str, float | None]]],
+        dict[str, dict[str, list[dict[str, int | float]]]],
+        list[Hashable],
+    ]:
+        step_times_dict = ModalDict.from_name(
+            "training-gym-step-times", create_if_missing=True
+        )
+        keys: list[Hashable] = [
             f"{run_id}:{step}:{suffix}"
             for step in range(1, num_steps + 1)
             for suffix in STEP_TIME_KEY_SUFFIXES
         ]
         if slime.async_mode:
-            timing_event_keys: set[Any] = set()
             async for key in step_times_dict.keys.aio():
                 match key:
                     case (
@@ -1086,55 +1070,94 @@ def build_slime_app(
                         _,
                         ("start" | "finish"),
                     ) if key_run_id == run_id:
-                        timing_event_keys.add(key)
+                        keys.append(key)
                     case (key_run_id, "timing_event_batch", _) if key_run_id == run_id:
-                        timing_event_keys.add(key)
+                        keys.append(key)
                     case (key_run_id, "timing_event", _) if key_run_id == run_id:
-                        timing_event_keys.add(key)
-            keys.extend(timing_event_keys)
-        return keys
-
-    async def write_step_times(
-        run_id: str, num_steps: int
-    ) -> tuple[
-        dict[str, dict[str, int | None]],
-        dict[str, dict[str, dict[str, float | None]]],
-        dict[str, dict[str, list[dict[str, int | float]]]],
-        list[Any],
-    ]:
-        step_times_dict = ModalDict.from_name(
-            "training-gym-step-times", create_if_missing=True
-        )
-        keys = await step_time_keys(step_times_dict, run_id, num_steps)
-        event_times_by_key: dict[Any, Any] = {}
+                        keys.append(key)
+        stored_values: dict[Hashable, object] = {}
         for offset in range(0, len(keys), STEP_TIME_DICT_BATCH_SIZE):
             batch = keys[offset : offset + STEP_TIME_DICT_BATCH_SIZE]
             values = await asyncio.gather(*(step_times_dict.get.aio(k) for k in batch))
-            event_times_by_key.update(zip(batch, values))
-        timing_events: list[Mapping[str, Any]] = []
-        for key, value in list(event_times_by_key.items()):
+            stored_values.update(zip(batch, values))
+
+        recorded_times: dict[str, float] = {}
+        timing_events: list[Mapping[str, object]] = []
+        interval_boundaries: SubstepTimingBoundaries = {}
+        for key, value in stored_values.items():
+            if isinstance(key, str):
+                if isinstance(value, (int, float)):
+                    recorded_times[key] = float(value)
+                continue
             match key:
+                case (
+                    key_run_id,
+                    "substep_boundary",
+                    step,
+                    phase,
+                    update,
+                    ("start" | "finish") as boundary,
+                ) if key_run_id == run_id:
+                    if not isinstance(value, (int, float, str)):
+                        continue
+                    try:
+                        step = int(step)
+                        update = int(update)
+                        timestamp = float(value)
+                    except (TypeError, ValueError):
+                        continue
+                    if (
+                        step <= 0
+                        or update < 0
+                        or not isinstance(phase, str)
+                        or not math.isfinite(timestamp)
+                    ):
+                        continue
+                    updates = interval_boundaries.setdefault((step, phase), {})
+                    updates.setdefault(update, {})[boundary] = timestamp
                 case (key_run_id, "timing_event_batch", _) if key_run_id == run_id:
                     if isinstance(value, list):
-                        timing_events.extend(
-                            event for event in value if isinstance(event, Mapping)
-                        )
+                        for event in value:
+                            if isinstance(event, Mapping):
+                                timing_events.append(
+                                    {
+                                        field: item
+                                        for field, item in event.items()
+                                        if isinstance(field, str)
+                                    }
+                                )
                 case (key_run_id, "timing_event", _) if key_run_id == run_id:
                     if isinstance(value, Mapping):
-                        timing_events.append(value)
+                        timing_events.append(
+                            {
+                                field: item
+                                for field, item in value.items()
+                                if isinstance(field, str)
+                            }
+                        )
 
-        record_step_time_events(event_times_by_key, run_id, timing_events)
+        reconciled_boundaries = reconcile_async_step_time_events(
+            recorded_times, run_id, timing_events
+        )
+        for phase, updates in reconciled_boundaries.items():
+            stored_updates = interval_boundaries.setdefault(phase, {})
+            for update, boundaries in updates.items():
+                stored_updates.setdefault(update, {}).update(boundaries)
         timing_data = aggregate_step_times(
-            event_times_by_key,
+            recorded_times,
             run_id,
             num_steps,
             SUBSTEP_ORDER,
             OPTIONAL_SUBSTEPS,
+            interval_boundaries=interval_boundaries,
             include_intervals=True,
         )
-        return (*timing_data, keys)
+        if len(timing_data) != 3:
+            raise RuntimeError("Detailed step timing aggregation returned no intervals")
+        step_times, substep_times, substep_timing_intervals = timing_data
+        return step_times, substep_times, substep_timing_intervals, keys
 
-    async def clear_step_times(keys: list[Any]) -> None:
+    async def clear_step_times(keys: list[Hashable]) -> None:
         step_times_dict = ModalDict.from_name(
             "training-gym-step-times", create_if_missing=True
         )
@@ -1458,7 +1481,7 @@ def build_slime_app(
                 run_record, training_run_id
             )
 
-            step_time_keys_read: list[Any] | None = None
+            step_time_keys_read: list[Hashable] | None = None
             try:
                 (
                     step_times,

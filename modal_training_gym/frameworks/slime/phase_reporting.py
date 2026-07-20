@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import os
 import time
+from collections.abc import Callable
 from functools import wraps
 from typing import Any
 
@@ -30,7 +31,7 @@ from .reporting import (
     _STEP_EVENT_TIMEOUT_SECONDS,
     _enqueue,
     _enqueue_rollout,
-    _record_timing_event,
+    _persist_async_timing_event,
     _post_framework_status,
     _run_context,
     _step_progress,
@@ -98,7 +99,7 @@ CUSTOM_BEFORE_TRAIN_STEP_HOOK_PATH_KEY = (
 )
 
 
-def _async_timing_enabled(args: Any) -> bool:
+def _async_timing_enabled(args: object) -> bool:
     return (
         bool(getattr(args, "async_mode", False))
         or os.environ.get("TRAINING_GYM_ASYNC_MODE") == "1"
@@ -267,13 +268,13 @@ def _is_primary_training_rank() -> bool:
     return not dist.is_available() or not dist.is_initialized() or dist.get_rank() == 0
 
 
-def _install_optimizer_timing(optimizer: Any) -> None:
+def _install_optimizer_timing(optimizer: object) -> None:
     if getattr(optimizer, _OPTIMIZER_TIMING_INSTALLED, False):
         return
-    original_step = optimizer.step
+    original_step: Callable[..., object] = getattr(optimizer, "step")
 
     @wraps(original_step)
-    def timed_step(*args: Any, **kwargs: Any) -> Any:
+    def timed_step(*args: object, **kwargs: object) -> object:
         context = getattr(optimizer, _OPTIMIZER_TIMING_CONTEXT, None)
         if context is None:
             return original_step(*args, **kwargs)
@@ -311,7 +312,7 @@ def _install_optimizer_timing(optimizer: Any) -> None:
                 event_ts=optimizer_finished,
             )
 
-    optimizer.step = timed_step
+    setattr(optimizer, "step", timed_step)
     setattr(optimizer, _OPTIMIZER_TIMING_INSTALLED, True)
 
 
@@ -385,7 +386,10 @@ def report_step_event(
     if step_id is not None:
         payload["step_id"] = step_id
     if _async_timing_enabled(args):
-        _record_timing_event(payload)
+        training_attempt = os.environ.get("TRAINING_GYM_TRAINING_ATTEMPT")
+        if training_attempt:
+            payload["training_attempt"] = training_attempt
+        _persist_async_timing_event(payload)
         return
     match step_event:
         case "start":

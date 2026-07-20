@@ -13,6 +13,7 @@ import os
 import threading
 import time
 import uuid
+from collections.abc import Mapping
 from queue import Queue
 from typing import Any
 from urllib.error import URLError
@@ -55,7 +56,7 @@ def _arg_value(args: Any, key: str) -> Any:
 
 
 def _run_context(args: Any) -> dict[str, Any]:
-    context = {
+    return {
         "training_run_id": _arg_value(args, "training_run_id")
         or _arg_value(args, "training_gym_training_run_id")
         or os.environ.get("TRAINING_GYM_TRAINING_RUN_ID", "")
@@ -66,13 +67,6 @@ def _run_context(args: Any) -> dict[str, Any]:
         or "",
         "modal_app_id": os.environ.get("MODAL_APP_ID", ""),
     }
-    training_attempt = _positive_int(
-        _arg_value(args, "training_gym_training_attempt")
-        or os.environ.get("TRAINING_GYM_TRAINING_ATTEMPT")
-    )
-    if training_attempt is not None:
-        context["training_attempt"] = training_attempt
-    return context
 
 
 def _positive_int(value: Any) -> int | None:
@@ -166,7 +160,7 @@ def _enqueue(payload: dict[str, Any]) -> None:
         pass
 
 
-def _record_timing_event(payload: dict[str, Any]) -> None:
+def _persist_async_timing_event(payload: Mapping[str, object]) -> None:
     training_run_id = str(payload.get("training_run_id") or "")
     if not training_run_id:
         raise RuntimeError("Cannot persist a timing event without a training run ID")
@@ -243,7 +237,12 @@ def _post(item: dict[str, Any]) -> None:
     token = _report_token()
     if token:
         headers["Authorization"] = f"Bearer {token}"
-    request = Request(url, data=body, headers=headers, method="POST")
+    request = Request(
+        url,
+        data=body,
+        headers=headers,
+        method="POST",
+    )
     try:
         with urlopen(request, timeout=timeout) as response:
             response.read()
