@@ -15,6 +15,17 @@ from modal_training_gym.common.environments.base import (
     StepResult,
     ToolCall,
 )
+from modal_training_gym.common.environments.bfcl import (
+    BfclMultiTurnConfig,
+    BfclMultiTurnDataset,
+    BfclTurnEnvironment,
+    build_env as build_bfcl_env,
+    build_prefix_messages as build_bfcl_prefix_messages,
+    default_system_prompt as bfcl_default_system_prompt,
+    prune_prefix as prune_bfcl_prefix,
+    to_json_schema,
+    tool_schemas_to_openai as bfcl_tool_schemas_to_openai,
+)
 from modal_training_gym.common.environments.toolathlon import (
     DEFAULT_CONFIG,
     TIER_A_MCPS,
@@ -31,44 +42,6 @@ from modal_training_gym.common.environments.toolathlon import (
     prune_prefix,
     render_tool_catalog,
     tool_schemas_to_openai,
-)
-from modal_training_gym.common.environments.bfcl import (
-    DEFAULT_CONFIG as BFCL_DEFAULT_CONFIG,
-)
-from modal_training_gym.common.environments.bfcl import (
-    BfclMultiTurnConfig,
-    BfclMultiTurnDataset,
-    BfclTurnEnvironment,
-)
-from modal_training_gym.common.environments.bfcl import build_env as build_bfcl_env
-from modal_training_gym.common.environments.bfcl import (
-    build_instances as build_bfcl_instances,
-)
-from modal_training_gym.common.environments.bfcl import (
-    build_prefix_messages as build_bfcl_prefix_messages,
-)
-from modal_training_gym.common.environments.bfcl import (
-    default_system_prompt as bfcl_default_system_prompt,
-)
-from modal_training_gym.common.environments.bfcl import (
-    execute_call as execute_bfcl_call,
-)
-from modal_training_gym.common.environments.bfcl import (
-    load_func_docs as load_bfcl_func_docs,
-)
-from modal_training_gym.common.environments.bfcl import (
-    parse_call_string as parse_bfcl_call_string,
-)
-from modal_training_gym.common.environments.bfcl import (
-    prune_prefix as prune_bfcl_prefix,
-)
-from modal_training_gym.common.environments.bfcl import (
-    render_tool_catalog as render_bfcl_tool_catalog,
-)
-from modal_training_gym.common.environments.bfcl import replay as replay_bfcl
-from modal_training_gym.common.environments.bfcl import to_json_schema
-from modal_training_gym.common.environments.bfcl import (
-    tool_schemas_to_openai as bfcl_tool_schemas_to_openai,
 )
 
 __all__ = [
@@ -102,20 +75,13 @@ __all__ = [
     "tool_schemas_to_openai",
     # bfcl — config + env
     "BfclMultiTurnConfig",
-    "BFCL_DEFAULT_CONFIG",
     "BfclTurnEnvironment",
     "build_bfcl_env",
-    "build_bfcl_instances",
-    "execute_bfcl_call",
-    "replay_bfcl",
-    "parse_bfcl_call_string",
     # bfcl — data + prompts
     "BfclMultiTurnDataset",
     "build_bfcl_prefix_messages",
     "prune_bfcl_prefix",
-    "render_bfcl_tool_catalog",
     "bfcl_default_system_prompt",
     "bfcl_tool_schemas_to_openai",
-    "load_bfcl_func_docs",
     "to_json_schema",
 ]

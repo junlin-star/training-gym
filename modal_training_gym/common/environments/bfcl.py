@@ -31,10 +31,8 @@ from modal_training_gym.common.environments.base import (
     Observation,
     StepResult,
     ToolCall,
+    tool_schemas_to_openai as _tool_schemas_to_openai,
 )
-
-# Last N ids held out for eval (BFCL has no official train/eval split).
-DEFAULT_EVAL_TAIL = 30
 
 # Empty for interface parity with Toolathlon's DONE_TOOLS.
 DONE_TOOLS: frozenset[str] = frozenset()
@@ -219,18 +217,17 @@ def to_json_schema(node: Any) -> Any:
 
 
 def tool_schemas_to_openai(tool_schemas: dict) -> list[dict]:
-    """Render BFCL func-docs as an OpenAI ``tools=`` list."""
-    return [
-        {
-            "type": "function",
-            "function": {
-                "name": name,
-                "description": spec.get("description", ""),
+    """Convert BFCL function docs to OpenAI tools, normalizing BFCL type names."""
+    normalized = {}
+    for name, spec in (tool_schemas or {}).items():
+        if isinstance(spec, dict) and ("parameters" in spec or "description" in spec):
+            normalized[name] = {
+                **spec,
                 "parameters": to_json_schema(spec.get("parameters", {})),
-            },
-        }
-        for name, spec in (tool_schemas or {}).items()
-    ]
+            }
+        else:
+            normalized[name] = to_json_schema(spec)
+    return _tool_schemas_to_openai(normalized)
 
 
 def load_func_docs(
@@ -250,7 +247,7 @@ def load_func_docs(
                 continue
             schemas[doc["name"]] = {
                 "description": doc.get("description", ""),
-                "parameters": doc.get("parameters", {}),
+                "parameters": to_json_schema(doc.get("parameters", {})),
             }
     return schemas
 
@@ -282,30 +279,13 @@ temp
 Use the actual tool name, parameters, and full (untruncated) values required by your task; the call above is only an illustration of the wire format."""
 
 
-def render_tool_catalog(tool_schemas: dict, desc_chars: int = 160) -> str:
-    """Render available tools as ``name(arg, required*)`` lines + a short description."""
-    lines = []
-    for name in sorted(tool_schemas or {}):
-        spec = tool_schemas[name]
-        desc, params = spec.get("description", ""), spec.get("parameters", {})
-        props = (params or {}).get("properties", {}) if isinstance(params, dict) else {}
-        required = (
-            set((params or {}).get("required", []) or [])
-            if isinstance(params, dict)
-            else set()
-        )
-        sig = ", ".join(f"{k}*" if k in required else k for k in props)
-        lines.append(f"- {name}({sig}): {desc[:desc_chars]}")
-    return "\n".join(lines)
-
-
 def default_system_prompt(tool_schemas: dict) -> str:
     """Behavioral rules only — the tool catalog travels via the chat template's
     ``tools=`` parameter (see :func:`tool_schemas_to_openai`), not prompt text."""
     return DEFAULT_SYSTEM_PROMPT
 
 
-def build_prefix_messages(label: dict, K: int, *, obs_limit: int = 1500) -> list[dict]:
+def build_prefix_messages(label: dict, K: int) -> list[dict]:
     """Reconstruct the chat-message prefix after the first ``K`` ground-truth calls."""
     observations = label.get("observations")
     if observations is None:
@@ -347,7 +327,7 @@ def build_prefix_messages(label: dict, K: int, *, obs_limit: int = 1500) -> list
                 {
                     "role": "tool",
                     "tool_call_id": f"call_{shown}",
-                    "content": str(observations[shown])[:obs_limit],
+                    "content": str(observations[shown]),
                 }
             )
             shown += 1
@@ -438,11 +418,10 @@ class BfclMultiTurnConfig:
     """
 
     category: str = "multi_turn_base"
-    eval_tail: int = DEFAULT_EVAL_TAIL
+    # BFCL has no official split, so reserve the last N ids for eval.
+    eval_tail: int = 30
+    # Bound tool observations stored in each training prefix.
     obs_limit: int = 1500
-
-
-DEFAULT_CONFIG = BfclMultiTurnConfig()
 
 
 def _category_filename(category: str) -> str:
@@ -466,11 +445,11 @@ class BfclMultiTurnDataset(DatasetConfig):
     def __init__(
         self,
         split: str = "train",
-        config: BfclMultiTurnConfig = DEFAULT_CONFIG,
+        config: BfclMultiTurnConfig | None = None,
         **kwargs: Any,
     ) -> None:
         self._split = split
-        self.config = config
+        self.config = config if config is not None else BfclMultiTurnConfig()
         for k, v in kwargs.items():
             setattr(self, k, v)
 
