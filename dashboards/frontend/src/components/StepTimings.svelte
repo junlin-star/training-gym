@@ -140,6 +140,10 @@
             }
             segments.push({
               innerStep: hasDetails ? (value.step_id ?? index) : null,
+              trainingRole:
+                hasDetails && typeof value.training_role === "string"
+                  ? value.training_role
+                  : null,
               start,
               duration,
               end: start + duration,
@@ -184,8 +188,12 @@
   function tooltipLabel(step, sub) {
     const repeated =
       step.timeline.filter((interval) => interval.sub.name === sub.name).length > 1;
-    if (repeated && TRAINING_CHILDREN.has(sub.name) && sub.innerStep != null) {
-      return `${asyncLabelFor(sub.name)} ${sub.innerStep + 1}`;
+    if (TRAINING_CHILDREN.has(sub.name) && sub.innerStep != null) {
+      const role = sub.trainingRole
+        ? `${sub.trainingRole[0].toUpperCase()}${sub.trainingRole.slice(1)} `
+        : "";
+      const update = repeated ? ` ${sub.innerStep + 1}` : "";
+      return `${role}${asyncLabelFor(sub.name)}${update}`;
     }
     return asyncMode ? asyncLabelFor(sub.name) : labelFor(sub.name);
   }
@@ -313,6 +321,7 @@
       tip &&
       tip.rolloutId === step.rolloutId &&
       tip.name === sub.name &&
+      tip.trainingRole === (sub.trainingRole ?? null) &&
       tip.innerStep === (sub.innerStep ?? null)
     );
   }
@@ -323,6 +332,7 @@
       x: e.clientX,
       y: e.clientY,
       rolloutId: step.rolloutId,
+      trainingRole: sub.trainingRole ?? null,
       innerStep: sub.innerStep ?? null,
       name: sub.name,
       label: tooltipLabel(step, sub),
@@ -353,6 +363,7 @@
       x: e.clientX,
       y: e.clientY,
       rolloutId: step.rolloutId,
+      trainingRole: sub.trainingRole ?? null,
       innerStep: sub.innerStep ?? null,
       name: sub.name,
       label: tooltipLabel(step, sub),
@@ -442,7 +453,7 @@
         {#each windows as span (`window-${span.step.key}-${span.start}`)}
           {@render trainingWindow(span)}
         {/each}
-        {#each spans as span (`${span.step.key}-${span.sub.name}-${span.sub.innerStep ?? "total"}-${span.start}`)}
+        {#each spans as span (`${span.step.key}-${span.sub.name}-${span.sub.trainingRole ?? "default"}-${span.sub.innerStep ?? "total"}-${span.start}`)}
           {@render asyncSegment(span)}
         {/each}
       </div>

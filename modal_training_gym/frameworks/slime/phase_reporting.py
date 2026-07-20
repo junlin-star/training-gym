@@ -99,13 +99,6 @@ CUSTOM_BEFORE_TRAIN_STEP_HOOK_PATH_KEY = (
 )
 
 
-def _async_timing_enabled(args: object) -> bool:
-    return (
-        bool(getattr(args, "async_mode", False))
-        or os.environ.get("TRAINING_GYM_ASYNC_MODE") == "1"
-    )
-
-
 def _hook_path_from_args(args: Any, path_key: str) -> str | None:
     direct = getattr(args, path_key, None)
     if isinstance(direct, str) and direct.strip():
@@ -189,7 +182,10 @@ def log_rollout_data(
     rollout_time: Any,
 ) -> bool:
     progress = _step_progress(args, rollout_id)
-    if not _async_timing_enabled(args):
+    if not (
+        bool(getattr(args, "async_mode", False))
+        or os.environ.get("TRAINING_GYM_ASYNC_MODE") == "1"
+    ):
         report_phase(
             SlimeStatus.ROLLOUT_LOGGING,
             args,
@@ -260,14 +256,6 @@ _OPTIMIZER_TIMING_CONTEXT = "_training_gym_timing_context"
 _OPTIMIZER_TIMING_INSTALLED = "_training_gym_timing_installed"
 
 
-def _is_primary_training_rank() -> bool:
-    try:
-        import torch.distributed as dist
-    except ImportError:
-        return True
-    return not dist.is_available() or not dist.is_initialized() or dist.get_rank() == 0
-
-
 def _install_optimizer_timing(optimizer: object) -> None:
     if getattr(optimizer, _OPTIMIZER_TIMING_INSTALLED, False):
         return
@@ -324,9 +312,24 @@ def before_train_step_hook(
     optimizer: Any,
     opt_param_scheduler: Any,
 ) -> None:
-    async_mode = _async_timing_enabled(args)
-    async_timing = async_mode and _is_primary_training_rank()
-    if not async_mode:
+    async_mode = (
+        bool(getattr(args, "async_mode", False))
+        or os.environ.get("TRAINING_GYM_ASYNC_MODE") == "1"
+    )
+    record_async_timing = False
+    if async_mode:
+        record_async_timing = True
+        try:
+            import torch.distributed as dist
+        except ImportError:
+            pass
+        else:
+            record_async_timing = (
+                not dist.is_available()
+                or not dist.is_initialized()
+                or dist.get_rank() == 0
+            )
+    else:
         report_phase(
             SlimeStatus.OPTIMIZER_STEP,
             args,
@@ -344,7 +347,8 @@ def before_train_step_hook(
         optimizer,
         opt_param_scheduler,
     )
-    if async_timing:
+    # This is separate from the mode branch so the custom hook runs first.
+    if record_async_timing:
         _install_optimizer_timing(optimizer)
         setattr(
             optimizer,
@@ -381,11 +385,17 @@ def report_step_event(
         "rollout_id": rollout_id,
         "event_ts": time.time() if event_ts is None else event_ts,
     }
+    training_role = getattr(args, "training_gym_role", None)
+    if isinstance(training_role, str):
+        payload["training_role"] = training_role
     if step_event:
         payload["step_event"] = step_event
     if step_id is not None:
         payload["step_id"] = step_id
-    if _async_timing_enabled(args):
+    if (
+        bool(getattr(args, "async_mode", False))
+        or os.environ.get("TRAINING_GYM_ASYNC_MODE") == "1"
+    ):
         training_attempt = os.environ.get("TRAINING_GYM_TRAINING_ATTEMPT")
         if training_attempt:
             payload["training_attempt"] = training_attempt

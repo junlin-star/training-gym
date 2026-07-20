@@ -19,10 +19,10 @@ class Substep(str, Enum):
     EVAL_AFTER = f"{SlimeStatus.EVAL_ROLLOUT_LOGGING.value}_end"
 
 
-SubstepTimingBoundaries = dict[tuple[int, str], dict[int, dict[str, float]]]
+AsyncUpdateBoundaries = dict[tuple[int, str], dict[tuple[str, int], dict[str, float]]]
 
 
-def record_step_time_event(
+def record_sync_step_time(
     step_times: MutableMapping[str, float],
     training_run_id: str,
     current_step: object,
@@ -34,8 +34,6 @@ def record_step_time_event(
         return
     event_time = round(float(event_ts), 3)
     step_window_start_key = f"{training_run_id}:{current_step}:substep_start"
-    phase_start_key = f"{training_run_id}:{current_step}:substep:{phase}"
-    phase_finish_key = f"{phase_start_key}:finish"
 
     def record_first_in_step_window(
         key: str, *, allow_before_step_window: bool = False
@@ -64,10 +62,6 @@ def record_step_time_event(
         step_times[step_window_start_key] = event_time
     elif step_event == "substep_finish":
         record_first_in_step_window(f"{training_run_id}:{current_step}:substep_finish")
-    elif step_event == "phase_start":
-        record_first_in_step_window(phase_start_key)
-    elif step_event == "phase_finish":
-        record_first_in_step_window(phase_finish_key)
     elif step_event in ("eval_begin", "eval_end"):
         substep = (
             Substep.EVAL_BEFORE if step_event == "eval_begin" else Substep.EVAL_AFTER
@@ -84,75 +78,116 @@ def record_step_time_event(
         record_first_in_step_window(f"{training_run_id}:{current_step}:substep:{phase}")
 
 
-def reconcile_async_step_time_events(
+def record_async_step_times(
     step_times: MutableMapping[str, float],
     training_run_id: str,
     events: Iterable[Mapping[str, object]],
-) -> SubstepTimingBoundaries:
-    normalized_events: list[tuple[int, str, str, float, int | None, int]] = []
+) -> AsyncUpdateBoundaries:
+    normalized_events: list[tuple[int, str, str, float, int | None, int, str]] = []
     for event in events:
         if event.get("training_run_id") != training_run_id:
             continue
-        raw_step = event.get("progress_current")
-        raw_event_ts = event.get("event_ts")
-        raw_attempt = event.get("training_attempt", 0)
-        if not isinstance(raw_step, (int, float, str)) or not isinstance(
-            raw_event_ts, (int, float, str)
+        step = event.get("progress_current")
+        event_ts = event.get("event_ts")
+        training_attempt = event.get("training_attempt", 0)
+        if not isinstance(step, (int, float, str)) or not isinstance(
+            event_ts, (int, float, str)
         ):
             continue
-        if not isinstance(raw_attempt, (int, float, str)):
-            raw_attempt = 0
+        if not isinstance(training_attempt, (int, float, str)):
+            training_attempt = 0
         try:
-            step = int(raw_step)
-            event_ts = float(raw_event_ts)
-            training_attempt = int(raw_attempt or 0)
+            step = int(step)
+            event_ts = float(event_ts)
+            training_attempt = int(training_attempt or 0)
         except (TypeError, ValueError):
             continue
         phase = event.get("phase")
         step_event = event.get("step_event", "")
+        training_role = event.get("training_role", "")
         if (
             step <= 0
             or not math.isfinite(event_ts)
             or not isinstance(phase, str)
             or not isinstance(step_event, str)
+            or not isinstance(training_role, str)
         ):
             continue
-        raw_step_id = event.get("step_id")
-        if raw_step_id is not None and not isinstance(raw_step_id, (int, float, str)):
-            raw_step_id = None
+        step_id = event.get("step_id")
+        if step_id is not None and not isinstance(step_id, (int, float, str)):
+            step_id = None
         try:
-            step_id = int(raw_step_id) if raw_step_id is not None else None
+            step_id = int(step_id) if step_id is not None else None
         except (TypeError, ValueError):
             step_id = None
         normalized_events.append(
-            (step, phase, step_event, event_ts, step_id, training_attempt)
+            (
+                step,
+                phase,
+                step_event,
+                event_ts,
+                step_id,
+                training_attempt,
+                training_role,
+            )
         )
 
-    latest_attempt_by_phase: dict[tuple[int, str], int] = {}
-    for step, phase, _, _, _, training_attempt in normalized_events:
-        phase_key = (step, phase)
+    latest_attempt_by_phase: dict[tuple[int, str, str], int] = {}
+    for step, phase, _, _, _, training_attempt, training_role in normalized_events:
+        phase_key = (step, phase, training_role)
         latest_attempt_by_phase[phase_key] = max(
             training_attempt,
             latest_attempt_by_phase.get(phase_key, training_attempt),
         )
-    boundaries: SubstepTimingBoundaries = {}
-    for step, phase, step_event, event_ts, step_id, training_attempt in sorted(
-        normalized_events, key=lambda event: (event[5], event[3])
-    ):
-        if training_attempt != latest_attempt_by_phase[(step, phase)]:
+    update_boundaries: AsyncUpdateBoundaries = {}
+
+    def record_first(step: int, key: str, event_time: float) -> None:
+        step_window_start = step_times.get(f"{training_run_id}:{step}:substep_start")
+        existing = step_times.get(key)
+        if existing is not None and (
+            step_window_start is None or existing >= step_window_start
+        ):
+            return
+        step_times[key] = (
+            max(event_time, step_window_start)
+            if step_window_start is not None
+            else event_time
+        )
+
+    for (
+        step,
+        phase,
+        step_event,
+        event_ts,
+        step_id,
+        training_attempt,
+        training_role,
+    ) in sorted(normalized_events, key=lambda event: (event[5], event[3])):
+        if training_attempt != latest_attempt_by_phase[(step, phase, training_role)]:
             continue
         if step_id is not None and step_event in ("phase_start", "phase_finish"):
             boundary = step_event.removeprefix("phase_")
-            updates = boundaries.setdefault((step, phase), {})
-            updates.setdefault(step_id, {})[boundary] = event_ts
+            updates = update_boundaries.setdefault((step, phase), {})
+            updates.setdefault((training_role, step_id), {})[boundary] = event_ts
             if step_event == "phase_finish":
                 continue
-        record_step_time_event(
-            step_times,
-            training_run_id,
-            step,
-            phase,
-            step_event,
-            event_ts,
-        )
-    return boundaries
+
+        event_time = round(event_ts, 3)
+        if step_event == "start":
+            step_times[f"{training_run_id}:{step}:start"] = event_time
+        elif step_event == "finish":
+            step_times[f"{training_run_id}:{step}:finish"] = event_time
+        elif step_event == "substep_start":
+            step_times[f"{training_run_id}:{step}:substep_start"] = event_time
+        elif step_event == "substep_finish":
+            record_first(step, f"{training_run_id}:{step}:substep_finish", event_time)
+        elif step_event == "phase_start":
+            record_first(step, f"{training_run_id}:{step}:substep:{phase}", event_time)
+        elif step_event == "phase_finish":
+            record_first(
+                step,
+                f"{training_run_id}:{step}:substep:{phase}:finish",
+                event_time,
+            )
+
+    return update_boundaries

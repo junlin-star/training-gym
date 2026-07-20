@@ -12,7 +12,6 @@ import json
 import os
 import threading
 import time
-import uuid
 from collections.abc import Mapping
 from queue import Queue
 from typing import Any
@@ -162,11 +161,46 @@ def _enqueue(payload: dict[str, Any]) -> None:
 
 def _persist_async_timing_event(payload: Mapping[str, object]) -> None:
     training_run_id = str(payload.get("training_run_id") or "")
-    if not training_run_id:
-        print("Skipping async timing event without a training run ID")
+    phase = payload.get("phase")
+    step_event = payload.get("step_event")
+    training_role = payload.get("training_role", "")
+    training_attempt = payload.get("training_attempt", 0)
+    rollout_id = payload.get("rollout_id")
+    step_id = payload.get("step_id")
+    number_like = (int, float, str)
+    if (
+        not isinstance(training_attempt, number_like)
+        or not isinstance(rollout_id, number_like)
+        or (step_id is not None and not isinstance(step_id, number_like))
+        or not isinstance(training_role, str)
+    ):
+        print("Skipping async timing event without a complete identity")
+        return
+    try:
+        training_attempt = int(training_attempt or 0)
+        rollout_id = int(rollout_id)
+        step_id = int(step_id) if step_id is not None else -1
+    except (TypeError, ValueError):
+        print("Skipping async timing event without a complete identity")
+        return
+    if (
+        not training_run_id
+        or not isinstance(phase, str)
+        or not isinstance(step_event, str)
+    ):
+        print("Skipping async timing event without a complete identity")
         return
 
-    key = (training_run_id, "timing_event", uuid.uuid4().hex)
+    key = (
+        training_run_id,
+        "timing_event",
+        training_attempt,
+        training_role,
+        rollout_id,
+        phase,
+        step_event,
+        step_id,
+    )
     failures = 0
     while True:
         try:

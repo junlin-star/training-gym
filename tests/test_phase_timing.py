@@ -1,4 +1,5 @@
-from types import SimpleNamespace
+import sys
+from types import ModuleType, SimpleNamespace
 
 import pytest
 
@@ -32,7 +33,6 @@ def test_async_rollout_logging_does_not_duplicate_driver_timing(monkeypatch):
 def test_async_train_hook_reports_inner_model_and_optimizer_intervals(monkeypatch):
     reports = []
     wall_times = iter((100.0, 104.0, 105.5))
-    monkeypatch.setattr(phase_reporting, "_is_primary_training_rank", lambda: True)
     monkeypatch.setattr(phase_reporting, "_call_hook", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         phase_reporting,
@@ -124,7 +124,11 @@ def test_async_step_boundaries_are_persisted(monkeypatch):
 
     phase_reporting.report_step_event(
         SlimeStatus.TRAIN_MODEL,
-        SimpleNamespace(num_rollout=3, async_mode=True),
+        SimpleNamespace(
+            num_rollout=3,
+            async_mode=True,
+            training_gym_role="actor",
+        ),
         rollout_id=1,
         step_event="phase_start",
         step_id=2,
@@ -134,6 +138,7 @@ def test_async_step_boundaries_are_persisted(monkeypatch):
     assert reports[0]["step_event"] == "phase_start"
     assert reports[0]["step_id"] == 2
     assert reports[0]["event_ts"] == 123.0
+    assert reports[0]["training_role"] == "actor"
 
 
 def test_training_attempt_is_only_added_to_async_timing_events(monkeypatch):
@@ -153,19 +158,36 @@ def test_training_attempt_is_only_added_to_async_timing_events(monkeypatch):
     assert "training_attempt" not in reporting._run_context(SimpleNamespace())
 
 
-def test_timing_events_use_unique_dict_keys(monkeypatch):
+def test_timing_events_use_deterministic_idempotency_keys(monkeypatch):
     store = {}
     monkeypatch.setattr(reporting, "_step_times_dict", lambda: store)
 
-    first = {"training_run_id": "run-1", "event_ts": 1.0}
-    second = {"training_run_id": "run-1", "event_ts": 2.0}
+    first = {
+        "training_run_id": "run-1",
+        "training_attempt": 2,
+        "rollout_id": 0,
+        "phase": "training",
+        "step_event": "phase_start",
+        "event_ts": 1.0,
+    }
+    second = {**first, "step_event": "phase_finish", "event_ts": 2.0}
     reporting._persist_async_timing_event(first)
+    reporting._persist_async_timing_event({**first, "event_ts": 1.5})
     reporting._persist_async_timing_event(second)
 
     assert len(store) == 2
-    assert {value["event_ts"] for value in store.values()} == {1.0, 2.0}
-    assert all(key[:2] == ("run-1", "timing_event") for key in store)
-    assert all(len(key) == 3 and len(key[2]) == 32 for key in store)
+    assert (
+        store[("run-1", "timing_event", 2, "", 0, "training", "phase_start", -1)][
+            "event_ts"
+        ]
+        == 1.5
+    )
+    assert (
+        store[("run-1", "timing_event", 2, "", 0, "training", "phase_finish", -1)][
+            "event_ts"
+        ]
+        == 2.0
+    )
 
 
 def test_timing_event_retry_reuses_the_same_key(monkeypatch):
@@ -182,13 +204,37 @@ def test_timing_event_retry_reuses_the_same_key(monkeypatch):
     monkeypatch.setattr(reporting, "_step_times_dict", lambda: store)
     monkeypatch.setattr(reporting, "_TIMING_RETRY_DELAY_SECONDS", 0)
 
-    reporting._persist_async_timing_event({"training_run_id": "run-1"})
+    reporting._persist_async_timing_event(
+        {
+            "training_run_id": "run-1",
+            "rollout_id": 0,
+            "phase": "training",
+            "step_event": "phase_start",
+        }
+    )
 
     assert len(store.keys) == 5
     assert len(set(store.keys)) == 1
 
 
-def test_timing_event_without_run_id_is_nonfatal(monkeypatch):
+def test_training_roles_use_distinct_timing_keys(monkeypatch):
+    store = {}
+    monkeypatch.setattr(reporting, "_step_times_dict", lambda: store)
+    event = {
+        "training_run_id": "run-1",
+        "rollout_id": 0,
+        "phase": "train_model",
+        "step_event": "phase_start",
+        "step_id": 0,
+    }
+
+    reporting._persist_async_timing_event({**event, "training_role": "actor"})
+    reporting._persist_async_timing_event({**event, "training_role": "critic"})
+
+    assert len(store) == 2
+
+
+def test_timing_event_without_complete_identity_is_nonfatal(monkeypatch):
     monkeypatch.setattr(
         reporting,
         "_step_times_dict",
@@ -201,7 +247,6 @@ def test_timing_event_without_run_id_is_nonfatal(monkeypatch):
 def test_optimizer_timing_wrapper_is_reused_across_updates(monkeypatch):
     reports = []
     wall_times = iter((100.0, 101.0, 102.0, 103.0, 104.0, 105.0))
-    monkeypatch.setattr(phase_reporting, "_is_primary_training_rank", lambda: True)
     monkeypatch.setattr(phase_reporting, "_call_hook", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         phase_reporting,
@@ -230,3 +275,22 @@ def test_optimizer_timing_wrapper_is_reused_across_updates(monkeypatch):
         SlimeStatus.OPTIMIZER_STEP,
         SlimeStatus.OPTIMIZER_STEP,
     ]
+
+
+def test_non_primary_rank_does_not_report_update_timing(monkeypatch):
+    dist = ModuleType("torch.distributed")
+    setattr(dist, "is_available", lambda: True)
+    setattr(dist, "is_initialized", lambda: True)
+    setattr(dist, "get_rank", lambda: 1)
+    torch = ModuleType("torch")
+    setattr(torch, "distributed", dist)
+    monkeypatch.setitem(sys.modules, "torch", torch)
+    monkeypatch.setitem(sys.modules, "torch.distributed", dist)
+    monkeypatch.setattr(phase_reporting, "_call_hook", lambda *args, **kwargs: None)
+
+    optimizer = _Optimizer()
+    phase_reporting.before_train_step_hook(
+        SimpleNamespace(async_mode=True), 0, 0, object(), optimizer, object()
+    )
+
+    assert not hasattr(optimizer, phase_reporting._OPTIMIZER_TIMING_INSTALLED)

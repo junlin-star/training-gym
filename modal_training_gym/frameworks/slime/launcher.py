@@ -66,9 +66,9 @@ from modal_training_gym.common.launcher_helpers import (
 from modal_training_gym.common.wandb import WandbConfig
 from modal_training_gym.common.status import SlimeStatus
 from modal_training_gym.common.step_timing import (
+    AsyncUpdateBoundaries,
     Substep,
-    SubstepTimingBoundaries,
-    reconcile_async_step_time_events,
+    record_async_step_times,
 )
 
 from modal_training_gym.train_recipes.slime_recipe.recipe import (
@@ -154,6 +154,7 @@ _PATCH_QWEN3_VL_TORCH_DIST_B64 = encode_patch(
 _PATCH_ROLLOUT_STATUS_B64 = encode_patch(
     "patch_rollout_status_reporting", _SLIME_PATCHES
 )
+_PATCH_TRAINING_ROLE_B64 = encode_patch("patch_training_role", _SLIME_PATCHES)
 _PATCH_ADVANTAGE_DIST_B64 = encode_patch("patch_advantage_distribution", _SLIME_PATCHES)
 _PATCH_LOG_ELIDE_B64 = encode_patch("patch_log_elide", _SLIME_PATCHES)
 # Backport of NVIDIA/Megatron-LM #3845: dequantize quantized CUDA tensors in the
@@ -182,6 +183,7 @@ def _build_slime_base_image() -> "Image":
             f"echo {_PATCH_QWEN3_VL_EXPORT_B64} | base64 -d | python3",
             f"echo {_PATCH_QWEN3_VL_TORCH_DIST_B64} | base64 -d | python3",
             f"echo {_PATCH_ROLLOUT_STATUS_B64} | base64 -d | python3",
+            f"echo {_PATCH_TRAINING_ROLE_B64} | base64 -d | python3",
             f"echo {_PATCH_ADVANTAGE_DIST_B64} | base64 -d | python3",
             f"echo {_PATCH_LOG_ELIDE_B64} | base64 -d | python3",
             f"echo {_PATCH_DIST_CKPT_QUANTIZED_B64} | base64 -d | python3",
@@ -306,7 +308,9 @@ def aggregate_step_times(
     SUBSTEP_ORDER: list[str],
     OPTIONAL_SUBSTEPS: set[str],
     *,
-    interval_boundaries: Mapping[tuple[int, str], Mapping[int, Mapping[str, float]]]
+    update_boundaries: Mapping[
+        tuple[int, str], Mapping[tuple[str, int], Mapping[str, float]]
+    ]
     | None = None,
     include_intervals: bool = False,
 ) -> (
@@ -317,7 +321,7 @@ def aggregate_step_times(
     | tuple[
         dict[str, dict[str, int | None]],
         dict[str, dict[str, dict[str, float | None]]],
-        dict[str, dict[str, list[dict[str, int | float]]]],
+        dict[str, dict[str, list[dict[str, int | float | str]]]],
     ]
 ):
     """Organize step and substep timings from the Modal dict at the end of a run.
@@ -331,8 +335,10 @@ def aggregate_step_times(
     """
     step_times: dict[str, dict[str, int | None]] = {}
     substep_times: dict[str, dict[str, dict[str, float | None]]] = {}
-    substep_timing_intervals: dict[str, dict[str, list[dict[str, int | float]]]] = {}
-    interval_boundaries = interval_boundaries or {}
+    substep_timing_intervals: dict[
+        str, dict[str, list[dict[str, int | float | str]]]
+    ] = {}
+    update_boundaries = update_boundaries or {}
 
     for current_step_num in range(1, num_steps + 1):
         start_key = f"{run_id}:{current_step_num}:start"
@@ -382,15 +388,15 @@ def aggregate_step_times(
         eval_before = Substep.EVAL_BEFORE.value
         present: set[str] = set()
         recorded: list[
-            tuple[float, int, str, float | None, list[dict[str, int | float]]]
+            tuple[float, int, str, float | None, list[dict[str, int | float | str]]]
         ] = []
         for order_idx, substep in enumerate(SUBSTEP_ORDER):
             substep_start = step_times_dict.get(
                 f"{run_id}:{current_step_num}:substep:{substep}"
             )
-            intervals: list[dict[str, int | float]] = []
-            updates = interval_boundaries.get((current_step_num, substep), {})
-            for update, boundaries in sorted(updates.items()):
+            intervals: list[dict[str, int | float | str]] = []
+            updates = update_boundaries.get((current_step_num, substep), {})
+            for (training_role, update), boundaries in sorted(updates.items()):
                 try:
                     start = boundaries["start"]
                     finish = boundaries["finish"]
@@ -398,13 +404,14 @@ def aggregate_step_times(
                     continue
                 if finish < start:
                     continue
-                intervals.append(
-                    {
-                        "step_id": update,
-                        "start": round(start, 3),
-                        "duration_s": round(finish - start, 3),
-                    }
-                )
+                interval: dict[str, int | float | str] = {
+                    "step_id": update,
+                    "start": round(start, 3),
+                    "duration_s": round(finish - start, 3),
+                }
+                if training_role:
+                    interval["training_role"] = training_role
+                intervals.append(interval)
             if intervals:
                 substep_start = min(float(interval["start"]) for interval in intervals)
             elif substep_start is None:
@@ -1048,7 +1055,7 @@ def build_slime_app(
     ) -> tuple[
         dict[str, dict[str, int | None]],
         dict[str, dict[str, dict[str, float | None]]],
-        dict[str, dict[str, list[dict[str, int | float]]]],
+        dict[str, dict[str, list[dict[str, int | float | str]]]],
         list[Hashable],
     ]:
         step_times_dict = ModalDict.from_name(
@@ -1073,7 +1080,7 @@ def build_slime_app(
                         keys.append(key)
                     case (key_run_id, "timing_event_batch", _) if key_run_id == run_id:
                         keys.append(key)
-                    case (key_run_id, "timing_event", _) if key_run_id == run_id:
+                    case (key_run_id, "timing_event", *_) if key_run_id == run_id:
                         keys.append(key)
         stored_values: dict[Hashable, object] = {}
         for offset in range(0, len(keys), STEP_TIME_DICT_BATCH_SIZE):
@@ -1083,7 +1090,7 @@ def build_slime_app(
 
         recorded_times: dict[str, float] = {}
         timing_events: list[Mapping[str, object]] = []
-        interval_boundaries: SubstepTimingBoundaries = {}
+        update_boundaries: AsyncUpdateBoundaries = {}
         for key, value in stored_values.items():
             if isinstance(key, str):
                 if isinstance(value, (int, float)):
@@ -1113,8 +1120,8 @@ def build_slime_app(
                         or not math.isfinite(timestamp)
                     ):
                         continue
-                    updates = interval_boundaries.setdefault((step, phase), {})
-                    updates.setdefault(update, {})[boundary] = timestamp
+                    updates = update_boundaries.setdefault((step, phase), {})
+                    updates.setdefault(("", update), {})[boundary] = timestamp
                 case (key_run_id, "timing_event_batch", _) if key_run_id == run_id:
                     if isinstance(value, list):
                         for event in value:
@@ -1126,7 +1133,7 @@ def build_slime_app(
                                         if isinstance(field, str)
                                     }
                                 )
-                case (key_run_id, "timing_event", _) if key_run_id == run_id:
+                case (key_run_id, "timing_event", *_) if key_run_id == run_id:
                     if isinstance(value, Mapping):
                         timing_events.append(
                             {
@@ -1136,11 +1143,11 @@ def build_slime_app(
                             }
                         )
 
-        reconciled_boundaries = reconcile_async_step_time_events(
+        reconciled_boundaries = record_async_step_times(
             recorded_times, run_id, timing_events
         )
         for phase, updates in reconciled_boundaries.items():
-            stored_updates = interval_boundaries.setdefault(phase, {})
+            stored_updates = update_boundaries.setdefault(phase, {})
             for update, boundaries in updates.items():
                 stored_updates.setdefault(update, {}).update(boundaries)
         timing_data = aggregate_step_times(
@@ -1149,7 +1156,7 @@ def build_slime_app(
             num_steps,
             SUBSTEP_ORDER,
             OPTIONAL_SUBSTEPS,
-            interval_boundaries=interval_boundaries,
+            update_boundaries=update_boundaries,
             include_intervals=True,
         )
         if len(timing_data) != 3:
