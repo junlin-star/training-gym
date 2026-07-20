@@ -16,28 +16,28 @@ JsonDict = dict[str, Any]
 
 
 class FrameworkProgress(BaseModel):
-    current: int | float | None = None
-    total: int | float | None = None
+    current: int | None = None
+    total: int | None = None
     unit: str = "step"
     phase: str = ""
     is_active: bool | None = None
-    rollout_id: int | float | None = None
-    step_id: int | float | None = None
-    updated_at: int | float = 0
+    rollout_id: int | None = None
+    step_id: int | None = None
+    updated_at: int = 0
 
 
 class LatestRollout(BaseModel):
-    rollout_id: int | float = 0
+    rollout_id: int = 0
     mean: float = 0.0
-    total: int | float = 0
-    created_at: int | float = 0
+    total: int = 0
+    created_at: int = 0
 
 
 class WandbLink(BaseModel):
     label: str
     url: str
     run_id: str = ""
-    attempt: int | float | None = None
+    attempt: int | None = None
 
 
 class ConfigSummary(BaseModel):
@@ -45,10 +45,10 @@ class ConfigSummary(BaseModel):
     dataset_name: str = ""
     dataset_prompt_data: str = ""
     gpu_type: str = ""
-    actor_num_nodes: int | float = 0
-    actor_num_gpus_per_node: int | float = 0
-    lr: int | float = 0
-    global_batch_size: int | float = 0
+    actor_num_nodes: int = 0
+    actor_num_gpus_per_node: int = 0
+    lr: float = 0.0
+    global_batch_size: int = 0
     wandb_project: str = ""
     wandb_group: str = ""
     wandb_entity: str = ""
@@ -71,13 +71,13 @@ class TrainResultSummary(BaseModel):
 
 
 class ResumeState(BaseModel):
-    attempt_count: int | float = 0
+    attempt_count: int = 0
     resumed_from_checkpoint: bool = False
     resume_checkpoint_name: str = ""
     resume_checkpoint_path: str = ""
-    resume_from_iteration: int | float | None = None
+    resume_from_iteration: int | None = None
     last_attempt_status: str = ""
-    last_attempt_started_at: int | float = 0
+    last_attempt_started_at: int = 0
 
 
 class GroupTag(BaseModel):
@@ -113,12 +113,12 @@ class RunSummary(BaseModel):
     modal_app_url: str | None = None
     dataset_id: str = ""
     deployment_id: str = ""
-    created_at: int | float = 0
-    started_at: int | float = 0
-    updated_at: int | float = 0
-    ended_at: int | float | None = None
-    completed_at: int | float | None = None
-    duration_seconds: int | float | None = None
+    created_at: int = 0
+    started_at: int = 0
+    updated_at: int = 0
+    ended_at: int | None = None
+    completed_at: int | None = None
+    duration_seconds: int | None = None
     has_train_result: bool = False
     config_summary: JsonDict | ConfigSummary = Field(default_factory=dict)
     train_result: TrainResultSummary | None = None
@@ -158,7 +158,7 @@ def _number(value: object, default: float = 0.0) -> float:
     return parsed if math.isfinite(parsed) else default
 
 
-def _optional_number(value: object) -> int | float | None:
+def _optional_int(value: object) -> int | None:
     value = _unwrap(value)
     if value in (None, ""):
         return None
@@ -168,18 +168,18 @@ def _optional_number(value: object) -> int | float | None:
         return None
     if not math.isfinite(parsed):
         return None
-    return int(parsed) if parsed.is_integer() else parsed
+    return int(parsed) if parsed.is_integer() else None
 
 
-def _numeric(value: object, default: int | float = 0) -> int | float:
-    parsed = _optional_number(value)
+def _integer(value: object, default: int = 0) -> int:
+    parsed = _optional_int(value)
     return default if parsed is None else parsed
 
 
-def _timestamp(value: object) -> int | float:
+def _timestamp(value: object) -> int:
     value = _unwrap(value)
     if isinstance(value, (int, float)) and not isinstance(value, bool):
-        return value if math.isfinite(value) else 0
+        return int(value) if math.isfinite(value) else 0
     if not isinstance(value, str) or not value.strip():
         return 0
     try:
@@ -194,7 +194,7 @@ def _timestamp(value: object) -> int | float:
         return int(parsed.timestamp())
     if not math.isfinite(parsed_number):
         return 0
-    return int(parsed_number) if parsed_number.is_integer() else parsed_number
+    return int(parsed_number)
 
 
 def _modal_app_url(modal_app_id: str) -> str | None:
@@ -251,10 +251,10 @@ def _config_summary(config: object, training_run_id: str) -> ConfigSummary | Jso
         dataset_name=dataset_name,
         dataset_prompt_data=_text(dataset.get("prompt_data")),
         gpu_type=_text(recipe.get("gpu_type")),
-        actor_num_nodes=_numeric(recipe.get("actor_num_nodes")),
-        actor_num_gpus_per_node=_numeric(recipe.get("actor_num_gpus_per_node")),
-        lr=_numeric(config.get("lr")),
-        global_batch_size=_numeric(config.get("global_batch_size")),
+        actor_num_nodes=_integer(recipe.get("actor_num_nodes")),
+        actor_num_gpus_per_node=_integer(recipe.get("actor_num_gpus_per_node")),
+        lr=_number(config.get("lr")),
+        global_batch_size=_integer(config.get("global_batch_size")),
         **_wandb_summary(
             entity=wandb.get("entity"),
             project=wandb.get("project"),
@@ -286,18 +286,17 @@ def _framework_progress(metadata: JsonDict) -> FrameworkProgress | None:
         return None
     is_active = progress.get("is_active")
     return FrameworkProgress(
-        current=_optional_number(progress.get("current")),
+        current=_optional_int(progress.get("current")),
         total=(
             total
-            if (total := _optional_number(progress.get("total"))) is not None
-            and total > 0
+            if (total := _optional_int(progress.get("total"))) is not None and total > 0
             else None
         ),
         unit=_text(progress.get("unit")) or "step",
         phase=_text(progress.get("phase")),
         is_active=is_active if isinstance(is_active, bool) else None,
-        rollout_id=_optional_number(progress.get("rollout_id")),
-        step_id=_optional_number(progress.get("step_id")),
+        rollout_id=_optional_int(progress.get("rollout_id")),
+        step_id=_optional_int(progress.get("step_id")),
         updated_at=_timestamp(progress.get("updated_at")),
     )
 
@@ -307,15 +306,15 @@ def _latest_rollout(metadata: JsonDict) -> LatestRollout | None:
     if not rollout:
         return None
     return LatestRollout(
-        rollout_id=_numeric(rollout.get("rollout_id")),
+        rollout_id=_integer(rollout.get("rollout_id")),
         mean=_number(rollout.get("mean")),
-        total=_numeric(rollout.get("total")),
+        total=_integer(rollout.get("total")),
         created_at=_timestamp(rollout.get("created_at")),
     )
 
 
 def _resume_state(metadata: JsonDict) -> ResumeState | None:
-    attempt_count = _numeric(metadata.get("attempt_count"))
+    attempt_count = _integer(metadata.get("attempt_count"))
     checkpoint_path = _text(metadata.get("resume_checkpoint_path"))
     resumed = metadata.get("resumed_from_checkpoint") is True or bool(checkpoint_path)
     if attempt_count <= 1 and not resumed:
@@ -325,7 +324,7 @@ def _resume_state(metadata: JsonDict) -> ResumeState | None:
         resumed_from_checkpoint=resumed,
         resume_checkpoint_name=_text(metadata.get("resume_checkpoint_name")),
         resume_checkpoint_path=checkpoint_path,
-        resume_from_iteration=_optional_number(metadata.get("resume_from_iteration")),
+        resume_from_iteration=_optional_int(metadata.get("resume_from_iteration")),
         last_attempt_status=_text(metadata.get("last_attempt_status")),
         last_attempt_started_at=_timestamp(metadata.get("last_attempt_started_at")),
     )
@@ -381,7 +380,7 @@ def _wandb_attempt_links(metadata: JsonDict) -> list[WandbLink]:
     links: list[WandbLink] = []
     for raw_attempt in attempts:
         attempt = _mapping(raw_attempt)
-        attempt_number = _numeric(attempt.get("attempt"))
+        attempt_number = _integer(attempt.get("attempt"))
         run_id = _text(attempt.get("run_id"))
         url = _wandb_url(
             attempt.get("entity"), attempt.get("project"), attempt.get("run_id")
@@ -443,15 +442,9 @@ def build_run_summary(
         or started_at
         or created_at
     )
-    raw_duration = _unwrap(run.get("duration_seconds"))
-    duration = (
-        raw_duration
-        if isinstance(raw_duration, (int, float))
-        and not isinstance(raw_duration, bool)
-        and math.isfinite(raw_duration)
-        and raw_duration >= 0
-        else None
-    )
+    duration = _optional_int(run.get("duration_seconds"))
+    if duration is not None and duration < 0:
+        duration = None
     if duration is None and started_at and ended_at:
         duration = max(0, ended_at - started_at)
     modal_app_url = _modal_app_url(modal_app_id)

@@ -110,10 +110,10 @@ def test_legacy_value_helpers_unwrap_and_normalize_values():
     ("value", "expected"),
     [
         (123, 123),
-        (123.5, 123.5),
+        (123.5, 123),
         ("123", 123),
-        ("123.5", 123.5),
-        ({"value": "123.5", "source": "legacy"}, 123.5),
+        ("123.5", 123),
+        ({"value": "123.5", "source": "legacy"}, 123),
         ("2025-01-02T03:04:05Z", 1735787045),
         ("2025-01-02T03:04:05", 1735787045),
         ("", 0),
@@ -129,15 +129,15 @@ def test_timestamp_normalization(value, expected):
     assert run_summary_module._timestamp(value) == expected
 
 
-def test_number_helpers_preserve_fractions_and_apply_fallbacks():
+def test_number_and_integer_helpers_apply_fallbacks():
     assert run_summary_module._number({"value": "2.5"}) == 2.5
     assert run_summary_module._number("invalid", default=7) == 7
     assert run_summary_module._number(float("inf"), default=7) == 7
-    assert run_summary_module._optional_number("4.0") == 4
-    assert run_summary_module._optional_number("4.25") == 4.25
-    assert run_summary_module._optional_number("") is None
-    assert run_summary_module._optional_number("invalid") is None
-    assert run_summary_module._numeric("invalid", default=7) == 7
+    assert run_summary_module._optional_int("4.0") == 4
+    assert run_summary_module._optional_int("4.25") is None
+    assert run_summary_module._optional_int("") is None
+    assert run_summary_module._optional_int("invalid") is None
+    assert run_summary_module._integer("invalid", default=7) == 7
 
 
 def test_url_helpers_match_old_frontend_behavior():
@@ -208,7 +208,7 @@ def test_progress_rollout_and_resume_helpers_handle_missing_and_invalid_values()
     assert progress.total is None
     assert progress.unit == "step"
     assert progress.is_active is None
-    assert progress.rollout_id == 2.5
+    assert progress.rollout_id is None
     assert progress.step_id == 3
     assert progress.updated_at == 1735787045
 
@@ -225,8 +225,8 @@ def test_progress_rollout_and_resume_helpers_handle_missing_and_invalid_values()
     )
     assert rollout.rollout_id == 0
     assert rollout.mean == 0
-    assert rollout.total == 3.5
-    assert rollout.created_at == 100.5
+    assert rollout.total == 0
+    assert rollout.created_at == 100
 
     assert run_summary_module._resume_state({"attempt_count": 1}) is None
     resume = run_summary_module._resume_state(
@@ -238,8 +238,8 @@ def test_progress_rollout_and_resume_helpers_handle_missing_and_invalid_values()
         }
     )
     assert resume.resumed_from_checkpoint is True
-    assert resume.resume_from_iteration == 1.5
-    assert resume.last_attempt_started_at == 100.5
+    assert resume.resume_from_iteration is None
+    assert resume.last_attempt_started_at == 100
 
 
 def test_group_tag_helper_synthesizes_tags_from_overrides():
@@ -272,7 +272,7 @@ def test_wandb_attempt_helpers_skip_invalid_links_and_dedupe_by_url():
                 None,
                 {"attempt": 1, "project": "missing-entity"},
                 {
-                    "attempt": "2.5",
+                    "attempt": "2",
                     "entity": "entity",
                     "project": "project",
                     "run_id": "run-2",
@@ -289,8 +289,8 @@ def test_wandb_attempt_helpers_skip_invalid_links_and_dedupe_by_url():
         url="https://wandb.ai/entity/project/runs/other",
     )
 
-    assert links[0].label == "W&B a2.5"
-    assert links[0].attempt == 2.5
+    assert links[0].label == "W&B a2"
+    assert links[0].attempt == 2
     assert run_summary_module._dedupe_links(links, [duplicate, other]) == [
         links[0],
         other,
@@ -399,7 +399,7 @@ def test_missing_config_and_urls_match_old_frontend_defaults():
     assert summary.train_result.wandb_url is None
 
 
-def test_config_defaults_and_fractional_numbers_match_old_frontend():
+def test_config_defaults_and_fractional_integer_fields_are_rejected():
     run = _run(
         config={},
         metadata={
@@ -414,12 +414,11 @@ def test_config_defaults_and_fractional_numbers_match_old_frontend():
 
     assert summary.config_summary.lr == 0
     assert summary.config_summary.wandb_url is None
-    assert summary.framework_progress.current == 1.5
-    assert summary.framework_progress.total == 2.5
-    assert summary.latest_rollout.rollout_id == 1.5
-    assert summary.latest_rollout.total == 3.5
-    assert summary.resume_state.attempt_count == 2.5
-    assert summary.resume_state.resume_from_iteration == 1.5
+    assert summary.framework_progress.current is None
+    assert summary.framework_progress.total is None
+    assert summary.latest_rollout.rollout_id == 0
+    assert summary.latest_rollout.total == 0
+    assert summary.resume_state is None
 
 
 def test_negative_duration_is_recalculated():
@@ -440,7 +439,7 @@ def test_wrappers_with_additional_keys_are_unwrapped():
     )
 
     assert summary.framework == "miles"
-    assert summary.created_at == 100.5
+    assert summary.created_at == 100
     assert summary.modal_app_url == "https://modal.com/apps/example"
 
 
