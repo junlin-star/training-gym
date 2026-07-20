@@ -82,6 +82,8 @@
   function stepTimingForRollout(rolloutId) {
     const st = run?.step_times || null;
     const sub = run?.substep_times || null;
+    const timingIntervals =
+      run?.metadata?.substep_timing_intervals || run?.metadata?.substep_spans || null;
     if (!st && !sub) return null;
     const candidates = [String(Number(rolloutId) + 1), String(rolloutId)];
     const key = candidates.find((k) => (st && st[k]) || (sub && sub[k]));
@@ -89,6 +91,8 @@
     return {
       stepTimes: st && st[key] ? { [key]: st[key] } : null,
       substepTimes: sub && sub[key] ? { [key]: sub[key] } : null,
+      substepTimingIntervals:
+        timingIntervals && timingIntervals[key] ? { [key]: timingIntervals[key] } : null,
     };
   }
 
@@ -1205,11 +1209,18 @@
           {/if}
           {#if run.step_times || run.substep_times}
             <div class="rollout-chart">
-              <div class="rollout-chart-title">Step &amp; substep timeline</div>
+              <div class="rollout-chart-title">
+                {run?.config?.recipe?.async_mode === true
+                  ? "Rollout & training timeline"
+                  : "Step & substep timeline"}
+              </div>
               <StepTimings
                 stepTimes={run.step_times}
                 substepTimes={run.substep_times}
+                substepTimingIntervals={run?.metadata?.substep_timing_intervals ||
+                  run?.metadata?.substep_spans}
                 layout="timeline"
+                asyncMode={run?.config?.recipe?.async_mode === true}
                 downloadName={`step_substep_times_${runId}.json`}
               />
             </div>
@@ -1385,11 +1396,19 @@
                       {@const stepTiming = stepTimingForRollout(r.rollout_id)}
                       {#if stepTiming}
                         <div class="rollout-chart">
-                          <div class="rollout-chart-title">Step timing</div>
+                          <div class="rollout-chart-title">
+                            {run?.config?.recipe?.async_mode === true
+                              ? "Rollout timing"
+                              : "Step timing"}
+                          </div>
                           <StepTimings
                             stepTimes={stepTiming.stepTimes}
                             substepTimes={stepTiming.substepTimes}
-                            layout="rows"
+                            substepTimingIntervals={stepTiming.substepTimingIntervals}
+                            layout={run?.config?.recipe?.async_mode === true
+                              ? "timeline"
+                              : "rows"}
+                            asyncMode={run?.config?.recipe?.async_mode === true}
                           />
                         </div>
                       {/if}
@@ -1801,4 +1820,3 @@
     {/if}
   {/if}
 </section>
-

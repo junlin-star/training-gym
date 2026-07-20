@@ -1,5 +1,8 @@
 from modal_training_gym.common.status import SlimeStatus
-from modal_training_gym.common.step_timing import record_step_time_event
+from modal_training_gym.common.step_timing import (
+    record_step_time_event,
+    record_step_time_events,
+)
 from modal_training_gym.frameworks.slime.launcher import aggregate_step_times
 
 EVAL_BEFORE = SlimeStatus.EVAL_ROLLOUT_LOGGING.value
@@ -30,9 +33,69 @@ OPTIONAL_SUBSTEPS = {
     OFFLOAD_TRAIN,
     EVAL_AFTER,
 }
-
 RUN_ID = "run-hooks"
 STEP = 1
+
+
+def test_record_step_time_event_batch_uses_structured_events():
+    recorded = {}
+    record_step_time_events(
+        recorded,
+        RUN_ID,
+        [
+            {
+                "training_run_id": RUN_ID,
+                "progress_current": 1,
+                "phase": SlimeStatus.TRAIN_MODEL.value,
+                "step_event": "phase_start",
+                "step_id": 2,
+                "event_ts": 10.25,
+            },
+            {
+                "training_run_id": RUN_ID,
+                "progress_current": 1,
+                "phase": SlimeStatus.TRAIN_MODEL.value,
+                "step_event": "phase_finish",
+                "step_id": 2,
+                "event_ts": 12.75,
+            },
+        ],
+    )
+
+    assert recorded[
+        (RUN_ID, "substep_boundary", 1, SlimeStatus.TRAIN_MODEL.value, 2, "start")
+    ] == 10.25
+    assert recorded[
+        (RUN_ID, "substep_boundary", 1, SlimeStatus.TRAIN_MODEL.value, 2, "finish")
+    ] == 12.75
+
+
+def test_record_step_time_events_prefers_latest_attempt_per_phase():
+    recorded = {}
+    events = []
+    for attempt, start, finish in ((1, 10.0, 11.0), (2, 20.0, 23.0)):
+        for step_event, event_ts in (("phase_start", start), ("phase_finish", finish)):
+            events.append(
+                {
+                    "training_run_id": RUN_ID,
+                    "training_attempt": attempt,
+                    "progress_current": 1,
+                    "phase": SlimeStatus.TRAIN_MODEL.value,
+                    "step_event": step_event,
+                    "step_id": 0,
+                    "event_ts": event_ts,
+                }
+            )
+
+    record_step_time_events(recorded, RUN_ID, reversed(events))
+
+    assert recorded[
+        (RUN_ID, "substep_boundary", 1, SlimeStatus.TRAIN_MODEL.value, 0, "start")
+    ] == 20.0
+    assert recorded[
+        (RUN_ID, "substep_boundary", 1, SlimeStatus.TRAIN_MODEL.value, 0, "finish")
+    ] == 23.0
+
 
 EVENT_REPORTS = {
     "step_start": (ROLLOUT_LOGGING, "start"),
@@ -187,6 +250,38 @@ def test_fractional_events_preserve_integer_step_format():
         "start": 2.875,
         "duration_s": 1.25,
     }
+
+
+def test_async_step_times_keep_legacy_integer_format():
+    step_times, _, _ = aggregate_step_times(
+        {
+            f"{RUN_ID}:1:start": 2.875,
+            f"{RUN_ID}:1:finish": 3.125,
+            (
+                RUN_ID,
+                "substep_boundary",
+                1,
+                SlimeStatus.TRAIN_MODEL.value,
+                0,
+                "start",
+            ): 2.9,
+            (
+                RUN_ID,
+                "substep_boundary",
+                1,
+                SlimeStatus.TRAIN_MODEL.value,
+                0,
+                "finish",
+            ): 3.0,
+        },
+        RUN_ID,
+        1,
+        [SlimeStatus.TRAIN_MODEL.value],
+        set(),
+        include_intervals=True,
+    )
+
+    assert step_times["1"] == {"start": 2, "end": 3, "duration_s": 1}
 
 
 def test_in_loop_generate_stamp_splits_eval_before_from_generation():
@@ -403,4 +498,126 @@ def test_substep_times_adverse_timings():
         OFFLOAD_TRAIN: 1.0,
         OPTIMIZER_STEP: 5.0,
         WEIGHT_SYNC: 3.0,
+    }
+
+
+def test_async_substeps_keep_exact_overlapping_durations():
+    step_times_dict = {}
+
+    def record(
+        step: int,
+        timestamp: float,
+        phase: str,
+        event: str,
+        *,
+        step_id: int | None = None,
+    ) -> None:
+        record_step_time_event(
+            step_times_dict,
+            RUN_ID,
+            step,
+            phase,
+            event,
+            timestamp,
+            step_id,
+        )
+
+    record(1, 6.0, ROLLOUT_LOGGING, "phase_start")
+    record(1, 10.0, ROLLOUT_LOGGING, "start")
+    record(1, 10.0, ROLLOUT_LOGGING, "substep_start")
+    record(1, 11.0, ROLLOUT_LOGGING, "phase_finish")
+    record(2, 12.0, ROLLOUT_LOGGING, "phase_start")
+    record(1, 11.0, SlimeStatus.TRAINING.value, "phase_start")
+    record(1, 11.0, SlimeStatus.TRAIN_MODEL.value, "phase_start", step_id=0)
+    record(1, 13.0, SlimeStatus.TRAIN_MODEL.value, "phase_finish", step_id=0)
+    record(1, 13.0, OPTIMIZER_STEP, "phase_start", step_id=0)
+    record(1, 13.5, OPTIMIZER_STEP, "phase_finish", step_id=0)
+    record(1, 13.5, SlimeStatus.TRAIN_MODEL.value, "phase_start", step_id=1)
+    record(1, 14.5, SlimeStatus.TRAIN_MODEL.value, "phase_finish", step_id=1)
+    record(1, 14.5, OPTIMIZER_STEP, "phase_start", step_id=1)
+    record(1, 15.0, OPTIMIZER_STEP, "phase_finish", step_id=1)
+    record(1, 15.0, SlimeStatus.TRAINING.value, "phase_finish")
+    record(1, 15.0, CHECKPOINT_SAVE, "phase_start")
+    record(1, 16.0, CHECKPOINT_SAVE, "phase_finish")
+    record(2, 18.0, ROLLOUT_LOGGING, "phase_finish")
+    record(1, 16.0, WEIGHT_SYNC, "phase_start")
+    record(1, 20.0, WEIGHT_SYNC, "phase_finish")
+    record(1, 20.0, EVAL_AFTER, "phase_start")
+    record(1, 21.0, EVAL_AFTER, "phase_finish")
+    record(1, 21.0, SlimeStatus.TRAINING.value, "substep_finish")
+    record(1, 21.0, SlimeStatus.TRAINING.value, "finish")
+
+    record(2, 21.0, ROLLOUT_LOGGING, "start")
+    record(2, 21.0, ROLLOUT_LOGGING, "substep_start")
+    record(2, 22.0, SlimeStatus.TRAINING.value, "phase_start")
+    record(2, 22.0, SlimeStatus.TRAIN_MODEL.value, "phase_start", step_id=0)
+    record(2, 24.0, SlimeStatus.TRAIN_MODEL.value, "phase_finish", step_id=0)
+    record(2, 24.0, OPTIMIZER_STEP, "phase_start", step_id=0)
+    record(2, 25.0, OPTIMIZER_STEP, "phase_finish", step_id=0)
+    record(2, 25.0, SlimeStatus.TRAINING.value, "phase_finish")
+    record(2, 25.0, SlimeStatus.TRAINING.value, "substep_finish")
+    record(2, 25.0, SlimeStatus.TRAINING.value, "finish")
+
+    step_times_dict[(RUN_ID, "substep_boundary", 1, OPTIMIZER_STEP, 8, "start")] = 30.0
+    step_times_dict[(RUN_ID, "substep_boundary", 1, OPTIMIZER_STEP, 9, "start")] = 31.0
+    step_times_dict[(RUN_ID, "substep_boundary", 1, OPTIMIZER_STEP, 9, "finish")] = 30.0
+    step_times_dict[(RUN_ID, "substep_boundary", 1, OPTIMIZER_STEP, 10, "start")] = (
+        float("nan")
+    )
+    step_times_dict[
+        ("another-run", "substep_boundary", 1, OPTIMIZER_STEP, 0, "start")
+    ] = 1.0
+    step_times_dict[
+        ("another-run", "substep_boundary", 1, OPTIMIZER_STEP, 0, "finish")
+    ] = 100.0
+    step_times_dict[f"{RUN_ID}:1:substep:{SlimeStatus.TRAIN_MODEL.value}"] = 13.5
+
+    async_order = [
+        ROLLOUT_LOGGING,
+        SlimeStatus.TRAINING.value,
+        SlimeStatus.TRAIN_MODEL.value,
+        OPTIMIZER_STEP,
+        CHECKPOINT_SAVE,
+        WEIGHT_SYNC,
+        EVAL_AFTER,
+    ]
+    step_times, substep_times, substep_timing_intervals = aggregate_step_times(
+        step_times_dict,
+        RUN_ID,
+        2,
+        async_order,
+        {CHECKPOINT_SAVE, WEIGHT_SYNC, EVAL_AFTER},
+        include_intervals=True,
+    )
+
+    assert step_times["1"] == {"start": 10, "end": 21, "duration_s": 11}
+    assert substep_times["1"] == {
+        ROLLOUT_LOGGING: {"start": 6.0, "duration_s": 5.0},
+        SlimeStatus.TRAINING.value: {"start": 11.0, "duration_s": 4.0},
+        SlimeStatus.TRAIN_MODEL.value: {
+            "start": 11.0,
+            "duration_s": 3.0,
+        },
+        OPTIMIZER_STEP: {
+            "start": 13.0,
+            "duration_s": 1.0,
+        },
+        CHECKPOINT_SAVE: {"start": 15.0, "duration_s": 1.0},
+        WEIGHT_SYNC: {"start": 16.0, "duration_s": 4.0},
+        EVAL_AFTER: {"start": 20.0, "duration_s": 1.0},
+    }
+    assert step_times["2"] == {"start": 21, "end": 25, "duration_s": 4}
+    assert substep_times["2"][ROLLOUT_LOGGING] == {
+        "start": 12.0,
+        "duration_s": 6.0,
+    }
+    assert substep_timing_intervals["1"] == {
+        SlimeStatus.TRAIN_MODEL.value: [
+            {"step_id": 0, "start": 11.0, "duration_s": 2.0},
+            {"step_id": 1, "start": 13.5, "duration_s": 1.0},
+        ],
+        OPTIMIZER_STEP: [
+            {"step_id": 0, "start": 13.0, "duration_s": 0.5},
+            {"step_id": 1, "start": 14.5, "duration_s": 0.5},
+        ],
     }

@@ -4,9 +4,13 @@
   let {
     stepTimes = null,
     substepTimes = null,
+    substepTimingIntervals = null,
     layout = "rows",
+    asyncMode = false,
     downloadName = "step_substep_times.json",
   } = $props();
+
+  let detailedTimingIntervals = $derived(substepTimingIntervals);
 
   const SUBSTEP_LABELS = {
     evaluate_rollouts: "Eval (before)",
@@ -32,7 +36,34 @@
     evaluate_rollouts_end: "#818cf8",
   };
 
-  const ORDER = Object.keys(SUBSTEP_LABELS);
+  const ASYNC_SUBSTEP_LABELS = {
+    ...SUBSTEP_LABELS,
+    generate_rollouts: "Rollout + reward",
+    training: "Training",
+    train_model: "Forward / backward",
+  };
+
+  const ASYNC_SUBSTEP_COLORS = {
+    ...SUBSTEP_COLORS,
+    training: "var(--color-c-dataviz-primary-7, #648fe0)",
+    train_model: "var(--color-c-dataviz-paired-4, #6cabc1)",
+    optimizer_step: "var(--color-c-dataviz-paired-7, #8956fa)",
+  };
+
+  const SUBSTEP_ORDER = Object.keys(SUBSTEP_LABELS);
+  const ASYNC_SUBSTEP_ORDER = [
+    "evaluate_rollouts",
+    "generate_rollouts",
+    "training",
+    "train_model",
+    "optimizer_step",
+    "checkpoint_save",
+    "weight_sync",
+    "offload_rollout",
+    "compute_log_probs",
+    "offload_train",
+    "evaluate_rollouts_end",
+  ];
 
   // Timeline zoom bounds: 1 = fit-to-width, MAX_ZOOM = deepest magnification.
   const MIN_ZOOM = 1;
@@ -46,6 +77,14 @@
 
   function colorFor(name) {
     return SUBSTEP_COLORS[name] || "var(--color-c-gray-40, #5e5e5e)";
+  }
+
+  function asyncLabelFor(name) {
+    return ASYNC_SUBSTEP_LABELS[name] || labelFor(name);
+  }
+
+  function asyncColorFor(name) {
+    return ASYNC_SUBSTEP_COLORS[name] || colorFor(name);
   }
 
   // Durations are float seconds; keep up to 3 decimals (trailing zeros trimmed).
@@ -62,7 +101,14 @@
   }
 
   function downloadJson() {
-    const payload = { step_times: stepTimes || {}, substep_times: substepTimes || {} };
+    const payload = {
+      step_times: stepTimes || {},
+      substep_times: substepTimes || {},
+    };
+    if (detailedTimingIntervals) {
+      payload.substep_timing_intervals = detailedTimingIntervals;
+      payload.substep_spans = detailedTimingIntervals;
+    }
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -80,18 +126,52 @@
       const st = (stepTimes || {})[k] || null;
       const subs = (substepTimes || {})[k] || {};
       const substeps = Object.entries(subs)
-        .map(([name, v]) => ({
-          name,
-          start: v?.start ?? null,
-          duration: v?.duration_s ?? null,
-        }))
+        .map(([name, v]) => {
+          const detailed = detailedTimingIntervals?.[k]?.[name];
+          const hasDetails = Array.isArray(detailed) && detailed.length > 0;
+          const values = hasDetails ? detailed : [v];
+          const segments = [];
+          for (const [index, value] of values.entries()) {
+            if (value?.start == null || value?.duration_s == null) continue;
+            const start = Number(value?.start);
+            const duration = Number(value?.duration_s);
+            if (!Number.isFinite(start) || !Number.isFinite(duration) || duration < 0) {
+              continue;
+            }
+            segments.push({
+              innerStep: hasDetails ? (value.step_id ?? index) : null,
+              start,
+              duration,
+              end: start + duration,
+            });
+          }
+          return {
+            name,
+            start: v?.start ?? null,
+            duration: v?.duration_s ?? null,
+            segments,
+          };
+        })
         .sort((a, b) => (a.start ?? 0) - (b.start ?? 0));
-      return {
+      const step = {
         key: k,
         n: Number.isFinite(Number(k)) ? Number(k) : k,
+        rolloutId: Number.isFinite(Number(k)) ? Math.max(0, Number(k) - 1) : k,
         duration: st?.duration_s ?? null,
         substeps,
       };
+      step.timeline = [];
+      for (const sub of substeps) {
+        for (const item of sub.segments) {
+          step.timeline.push({
+            step,
+            sub: { name: sub.name, ...item },
+            start: item.start,
+            end: item.end,
+          });
+        }
+      }
+      return step;
     });
     out.sort((a, b) => (Number(a.key) || 0) - (Number(b.key) || 0));
     return out;
@@ -99,10 +179,80 @@
 
   let hasData = $derived(steps.length > 0);
 
+  const TRAINING_CHILDREN = new Set(["train_model", "optimizer_step"]);
+
+  function tooltipLabel(step, sub) {
+    const repeated =
+      step.timeline.filter((interval) => interval.sub.name === sub.name).length > 1;
+    if (repeated && TRAINING_CHILDREN.has(sub.name) && sub.innerStep != null) {
+      return `${asyncLabelFor(sub.name)} ${sub.innerStep + 1}`;
+    }
+    return asyncMode ? asyncLabelFor(sub.name) : labelFor(sub.name);
+  }
+
+  function trainingUpdates(step) {
+    return step.timeline
+      .filter((interval) => TRAINING_CHILDREN.has(interval.sub.name))
+      .sort((a, b) => a.start - b.start);
+  }
+
+  function topLevelSubsteps(step) {
+    const hasUpdates = trainingUpdates(step).length > 0;
+    return hasUpdates
+      ? step.substeps.filter(
+          (sub) => sub.name !== "training" && !TRAINING_CHILDREN.has(sub.name),
+        )
+      : step.substeps;
+  }
+
+  let asyncTimeline = $derived.by(() => {
+    const rollout = [];
+    const training = [];
+    const trainingWindows = [];
+    const coordination = [];
+    for (const step of steps) {
+      const hasUpdates = trainingUpdates(step).length > 0;
+      for (const span of step.timeline) {
+        if (TRAINING_CHILDREN.has(span.sub.name)) training.push(span);
+        else if (span.sub.name === "training" && hasUpdates) trainingWindows.push(span);
+        else if (
+          span.sub.name === "generate_rollouts" ||
+          span.sub.name.startsWith("evaluate_rollouts")
+        ) {
+          rollout.push(span);
+        } else if (span.sub.name === "training") training.push(span);
+        else coordination.push(span);
+      }
+    }
+    const spans = [...rollout, ...trainingWindows, ...training, ...coordination];
+    if (!spans.length) {
+      return { start: 0, duration: 1, rollout, training, trainingWindows, coordination };
+    }
+    const start = Math.min(...spans.map((span) => span.start));
+    const end = Math.max(...spans.map((span) => span.end));
+    return {
+      start,
+      duration: Math.max(end - start, 0.001),
+      rollout,
+      training,
+      trainingWindows,
+      coordination,
+    };
+  });
+
   let legend = $derived.by(() => {
     const seen = new Set();
-    for (const s of steps) for (const sub of s.substeps) seen.add(sub.name);
-    return ORDER.filter((n) => seen.has(n));
+    if (asyncMode) {
+      for (const step of steps) {
+        for (const sub of topLevelSubsteps(step)) seen.add(sub.name);
+        for (const span of trainingUpdates(step)) seen.add(span.sub.name);
+      }
+      if (asyncTimeline.trainingWindows.length) seen.add("training");
+    } else {
+      for (const step of steps) for (const sub of step.substeps) seen.add(sub.name);
+    }
+    const order = asyncMode ? ASYNC_SUBSTEP_ORDER : SUBSTEP_ORDER;
+    return order.filter((n) => seen.has(n));
   });
 
   let tip = $state(null);
@@ -154,12 +304,26 @@
   }
 
   function isActive(step, sub) {
-    return tip && tip.step === step.n && tip.name === sub.name;
+    return (
+      tip &&
+      tip.rolloutId === step.rolloutId &&
+      tip.name === sub.name &&
+      tip.innerStep === (sub.innerStep ?? null)
+    );
   }
 
   function showTip(e, step, sub) {
     if (pinned) return;
-    tip = { x: e.clientX, y: e.clientY, step: step.n, name: sub.name, dur: sub.duration };
+    tip = {
+      x: e.clientX,
+      y: e.clientY,
+      rolloutId: step.rolloutId,
+      innerStep: sub.innerStep ?? null,
+      name: sub.name,
+      label: tooltipLabel(step, sub),
+      stepLabel: asyncMode ? `Rollout ${step.rolloutId}` : `Step ${step.n}`,
+      dur: sub.duration,
+    };
   }
 
   function moveTip(e) {
@@ -180,7 +344,16 @@
       return;
     }
     pinned = true;
-    tip = { x: e.clientX, y: e.clientY, step: step.n, name: sub.name, dur: sub.duration };
+    tip = {
+      x: e.clientX,
+      y: e.clientY,
+      rolloutId: step.rolloutId,
+      innerStep: sub.innerStep ?? null,
+      name: sub.name,
+      label: tooltipLabel(step, sub),
+      stepLabel: asyncMode ? `Rollout ${step.rolloutId}` : `Step ${step.n}`,
+      dur: sub.duration,
+    };
   }
 
   function clearPin() {
@@ -214,6 +387,64 @@
   ></div>
 {/snippet}
 
+{#snippet asyncSegment(span)}
+  {@const trainingChild = TRAINING_CHILDREN.has(span.sub.name)}
+  <div
+    class="seg async-seg"
+    class:training-inner-seg={trainingChild}
+    class:active={pinned && isActive(span.step, span.sub)}
+    style={`left:${((span.start - asyncTimeline.start) / asyncTimeline.duration) * 100}%;width:${(span.sub.duration / asyncTimeline.duration) * 100}%;background:${asyncColorFor(span.sub.name)}`}
+    role="button"
+    tabindex="0"
+    onmouseenter={(e) => showTip(e, span.step, span.sub)}
+    onmousemove={moveTip}
+    onmouseleave={hideTip}
+    onclick={(e) => pinTip(e, span.step, span.sub)}
+    onkeydown={(e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        pinTip(e, span.step, span.sub);
+      }
+    }}
+  ></div>
+{/snippet}
+
+{#snippet trainingWindow(span)}
+  <div
+    class="training-window"
+    class:active={pinned && isActive(span.step, span.sub)}
+    style={`left:${((span.start - asyncTimeline.start) / asyncTimeline.duration) * 100}%;width:${(span.sub.duration / asyncTimeline.duration) * 100}%;--training-color:${asyncColorFor(span.sub.name)}`}
+    role="button"
+    tabindex="0"
+    onmouseenter={(e) => showTip(e, span.step, span.sub)}
+    onmousemove={moveTip}
+    onmouseleave={hideTip}
+    onclick={(e) => pinTip(e, span.step, span.sub)}
+    onkeydown={(e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        pinTip(e, span.step, span.sub);
+      }
+    }}
+  ></div>
+{/snippet}
+
+{#snippet asyncLane(label, spans, windows = [])}
+  {#if spans.length || windows.length}
+    <div class="async-lane">
+      <div class="async-lane-label tl-step-name">{label}</div>
+      <div class="bar tl-bar async-lane-track">
+        {#each windows as span (`window-${span.step.key}-${span.start}`)}
+          {@render trainingWindow(span)}
+        {/each}
+        {#each spans as span (`${span.step.key}-${span.sub.name}-${span.sub.innerStep ?? "total"}-${span.start}`)}
+          {@render asyncSegment(span)}
+        {/each}
+      </div>
+    </div>
+  {/if}
+{/snippet}
+
 {#if hasData}
   <div class="step-timings">
     {#if legend.length || layout === "timeline"}
@@ -221,8 +452,8 @@
         <div class="legend">
           {#each legend as name (name)}
             <span class="legend-item">
-              <span class="swatch" style:background={colorFor(name)}></span>
-              {labelFor(name)}
+              <span class="swatch" style:background={asyncMode ? asyncColorFor(name) : colorFor(name)}></span>
+              {asyncMode ? asyncLabelFor(name) : labelFor(name)}
             </span>
           {/each}
         </div>
@@ -267,7 +498,22 @@
       </div>
     {/if}
 
-    {#if layout === "timeline"}
+    {#if layout === "timeline" && asyncMode}
+      <div class="tl-viewport" bind:this={viewport} use:wheelZoom>
+        <div class="async-timeline" style:width={`${zoom * 100}%`}>
+          <div class="async-axis">
+            <span class="tl-step-name">Async wall-clock timeline</span>
+            <span class="tl-step-dur">{fmtSecs(asyncTimeline.duration)}</span>
+          </div>
+          {@render asyncLane("Rollout + reward", asyncTimeline.rollout)}
+          {@render asyncLane("Training", asyncTimeline.training, asyncTimeline.trainingWindows)}
+          {@render asyncLane("Coordination / I/O", asyncTimeline.coordination)}
+        </div>
+      </div>
+      <div class="tl-hint">
+        Blue outline = total training time · unfilled space = preprocessing and other training work · scroll to zoom
+      </div>
+    {:else if layout === "timeline"}
       <div class="tl-viewport" bind:this={viewport} use:wheelZoom>
         <div class="tl-track" style:width={`${zoom * 100}%`}>
           {#each steps as step (step.key)}
@@ -313,8 +559,8 @@
 
   {#if tip}
     <div class="tg-tip" class:pinned style:left={`${tip.x}px`} style:top={`${tip.y}px`}>
-      <span class="tg-tip-step">Step {tip.step}</span>
-      <span class="tg-tip-name">{labelFor(tip.name)}</span>
+      <span class="tg-tip-step">{tip.stepLabel}</span>
+      <span class="tg-tip-name">{tip.label}</span>
       <span class="tg-tip-dur">
         {tip.dur == null ? "unknown (report dropped)" : fmtSecs(tip.dur)}
       </span>
@@ -327,6 +573,79 @@
     display: flex;
     flex-direction: column;
     gap: 10px;
+  }
+
+  .async-timeline {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 100%;
+    padding-bottom: 2px;
+  }
+
+  .async-axis,
+  .async-lane {
+    display: grid;
+    grid-template-columns: 128px minmax(0, 1fr);
+    gap: 8px;
+  }
+
+  .async-axis {
+    font-size: 10px;
+    line-height: 14px;
+    margin-bottom: 3px;
+  }
+
+  .async-axis span:last-child {
+    grid-column: 2;
+    justify-self: end;
+  }
+
+  .async-lane {
+    align-items: center;
+  }
+
+  .async-lane-label {
+    font-size: 10px;
+    line-height: 14px;
+    overflow: hidden;
+    text-align: right;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .async-lane-track {
+    position: relative;
+  }
+
+  .async-seg {
+    position: absolute;
+    top: 0;
+    z-index: 2;
+    min-width: 1px;
+  }
+
+  .async-seg.training-inner-seg {
+    top: 2px;
+    z-index: 3;
+    height: calc(100% - 4px);
+    border-radius: 1px;
+  }
+
+  .training-window {
+    position: absolute;
+    top: 0;
+    z-index: 1;
+    height: 100%;
+    border: 1px solid var(--training-color);
+    border-radius: 3px;
+    background: color-mix(in srgb, var(--training-color) 28%, transparent);
+    cursor: pointer;
+  }
+
+  .training-window.active {
+    outline: 1px solid var(--text-bright);
+    outline-offset: -1px;
   }
 
   .legend-row {
@@ -535,6 +854,10 @@
 
   .tl-bar {
     height: 18px;
+  }
+
+  .bar.tl-bar.async-lane-track {
+    height: 14px;
   }
 
   .tl-hint {

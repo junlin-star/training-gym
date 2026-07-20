@@ -16,6 +16,7 @@ Then: `uv run modal run <tutorial_file>.py::train`.
 """
 
 import asyncio
+import math
 import os
 import shlex
 import subprocess
@@ -23,7 +24,7 @@ import tempfile
 import time
 from pathlib import Path, PurePosixPath
 from typing import Any
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Collection, Mapping, Sequence
 from enum import Enum
 from modal import App, Dict as ModalDict, Image, Secret, Volume, Retries
 
@@ -64,7 +65,7 @@ from modal_training_gym.common.launcher_helpers import (
 )
 from modal_training_gym.common.wandb import WandbConfig
 from modal_training_gym.common.status import SlimeStatus
-from modal_training_gym.common.step_timing import Substep
+from modal_training_gym.common.step_timing import Substep, record_step_time_events
 
 from modal_training_gym.train_recipes.slime_recipe.recipe import (
     CHECKPOINTS_PATH,
@@ -91,6 +92,32 @@ SLIME_IMAGE = "slimerl/slime@sha256:269b44b17e3f7136447db4cdaa3bf36ef9e3169f1596
 # actual CPU-/RAM-second usage instead of over-provisioning a static reservation.
 HARBOR_PKG_VERSION = "0.8.0"
 
+_SYNC_SUBSTEP_ORDER = tuple(substep.value for substep in Substep)
+_SYNC_OPTIONAL_SUBSTEPS = frozenset(
+    {
+        Substep.EVAL_BEFORE.value,
+        Substep.OFFLOAD_ROLLOUT.value,
+        Substep.CHECKPOINT_SAVE.value,
+        Substep.OFFLOAD_TRAIN.value,
+        Substep.EVAL_AFTER.value,
+    }
+)
+_ASYNC_SUBSTEP_ORDER = (
+    Substep.GENERATE_ROLLOUTS.value,
+    SlimeStatus.TRAINING.value,
+    SlimeStatus.TRAIN_MODEL.value,
+    Substep.OPTIMIZER_STEP.value,
+    Substep.CHECKPOINT_SAVE.value,
+    Substep.WEIGHT_SYNC.value,
+    Substep.EVAL_AFTER.value,
+)
+_ASYNC_OPTIONAL_SUBSTEPS = frozenset(
+    {
+        Substep.CHECKPOINT_SAVE.value,
+        Substep.WEIGHT_SYNC.value,
+        Substep.EVAL_AFTER.value,
+    }
+)
 _SLIME_PATCHES = Path(__file__).parent / "modal_helpers" / "patches"
 _PATCH_VALIDATION_B64 = encode_patch("patch_validation", _SLIME_PATCHES)
 _PATCH_MEGATRON_BRIDGE_B64 = encode_patch("patch_megatron_bridge", _SLIME_PATCHES)
@@ -257,10 +284,12 @@ def _serialize_slime_params(
     dataset: DatasetConfig | None = None,
     model: ModelConfig | None = None,
 ) -> dict[str, Any]:
-    return {
+    params = {
         key: _serialize_slime_param_value(key, value)
         for key, value in recipe._fields(dataset=dataset, model=model).items()
     }
+    params["async_mode"] = recipe.async_mode
+    return params
 
 
 def _preflight_wandb(wandb_cfg: WandbConfig) -> str:
@@ -271,26 +300,57 @@ def _preflight_wandb(wandb_cfg: WandbConfig) -> str:
 
 
 def aggregate_step_times(
-    step_times_dict: Mapping[str, Any],
+    step_times_dict: Mapping[Any, Any],
     run_id: str,
     num_steps: int,
-    SUBSTEP_ORDER: list[str],
-    OPTIONAL_SUBSTEPS: set[str],
+    SUBSTEP_ORDER: Sequence[str],
+    OPTIONAL_SUBSTEPS: Collection[str],
+    *,
+    include_intervals: bool = False,
 ) -> tuple[
     dict[str, dict[str, int | None]],
     dict[str, dict[str, dict[str, float | None]]],
+] | tuple[
+    dict[str, dict[str, int | None]],
+    dict[str, dict[str, dict[str, float | None]]],
+    dict[str, dict[str, list[dict[str, int | float]]]],
 ]:
     """Organize step and substep timings from the Modal dict at the end of a run.
 
     Records each step's start/end/duration; missing timestamps become None.
-    Each substep's duration is the gap from its start to the next recorded
-    substep's start (or the step's end for the last one). Duration is None
-    if a mandatory substep in between is missing. Step duration is computed
-    independently, since substeps include work outside the step (evals,
-    checkpointing).
+    Each substep's duration uses its explicit finish when available, otherwise
+    the gap from its start to the next recorded substep's start (or the step's
+    end for the last one). Duration is None if a mandatory substep in between
+    is missing. Step duration is computed independently, since substeps include
+    work outside the step (evals, checkpointing).
     """
     step_times: dict[str, dict[str, int | None]] = {}
     substep_times: dict[str, dict[str, dict[str, float | None]]] = {}
+    substep_timing_intervals: dict[str, dict[str, list[dict[str, int | float]]]] = {}
+    interval_boundaries: dict[tuple[int, str], dict[int, dict[str, float]]] = {}
+    for key, value in step_times_dict.items():
+        match key:
+            case (
+                key_run_id,
+                "substep_boundary",
+                step,
+                phase,
+                update,
+                ("start" | "finish") as boundary,
+            ) if key_run_id == run_id and value is not None:
+                pass
+            case _:
+                continue
+        try:
+            step = int(step)
+            update = int(update)
+            timestamp = float(value)
+        except (TypeError, ValueError):
+            continue
+        if step <= 0 or update < 0 or not math.isfinite(timestamp):
+            continue
+        updates = interval_boundaries.setdefault((step, str(phase)), {})
+        updates.setdefault(update, {})[str(boundary)] = timestamp
 
     for current_step_num in range(1, num_steps + 1):
         start_key = f"{run_id}:{current_step_num}:start"
@@ -334,32 +394,77 @@ def aggregate_step_times(
         else:
             full_step_end_time = precise_end_time
 
-        substep_times[f"{current_step_num}"] = {}
+        step_key = str(current_step_num)
+        substep_times[step_key] = {}
+        substep_timing_intervals[step_key] = {}
         eval_before = Substep.EVAL_BEFORE.value
         present: set[str] = set()
-        recorded: list[tuple[float, int, str]] = []
+        recorded: list[
+            tuple[float, int, str, float | None, list[dict[str, int | float]]]
+        ] = []
         for order_idx, substep in enumerate(SUBSTEP_ORDER):
             substep_start = step_times_dict.get(
                 f"{run_id}:{current_step_num}:substep:{substep}"
             )
-            if substep_start is None:
+            intervals: list[dict[str, int | float]] = []
+            updates = interval_boundaries.get((current_step_num, substep), {})
+            for update, boundaries in sorted(updates.items()):
+                try:
+                    start = boundaries["start"]
+                    finish = boundaries["finish"]
+                except KeyError:
+                    continue
+                if finish < start:
+                    continue
+                intervals.append(
+                    {
+                        "step_id": update,
+                        "start": round(start, 3),
+                        "duration_s": round(finish - start, 3),
+                    }
+                )
+            if intervals:
+                substep_start = min(float(interval["start"]) for interval in intervals)
+            elif substep_start is None:
                 continue
-            substep_start = float(substep_start)
+            else:
+                substep_start = float(substep_start)
+            substep_finish = step_times_dict.get(
+                f"{run_id}:{current_step_num}:substep:{substep}:finish"
+            )
+            if substep_finish is not None:
+                substep_finish = float(substep_finish)
+                if substep_finish < substep_start:
+                    substep_finish = None
+            exact = substep_finish is not None
             if (
                 step_window_start is not None
                 and substep_start < step_window_start
                 and substep != eval_before
+                and not exact
             ):
                 continue
-            if full_step_start_time is not None and substep != eval_before:
+            if (
+                full_step_start_time is not None
+                and substep != eval_before
+                and not exact
+            ):
                 substep_start = max(substep_start, full_step_start_time)
-            if full_step_end_time is not None:
+            if full_step_end_time is not None and not exact:
                 substep_start = min(substep_start, full_step_end_time)
             present.add(substep)
-            recorded.append((substep_start, order_idx, substep))
+            recorded.append(
+                (substep_start, order_idx, substep, substep_finish, intervals)
+            )
         recorded.sort()
 
-        for idx, (substep_start, order_idx, substep) in enumerate(recorded):
+        for idx, (
+            substep_start,
+            order_idx,
+            substep,
+            substep_finish,
+            intervals,
+        ) in enumerate(recorded):
             if idx + 1 < len(recorded):
                 next_start, next_idx = recorded[idx + 1][0], recorded[idx + 1][1]
             else:
@@ -369,16 +474,27 @@ def aggregate_step_times(
             dropped_mandatory = any(
                 s not in OPTIONAL_SUBSTEPS and s not in present for s in gap
             )
-            if next_start is None or dropped_mandatory:
+            if intervals:
+                substep_duration = round(
+                    sum(float(interval["duration_s"]) for interval in intervals), 3
+                )
+            elif substep_finish is not None:
+                substep_duration = round(max(substep_finish - substep_start, 0.0), 3)
+            elif next_start is None or dropped_mandatory:
                 substep_duration = None
             else:
                 substep_duration = round(max(next_start - substep_start, 0.0), 3)
 
-            substep_times[f"{current_step_num}"][substep] = {
+            timing: dict[str, float | None] = {
                 "start": round(substep_start, 3),
                 "duration_s": substep_duration,
             }
+            substep_times[step_key][substep] = timing
+            if intervals:
+                substep_timing_intervals[step_key][substep] = intervals
 
+    if include_intervals:
+        return step_times, substep_times, substep_timing_intervals
     return step_times, substep_times
 
 
@@ -619,8 +735,10 @@ def build_slime_app(
 
     # Build train_image AFTER _ship_callable so shipped modules are included.
     train_image = image
+    if slime.async_mode:
+        train_image = train_image.uv_pip_install("modal==1.5.2")
     if _has_hybrid_spec:
-        train_image = image.run_commands(
+        train_image = train_image.run_commands(
             f"echo {_PATCH_TORCH_LOAD_B64} | base64 -d | python3",
             f"echo {_PATCH_GLOBAL_PLAN_B64} | base64 -d | python3",
             f"echo {_PATCH_CHECKPOINT_SAVE_B64} | base64 -d | python3",
@@ -927,14 +1045,12 @@ def build_slime_app(
         unsupported = ", ".join(sorted(train_function_kwargs))
         raise TypeError(f"Unsupported slime.train_function_kwargs keys: {unsupported}")
 
-    SUBSTEP_ORDER = [substep.value for substep in Substep]
-    OPTIONAL_SUBSTEPS = {
-        Substep.EVAL_BEFORE.value,
-        Substep.OFFLOAD_ROLLOUT.value,
-        Substep.CHECKPOINT_SAVE.value,
-        Substep.OFFLOAD_TRAIN.value,
-        Substep.EVAL_AFTER.value,
-    }
+    if slime.async_mode:
+        SUBSTEP_ORDER = _ASYNC_SUBSTEP_ORDER
+        OPTIONAL_SUBSTEPS = _ASYNC_OPTIONAL_SUBSTEPS
+    else:
+        SUBSTEP_ORDER = _SYNC_SUBSTEP_ORDER
+        OPTIONAL_SUBSTEPS = _SYNC_OPTIONAL_SUBSTEPS
 
     STEP_TIME_DICT_BATCH_SIZE = 128
 
@@ -945,43 +1061,83 @@ def build_slime_app(
         "substep_finish",
         *(f"substep:{s}" for s in SUBSTEP_ORDER),
     )
-
-    async def write_step_times(
-        run_id: str, num_steps: int
-    ) -> tuple[
-        dict[str, dict[str, float | None]],
-        dict[str, dict[str, dict[str, float | None]]],
-    ]:
-        step_times_dict = ModalDict.from_name(
-            "training-gym-step-times", create_if_missing=True
+    if slime.async_mode:
+        STEP_TIME_KEY_SUFFIXES += tuple(
+            f"substep:{substep}:finish" for substep in SUBSTEP_ORDER
         )
+
+    async def step_time_keys(
+        step_times_dict: ModalDict, run_id: str, num_steps: int
+    ) -> list[Any]:
         keys = [
             f"{run_id}:{step}:{suffix}"
             for step in range(1, num_steps + 1)
             for suffix in STEP_TIME_KEY_SUFFIXES
         ]
-        event_times_by_key: dict[str, Any] = {}
+        if slime.async_mode:
+            timing_event_keys: set[Any] = set()
+            async for key in step_times_dict.keys.aio():
+                match key:
+                    case (
+                        key_run_id,
+                        "substep_boundary",
+                        _,
+                        _,
+                        _,
+                        ("start" | "finish"),
+                    ) if key_run_id == run_id:
+                        timing_event_keys.add(key)
+                    case (key_run_id, "timing_event_batch", _) if key_run_id == run_id:
+                        timing_event_keys.add(key)
+                    case (key_run_id, "timing_event", _) if key_run_id == run_id:
+                        timing_event_keys.add(key)
+            keys.extend(timing_event_keys)
+        return keys
+
+    async def write_step_times(
+        run_id: str, num_steps: int
+    ) -> tuple[
+        dict[str, dict[str, int | None]],
+        dict[str, dict[str, dict[str, float | None]]],
+        dict[str, dict[str, list[dict[str, int | float]]]],
+        list[Any],
+    ]:
+        step_times_dict = ModalDict.from_name(
+            "training-gym-step-times", create_if_missing=True
+        )
+        keys = await step_time_keys(step_times_dict, run_id, num_steps)
+        event_times_by_key: dict[Any, Any] = {}
         for offset in range(0, len(keys), STEP_TIME_DICT_BATCH_SIZE):
             batch = keys[offset : offset + STEP_TIME_DICT_BATCH_SIZE]
             values = await asyncio.gather(*(step_times_dict.get.aio(k) for k in batch))
             event_times_by_key.update(zip(batch, values))
-        return aggregate_step_times(
+        timing_events: list[Mapping[str, Any]] = []
+        for key, value in list(event_times_by_key.items()):
+            match key:
+                case (key_run_id, "timing_event_batch", _) if key_run_id == run_id:
+                    if isinstance(value, list):
+                        timing_events.extend(
+                            event for event in value if isinstance(event, Mapping)
+                        )
+                case (key_run_id, "timing_event", _) if key_run_id == run_id:
+                    if isinstance(value, Mapping):
+                        timing_events.append(value)
+
+        record_step_time_events(event_times_by_key, run_id, timing_events)
+        timing_data = aggregate_step_times(
             event_times_by_key,
             run_id,
             num_steps,
             SUBSTEP_ORDER,
             OPTIONAL_SUBSTEPS,
+            include_intervals=True,
         )
+        return (*timing_data, keys)
 
-    async def clear_step_times(run_id: str, num_steps: int) -> None:
+    async def clear_step_times(keys: list[Any]) -> None:
         step_times_dict = ModalDict.from_name(
             "training-gym-step-times", create_if_missing=True
         )
-        keys = [
-            f"{run_id}:{step}:{suffix}"
-            for step in range(1, num_steps + 1)
-            for suffix in STEP_TIME_KEY_SUFFIXES
-        ]
         for offset in range(0, len(keys), STEP_TIME_DICT_BATCH_SIZE):
             batch = keys[offset : offset + STEP_TIME_DICT_BATCH_SIZE]
             await asyncio.gather(*(step_times_dict.pop.aio(k, None) for k in batch))
@@ -1089,6 +1245,7 @@ def build_slime_app(
             wandb_entity=wandb_entity,
             framework_status_token=framework_status_token,
         )
+        training_attempt = int((run_record.metadata or {}).get("attempt_count") or 1)
 
         try:  # Wraps all post-setup work so any failure marks the run terminal.
             # In-flight status updates are fire-and-forget via the dashboard's
@@ -1227,7 +1384,9 @@ def build_slime_app(
                     "MASTER_ADDR": cluster.head_addr,
                     "TRAINING_GYM_TRAINING_RUN_ID": training_run_id,
                     "TRAINING_GYM_APP_NAME": app_name,
+                    "TRAINING_GYM_ASYNC_MODE": "1" if slime.async_mode else "",
                     "TRAINING_GYM_TOTAL_STEPS": str(slime.num_rollout),
+                    "TRAINING_GYM_TRAINING_ATTEMPT": str(training_attempt),
                     "TRAINING_GYM_RESPONSE_PARSER_PATH": _response_parser_path(model),
                     "TRAINING_GYM_CAPTURE_TRACE": (
                         "1" if getattr(slime, "capture_trace", False) else ""
@@ -1299,25 +1458,57 @@ def build_slime_app(
                 run_record, training_run_id
             )
 
-            step_times_read = False
-            if not slime.async_mode:
-                try:
-                    (
-                        latest_run_record.step_times,
-                        latest_run_record.substep_times,
-                    ) = await write_step_times(training_run_id, slime.num_rollout)
-                    step_times_read = True
-                except Exception as exc:
-                    print(f"Failed to read step times: {exc}")
+            step_time_keys_read: list[Any] | None = None
+            try:
+                (
+                    step_times,
+                    substep_times,
+                    substep_timing_intervals,
+                    step_time_keys_read,
+                ) = await write_step_times(training_run_id, slime.num_rollout)
+                latest_run_record.step_times = {
+                    **(latest_run_record.step_times or {}),
+                    **{
+                        step: timing
+                        for step, timing in step_times.items()
+                        if any(value is not None for value in timing.values())
+                    },
+                }
+                merged_substep_times = dict(latest_run_record.substep_times or {})
+                for step, timings in substep_times.items():
+                    if timings:
+                        merged_substep_times[step] = {
+                            **merged_substep_times.get(step, {}),
+                            **timings,
+                        }
+                latest_run_record.substep_times = merged_substep_times
+                metadata = dict(latest_run_record.metadata or {})
+                if any(substep_timing_intervals.values()):
+                    merged_intervals = dict(
+                        metadata.get("substep_timing_intervals")
+                        or metadata.get("substep_spans")
+                        or {}
+                    )
+                    for step, intervals in substep_timing_intervals.items():
+                        if intervals:
+                            merged_intervals[step] = {
+                                **merged_intervals.get(step, {}),
+                                **intervals,
+                            }
+                    metadata["substep_timing_intervals"] = merged_intervals
+                    metadata["substep_spans"] = merged_intervals
+                latest_run_record.metadata = metadata
+            except Exception as exc:
+                print(f"Failed to read step times: {exc}")
 
             try:
                 await latest_run_record.save(is_async=True)
             except Exception as exc:
                 print(f"Failed to save run record: {exc}")
             else:
-                if step_times_read or slime.async_mode:
+                if step_time_keys_read is not None:
                     try:
-                        await clear_step_times(training_run_id, slime.num_rollout)
+                        await clear_step_times(step_time_keys_read)
                     except Exception as exc:
                         print(f"Failed to clear step times: {exc}")
 

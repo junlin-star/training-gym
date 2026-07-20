@@ -80,6 +80,7 @@ def test_train_config_can_skip_model_recipe_merge() -> None:
         rollout_max_response_len=4096,
         rollout_temperature=1.0,
         save_interval=10,
+        async_mode=True,
     )
     dataset = HuggingFaceDataset(
         hf_repo="some/dataset",
@@ -94,6 +95,7 @@ def test_train_config_can_skip_model_recipe_merge() -> None:
     )._build_config_summary("brisk-river-deadbeef")
     assert merged["recipe"]["n_samples_per_prompt"] == 8
     assert merged["recipe"]["lr"] == 5e-7
+    assert merged["recipe"]["async_mode"] is True
 
     unmerged = TrainConfig(
         dataset=dataset,
@@ -103,3 +105,4 @@ def test_train_config_can_skip_model_recipe_merge() -> None:
     )._build_config_summary("brisk-river-deadbeef")
     assert unmerged["recipe"]["n_samples_per_prompt"] == 2
     assert unmerged["recipe"]["lr"] == 1e-6
+    assert unmerged["recipe"]["async_mode"] is True

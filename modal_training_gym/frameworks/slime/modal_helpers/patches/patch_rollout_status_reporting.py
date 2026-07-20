@@ -20,6 +20,17 @@ SUBSTEP_FINISH_MARKER = "PATCHED_TRAINING_GYM_SUBSTEP_FINISH"
 SUBSTEP_START_MARKER = "PATCHED_TRAINING_GYM_SUBSTEP_START"
 EVAL_BEGIN_MARKER = "PATCHED_TRAINING_GYM_EVAL_BEGIN"
 EVAL_END_MARKER = "PATCHED_TRAINING_GYM_EVAL_END"
+ASYNC_INITIAL_GENERATION_MARKER = "PATCHED_TRAINING_GYM_ASYNC_INITIAL_GENERATION"
+ASYNC_GENERATION_FINISH_MARKER = "PATCHED_TRAINING_GYM_ASYNC_GENERATION_FINISH"
+ASYNC_EARLY_GENERATION_FINISH_MARKER = (
+    "PATCHED_TRAINING_GYM_ASYNC_EARLY_GENERATION_FINISH"
+)
+ASYNC_NEXT_GENERATION_MARKER = "PATCHED_TRAINING_GYM_ASYNC_NEXT_GENERATION"
+ASYNC_TRAIN_START_MARKER = "PATCHED_TRAINING_GYM_ASYNC_TRAIN_START"
+ASYNC_TRAIN_FINISH_MARKER = "PATCHED_TRAINING_GYM_ASYNC_TRAIN_FINISH"
+ASYNC_CHECKPOINT_MARKER = "PATCHED_TRAINING_GYM_ASYNC_CHECKPOINT"
+ASYNC_WEIGHT_SYNC_MARKER = "PATCHED_TRAINING_GYM_ASYNC_WEIGHT_SYNC"
+ASYNC_EVAL_MARKER = "PATCHED_TRAINING_GYM_ASYNC_EVAL"
 
 PREAMBLE = (
     f"# {PREAMBLE_MARKER}: bootstrap phase reporter (runs once per process)\n"
@@ -35,10 +46,182 @@ PREAMBLE = (
     "\n"
 )
 
+ASYNC_PREAMBLE = (
+    f"# {PREAMBLE_MARKER}: bootstrap phase reporter (runs once per process)\n"
+    "import sys as _tg_sys\n"
+    "if '/root' not in _tg_sys.path:\n"
+    "    _tg_sys.path.insert(0, '/root')\n"
+    "try:\n"
+    "    from modal_training_gym.frameworks.slime.phase_reporting import report_step_event as _tg_report\n"
+    "except ImportError:\n"
+    "    def _tg_report(status, args=None, rollout_id=None, step_event=''): pass\n"
+    "\n"
+)
+
+
+def _patch_async_file(path: Path) -> None:
+    src = path.read_text()
+    if PREAMBLE_MARKER not in src:
+        src = ASYNC_PREAMBLE + src
+
+    failed: list[str] = []
+
+    def replace_once(marker: str, old: str, new: str, description: str) -> None:
+        nonlocal src
+        if marker in src:
+            return
+        if old not in src:
+            failed.append(description)
+            return
+        src = src.replace(old, new, 1)
+
+    replace_once(
+        ASYNC_INITIAL_GENERATION_MARKER,
+        "    rollout_data_next_future = rollout_manager.generate.remote(args.start_rollout_id)\n",
+        f"    # {ASYNC_INITIAL_GENERATION_MARKER}\n"
+        "    _tg_report('generate_rollouts', args, args.start_rollout_id, 'phase_start')\n"
+        "    rollout_data_next_future = rollout_manager.generate.remote(args.start_rollout_id)\n",
+        "initial generation",
+    )
+    replace_once(
+        STEP_START_MARKER,
+        "    for rollout_id in range(args.start_rollout_id, args.num_rollout):\n",
+        "    for rollout_id in range(args.start_rollout_id, args.num_rollout):\n"
+        f"        # {STEP_START_MARKER}\n"
+        "        _tg_report('generate_rollouts', args, rollout_id, 'start')\n"
+        f"        # {SUBSTEP_START_MARKER}\n"
+        "        _tg_report('generate_rollouts', args, rollout_id, 'substep_start')\n",
+        "step start",
+    )
+    replace_once(
+        ASYNC_GENERATION_FINISH_MARKER,
+        "        if rollout_data_next_future is not None:\n"
+        "            rollout_data_curr_ref = ray.get(rollout_data_next_future)\n",
+        "        if rollout_data_next_future is not None:\n"
+        "            rollout_data_curr_ref = ray.get(rollout_data_next_future)\n"
+        f"            # {ASYNC_GENERATION_FINISH_MARKER}\n"
+        "            _tg_report('generate_rollouts', args, rollout_id, 'phase_finish')\n",
+        "generation finish",
+    )
+    replace_once(
+        ASYNC_NEXT_GENERATION_MARKER,
+        "        if rollout_id + 1 < args.num_rollout:\n"
+        "            rollout_data_next_future = rollout_manager.generate.remote(rollout_id + 1)\n",
+        "        if rollout_id + 1 < args.num_rollout:\n"
+        f"            # {ASYNC_NEXT_GENERATION_MARKER}\n"
+        "            _tg_report('generate_rollouts', args, rollout_id + 1, 'phase_start')\n"
+        "            rollout_data_next_future = rollout_manager.generate.remote(rollout_id + 1)\n",
+        "next generation",
+    )
+    replace_once(
+        ASYNC_TRAIN_START_MARKER,
+        "        if args.use_critic:\n",
+        f"        # {ASYNC_TRAIN_START_MARKER}\n"
+        "        _tg_report('training', args, rollout_id, 'phase_start')\n"
+        "        if args.use_critic:\n",
+        "model training start",
+    )
+    replace_once(
+        ASYNC_TRAIN_FINISH_MARKER,
+        "        else:\n"
+        "            ray.get(actor_model.async_train(rollout_id, rollout_data_curr_ref))\n\n"
+        "        if should_run_periodic_action(",
+        "        else:\n"
+        "            ray.get(actor_model.async_train(rollout_id, rollout_data_curr_ref))\n"
+        f"        # {ASYNC_TRAIN_FINISH_MARKER}\n"
+        "        _tg_report('training', args, rollout_id, 'phase_finish')\n\n"
+        "        if should_run_periodic_action(",
+        "model training finish",
+    )
+    replace_once(
+        ASYNC_CHECKPOINT_MARKER,
+        "        if should_run_periodic_action(rollout_id, args.save_interval, num_rollout_per_epoch, args.num_rollout):\n"
+        "            if (not args.use_critic) or rollout_id >= args.num_critic_only_steps:\n",
+        "        if should_run_periodic_action(rollout_id, args.save_interval, num_rollout_per_epoch, args.num_rollout):\n"
+        f"            # {ASYNC_CHECKPOINT_MARKER}\n"
+        "            _tg_report('checkpoint_save', args, rollout_id, 'phase_start')\n"
+        "            if (not args.use_critic) or rollout_id >= args.num_critic_only_steps:\n",
+        "checkpoint start",
+    )
+    replace_once(
+        f"{ASYNC_CHECKPOINT_MARKER}_FINISH",
+        "            if args.rollout_global_dataset:\n"
+        "                ray.get(rollout_manager.save.remote(rollout_id))\n\n"
+        "        if (rollout_id + 1) % args.update_weights_interval == 0:\n",
+        "            if args.rollout_global_dataset:\n"
+        "                ray.get(rollout_manager.save.remote(rollout_id))\n"
+        f"            # {ASYNC_CHECKPOINT_MARKER}_FINISH\n"
+        "            _tg_report('checkpoint_save', args, rollout_id, 'phase_finish')\n\n"
+        "        if (rollout_id + 1) % args.update_weights_interval == 0:\n",
+        "checkpoint finish",
+    )
+    replace_once(
+        ASYNC_WEIGHT_SYNC_MARKER,
+        "        if (rollout_id + 1) % args.update_weights_interval == 0:\n"
+        "            # sync generate before update weights to prevent update weight in the middle of generation\n",
+        "        if (rollout_id + 1) % args.update_weights_interval == 0:\n"
+        f"            # {ASYNC_WEIGHT_SYNC_MARKER}\n"
+        "            _tg_report('weight_sync', args, rollout_id, 'phase_start')\n"
+        "            # sync generate before update weights to prevent update weight in the middle of generation\n",
+        "weight sync start",
+    )
+    replace_once(
+        ASYNC_EARLY_GENERATION_FINISH_MARKER,
+        "            rollout_data_curr_ref = ray.get(x) if (x := rollout_data_next_future) is not None else None\n"
+        "            rollout_data_next_future = None\n",
+        "            rollout_data_curr_ref = ray.get(x) if (x := rollout_data_next_future) is not None else None\n"
+        "            if x is not None:\n"
+        f"                # {ASYNC_EARLY_GENERATION_FINISH_MARKER}\n"
+        "                _tg_report('generate_rollouts', args, rollout_id + 1, 'phase_finish')\n"
+        "            rollout_data_next_future = None\n",
+        "generation finish before weight sync",
+    )
+    replace_once(
+        f"{ASYNC_WEIGHT_SYNC_MARKER}_FINISH",
+        "            actor_model.update_weights()\n\n"
+        "        if should_run_periodic_action(rollout_id, args.eval_interval, num_rollout_per_epoch):\n",
+        "            actor_model.update_weights()\n"
+        f"            # {ASYNC_WEIGHT_SYNC_MARKER}_FINISH\n"
+        "            _tg_report('weight_sync', args, rollout_id, 'phase_finish')\n\n"
+        "        if should_run_periodic_action(rollout_id, args.eval_interval, num_rollout_per_epoch):\n",
+        "weight sync finish",
+    )
+    replace_once(
+        ASYNC_EVAL_MARKER,
+        "        if should_run_periodic_action(rollout_id, args.eval_interval, num_rollout_per_epoch):\n"
+        "            ray.get(rollout_manager.eval.remote(rollout_id))\n",
+        "        if should_run_periodic_action(rollout_id, args.eval_interval, num_rollout_per_epoch):\n"
+        f"            # {ASYNC_EVAL_MARKER}\n"
+        "            _tg_report('evaluate_rollouts_end', args, rollout_id, 'phase_start')\n"
+        "            ray.get(rollout_manager.eval.remote(rollout_id))\n"
+        "            _tg_report('evaluate_rollouts_end', args, rollout_id, 'phase_finish')\n",
+        "evaluation",
+    )
+    replace_once(
+        STEP_FINISH_MARKER,
+        "            _tg_report('evaluate_rollouts_end', args, rollout_id, 'phase_finish')\n\n"
+        "    ray.get(rollout_manager.dispose.remote())\n",
+        "            _tg_report('evaluate_rollouts_end', args, rollout_id, 'phase_finish')\n"
+        f"        # {SUBSTEP_FINISH_MARKER}\n"
+        "        _tg_report('training', args, rollout_id, 'substep_finish')\n"
+        f"        # {STEP_FINISH_MARKER}\n"
+        "        _tg_report('training', args, rollout_id, 'finish')\n\n"
+        "    ray.get(rollout_manager.dispose.remote())\n",
+        "step finish",
+    )
+    if failed:
+        print(f"WARNING: Could not patch {path.name} for: {', '.join(failed)}")
+    path.write_text(src)
+    print(f"Patched {path.name} with async rollout status reporting")
+
 
 def _patch_file(path: Path) -> None:
     if not path.exists():
         print(f"WARNING: {path} not found, skipping rollout-status patch")
+        return
+
+    if path.name == "train_async.py":
+        _patch_async_file(path)
         return
 
     src = path.read_text()

@@ -37,13 +37,26 @@ from starlette.requests import Request
 # Used as endpoint parameter annotations, so — like ``Request`` above — these
 # must resolve from this module's globals.
 from modal_training_gym.common.advantage_distribution import AdvantageDistribution
-from modal_training_gym.common.run import FrameworkStatusUpdate, TrainingRun
+from modal_training_gym.common.run import (
+    FrameworkStatusUpdate,
+    TrainingRun,
+    TrainingRunStatus,
+)
 from modal_training_gym.common.run_summary import (
     JsonDict,
     RunSummary,
     build_run_summaries,
 )
 from modal_training_gym.common.training_rollout import TrainingRolloutResult
+
+_TERMINAL_RUN_STATUSES = frozenset(
+    {
+        TrainingRunStatus.STOPPED,
+        TrainingRunStatus.CANCELLED,
+        TrainingRunStatus.COMPLETED,
+        TrainingRunStatus.FAILED,
+    }
+)
 
 SummaryLoader = Callable[[], Awaitable[list[JsonDict]]]
 
@@ -743,6 +756,10 @@ def fastapi_app():
                 detail=f"TrainingRun {training_run_id!r} not found",
             )
 
+    def _is_async_training_run(run: TrainingRun) -> bool:
+        recipe = run.config.get("recipe")
+        return isinstance(recipe, dict) and recipe.get("async_mode") is True
+
     # ── Training runs ────────────────────────────────────────────────────
 
     @web.get("/api/runs", response_model=list[RunSummary])
@@ -763,6 +780,9 @@ def fastapi_app():
         run = await _get_run_or_404(update.training_run_id)
         await _require_framework_status_token(update.training_run_id, authorization)
 
+        if run.status in _TERMINAL_RUN_STATUSES:
+            return JSONResponse({"status": "ignored"})
+
         status = await run_in_threadpool(run.apply_framework_status, update)
         if status is None:
             raise HTTPException(
@@ -772,8 +792,12 @@ def fastapi_app():
                     f"for {run.framework.value}"
                 ),
             )
-        await run.save(is_async=True)
-        invalidate_cache("runs")
+        timing_event = bool(update.step_event.strip()) and (
+            _is_async_training_run(run) or update.step_id is not None
+        )
+        if not timing_event:
+            await run.save(is_async=True)
+            invalidate_cache("runs")
         return JSONResponse({"status": "ok", "framework_status": status.value})
 
     # ── Training rollouts ────────────────────────────────────────────────
@@ -787,9 +811,10 @@ def fastapi_app():
         await _require_framework_status_token(result.training_run_id, authorization)
 
         await result.save(is_async=True)
-        run.record_latest_rollout(result)
-        await run.save(is_async=True)
-        invalidate_cache("runs")
+        if run.status not in _TERMINAL_RUN_STATUSES and not _is_async_training_run(run):
+            run.record_latest_rollout(result)
+            await run.save(is_async=True)
+            invalidate_cache("runs")
 
         return JSONResponse(
             {"status": "ok", "rollout_id": result.rollout_id, "mean": result.mean}

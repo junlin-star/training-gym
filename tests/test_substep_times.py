@@ -49,3 +49,6 @@ def test_patch_matches_golden(slime_inputs, tmp_path, request):
         assert actual == expected, (
             f"golden mismatch for {name}; rerun with --rewrite to accept"
         )
+
+        patcher._patch_file(work)
+        assert work.read_text() == actual, f"patch is not idempotent for {name}"

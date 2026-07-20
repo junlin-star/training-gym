@@ -11,10 +11,14 @@ from __future__ import annotations
 import json
 import os
 import threading
+import time
+import uuid
 from queue import Queue
 from typing import Any
 from urllib.error import URLError
 from urllib.request import Request, urlopen
+
+from modal_training_gym.utils.metadata import _step_times_dict
 
 PHASE_REPORT_URL_ENV = "SLIME_PHASE_REPORT_URL"
 PHASE_REPORT_TOKEN_ENV = "SLIME_PHASE_REPORT_TOKEN"
@@ -32,6 +36,8 @@ _ADVANTAGE_PATH = "/api/advantage-distributions"
 _PHASE_TIMEOUT_SECONDS = 1.0
 _STEP_EVENT_TIMEOUT_SECONDS = 5.0
 _ROLLOUT_TIMEOUT_SECONDS = 10.0
+_TIMING_DELIVERY_ATTEMPTS = 3
+_TIMING_RETRY_DELAY_SECONDS = 0.1
 
 
 def _arg_value(args: Any, key: str) -> Any:
@@ -49,7 +55,7 @@ def _arg_value(args: Any, key: str) -> Any:
 
 
 def _run_context(args: Any) -> dict[str, Any]:
-    return {
+    context = {
         "training_run_id": _arg_value(args, "training_run_id")
         or _arg_value(args, "training_gym_training_run_id")
         or os.environ.get("TRAINING_GYM_TRAINING_RUN_ID", "")
@@ -60,6 +66,13 @@ def _run_context(args: Any) -> dict[str, Any]:
         or "",
         "modal_app_id": os.environ.get("MODAL_APP_ID", ""),
     }
+    training_attempt = _positive_int(
+        _arg_value(args, "training_gym_training_attempt")
+        or os.environ.get("TRAINING_GYM_TRAINING_ATTEMPT")
+    )
+    if training_attempt is not None:
+        context["training_attempt"] = training_attempt
+    return context
 
 
 def _positive_int(value: Any) -> int | None:
@@ -153,6 +166,23 @@ def _enqueue(payload: dict[str, Any]) -> None:
         pass
 
 
+def _record_timing_event(payload: dict[str, Any]) -> None:
+    training_run_id = str(payload.get("training_run_id") or "")
+    if not training_run_id:
+        raise RuntimeError("Cannot persist a timing event without a training run ID")
+
+    key = (training_run_id, "timing_event", uuid.uuid4().hex)
+    store = _step_times_dict()
+    for attempt in range(_TIMING_DELIVERY_ATTEMPTS):
+        try:
+            store[key] = dict(payload)
+            return
+        except Exception as exc:
+            if attempt + 1 == _TIMING_DELIVERY_ATTEMPTS:
+                raise RuntimeError("Failed to persist async timing event") from exc
+            time.sleep(_TIMING_RETRY_DELAY_SECONDS * (attempt + 1))
+
+
 def _enqueue_rollout(payload: dict[str, Any]) -> None:
     """Enqueue a rollout-data payload (large, longer timeout)."""
     url = _rollout_url()
@@ -213,12 +243,7 @@ def _post(item: dict[str, Any]) -> None:
     token = _report_token()
     if token:
         headers["Authorization"] = f"Bearer {token}"
-    request = Request(
-        url,
-        data=body,
-        headers=headers,
-        method="POST",
-    )
+    request = Request(url, data=body, headers=headers, method="POST")
     try:
         with urlopen(request, timeout=timeout) as response:
             response.read()

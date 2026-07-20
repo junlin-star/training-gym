@@ -15,7 +15,9 @@ This module keeps the reporting entry points (``report_*``, ``log_*``,
 
 from __future__ import annotations
 
+import os
 import time
+from functools import wraps
 from typing import Any
 
 from modal_training_gym.common.status import SlimeStatus
@@ -28,6 +30,7 @@ from .reporting import (
     _STEP_EVENT_TIMEOUT_SECONDS,
     _enqueue,
     _enqueue_rollout,
+    _record_timing_event,
     _post_framework_status,
     _run_context,
     _step_progress,
@@ -93,6 +96,13 @@ CUSTOM_BEFORE_LOG_PROB_HOOK_PATH_KEY = (
 CUSTOM_BEFORE_TRAIN_STEP_HOOK_PATH_KEY = (
     "training_gym_custom_megatron_before_train_step_hook_path"
 )
+
+
+def _async_timing_enabled(args: Any) -> bool:
+    return (
+        bool(getattr(args, "async_mode", False))
+        or os.environ.get("TRAINING_GYM_ASYNC_MODE") == "1"
+    )
 
 
 def _hook_path_from_args(args: Any, path_key: str) -> str | None:
@@ -178,15 +188,16 @@ def log_rollout_data(
     rollout_time: Any,
 ) -> bool:
     progress = _step_progress(args, rollout_id)
-    report_phase(
-        SlimeStatus.ROLLOUT_LOGGING,
-        args,
-        **progress,
-        rollout_id=rollout_id,
-        sample_count=len(samples) if hasattr(samples, "__len__") else None,
-        metrics=rollout_extra_metrics,
-        rollout_time=rollout_time,
-    )
+    if not _async_timing_enabled(args):
+        report_phase(
+            SlimeStatus.ROLLOUT_LOGGING,
+            args,
+            **progress,
+            rollout_id=rollout_id,
+            sample_count=len(samples) if hasattr(samples, "__len__") else None,
+            metrics=rollout_extra_metrics,
+            rollout_time=rollout_time,
+        )
     report_rollout_samples(
         rollout_id, args, samples, rollout_extra_metrics, rollout_time
     )
@@ -244,6 +255,66 @@ def before_log_prob_hook(args: Any, model: Any, store_prefix: str) -> None:
     )
 
 
+_OPTIMIZER_TIMING_CONTEXT = "_training_gym_timing_context"
+_OPTIMIZER_TIMING_INSTALLED = "_training_gym_timing_installed"
+
+
+def _is_primary_training_rank() -> bool:
+    try:
+        import torch.distributed as dist
+    except ImportError:
+        return True
+    return not dist.is_available() or not dist.is_initialized() or dist.get_rank() == 0
+
+
+def _install_optimizer_timing(optimizer: Any) -> None:
+    if getattr(optimizer, _OPTIMIZER_TIMING_INSTALLED, False):
+        return
+    original_step = optimizer.step
+
+    @wraps(original_step)
+    def timed_step(*args: Any, **kwargs: Any) -> Any:
+        context = getattr(optimizer, _OPTIMIZER_TIMING_CONTEXT, None)
+        if context is None:
+            return original_step(*args, **kwargs)
+        setattr(optimizer, _OPTIMIZER_TIMING_CONTEXT, None)
+        hook_args, rollout_id, step_id = context
+
+        optimizer_started = time.time()
+        report_step_event(
+            SlimeStatus.TRAIN_MODEL,
+            hook_args,
+            rollout_id,
+            "phase_finish",
+            step_id=step_id,
+            event_ts=optimizer_started,
+        )
+        report_step_event(
+            SlimeStatus.OPTIMIZER_STEP,
+            hook_args,
+            rollout_id,
+            "phase_start",
+            step_id=step_id,
+            event_ts=optimizer_started,
+        )
+
+        try:
+            return original_step(*args, **kwargs)
+        finally:
+            optimizer_finished = time.time()
+            report_step_event(
+                SlimeStatus.OPTIMIZER_STEP,
+                hook_args,
+                rollout_id,
+                "phase_finish",
+                step_id=step_id,
+                event_ts=optimizer_finished,
+            )
+
+    optimizer.step = timed_step
+    setattr(optimizer, _OPTIMIZER_TIMING_INSTALLED, True)
+
+
 def before_train_step_hook(
     args: Any,
     rollout_id: int,
@@ -252,13 +323,16 @@ def before_train_step_hook(
     optimizer: Any,
     opt_param_scheduler: Any,
 ) -> None:
-    report_phase(
-        SlimeStatus.OPTIMIZER_STEP,
-        args,
-        **_step_progress(args, rollout_id),
-        rollout_id=rollout_id,
-        step_id=step_id,
-    )
+    async_mode = _async_timing_enabled(args)
+    async_timing = async_mode and _is_primary_training_rank()
+    if not async_mode:
+        report_phase(
+            SlimeStatus.OPTIMIZER_STEP,
+            args,
+            **_step_progress(args, rollout_id),
+            rollout_id=rollout_id,
+            step_id=step_id,
+        )
     _call_hook(
         CUSTOM_BEFORE_TRAIN_STEP_HOOK_PATH_KEY,
         args,
@@ -269,6 +343,21 @@ def before_train_step_hook(
         optimizer,
         opt_param_scheduler,
     )
+    if async_timing:
+        _install_optimizer_timing(optimizer)
+        setattr(
+            optimizer,
+            _OPTIMIZER_TIMING_CONTEXT,
+            (args, rollout_id, step_id),
+        )
+        report_step_event(
+            SlimeStatus.TRAIN_MODEL,
+            args,
+            rollout_id,
+            "phase_start",
+            step_id=step_id,
+            event_ts=time.time(),
+        )
 
 
 def report_step_event(
@@ -276,6 +365,8 @@ def report_step_event(
     args: Any = None,
     rollout_id: int | None = None,
     step_event: str = "",
+    step_id: int | None = None,
+    event_ts: float | None = None,
 ) -> None:
     """Report one step/substep event tagged with the ``status`` phase.
 
@@ -287,10 +378,15 @@ def report_step_event(
         "phase": status.value if isinstance(status, SlimeStatus) else str(status),
         **_step_progress(args, rollout_id),
         "rollout_id": rollout_id,
-        "event_ts": time.time(),
+        "event_ts": time.time() if event_ts is None else event_ts,
     }
     if step_event:
         payload["step_event"] = step_event
+    if step_id is not None:
+        payload["step_id"] = step_id
+    if _async_timing_enabled(args):
+        _record_timing_event(payload)
+        return
     match step_event:
         case "start":
             _post_framework_status(payload, _STEP_EVENT_TIMEOUT_SECONDS)
