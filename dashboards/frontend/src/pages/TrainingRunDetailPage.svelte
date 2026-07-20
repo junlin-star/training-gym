@@ -536,26 +536,25 @@
   // ── Historical logs ─────
   let isRunning = $derived(runStatus === "running");
 
-  const HIST_PAGE = 500; // lines fetched per page
+  const HIST_PAGE = 500;
   const HIST_BUFFER_MAX = 2000;
-  let histLines = $state([]); // bounded [{id, task_id, line, ts, ts_ns}], oldest-first
-  let histLoading = $state(false); // initial page in flight
-  let histLoadingOlder = $state(false); // "load older" page in flight
-  let histLoadingNewer = $state(false); // "load newer" page in flight
+  let histLines = $state([]);
+  let histLoading = $state(false);
+  let histLoadingOlder = $state(false);
+  let histLoadingNewer = $state(false);
   let histError = $state("");
-  let histHasMore = $state(false); // older lines exist before the first row
-  let histNewerWindows = $state([]); // trimmed (since, until] ranges, nearest last
-  let histNextUntil = $state(null); // `until` cursor for the next older page
-  let histTailEl = $state(null); // scroll container
-  let histSeq = 0; // monotonic id for stable keying across prepends
-  let histController = null; // aborts in-flight fetches when filters change
+  let histHasMore = $state(false);
+  let histNewerWindows = $state([]);
+  let histNextUntil = $state(null);
+  let histTailEl = $state(null);
+  let histSeq = 0;
+  let histController = null;
   let histLastScrollTop = 0;
   let histRestoringScroll = false;
 
-  // Time-window filters
   let histSinceText = $state("");
   let histUntilText = $state("");
-  let histSince = $state(""); // debounced epoch-seconds string for the fetch
+  let histSince = $state("");
   let histUntil = $state("");
 
   function epochToLocalInput(epoch) {
@@ -597,11 +596,12 @@
   $effect(() => {
     const id = runId;
     const running = isRunning;
+    if (!id || running || histPrefilledFor === id) return;
+
     const startedAt = run?.started_at || run?.created_at || 0;
     const endedAt = run?.ended_at || run?.completed_at || 0;
-    if (!id || running || histPrefilledFor === id) return;
-    // Wait until the run's timestamps are actually loaded.
     if (!startedAt && !endedAt) return;
+
     histPrefilledFor = id;
     const sinceText = epochToLocalInput(startedAt);
     const untilText = epochToLocalInput(endedAt);
@@ -673,17 +673,20 @@
   }
 
   async function restoreHistAnchor(anchor) {
-    const el = histTailEl;
-    if (!el || !anchor) return;
+    if (!histTailEl || !anchor) return;
     histRestoringScroll = true;
     await tick();
-    const node = el.querySelector(`[data-hist-id="${anchor.id}"]`);
-    if (node) {
-      el.scrollTop += node.getBoundingClientRect().top - anchor.top;
-    } else {
-      el.scrollTop = anchor.scrollTop;
+    if (!histTailEl) {
+      histRestoringScroll = false;
+      return;
     }
-    histLastScrollTop = el.scrollTop;
+    const node = histTailEl.querySelector(`[data-hist-id="${anchor.id}"]`);
+    if (node) {
+      histTailEl.scrollTop += node.getBoundingClientRect().top - anchor.top;
+    } else {
+      histTailEl.scrollTop = anchor.scrollTop;
+    }
+    histLastScrollTop = histTailEl.scrollTop;
     requestAnimationFrame(() => {
       if (histTailEl) histLastScrollTop = histTailEl.scrollTop;
       histRestoringScroll = false;
@@ -753,7 +756,80 @@
     }
   }
 
-  async function loadHistOlder() {
+  async function loadHistPage(direction, { since, until }) {
+    const loadingOlder = direction === "older";
+    if (loadingOlder) {
+      histLoadingOlder = true;
+    } else {
+      histLoadingNewer = true;
+    }
+    histError = "";
+    const anchor = captureHistAnchor();
+    const signal = histController?.signal;
+    try {
+      const data = await fetchRunLogs(runId, {
+        since,
+        until,
+        tail: HIST_PAGE,
+        search: logSearch,
+        signal,
+      });
+      if (signal?.aborted) return;
+      const rows = [];
+      pushHistRows(rows, data.logs);
+      if (loadingOlder && !rows.length) {
+        histHasMore = false;
+        histNextUntil = null;
+        return;
+      }
+
+      const adjacent =
+        rows.length <= HIST_PAGE
+          ? rows
+          : loadingOlder
+            ? rows.slice(-HIST_PAGE)
+            : rows.slice(0, HIST_PAGE);
+      const merged = loadingOlder
+        ? adjacent.concat(histLines)
+        : histLines.concat(adjacent);
+
+      if (loadingOlder) {
+        const dropped = merged.slice(HIST_BUFFER_MAX);
+        histLines = merged.slice(0, HIST_BUFFER_MAX);
+        rememberTrimmedNewer(histLines, dropped);
+        if (rows.length > HIST_PAGE) {
+          histHasMore = true;
+          histNextUntil = histCursorBefore(adjacent[0]);
+        } else {
+          histHasMore = data.hasMore;
+          histNextUntil = data.nextUntil;
+        }
+      } else {
+        const dropped = merged.slice(
+          0,
+          Math.max(0, merged.length - HIST_BUFFER_MAX),
+        );
+        histLines = merged.slice(-HIST_BUFFER_MAX);
+        markTrimmedOlder(histLines, dropped);
+        histNewerWindows = histNewerWindows.slice(0, -1);
+      }
+
+      await restoreHistAnchor(anchor);
+    } catch (err) {
+      if (signal?.aborted) return;
+      histError = String(err?.message || err);
+    } finally {
+      if (!signal?.aborted) {
+        if (loadingOlder) {
+          histLoadingOlder = false;
+        } else {
+          histLoadingNewer = false;
+        }
+      }
+    }
+  }
+
+  function loadHistOlder() {
     if (
       !histHasMore ||
       histNextUntil == null ||
@@ -763,56 +839,13 @@
     ) {
       return;
     }
-    histLoadingOlder = true;
-    histError = "";
-    const anchor = captureHistAnchor();
-    const signal = histController?.signal;
-    try {
-      const data = await fetchRunLogs(runId, {
-        since: histSince,
-        until: histNextUntil,
-        tail: HIST_PAGE,
-        search: logSearch,
-        signal,
-      });
-      if (signal?.aborted) return;
-      const older = [];
-      pushHistRows(older, data.logs);
-      if (!older.length) {
-        histHasMore = false;
-        histNextUntil = null;
-        return;
-      }
-      // A single backend log entry may expand into many rendered lines. Keep
-      // only the rendered page nearest the current window so the existing
-      // visible anchor cannot be evicted by one unusually large response.
-      const adjacentOlder =
-        older.length > HIST_PAGE ? older.slice(-HIST_PAGE) : older;
-      const merged = adjacentOlder.concat(histLines);
-      const droppedNewer =
-        merged.length > HIST_BUFFER_MAX ? merged.slice(HIST_BUFFER_MAX) : [];
-      histLines =
-        merged.length > HIST_BUFFER_MAX
-          ? merged.slice(0, HIST_BUFFER_MAX)
-          : merged;
-      rememberTrimmedNewer(histLines, droppedNewer);
-      if (older.length > HIST_PAGE) {
-        histHasMore = true;
-        histNextUntil = histCursorBefore(adjacentOlder[0]);
-      } else {
-        histHasMore = data.hasMore;
-        histNextUntil = data.nextUntil;
-      }
-      await restoreHistAnchor(anchor);
-    } catch (err) {
-      if (signal?.aborted) return;
-      histError = String(err?.message || err);
-    } finally {
-      if (!signal?.aborted) histLoadingOlder = false;
-    }
+    return loadHistPage("older", {
+      since: histSince,
+      until: histNextUntil,
+    });
   }
 
-  async function loadHistNewer() {
+  function loadHistNewer() {
     if (
       !histNewerWindows.length ||
       histLoadingNewer ||
@@ -821,44 +854,8 @@
     ) {
       return;
     }
-    histLoadingNewer = true;
-    histError = "";
-    const anchor = captureHistAnchor();
-    const window = histNewerWindows[histNewerWindows.length - 1];
-    const signal = histController?.signal;
-    try {
-      const data = await fetchRunLogs(runId, {
-        since: window.since,
-        until: window.until,
-        tail: HIST_PAGE,
-        search: logSearch,
-        signal,
-      });
-      if (signal?.aborted) return;
-      const newer = [];
-      pushHistRows(newer, data.logs);
-      // Keep the nearest newer rendered rows. This mirrors loadHistOlder and
-      // guarantees the currently visible rows survive the window swap.
-      const adjacentNewer =
-        newer.length > HIST_PAGE ? newer.slice(0, HIST_PAGE) : newer;
-      const merged = histLines.concat(adjacentNewer);
-      const droppedOlder =
-        merged.length > HIST_BUFFER_MAX
-          ? merged.slice(0, merged.length - HIST_BUFFER_MAX)
-          : [];
-      histLines =
-        merged.length > HIST_BUFFER_MAX
-          ? merged.slice(-HIST_BUFFER_MAX)
-          : merged;
-      markTrimmedOlder(histLines, droppedOlder);
-      histNewerWindows = histNewerWindows.slice(0, -1);
-      await restoreHistAnchor(anchor);
-    } catch (err) {
-      if (signal?.aborted) return;
-      histError = String(err?.message || err);
-    } finally {
-      if (!signal?.aborted) histLoadingNewer = false;
-    }
+    const range = histNewerWindows[histNewerWindows.length - 1];
+    return loadHistPage("newer", range);
   }
 
   // Load only in the direction the user moved. Scroll restoration after a
@@ -892,7 +889,6 @@
     );
   }
 
-  // Reset the range back to the run's lifetime
   function resetHistRange() {
     const startedAt = run?.started_at || run?.created_at || 0;
     const endedAt = run?.ended_at || run?.completed_at || 0;
