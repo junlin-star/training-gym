@@ -509,7 +509,7 @@ def run_bfcl_episode(
                         "type": "function",
                         "function": {
                             "name": action.name,
-                            "arguments": json.dumps(action.arguments or {}),
+                            "arguments": action.arguments or {},
                         },
                     }
                     for call_id, action in zip(call_ids, actions)
