@@ -534,9 +534,12 @@ def align_cross_tokenizer(
 #
 # Slime combines the reverse-KL loss from OPD into the GRPO advantage:
 #
-# A_t = A_t^GRPO + \lambda * (log_pi_student(y_t) - log_pi_teacher(y_t))
+# $$
+# A_t = A_t^{\mathrm{GRPO}} + \lambda
+# \left(\log \pi_{\mathrm{student}}(y_t) - \log \pi_{\mathrm{teacher}}(y_t)\right)
+# $$
 #
-# where \lambda is the --opd-kl-coef set to 0.3 in this tutorial.
+# where $\lambda$ is `--opd-kl-coef`, set to `0.3` in this tutorial.
 
 _student_tokenizer_cache = {}
 

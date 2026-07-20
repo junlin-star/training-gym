@@ -705,14 +705,17 @@ def _mau_helpers():
 
 @markdown
 def _rm_intro():
-    """
+    r"""
     ## OPD-adjusted GRPO Advantage
 
     Slime combines the reverse-KL loss from OPD into the GRPO advantage:
 
-    A_t = A_t^GRPO + \lambda * (log_pi_student(y_t) - log_pi_teacher(y_t))
-    
-    where \lambda is the --opd-kl-coef set to 0.3 in this tutorial.
+    $$
+    A_t = A_t^{\mathrm{GRPO}} + \lambda
+    \left(\log \pi_{\mathrm{student}}(y_t) - \log \pi_{\mathrm{teacher}}(y_t)\right)
+    $$
+
+    where $\lambda$ is `--opd-kl-coef`, set to `0.3` in this tutorial.
     """
 
 
