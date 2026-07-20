@@ -16,6 +16,7 @@ from modal_training_gym.common.environments.base import (
     ToolCall,
 )
 from modal_training_gym.common.environments.bfcl import (
+    BfclEpisodeResult,
     BfclMultiTurnConfig,
     BfclMultiTurnDataset,
     BfclTurnEnvironment,
@@ -23,6 +24,7 @@ from modal_training_gym.common.environments.bfcl import (
     build_prefix_messages as build_bfcl_prefix_messages,
     default_system_prompt as bfcl_default_system_prompt,
     prune_prefix as prune_bfcl_prefix,
+    run_bfcl_episode,
     to_json_schema,
     tool_schemas_to_openai as bfcl_tool_schemas_to_openai,
 )
@@ -74,9 +76,11 @@ __all__ = [
     "default_system_prompt",
     "tool_schemas_to_openai",
     # bfcl — config + env
+    "BfclEpisodeResult",
     "BfclMultiTurnConfig",
     "BfclTurnEnvironment",
     "build_bfcl_env",
+    "run_bfcl_episode",
     # bfcl — data + prompts
     "BfclMultiTurnDataset",
     "build_bfcl_prefix_messages",

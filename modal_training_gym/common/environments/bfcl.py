@@ -20,9 +20,10 @@ import ast
 import inspect
 import json
 import os
+import time
 from copy import deepcopy
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 from modal_training_gym.common.dataset import DatasetConfig
 from modal_training_gym.common.environments.base import (
@@ -397,6 +398,147 @@ def build_env(label: dict, K: int) -> BfclTurnEnvironment:
     calls = deepcopy(label["flattened_calls"][:K])
     instances, _ = replay(label["involved_classes"], label["initial_config"], calls)
     return BfclTurnEnvironment(label=label, instances=instances, K=K)
+
+
+# ── Episode runner ───────────────────────────────────────────────────────────
+
+
+@dataclass
+class BfclEpisodeResult:
+    """Structured output from :func:`run_bfcl_episode`."""
+
+    messages: list[dict]
+    calls: list[dict[str, Any]]
+    execution_successes: list[bool]
+    verdict: EvalVerdict
+    final_response: str = ""
+    exit_reason: str = "max_turns"
+
+    @property
+    def first_call(self) -> dict[str, Any] | None:
+        return self.calls[0] if self.calls else None
+
+
+def run_bfcl_episode(
+    label: dict,
+    *,
+    start_step: int,
+    generate: Callable[[list[dict], list[dict]], dict],
+    parse_response: Callable[[dict], tuple[str, list[ToolCall]]],
+    max_turns: int,
+    max_consecutive_errors: int = 3,
+    observation_limit: int = 2000,
+    log: Callable[[str], None] | None = None,
+) -> BfclEpisodeResult:
+    """Generate, execute, and grade one BFCL episode.
+
+    ``generate`` receives the current OpenAI-style messages and tool schemas.
+    ``parse_response`` converts its returned message into assistant text and
+    normalized :class:`ToolCall` objects. Keeping those model-specific details
+    in callbacks lets the BFCL lifecycle stay independent of a serving engine.
+    """
+
+    def emit(message: str) -> None:
+        if log is not None:
+            log(message)
+
+    messages = build_prefix_messages(label, start_step)
+    tools = tool_schemas_to_openai(label.get("tool_schemas", {}))
+    env = build_env(label, start_step)
+    calls: list[dict[str, Any]] = []
+    execution_successes: list[bool] = []
+    final_response = ""
+    exit_reason = "max_turns"
+    consecutive_errors = 0
+
+    for turn in range(max_turns):
+        started_at = time.monotonic()
+        message = generate(messages, tools)
+        generation_seconds = time.monotonic() - started_at
+        content, actions = parse_response(message)
+        final_response = content
+        emit(
+            f"turn {turn} gen={generation_seconds:.1f}s "
+            f"calls={[action.name for action in actions]}"
+        )
+        if not actions:
+            exit_reason = "no_further_calls"
+            break
+
+        observations: list[str] = []
+        stop = False
+        for action in actions:
+            calls.append({"name": action.name, "arguments": action.arguments or {}})
+            try:
+                step_result = env.step(action)
+            except Exception as exc:
+                emit(f"  execution error on {action.name}: {exc!r} — ending episode")
+                execution_successes.append(False)
+                exit_reason = "execution_error"
+                stop = True
+                break
+
+            observation = step_result.observation
+            execution_successes.append(not observation.is_error)
+            observations.append(observation.text)
+            emit(f"  exec {action.name} -> {'ERR' if observation.is_error else 'ok'}")
+            consecutive_errors = consecutive_errors + 1 if observation.is_error else 0
+            if step_result.done:
+                exit_reason = "environment_done"
+                stop = True
+                break
+            if (
+                max_consecutive_errors > 0
+                and consecutive_errors >= max_consecutive_errors
+            ):
+                exit_reason = "repeated_errors"
+                stop = True
+                break
+
+        if stop:
+            break
+
+        call_ids = [f"call_t{turn}_{index}" for index in range(len(actions))]
+        messages.append(
+            {
+                "role": "assistant",
+                "content": content,
+                "tool_calls": [
+                    {
+                        "id": call_id,
+                        "type": "function",
+                        "function": {
+                            "name": action.name,
+                            "arguments": json.dumps(action.arguments or {}),
+                        },
+                    }
+                    for call_id, action in zip(call_ids, actions)
+                ],
+            }
+        )
+        messages.extend(
+            {
+                "role": "tool",
+                "tool_call_id": call_id,
+                "content": observation[:observation_limit],
+            }
+            for call_id, observation in zip(call_ids, observations)
+        )
+
+    try:
+        verdict = env.evaluate()
+    except Exception as exc:
+        emit(f"evaluate() failed: {exc!r} — marking failed")
+        verdict = EvalVerdict(passed=False, detail=str(exc), harness_error=True)
+
+    return BfclEpisodeResult(
+        messages=messages,
+        calls=calls,
+        execution_successes=execution_successes,
+        verdict=verdict,
+        final_response=final_response,
+        exit_reason=exit_reason,
+    )
 
 
 # ── Trajectory dataset ───────────────────────────────────────────────────────
