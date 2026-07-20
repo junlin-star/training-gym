@@ -263,21 +263,7 @@ Rules:
 - Use only the tools provided to you, with their exact names. Do not invent tools, arguments, or file paths.
 - Each user message may require several tool calls before the request is satisfied; keep calling tools until the request is complete, then stop calling tools.
 - After each tool result, check whether it succeeded before continuing; do not blindly repeat a failed call with the same arguments.
-
-Emit every tool call in exactly this format — a single <function> block wrapped in <emoji>, with one <parameter> block per argument. For example, a real call that moves a file (values abbreviated with … here) looks like:
-
-<emoji>
-<function=mv>
-<parameter=source>
-final_report.pdf
-</parameter>
-<parameter=destination>
-temp
-</parameter>
-</function>
-</emoji>
-
-Use the actual tool name, parameters, and full (untruncated) values required by your task; the call above is only an illustration of the wire format."""
+Use the model's provided tool-calling interface."""
 
 
 def default_system_prompt(tool_schemas: dict) -> str:
@@ -591,6 +577,7 @@ class BfclMultiTurnDataset(DatasetConfig):
         **kwargs: Any,
     ) -> None:
         self._split = split
+        self.hf_split = split
         self.config = config if config is not None else BfclMultiTurnConfig()
         for k, v in kwargs.items():
             setattr(self, k, v)
@@ -663,6 +650,7 @@ class BfclMultiTurnDataset(DatasetConfig):
     def load(self, split: str = "all") -> list[dict]:
         if split in ("train", "eval"):
             self._split = split
+            self.hf_split = split
         return self._load_split()
 
     def prepare(self, path: str, eval_paths: dict | None = None) -> None:

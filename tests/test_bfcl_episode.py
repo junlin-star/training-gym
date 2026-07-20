@@ -5,6 +5,7 @@ from modal_training_gym.common.environments.base import (
     StepResult,
     ToolCall,
 )
+from modal_training_gym.train_recipes.base import BaseTrainRecipe
 
 
 class _FakeEnvironment:
@@ -74,3 +75,19 @@ def test_run_bfcl_episode_executes_calls_and_appends_observations(monkeypatch) -
         "tool_call_id": "call_t0_0",
         "content": "result:lookup",
     }
+
+
+def test_bfcl_prompt_defers_to_model_tool_format() -> None:
+    assert "<emoji>" not in bfcl.DEFAULT_SYSTEM_PROMPT
+    assert "provided tool-calling interface" in bfcl.DEFAULT_SYSTEM_PROMPT
+
+
+def test_bfcl_dataset_paths_are_split_specific() -> None:
+    train = bfcl.BfclMultiTurnDataset(split="train")
+    evaluation = bfcl.BfclMultiTurnDataset(split="eval")
+
+    train_path, _ = BaseTrainRecipe._resolve_data_paths(train)
+    eval_path, _ = BaseTrainRecipe._resolve_data_paths(evaluation)
+
+    assert train_path == "/data/BfclMultiTurnDataset/train.jsonl"
+    assert eval_path == "/data/BfclMultiTurnDataset/eval.jsonl"
