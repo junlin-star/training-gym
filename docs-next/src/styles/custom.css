@@ -678,6 +678,13 @@ body::before {
   justify-content: flex-end;
 }
 
+@media (min-width: 72rem) {
+  .tg-page-head__actions {
+    margin-top: -1.5rem;
+    margin-bottom: 1.5rem;
+  }
+}
+
 .tg-page-head h1,
 .sl-markdown-content :is(h1, h2, h3, h4, h5, h6) {
   font-family: 'Goga', var(--sl-font);
@@ -874,6 +881,56 @@ a:hover {
 .sl-markdown-content table th:nth-child(6),
 .sl-markdown-content table td:nth-child(6) {
   min-width: 6.5rem;
+}
+
+.sl-markdown-content .tutorial-catalog table {
+  display: block;
+  width: 100%;
+  min-width: 44rem;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.sl-markdown-content .tutorial-catalog :is(thead, tbody) {
+  display: block;
+  width: 100%;
+}
+
+.sl-markdown-content .tutorial-catalog :is(thead, tbody, tr, th, td) {
+  margin: 0;
+}
+
+.sl-markdown-content .tutorial-catalog tr {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(0, 2.6fr) minmax(0, 0.9fr) minmax(0, 1fr) minmax(0, 1fr);
+  width: 100%;
+}
+
+.sl-markdown-content .tutorial-catalog table th:nth-child(n),
+.sl-markdown-content .tutorial-catalog table td:nth-child(n) {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.sl-markdown-content .tutorial-catalog table td > a > code:not(pre code),
+.sl-markdown-content .tutorial-catalog table td > code:not(pre code) {
+  white-space: normal;
+}
+
+.sl-markdown-content .tutorial-catalog td {
+  font-size: 0.875rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  align-content: center;
+}
+
+.sl-markdown-content .tutorial-catalog td code:not(pre code) {
+  font-size: 0.875rem;
+}
+
+.sl-markdown-content .tutorial-catalog td:nth-child(5) img {
+  display: block;
 }
 
 .sl-markdown-content tr:hover {

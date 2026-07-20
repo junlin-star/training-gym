@@ -160,6 +160,25 @@ def rewrite_images(markdown: str, *, source_dir: PurePosixPath) -> str:
     return MARKDOWN_IMAGE.sub(replace, markdown)
 
 
+_TUTORIAL_TABLE_BEGIN = "<!-- BEGIN TUTORIAL TABLE -->"
+_TUTORIAL_TABLE_END = "<!-- END TUTORIAL TABLE -->"
+
+
+def wrap_tutorial_catalog(markdown: str) -> str:
+    if _TUTORIAL_TABLE_BEGIN not in markdown or _TUTORIAL_TABLE_END not in markdown:
+        return markdown
+    markdown = markdown.replace(
+        _TUTORIAL_TABLE_BEGIN,
+        f'<div class="tutorial-catalog">\n\n{_TUTORIAL_TABLE_BEGIN}',
+        1,
+    )
+    return markdown.replace(
+        _TUTORIAL_TABLE_END,
+        f"{_TUTORIAL_TABLE_END}\n\n</div>",
+        1,
+    )
+
+
 def strip_first_heading(markdown: str) -> str:
     lines = markdown.splitlines()
     if lines and lines[0].startswith("# "):
@@ -196,6 +215,7 @@ def transform_markdown(
 ) -> str:
     page = source.read_text()
     page = strip_developer_guide(page)
+    page = wrap_tutorial_catalog(page)
     page = convert_github_callouts(page)
     page = rewrite_images(page, source_dir=source_dir)
     page = rewrite_links(

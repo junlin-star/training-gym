@@ -290,6 +290,8 @@ export async function fetchRuns({ signal } = {}) {
       updated_at: updatedAt,
       duration_seconds: durationSeconds,
       error_message: safeStr(run.error_message || ""),
+      step_times: run.step_times || null,
+      substep_times: run.substep_times || null,
       metadata,
       resume_state: summarizeResumeState(metadata),
       wandb_links: wandbLinks,

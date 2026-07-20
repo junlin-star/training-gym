@@ -98,3 +98,12 @@ def fake_volume(monkeypatch) -> FakeVolume:
     vol = FakeVolume()
     monkeypatch.setattr(metadata, "_metadata_volume", lambda: vol)
     return vol
+
+
+def pytest_addoption(parser):
+    parser.addoption(
+        "--rewrite",
+        action="store_true",
+        default=False,
+        help="Rewrite golden .output files in tests/testdata/ instead of asserting",
+    )
