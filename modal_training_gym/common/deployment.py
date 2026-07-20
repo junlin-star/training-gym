@@ -402,12 +402,19 @@ class ModelDeployment(BaseModel):
             "served_model_name": value.served_model_name,
         }
 
-    def generate(
+    # TODO(atoniolo76): A future PR should update all existing tutorials to
+    # use this new function while getting rid of the old generate.
+    def chat(
         self,
-        prompt: str | list[dict],
+        messages: list[dict],
         ensure_ready: bool = True,
+        max_attempts: int = 4,
+        timeout: int = 120,
         **kwargs,
-    ) -> str:
+    ) -> dict:
+        """Return one OpenAI-compatible chat-completion message while
+        preserving structured fields like tool_calls and reasoning_content.
+        """
         import time
 
         import requests
@@ -416,18 +423,17 @@ class ModelDeployment(BaseModel):
             self.wait_until_ready()
         body = {
             "model": self.deployment_config.served_model_name,
-            "messages": [{"role": "user", "content": prompt}],
+            "messages": messages,
             **kwargs,
         }
-        transient_status_codes = {502, 503, 504}
-        max_attempts = 4
+        transient_status_codes = {429, 500, 502, 503, 504}
 
         for attempt in range(1, max_attempts + 1):
             try:
                 resp = requests.post(
                     f"{self.url}/v1/chat/completions",
                     json=body,
-                    timeout=120,
+                    timeout=timeout,
                     headers=_modal_proxy_auth_headers(),
                 )
                 if (
@@ -443,13 +449,7 @@ class ModelDeployment(BaseModel):
                     continue
                 _raise_for_proxy_auth(resp.status_code, self.url)
                 resp.raise_for_status()
-                message = resp.json()["choices"][0]["message"]
-                content = message.get("content")
-                if isinstance(content, str):
-                    return content
-                if content is None:
-                    return message.get("reasoning_content", "")
-                return str(content)
+                return resp.json()["choices"][0]["message"]
             except (requests.ConnectionError, requests.Timeout) as exc:
                 if attempt >= max_attempts:
                     raise
@@ -463,6 +463,24 @@ class ModelDeployment(BaseModel):
         raise RuntimeError(
             f"Failed to generate from {self.url} after {max_attempts} attempts"
         )
+
+    def generate(
+        self,
+        prompt: str | list[dict],
+        ensure_ready: bool = True,
+        **kwargs,
+    ) -> str:
+        message = self.chat(
+            [{"role": "user", "content": prompt}],
+            ensure_ready=ensure_ready,
+            **kwargs,
+        )
+        content = message.get("content")
+        if isinstance(content, str):
+            return content
+        if content is None:
+            return message.get("reasoning_content", "")
+        return str(content)
 
     def save(self) -> None:
         payload = self.model_dump(mode="json")
