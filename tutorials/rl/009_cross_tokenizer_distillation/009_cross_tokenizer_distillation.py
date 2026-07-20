@@ -56,6 +56,7 @@ from modal_training_gym.common.environments import (
     build_bfcl_env as build_env,
     build_bfcl_prefix_messages as build_prefix_messages,
     bfcl_tool_schemas_to_openai as tool_schemas_to_openai,
+    run_bfcl_episode,
     to_json_schema,
 )
 from modal_training_gym.deploy_recipes.sglang_recipe import (
@@ -246,7 +247,6 @@ def trajectory_reward(
 SERVED_CONTEXT_LEN = 16384
 RESPONSE_TOKEN_CAP = 8192
 CONTEXT_SAFETY_MARGIN = 512
-_RETRYABLE_STATUS = (429, 500, 502, 503, 504)
 
 EVAL_MAX_TURNS = EVAL_TAIL_STEPS * 2
 MAX_CONSECUTIVE_TOOL_ERRORS = 3
@@ -263,13 +263,6 @@ def _prompt_token_count(messages, tools=None) -> int:
         return sum(len(str(m.get("content", ""))) for m in messages) // 3
 
 def _chat(deployment, messages, tools=None, max_tokens=None, max_attempts=12, *, qwen_thinking=False):
-    import random
-    import time
-
-    import requests as _requests
-
-    from modal_training_gym.common.deployment import _modal_proxy_auth_headers
-
     if max_tokens is None:
         max_tokens = RESPONSE_TOKEN_CAP
     remaining = SERVED_CONTEXT_LEN - _prompt_token_count(messages, tools) - CONTEXT_SAFETY_MARGIN
@@ -277,35 +270,20 @@ def _chat(deployment, messages, tools=None, max_tokens=None, max_attempts=12, *,
     if capped <= 0:
         return {"content": "", "tool_calls": []}
 
-    body = {
-        "model": deployment.deployment_config.served_model_name,
-        "messages": messages,
-        "tools": tools,
+    kwargs = {
         "temperature": 0.0,
         "max_tokens": capped,
     }
+    if tools is not None:
+        kwargs["tools"] = tools
     if qwen_thinking is not None:
-        body["chat_template_kwargs"] = {"enable_thinking": qwen_thinking}
-    for attempt in range(max_attempts):
-        try:
-            resp = _requests.post(
-                f"{deployment.url}/v1/chat/completions",
-                json=body,
-                timeout=120,
-                headers=_modal_proxy_auth_headers(),
-            )
-            if resp.status_code in _RETRYABLE_STATUS:
-                raise _requests.HTTPError(f"retryable status {resp.status_code}", response=resp)
-            resp.raise_for_status()
-            return resp.json()["choices"][0]["message"]
-        except (_requests.ConnectionError, _requests.Timeout, _requests.HTTPError) as e:
-            status = getattr(getattr(e, "response", None), "status_code", None)
-            retryable = status in _RETRYABLE_STATUS or status is None
-            if attempt == max_attempts - 1 or not retryable:
-                raise
-            wait = min(30.0, 2 ** attempt) + random.uniform(0, 1.0)
-            time.sleep(wait)
-    return {"content": "", "tool_calls": []}
+        kwargs["chat_template_kwargs"] = {"enable_thinking": qwen_thinking}
+    return deployment.chat(
+        messages,
+        ensure_ready=False,
+        max_attempts=max_attempts,
+        **kwargs,
+    )
 
 def _actions_from_message(msg: dict) -> tuple[str, list[ToolCall]]:
     """Prefer structured API tool_calls (DeepSeek); else parse Qwen wire text."""
@@ -338,94 +316,34 @@ def bfcl_eval_fn(deployment: ModelDeployment, example: dict) -> EvalRowResult:
     K = max(0, N - EVAL_TAIL_STEPS)
     expert_call = flattened_calls[K] if K < len(flattened_calls) else {}
 
-    messages = build_prefix_messages(label, K)
-    tools_list = tool_schemas_to_openai(label.get("tool_schemas", {}))
     served = deployment.deployment_config.served_model_name
     is_student = served != "deepseek-v4-flash"
-
-    import time as _time
 
     def _log(msg):
         who = "student" if is_student else "teacher"
         print(f"[eval:{who}:{task_id} K={K}] {msg}", flush=True)
 
     deployment.wait_until_ready(timeout=DEPLOYMENT_READY_TIMEOUT)
-    env = build_env(label, K)
-    first_call = None
-    model_calls = []
-    exec_successes = []
-    last_response = ""
-    consecutive_errors = 0
-    exit_reason = "max_turns"
-    done = False
-    shaped_score = 0.0
     _log(f"start tail={EVAL_TAIL_STEPS} max_turns={EVAL_MAX_TURNS}")
-    for turn in range(EVAL_MAX_TURNS):
-        _t0 = _time.monotonic()
-        msg = _chat(
+
+    episode = run_bfcl_episode(
+        label,
+        start_step=K,
+        generate=lambda messages, tools: _chat(
             deployment,
             messages,
-            tools=tools_list,
+            tools=tools,
             qwen_thinking=STUDENT_ENABLE_THINKING if is_student else None,
-        )
-        gen_s = _time.monotonic() - _t0
-        content, actions = _actions_from_message(msg)
-        last_response = content
-        if turn == 0:
-            first_call = (
-                {"name": actions[0].name, "arguments": actions[0].arguments} if actions else None
-            )
-        _log(f"turn {turn} gen={gen_s:.1f}s calls={[a.name for a in actions]}")
-        if not actions:
-            exit_reason = "no_further_calls"
-            break
-
-        observations: list[tuple[str, str]] = []
-        for action in actions:
-            name = action.name
-            model_calls.append({"name": action.name, "arguments": action.arguments})
-            try:
-                step_result = env.step(action)
-                obs, is_error = step_result.observation.text, step_result.observation.is_error
-            except Exception as e:
-                _log(f"  execution error on {name}: {e!r} — ending episode")
-                exec_successes.append(False)
-                exit_reason = "execution_error"
-                done = True
-                break
-            exec_successes.append(not is_error)
-            _log(f"  exec {name} -> {'ERR' if is_error else 'ok'}")
-            observations.append((name, obs))
-            consecutive_errors = consecutive_errors + 1 if is_error else 0
-            if consecutive_errors >= MAX_CONSECUTIVE_TOOL_ERRORS:
-                exit_reason = "repeated_errors"
-                done = True
-                break
-        if done:
-            break
-
-        call_ids = [f"call_t{turn}_{i}" for i in range(len(actions))]
-        messages.append({
-            "role": "assistant",
-            "content": content,
-            "tool_calls": [
-                {
-                    "id": cid,
-                    "type": "function",
-                    "function": {"name": a.name, "arguments": json.dumps(a.arguments)},
-                }
-                for cid, a in zip(call_ids, actions)
-            ],
-        })
-        for cid, (name, obs) in zip(call_ids, observations):
-            messages.append(
-                {"role": "tool", "tool_call_id": cid, "content": obs[:2000]}
-            )
-    try:
-        task_passed = env.evaluate().passed
-    except Exception as e:
-        _log(f"evaluate() failed: {e!r} — marking failed")
-        task_passed = False
+        ),
+        parse_response=_actions_from_message,
+        max_turns=EVAL_MAX_TURNS,
+        max_consecutive_errors=MAX_CONSECUTIVE_TOOL_ERRORS,
+        log=_log,
+    )
+    first_call = episode.first_call
+    model_calls = episode.calls
+    exec_successes = episode.execution_successes
+    task_passed = episode.verdict.passed
     expert_calls = flattened_calls[K:K + len(model_calls)]
     shaped_score = trajectory_reward(
         model_calls,
@@ -436,13 +354,13 @@ def bfcl_eval_fn(deployment: ModelDeployment, example: dict) -> EvalRowResult:
         EVAL_TAIL_STEPS,
     )
     _log(
-        f"done exit={exit_reason} passed={bool(task_passed)} "
+        f"done exit={episode.exit_reason} passed={bool(task_passed)} "
         f"reward={shaped_score:.3f} exec_ok={sum(exec_successes)}/{len(exec_successes)}"
     )
 
     return EvalRowResult(
         score=shaped_score,
-        response=last_response,
+        response=episode.final_response,
         metadata={
             "task": task_id,
             "step_K": K,
@@ -1158,7 +1076,10 @@ def _main_impl() -> None:
             capture_trace=True,
             trace_sample_limit=16,
             image_overlay=lambda img: img.pip_install(
-                "modal~=1.4.3", "huggingface_hub~=1.12", "aiohttp~=3.13", "jsonschema~=4.23",
+                "modal~=1.5.2",
+                "huggingface_hub~=1.12.0",
+                "aiohttp~=3.13.0",
+                "jsonschema~=4.23.0",
                 "bfcl-eval==2026.3.23",
             ),
 
