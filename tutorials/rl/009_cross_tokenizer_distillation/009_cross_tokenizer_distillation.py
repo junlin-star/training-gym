@@ -921,13 +921,14 @@ def _frac(rows, key):
 
 # ## Example results
 #
-# | Metric | Base | Trained | Delta |
-# | --- | ---: | ---: | ---: |
-# | Eval rows | 30 | 30 | — |
-# | Shaped reward | 0.707 | **0.789** | **+0.082** |
-# | Terminal pass rate | 53.3% | **63.3%** | **+10.0 pp** |
-# | Parsed tool call | 90.0% | **96.7%** | **+6.7 pp** |
-# | First-call tool match | 86.7% | **93.3%** | **+6.6 pp** |
+# <table style="border-collapse: separate; border-spacing: 1.25rem 0.35rem; white-space: nowrap;">
+#   <tr><th align="left">Metric</th><th align="right">Base</th><th align="right">Trained</th><th align="right">Delta</th></tr>
+#   <tr><td>Eval rows</td><td align="right">30</td><td align="right">30</td><td align="right">—</td></tr>
+#   <tr><td>Shaped reward</td><td align="right">0.707</td><td align="right"><strong>0.789</strong></td><td align="right"><strong>+0.082</strong></td></tr>
+#   <tr><td>Terminal pass rate</td><td align="right">53.3%</td><td align="right"><strong>63.3%</strong></td><td align="right"><strong>+10.0 pp</strong></td></tr>
+#   <tr><td>Parsed tool call</td><td align="right">90.0%</td><td align="right"><strong>96.7%</strong></td><td align="right"><strong>+6.7 pp</strong></td></tr>
+#   <tr><td>First-call tool match</td><td align="right">86.7%</td><td align="right"><strong>93.3%</strong></td><td align="right"><strong>+6.6 pp</strong></td></tr>
+# </table>
 #
 # After only 5 rollouts, shaped reward rose from 0.707 → 0.789 and terminal pass
 # rate from 53.3% → 63.3%, with parsed tool calls and first-call match also up. Still well below the teacher's
@@ -935,13 +936,14 @@ def _frac(rows, key):
 #
 # ### Teacher reference
 #
-# | Metric | Teacher |
-# | --- | ---: |
-# | Eval rows | 30 |
-# | Shaped reward | 0.751 |
-# | Terminal pass rate | **83.3%** |
-# | Parsed tool call | 100.0% |
-# | First-call tool match | 93.3% |
+# <table style="border-collapse: separate; border-spacing: 1.25rem 0.35rem; white-space: nowrap;">
+#   <tr><th align="left">Metric</th><th align="right">Teacher</th></tr>
+#   <tr><td>Eval rows</td><td align="right">30</td></tr>
+#   <tr><td>Shaped reward</td><td align="right">0.751</td></tr>
+#   <tr><td>Terminal pass rate</td><td align="right"><strong>83.3%</strong></td></tr>
+#   <tr><td>Parsed tool call</td><td align="right">100.0%</td></tr>
+#   <tr><td>First-call tool match</td><td align="right">93.3%</td></tr>
+# </table>
 #
 # The teacher's terminal pass rate is 30 percentage points above the base student.
 # ## Future Possibilities
@@ -1061,9 +1063,7 @@ def _main_impl() -> None:
     # lengthens the remaining horizon by one (`T ← T + 1`). Tune `rollout_temperature` and
     # `num_rollout` if you want more exploration or a longer run.
     #
-    # Training uses **2×8 H100** actor nodes. Checkpoints keep the recipe defaults
-    # (`save_interval=20`, `no_save_optim=True`) — saving Adam every step on one node
-    # previously OOMed Ray host RAM (~1 TB) during `save_model`.
+    # Training uses **2×8 H100** actor nodes.
 
     training_run = TrainConfig(
         model=base_model,
