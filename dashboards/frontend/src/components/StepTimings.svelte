@@ -224,12 +224,17 @@
         else coordination.push(span);
       }
     }
-    const spans = [...rollout, ...trainingWindows, ...training, ...coordination];
-    if (!spans.length) {
+    let start = Infinity;
+    let end = -Infinity;
+    for (const spans of [rollout, trainingWindows, training, coordination]) {
+      for (const span of spans) {
+        start = Math.min(start, span.start);
+        end = Math.max(end, span.end);
+      }
+    }
+    if (!Number.isFinite(start) || !Number.isFinite(end)) {
       return { start: 0, duration: 1, rollout, training, trainingWindows, coordination };
     }
-    const start = Math.min(...spans.map((span) => span.start));
-    const end = Math.max(...spans.map((span) => span.end));
     return {
       start,
       duration: Math.max(end - start, 0.001),

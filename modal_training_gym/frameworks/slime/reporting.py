@@ -37,8 +37,8 @@ _ADVANTAGE_PATH = "/api/advantage-distributions"
 _PHASE_TIMEOUT_SECONDS = 1.0
 _STEP_EVENT_TIMEOUT_SECONDS = 5.0
 _ROLLOUT_TIMEOUT_SECONDS = 10.0
-_TIMING_DELIVERY_ATTEMPTS = 3
 _TIMING_RETRY_DELAY_SECONDS = 0.1
+_TIMING_RETRY_MAX_DELAY_SECONDS = 5.0
 
 
 def _arg_value(args: Any, key: str) -> Any:
@@ -163,18 +163,27 @@ def _enqueue(payload: dict[str, Any]) -> None:
 def _persist_async_timing_event(payload: Mapping[str, object]) -> None:
     training_run_id = str(payload.get("training_run_id") or "")
     if not training_run_id:
-        raise RuntimeError("Cannot persist a timing event without a training run ID")
+        print("Skipping async timing event without a training run ID")
+        return
 
     key = (training_run_id, "timing_event", uuid.uuid4().hex)
-    store = _step_times_dict()
-    for attempt in range(_TIMING_DELIVERY_ATTEMPTS):
+    failures = 0
+    while True:
         try:
-            store[key] = dict(payload)
+            _step_times_dict()[key] = dict(payload)
             return
         except Exception as exc:
-            if attempt + 1 == _TIMING_DELIVERY_ATTEMPTS:
-                raise RuntimeError("Failed to persist async timing event") from exc
-            time.sleep(_TIMING_RETRY_DELAY_SECONDS * (attempt + 1))
+            failures += 1
+            if failures == 1 or failures % 10 == 0:
+                print(
+                    f"Retrying async timing event after {failures} failed writes: {exc}"
+                )
+            time.sleep(
+                min(
+                    _TIMING_RETRY_DELAY_SECONDS * failures,
+                    _TIMING_RETRY_MAX_DELAY_SECONDS,
+                )
+            )
 
 
 def _enqueue_rollout(payload: dict[str, Any]) -> None:
