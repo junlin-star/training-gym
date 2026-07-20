@@ -1,5 +1,16 @@
 const SERVER = "/api";
 
+async function errorFromResponse(res) {
+  let detail = `HTTP ${res.status}`;
+  try {
+    const body = await res.json();
+    if (body?.detail) detail = String(body.detail);
+  } catch {
+    // Non-JSON error body — keep the status-code message.
+  }
+  return new Error(detail);
+}
+
 function safeStr(v) {
   if (v && typeof v === "object" && "value" in v) return v.value;
   return v != null ? String(v) : "";
@@ -206,7 +217,7 @@ export async function fetchRuns({ signal } = {}) {
     fetch(`${SERVER}/runs`, { signal }),
     fetch(`${SERVER}/train-results`, { signal }),
   ]);
-  if (!runsRes.ok) throw new Error(`HTTP ${runsRes.status}`);
+  if (!runsRes.ok) throw await errorFromResponse(runsRes);
   const runs = await runsRes.json();
   const trainResults = resultsRes.ok ? await resultsRes.json() : [];
 
@@ -309,7 +320,7 @@ export async function fetchRuns({ signal } = {}) {
 
 export async function fetchEvals({ signal } = {}) {
   const res = await fetch(`${SERVER}/evals`, { signal });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  if (!res.ok) throw await errorFromResponse(res);
   const evals = await res.json();
   const seen = new Set();
   return evals.filter((e) => {
@@ -391,16 +402,7 @@ export async function fetchRunLogs(
     `${SERVER}/runs/${encodeURIComponent(trainingRunId)}/logs` + (qs ? `?${qs}` : ""),
     { signal },
   );
-  if (!res.ok) {
-    let detail = `HTTP ${res.status}`;
-    try {
-      const body = await res.json();
-      if (body?.detail) detail = String(body.detail);
-    } catch {
-      // non-JSON error body — keep the status-code message
-    }
-    throw new Error(detail);
-  }
+  if (!res.ok) throw await errorFromResponse(res);
   const data = await res.json();
   return {
     logs: Array.isArray(data.logs) ? data.logs : [],
