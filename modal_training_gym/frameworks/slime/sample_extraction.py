@@ -84,7 +84,7 @@ _SHAPED_REWARD_KEY = "shaped_reward"
 
 
 def _sample_score(sample: Sample, reward: float | None = None) -> float:
-    """Resolve gym :class:`~modal_training_gym.common.sample.Sample.score`.
+    """Resolve reward score from a training gym Sample.
 
     Resolution order:
 
