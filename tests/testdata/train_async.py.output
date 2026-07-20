@@ -3,9 +3,13 @@ import sys as _tg_sys
 if '/root' not in _tg_sys.path:
     _tg_sys.path.insert(0, '/root')
 try:
-    from modal_training_gym.frameworks.slime.phase_reporting import report_step_event as _tg_report
+    from modal_training_gym.frameworks.slime.phase_reporting import (
+        flush_async_timing_events as _tg_flush_timings,
+        report_step_event as _tg_report,
+    )
 except ImportError:
     def _tg_report(status, args=None, rollout_id=None, step_event=''): pass
+    def _tg_flush_timings(): pass
 
 import ray
 
@@ -112,6 +116,8 @@ def train(args):
         # PATCHED_TRAINING_GYM_STEP_FINISH
         _tg_report('training', args, rollout_id, 'finish')
 
+    # PATCHED_TRAINING_GYM_ASYNC_TIMING_FLUSH
+    _tg_flush_timings()
     ray.get(rollout_manager.dispose.remote())
     finish_tracking(args)
 

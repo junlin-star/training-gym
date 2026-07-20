@@ -5,7 +5,7 @@ and ``patch_advantage_distribution.py``) and the recipe's default custom-functio
 paths import from this module *inside the training container*, so everything
 they reference must stay importable here. The implementation is split across:
 
-- :mod:`.reporting` — HTTP queue/URL/token plumbing + run-context helpers
+- :mod:`.reporting` — background delivery and run-context helpers
 - :mod:`.sample_extraction` — trace/image/trajectory extraction from Samples
 - :mod:`.advantage_reporting` — torch/megatron advantage-distribution math
 
@@ -30,11 +30,12 @@ from .advantage_reporting import (
 from .reporting import (
     _STEP_EVENT_TIMEOUT_SECONDS,
     _enqueue,
+    _enqueue_async_timing_event,
     _enqueue_rollout,
-    _persist_async_timing_event,
     _post_framework_status,
     _run_context,
     _step_progress,
+    flush_async_timing_events,
 )
 from .reporting import (
     _advantage_url as _advantage_url,
@@ -399,7 +400,7 @@ def report_step_event(
         training_attempt = os.environ.get("TRAINING_GYM_TRAINING_ATTEMPT")
         if training_attempt:
             payload["training_attempt"] = training_attempt
-        _persist_async_timing_event(payload)
+        _enqueue_async_timing_event(payload)
         return
     match step_event:
         case "start":
@@ -414,6 +415,7 @@ def report_step_event(
 __all__ = [
     "before_log_prob_hook",
     "before_train_step_hook",
+    "flush_async_timing_events",
     "report_advantage_distribution",
     "report_phase",
     "report_rollout_samples",

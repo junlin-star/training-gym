@@ -31,6 +31,7 @@ ASYNC_TRAIN_FINISH_MARKER = "PATCHED_TRAINING_GYM_ASYNC_TRAIN_FINISH"
 ASYNC_CHECKPOINT_MARKER = "PATCHED_TRAINING_GYM_ASYNC_CHECKPOINT"
 ASYNC_WEIGHT_SYNC_MARKER = "PATCHED_TRAINING_GYM_ASYNC_WEIGHT_SYNC"
 ASYNC_EVAL_MARKER = "PATCHED_TRAINING_GYM_ASYNC_EVAL"
+ASYNC_TIMING_FLUSH_MARKER = "PATCHED_TRAINING_GYM_ASYNC_TIMING_FLUSH"
 
 PREAMBLE = (
     f"# {PREAMBLE_MARKER}: bootstrap phase reporter (runs once per process)\n"
@@ -52,9 +53,13 @@ ASYNC_PREAMBLE = (
     "if '/root' not in _tg_sys.path:\n"
     "    _tg_sys.path.insert(0, '/root')\n"
     "try:\n"
-    "    from modal_training_gym.frameworks.slime.phase_reporting import report_step_event as _tg_report\n"
+    "    from modal_training_gym.frameworks.slime.phase_reporting import (\n"
+    "        flush_async_timing_events as _tg_flush_timings,\n"
+    "        report_step_event as _tg_report,\n"
+    "    )\n"
     "except ImportError:\n"
     "    def _tg_report(status, args=None, rollout_id=None, step_event=''): pass\n"
+    "    def _tg_flush_timings(): pass\n"
     "\n"
 )
 
@@ -208,6 +213,14 @@ def _patch_async_file(path: Path) -> None:
         "        _tg_report('training', args, rollout_id, 'finish')\n\n"
         "    ray.get(rollout_manager.dispose.remote())\n",
         "step finish",
+    )
+    replace_once(
+        ASYNC_TIMING_FLUSH_MARKER,
+        "    ray.get(rollout_manager.dispose.remote())\n",
+        f"    # {ASYNC_TIMING_FLUSH_MARKER}\n"
+        "    _tg_flush_timings()\n"
+        "    ray.get(rollout_manager.dispose.remote())\n",
+        "async timing flush",
     )
     if failed:
         print(f"WARNING: Could not patch {path.name} for: {', '.join(failed)}")

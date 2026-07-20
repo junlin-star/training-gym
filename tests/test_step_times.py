@@ -37,9 +37,9 @@ RUN_ID = "run-hooks"
 STEP = 1
 
 
-def test_record_async_step_times_returns_update_boundaries():
+def test_record_async_step_times_returns_update_timestamps():
     recorded = {}
-    boundaries = record_async_step_times(
+    update_timestamps = record_async_step_times(
         recorded,
         RUN_ID,
         [
@@ -62,7 +62,7 @@ def test_record_async_step_times_returns_update_boundaries():
         ],
     )
 
-    assert boundaries[(1, SlimeStatus.TRAIN_MODEL.value)][("", 2)] == {
+    assert update_timestamps[(1, SlimeStatus.TRAIN_MODEL.value)][("", 2)] == {
         "start": 10.25,
         "finish": 12.75,
     }
@@ -86,9 +86,9 @@ def test_record_async_step_times_prefers_latest_attempt_per_phase():
                 }
             )
 
-    boundaries = record_async_step_times(recorded, RUN_ID, reversed(events))
+    update_timestamps = record_async_step_times(recorded, RUN_ID, reversed(events))
 
-    assert boundaries[(1, SlimeStatus.TRAIN_MODEL.value)][("", 0)] == {
+    assert update_timestamps[(1, SlimeStatus.TRAIN_MODEL.value)][("", 0)] == {
         "start": 20.0,
         "finish": 23.0,
     }
@@ -110,9 +110,9 @@ def test_record_async_step_times_keeps_training_roles_separate():
                 }
             )
 
-    boundaries = record_async_step_times({}, RUN_ID, events)
+    update_timestamps = record_async_step_times({}, RUN_ID, events)
 
-    assert boundaries[(1, SlimeStatus.TRAIN_MODEL.value)] == {
+    assert update_timestamps[(1, SlimeStatus.TRAIN_MODEL.value)] == {
         ("actor", 0): {"start": 10.0, "finish": 12.0},
         ("critic", 0): {"start": 9.0, "finish": 13.0},
     }
@@ -126,8 +126,7 @@ def test_record_async_step_times_keeps_training_roles_separate():
         1,
         [SlimeStatus.TRAIN_MODEL.value],
         set(),
-        update_boundaries=boundaries,
-        include_intervals=True,
+        update_timestamps=update_timestamps,
     )
     assert intervals["1"][SlimeStatus.TRAIN_MODEL.value] == [
         {
@@ -201,7 +200,7 @@ def build_step_times_dict(
 def aggregate_durations(
     schedule: list[tuple[float, str]],
 ) -> dict[str, float | None]:
-    _, substep_times = aggregate_step_times(
+    _, substep_times, _ = aggregate_step_times(
         build_step_times_dict(schedule),
         RUN_ID,
         STEP,
@@ -215,7 +214,7 @@ def aggregate_durations(
 
 
 def test_substep_times_aggregation():
-    step_times, substep_times = aggregate_step_times(
+    step_times, substep_times, _ = aggregate_step_times(
         build_step_times_dict(STEP_SCHEDULE),
         RUN_ID,
         STEP,
@@ -253,7 +252,7 @@ def test_replayed_step_replaces_stale_substep_times():
     ]
     build_step_times_dict(retry_schedule, offset=100.0, into=step_times_dict)
 
-    step_times, substep_times = aggregate_step_times(
+    step_times, substep_times, _ = aggregate_step_times(
         step_times_dict,
         RUN_ID,
         STEP,
@@ -279,7 +278,7 @@ def test_replayed_step_replaces_stale_substep_times():
 
 
 def test_fractional_events_preserve_integer_step_format():
-    step_times, substep_times = aggregate_step_times(
+    step_times, substep_times, _ = aggregate_step_times(
         {
             f"{RUN_ID}:1:start": 2.875,
             f"{RUN_ID}:1:finish": 18.999,
@@ -300,33 +299,16 @@ def test_fractional_events_preserve_integer_step_format():
     }
 
 
-def test_async_step_times_keep_legacy_integer_format():
+def test_step_times_keep_integer_format():
     step_times, _, _ = aggregate_step_times(
         {
             f"{RUN_ID}:1:start": 2.875,
             f"{RUN_ID}:1:finish": 3.125,
-            (
-                RUN_ID,
-                "substep_boundary",
-                1,
-                SlimeStatus.TRAIN_MODEL.value,
-                0,
-                "start",
-            ): 2.9,
-            (
-                RUN_ID,
-                "substep_boundary",
-                1,
-                SlimeStatus.TRAIN_MODEL.value,
-                0,
-                "finish",
-            ): 3.0,
         },
         RUN_ID,
         1,
         [SlimeStatus.TRAIN_MODEL.value],
         set(),
-        include_intervals=True,
     )
 
     assert step_times["1"] == {"start": 2, "end": 3, "duration_s": 1}
@@ -476,7 +458,7 @@ def test_substep_times_clamped_to_window():
         (18.0, "substep_finish"),
         (20.0, "step_complete"),
     ]
-    step_times, substep_times = aggregate_step_times(
+    step_times, substep_times, _ = aggregate_step_times(
         build_step_times_dict(schedule),
         RUN_ID,
         STEP,
@@ -504,7 +486,7 @@ def test_substep_times_multiple_steps():
     build_step_times_dict(STEP_SCHEDULE, step=1, into=step_times_dict)
     build_step_times_dict(STEP_SCHEDULE, step=2, offset=100.0, into=step_times_dict)
 
-    step_times, substep_times = aggregate_step_times(
+    step_times, substep_times, _ = aggregate_step_times(
         step_times_dict,
         RUN_ID,
         3,
@@ -613,8 +595,6 @@ def test_async_substeps_keep_explicit_overlapping_durations():
         (RUN_ID, 9, "phase_start", 31.0),
         (RUN_ID, 9, "phase_finish", 30.0),
         (RUN_ID, 10, "phase_start", float("nan")),
-        ("another-run", 0, "phase_start", 1.0),
-        ("another-run", 0, "phase_finish", 100.0),
     ):
         timing_events.append(
             {
@@ -627,7 +607,7 @@ def test_async_substeps_keep_explicit_overlapping_durations():
             }
         )
 
-    update_boundaries = record_async_step_times(step_times_dict, RUN_ID, timing_events)
+    update_timestamps = record_async_step_times(step_times_dict, RUN_ID, timing_events)
 
     async_order = [
         ROLLOUT_LOGGING,
@@ -644,8 +624,7 @@ def test_async_substeps_keep_explicit_overlapping_durations():
         2,
         async_order,
         {CHECKPOINT_SAVE, WEIGHT_SYNC, EVAL_AFTER},
-        update_boundaries=update_boundaries,
-        include_intervals=True,
+        update_timestamps=update_timestamps,
     )
 
     assert step_times["1"] == {"start": 10, "end": 21, "duration_s": 11}

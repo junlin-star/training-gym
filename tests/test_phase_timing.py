@@ -1,4 +1,5 @@
 import sys
+import threading
 from types import ModuleType, SimpleNamespace
 
 import pytest
@@ -118,9 +119,9 @@ def test_sync_step_boundaries_keep_direct_delivery(monkeypatch):
     ]
 
 
-def test_async_step_boundaries_are_persisted(monkeypatch):
+def test_async_step_boundaries_are_enqueued(monkeypatch):
     reports = []
-    monkeypatch.setattr(phase_reporting, "_persist_async_timing_event", reports.append)
+    monkeypatch.setattr(phase_reporting, "_enqueue_async_timing_event", reports.append)
 
     phase_reporting.report_step_event(
         SlimeStatus.TRAIN_MODEL,
@@ -144,7 +145,7 @@ def test_async_step_boundaries_are_persisted(monkeypatch):
 def test_training_attempt_is_only_added_to_async_timing_events(monkeypatch):
     reports = []
     monkeypatch.setenv("TRAINING_GYM_TRAINING_ATTEMPT", "2")
-    monkeypatch.setattr(phase_reporting, "_persist_async_timing_event", reports.append)
+    monkeypatch.setattr(phase_reporting, "_enqueue_async_timing_event", reports.append)
 
     phase_reporting.report_step_event(
         SlimeStatus.TRAINING,
@@ -171,9 +172,10 @@ def test_timing_events_use_deterministic_idempotency_keys(monkeypatch):
         "event_ts": 1.0,
     }
     second = {**first, "step_event": "phase_finish", "event_ts": 2.0}
-    reporting._persist_async_timing_event(first)
-    reporting._persist_async_timing_event({**first, "event_ts": 1.5})
-    reporting._persist_async_timing_event(second)
+    reporting._enqueue_async_timing_event(first)
+    reporting._enqueue_async_timing_event({**first, "event_ts": 1.5})
+    reporting._enqueue_async_timing_event(second)
+    assert reporting.flush_async_timing_events()
 
     assert len(store) == 2
     assert (
@@ -204,7 +206,30 @@ def test_timing_event_retry_reuses_the_same_key(monkeypatch):
     monkeypatch.setattr(reporting, "_step_times_dict", lambda: store)
     monkeypatch.setattr(reporting, "_TIMING_RETRY_DELAY_SECONDS", 0)
 
-    reporting._persist_async_timing_event(
+    reporting._enqueue_async_timing_event(
+        {
+            "training_run_id": "run-1",
+            "rollout_id": 0,
+            "phase": "training",
+            "step_event": "phase_start",
+        }
+    )
+    assert reporting.flush_async_timing_events()
+
+    assert len(store.keys) == 5
+    assert len(set(store.keys)) == 1
+
+
+def test_timing_delivery_failure_is_nonfatal(monkeypatch, capsys):
+    class Store:
+        def __setitem__(self, key, value):
+            raise OSError("unavailable")
+
+    monkeypatch.setattr(reporting, "_step_times_dict", Store)
+    monkeypatch.setattr(reporting, "_TIMING_RETRY_DELAY_SECONDS", 0)
+    failed_before = reporting._TIMING_FAILED_EVENTS
+
+    reporting._enqueue_async_timing_event(
         {
             "training_run_id": "run-1",
             "rollout_id": 0,
@@ -213,8 +238,11 @@ def test_timing_event_retry_reuses_the_same_key(monkeypatch):
         }
     )
 
-    assert len(store.keys) == 5
-    assert len(set(store.keys)) == 1
+    assert not reporting.flush_async_timing_events()
+    assert reporting._TIMING_FAILED_EVENTS == failed_before + 1
+    assert (
+        "Failed to write async timing event after 5 attempts" in capsys.readouterr().out
+    )
 
 
 def test_training_roles_use_distinct_timing_keys(monkeypatch):
@@ -228,8 +256,9 @@ def test_training_roles_use_distinct_timing_keys(monkeypatch):
         "step_id": 0,
     }
 
-    reporting._persist_async_timing_event({**event, "training_role": "actor"})
-    reporting._persist_async_timing_event({**event, "training_role": "critic"})
+    reporting._enqueue_async_timing_event({**event, "training_role": "actor"})
+    reporting._enqueue_async_timing_event({**event, "training_role": "critic"})
+    assert reporting.flush_async_timing_events()
 
     assert len(store) == 2
 
@@ -241,7 +270,52 @@ def test_timing_event_without_complete_identity_is_nonfatal(monkeypatch):
         lambda: pytest.fail("store should not be opened without a run ID"),
     )
 
-    reporting._persist_async_timing_event({})
+    reporting._enqueue_async_timing_event({})
+
+
+def test_timing_worker_start_failure_is_nonfatal(monkeypatch, capsys):
+    def fail_to_start():
+        raise RuntimeError("unavailable")
+
+    monkeypatch.setattr(reporting, "_ensure_timing_worker", fail_to_start)
+
+    reporting._enqueue_async_timing_event(
+        {
+            "training_run_id": "run-1",
+            "rollout_id": 0,
+            "phase": "training",
+            "step_event": "phase_start",
+        }
+    )
+
+    assert not reporting.flush_async_timing_events()
+    assert "Failed to queue async timing event" in capsys.readouterr().out
+
+
+def test_timing_delivery_does_not_block_the_caller(monkeypatch):
+    write_started = threading.Event()
+    allow_write = threading.Event()
+
+    class Store:
+        def __setitem__(self, key, value):
+            write_started.set()
+            allow_write.wait()
+
+    monkeypatch.setattr(reporting, "_step_times_dict", Store)
+
+    reporting._enqueue_async_timing_event(
+        {
+            "training_run_id": "run-1",
+            "rollout_id": 0,
+            "phase": "training",
+            "step_event": "phase_start",
+        }
+    )
+
+    assert write_started.wait(1)
+    assert not reporting.flush_async_timing_events(0.01)
+    allow_write.set()
+    assert reporting.flush_async_timing_events()
 
 
 def test_optimizer_timing_wrapper_is_reused_across_updates(monkeypatch):

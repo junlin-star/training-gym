@@ -1,5 +1,5 @@
-"""HTTP queue / URL / token plumbing + run-context helpers for slime's
-in-container dashboard reporting.
+"""Background delivery and run-context helpers for slime's in-container
+dashboard reporting.
 
 Split out of :mod:`.phase_reporting` (which re-exports these). Everything here
 is duck-typed and dependency-light so it stays importable inside the training
@@ -13,8 +13,8 @@ import os
 import threading
 import time
 from collections.abc import Mapping
-from queue import Queue
-from typing import Any
+from queue import Full, Queue
+from typing import Any, TypeAlias
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
@@ -30,14 +30,26 @@ PHASE_REPORT_TOKEN_ENV = "SLIME_PHASE_REPORT_TOKEN"
 _REPORT_QUEUE: "Queue[dict[str, Any] | None]" = Queue(maxsize=512)
 _REPORTER_STARTED = False
 _REPORTER_LOCK = threading.Lock()
+_TIMING_QUEUE_SIZE = 4096
+_TIMING_QUEUE: "Queue[TimingQueueItem]" = Queue(maxsize=_TIMING_QUEUE_SIZE)
+_TIMING_WORKER_STARTED = False
+_TIMING_WORKER_LOCK = threading.Lock()
+_TIMING_DROPPED_EVENTS = 0
+_TIMING_FAILED_EVENTS = 0
+_TIMING_REPORTED_DROPS = 0
+_TIMING_REPORTED_FAILURES = 0
 _PHASE_PATH = "/api/framework-status"
 _ROLLOUT_PATH = "/api/training-rollouts"
 _ADVANTAGE_PATH = "/api/advantage-distributions"
 _PHASE_TIMEOUT_SECONDS = 1.0
 _STEP_EVENT_TIMEOUT_SECONDS = 5.0
 _ROLLOUT_TIMEOUT_SECONDS = 10.0
+_TIMING_DELIVERY_ATTEMPTS = 5
 _TIMING_RETRY_DELAY_SECONDS = 0.1
-_TIMING_RETRY_MAX_DELAY_SECONDS = 5.0
+
+TimingKey: TypeAlias = tuple[str, str, int, str, int, str, str, int]
+TimingEvent: TypeAlias = tuple[TimingKey, dict[str, Any]]
+TimingQueueItem: TypeAlias = TimingEvent | threading.Event
 
 
 def _arg_value(args: Any, key: str) -> Any:
@@ -159,39 +171,39 @@ def _enqueue(payload: dict[str, Any]) -> None:
         pass
 
 
-def _persist_async_timing_event(payload: Mapping[str, object]) -> None:
-    training_run_id = str(payload.get("training_run_id") or "")
-    phase = payload.get("phase")
-    step_event = payload.get("step_event")
-    training_role = payload.get("training_role", "")
-    training_attempt = payload.get("training_attempt", 0)
-    rollout_id = payload.get("rollout_id")
-    step_id = payload.get("step_id")
-    number_like = (int, float, str)
-    if (
-        not isinstance(training_attempt, number_like)
-        or not isinstance(rollout_id, number_like)
-        or (step_id is not None and not isinstance(step_id, number_like))
-        or not isinstance(training_role, str)
-    ):
-        print("Skipping async timing event without a complete identity")
+def _ensure_timing_worker() -> None:
+    global _TIMING_WORKER_STARTED
+    if _TIMING_WORKER_STARTED:
         return
+    with _TIMING_WORKER_LOCK:
+        if _TIMING_WORKER_STARTED:
+            return
+        threading.Thread(
+            target=_timing_worker,
+            name="slime-timing-reporter",
+            daemon=True,
+        ).start()
+        _TIMING_WORKER_STARTED = True
+
+
+def _enqueue_async_timing_event(payload: Mapping[str, Any]) -> None:
+    global _TIMING_DROPPED_EVENTS
     try:
-        training_attempt = int(training_attempt or 0)
-        rollout_id = int(rollout_id)
-        step_id = int(step_id) if step_id is not None else -1
-    except (TypeError, ValueError):
+        training_run_id = str(payload["training_run_id"])
+        training_attempt = int(payload.get("training_attempt", 0) or 0)
+        training_role = str(payload.get("training_role", ""))
+        rollout_id = int(payload["rollout_id"])
+        phase = str(payload["phase"])
+        step_event = str(payload["step_event"])
+        step_id = int(payload.get("step_id", -1))
+    except (KeyError, TypeError, ValueError):
         print("Skipping async timing event without a complete identity")
         return
-    if (
-        not training_run_id
-        or not isinstance(phase, str)
-        or not isinstance(step_event, str)
-    ):
+    if not training_run_id or not phase or not step_event:
         print("Skipping async timing event without a complete identity")
         return
 
-    key = (
+    key: TimingKey = (
         training_run_id,
         "timing_event",
         training_attempt,
@@ -201,23 +213,71 @@ def _persist_async_timing_event(payload: Mapping[str, object]) -> None:
         step_event,
         step_id,
     )
-    failures = 0
+    try:
+        _ensure_timing_worker()
+        _TIMING_QUEUE.put_nowait((key, dict(payload)))
+    except Full:
+        _TIMING_DROPPED_EVENTS += 1
+        if _TIMING_DROPPED_EVENTS == 1:
+            print("Async timing queue is full; timing data will be incomplete")
+    except Exception as exc:
+        _TIMING_DROPPED_EVENTS += 1
+        print(f"Failed to queue async timing event: {exc}")
+
+
+def _timing_worker() -> None:
+    global _TIMING_FAILED_EVENTS
     while True:
-        try:
-            _step_times_dict()[key] = dict(payload)
-            return
-        except Exception as exc:
-            failures += 1
-            if failures == 1 or failures % 10 == 0:
-                print(
-                    f"Retrying async timing event after {failures} failed writes: {exc}"
-                )
-            time.sleep(
-                min(
-                    _TIMING_RETRY_DELAY_SECONDS * failures,
-                    _TIMING_RETRY_MAX_DELAY_SECONDS,
-                )
+        item = _TIMING_QUEUE.get()
+        if isinstance(item, threading.Event):
+            item.set()
+            _TIMING_QUEUE.task_done()
+            continue
+
+        key, payload = item
+        error: Exception | None = None
+        # TODO: ask Joy about design of retries
+        for attempt in range(1, _TIMING_DELIVERY_ATTEMPTS + 1):
+            try:
+                _step_times_dict()[key] = payload
+                error = None
+                break
+            except Exception as exc:
+                error = exc
+                if attempt < _TIMING_DELIVERY_ATTEMPTS:
+                    time.sleep(_TIMING_RETRY_DELAY_SECONDS * attempt)
+        if error is not None:
+            _TIMING_FAILED_EVENTS += 1
+            print(
+                "Failed to write async timing event after "
+                f"{_TIMING_DELIVERY_ATTEMPTS} attempts: {error}"
             )
+        _TIMING_QUEUE.task_done()
+
+
+def flush_async_timing_events(timeout_seconds: float = 5.0) -> bool:
+    global _TIMING_REPORTED_DROPS, _TIMING_REPORTED_FAILURES
+    if not _TIMING_WORKER_STARTED:
+        return True
+
+    barrier = threading.Event()
+    deadline = time.monotonic() + timeout_seconds
+    try:
+        _TIMING_QUEUE.put(barrier, timeout=timeout_seconds)
+    except Exception as exc:
+        print(f"Failed to flush async timing events: {exc}")
+        return False
+    flushed = barrier.wait(max(0.0, deadline - time.monotonic()))
+    if not flushed:
+        print("Timed out flushing async timing events")
+        return False
+    complete = (
+        _TIMING_DROPPED_EVENTS == _TIMING_REPORTED_DROPS
+        and _TIMING_FAILED_EVENTS == _TIMING_REPORTED_FAILURES
+    )
+    _TIMING_REPORTED_DROPS = _TIMING_DROPPED_EVENTS
+    _TIMING_REPORTED_FAILURES = _TIMING_FAILED_EVENTS
+    return complete
 
 
 def _enqueue_rollout(payload: dict[str, Any]) -> None:

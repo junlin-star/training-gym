@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 from collections.abc import Iterable, Mapping, MutableMapping
 from enum import Enum
+from typing import Any
 
 from modal_training_gym.common.status import SlimeStatus
 
@@ -19,7 +20,7 @@ class Substep(str, Enum):
     EVAL_AFTER = f"{SlimeStatus.EVAL_ROLLOUT_LOGGING.value}_end"
 
 
-AsyncUpdateBoundaries = dict[tuple[int, str], dict[tuple[str, int], dict[str, float]]]
+AsyncUpdateTimestamps = dict[tuple[int, str], dict[tuple[str, int], dict[str, float]]]
 
 
 def record_sync_step_time(
@@ -81,68 +82,63 @@ def record_sync_step_time(
 def record_async_step_times(
     step_times: MutableMapping[str, float],
     training_run_id: str,
-    events: Iterable[Mapping[str, object]],
-) -> AsyncUpdateBoundaries:
-    normalized_events: list[tuple[int, str, str, float, int | None, int, str]] = []
+    events: Iterable[Mapping[str, Any]],
+) -> AsyncUpdateTimestamps:
+    aggregated_events: list[tuple[int, str, str, float, int | None, int, str]] = []
     for event in events:
-        if event.get("training_run_id") != training_run_id:
-            continue
-        step = event.get("progress_current")
-        event_ts = event.get("event_ts")
-        training_attempt = event.get("training_attempt", 0)
-        if not isinstance(step, (int, float, str)) or not isinstance(
-            event_ts, (int, float, str)
-        ):
-            continue
-        if not isinstance(training_attempt, (int, float, str)):
-            training_attempt = 0
+        # Rollout steps are one-based for progress; Slime rollout IDs are zero-based.
         try:
-            step = int(step)
-            event_ts = float(event_ts)
-            training_attempt = int(training_attempt or 0)
-        except (TypeError, ValueError):
+            rollout_step = int(event["progress_current"])
+            event_ts = float(event["event_ts"])
+            training_attempt = int(event.get("training_attempt", 0) or 0)
+            update_id = event.get("step_id")
+            update_id = int(update_id) if update_id is not None else None
+        except (KeyError, TypeError, ValueError):
             continue
         phase = event.get("phase")
         step_event = event.get("step_event", "")
         training_role = event.get("training_role", "")
+        if not isinstance(training_role, str):
+            training_role = ""
         if (
-            step <= 0
-            or not math.isfinite(event_ts)
+            not math.isfinite(event_ts)
             or not isinstance(phase, str)
             or not isinstance(step_event, str)
-            or not isinstance(training_role, str)
         ):
             continue
-        step_id = event.get("step_id")
-        if step_id is not None and not isinstance(step_id, (int, float, str)):
-            step_id = None
-        try:
-            step_id = int(step_id) if step_id is not None else None
-        except (TypeError, ValueError):
-            step_id = None
-        normalized_events.append(
+        aggregated_events.append(
             (
-                step,
+                rollout_step,
                 phase,
                 step_event,
                 event_ts,
-                step_id,
+                update_id,
                 training_attempt,
                 training_role,
             )
         )
 
-    latest_attempt_by_phase: dict[tuple[int, str, str], int] = {}
-    for step, phase, _, _, _, training_attempt, training_role in normalized_events:
-        phase_key = (step, phase, training_role)
-        latest_attempt_by_phase[phase_key] = max(
+    latest_attempt_by_rollout_phase: dict[tuple[int, str, str], int] = {}
+    for (
+        rollout_step,
+        phase,
+        _,
+        _,
+        _,
+        training_attempt,
+        training_role,
+    ) in aggregated_events:
+        rollout_phase = (rollout_step, phase, training_role)
+        latest_attempt_by_rollout_phase[rollout_phase] = max(
             training_attempt,
-            latest_attempt_by_phase.get(phase_key, training_attempt),
+            latest_attempt_by_rollout_phase.get(rollout_phase, training_attempt),
         )
-    update_boundaries: AsyncUpdateBoundaries = {}
+    update_timestamps: AsyncUpdateTimestamps = {}
 
-    def record_first(step: int, key: str, event_time: float) -> None:
-        step_window_start = step_times.get(f"{training_run_id}:{step}:substep_start")
+    def record_first(rollout_step: int, key: str, event_time: float) -> None:
+        step_window_start = step_times.get(
+            f"{training_run_id}:{rollout_step}:substep_start"
+        )
         existing = step_times.get(key)
         if existing is not None and (
             step_window_start is None or existing >= step_window_start
@@ -155,39 +151,52 @@ def record_async_step_times(
         )
 
     for (
-        step,
+        rollout_step,
         phase,
         step_event,
         event_ts,
-        step_id,
+        update_id,
         training_attempt,
         training_role,
-    ) in sorted(normalized_events, key=lambda event: (event[5], event[3])):
-        if training_attempt != latest_attempt_by_phase[(step, phase, training_role)]:
+    ) in sorted(aggregated_events, key=lambda event: (event[5], event[3])):
+        if (
+            training_attempt
+            != latest_attempt_by_rollout_phase[(rollout_step, phase, training_role)]
+        ):
             continue
-        if step_id is not None and step_event in ("phase_start", "phase_finish"):
-            boundary = step_event.removeprefix("phase_")
-            updates = update_boundaries.setdefault((step, phase), {})
-            updates.setdefault((training_role, step_id), {})[boundary] = event_ts
+        if update_id is not None and step_event in ("phase_start", "phase_finish"):
+            timestamp_kind = step_event.removeprefix("phase_")
+            updates = update_timestamps.setdefault((rollout_step, phase), {})
+            updates.setdefault((training_role, update_id), {})[timestamp_kind] = (
+                event_ts
+            )
             if step_event == "phase_finish":
                 continue
 
         event_time = round(event_ts, 3)
         if step_event == "start":
-            step_times[f"{training_run_id}:{step}:start"] = event_time
+            step_times[f"{training_run_id}:{rollout_step}:start"] = event_time
         elif step_event == "finish":
-            step_times[f"{training_run_id}:{step}:finish"] = event_time
+            step_times[f"{training_run_id}:{rollout_step}:finish"] = event_time
         elif step_event == "substep_start":
-            step_times[f"{training_run_id}:{step}:substep_start"] = event_time
+            step_times[f"{training_run_id}:{rollout_step}:substep_start"] = event_time
         elif step_event == "substep_finish":
-            record_first(step, f"{training_run_id}:{step}:substep_finish", event_time)
+            record_first(
+                rollout_step,
+                f"{training_run_id}:{rollout_step}:substep_finish",
+                event_time,
+            )
         elif step_event == "phase_start":
-            record_first(step, f"{training_run_id}:{step}:substep:{phase}", event_time)
+            record_first(
+                rollout_step,
+                f"{training_run_id}:{rollout_step}:substep:{phase}",
+                event_time,
+            )
         elif step_event == "phase_finish":
             record_first(
-                step,
-                f"{training_run_id}:{step}:substep:{phase}:finish",
+                rollout_step,
+                f"{training_run_id}:{rollout_step}:substep:{phase}:finish",
                 event_time,
             )
 
-    return update_boundaries
+    return update_timestamps

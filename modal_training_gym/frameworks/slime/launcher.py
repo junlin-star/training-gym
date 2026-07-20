@@ -16,7 +16,6 @@ Then: `uv run modal run <tutorial_file>.py::train`.
 """
 
 import asyncio
-import math
 import os
 import shlex
 import subprocess
@@ -66,7 +65,7 @@ from modal_training_gym.common.launcher_helpers import (
 from modal_training_gym.common.wandb import WandbConfig
 from modal_training_gym.common.status import SlimeStatus
 from modal_training_gym.common.step_timing import (
-    AsyncUpdateBoundaries,
+    AsyncUpdateTimestamps,
     Substep,
     record_async_step_times,
 )
@@ -155,6 +154,7 @@ _PATCH_ROLLOUT_STATUS_B64 = encode_patch(
     "patch_rollout_status_reporting", _SLIME_PATCHES
 )
 _PATCH_TRAINING_ROLE_B64 = encode_patch("patch_training_role", _SLIME_PATCHES)
+_PATCH_ASYNC_TIMING_FLUSH_B64 = encode_patch("patch_async_timing_flush", _SLIME_PATCHES)
 _PATCH_ADVANTAGE_DIST_B64 = encode_patch("patch_advantage_distribution", _SLIME_PATCHES)
 _PATCH_LOG_ELIDE_B64 = encode_patch("patch_log_elide", _SLIME_PATCHES)
 # Backport of NVIDIA/Megatron-LM #3845: dequantize quantized CUDA tensors in the
@@ -183,7 +183,6 @@ def _build_slime_base_image() -> "Image":
             f"echo {_PATCH_QWEN3_VL_EXPORT_B64} | base64 -d | python3",
             f"echo {_PATCH_QWEN3_VL_TORCH_DIST_B64} | base64 -d | python3",
             f"echo {_PATCH_ROLLOUT_STATUS_B64} | base64 -d | python3",
-            f"echo {_PATCH_TRAINING_ROLE_B64} | base64 -d | python3",
             f"echo {_PATCH_ADVANTAGE_DIST_B64} | base64 -d | python3",
             f"echo {_PATCH_LOG_ELIDE_B64} | base64 -d | python3",
             f"echo {_PATCH_DIST_CKPT_QUANTIZED_B64} | base64 -d | python3",
@@ -308,22 +307,15 @@ def aggregate_step_times(
     SUBSTEP_ORDER: list[str],
     OPTIONAL_SUBSTEPS: set[str],
     *,
-    update_boundaries: Mapping[
+    update_timestamps: Mapping[
         tuple[int, str], Mapping[tuple[str, int], Mapping[str, float]]
     ]
     | None = None,
-    include_intervals: bool = False,
-) -> (
-    tuple[
-        dict[str, dict[str, int | None]],
-        dict[str, dict[str, dict[str, float | None]]],
-    ]
-    | tuple[
-        dict[str, dict[str, int | None]],
-        dict[str, dict[str, dict[str, float | None]]],
-        dict[str, dict[str, list[dict[str, int | float | str]]]],
-    ]
-):
+) -> tuple[
+    dict[str, dict[str, int | None]],
+    dict[str, dict[str, dict[str, float | None]]],
+    dict[str, dict[str, list[dict[str, int | float | str]]]],
+]:
     """Organize step and substep timings from the Modal dict at the end of a run.
 
     Records each step's start/end/duration; missing timestamps become None.
@@ -338,7 +330,7 @@ def aggregate_step_times(
     substep_timing_intervals: dict[
         str, dict[str, list[dict[str, int | float | str]]]
     ] = {}
-    update_boundaries = update_boundaries or {}
+    update_timestamps = update_timestamps or {}
 
     for current_step_num in range(1, num_steps + 1):
         start_key = f"{run_id}:{current_step_num}:start"
@@ -395,11 +387,11 @@ def aggregate_step_times(
                 f"{run_id}:{current_step_num}:substep:{substep}"
             )
             intervals: list[dict[str, int | float | str]] = []
-            updates = update_boundaries.get((current_step_num, substep), {})
-            for (training_role, update), boundaries in sorted(updates.items()):
+            updates = update_timestamps.get((current_step_num, substep), {})
+            for (training_role, update), timestamps in sorted(updates.items()):
                 try:
-                    start = boundaries["start"]
-                    finish = boundaries["finish"]
+                    start = timestamps["start"]
+                    finish = timestamps["finish"]
                 except KeyError:
                     continue
                 if finish < start:
@@ -477,9 +469,7 @@ def aggregate_step_times(
             if intervals:
                 substep_timing_intervals[step_key][substep] = intervals
 
-    if include_intervals:
-        return step_times, substep_times, substep_timing_intervals
-    return step_times, substep_times
+    return step_times, substep_times, substep_timing_intervals
 
 
 def build_slime_app(
@@ -720,7 +710,11 @@ def build_slime_app(
     # Build train_image AFTER _ship_callable so shipped modules are included.
     train_image = image
     if slime.async_mode:
-        train_image = train_image.uv_pip_install("modal==1.5.2")
+        train_image = train_image.uv_pip_install("modal==1.5.2").run_commands(
+            f"echo {_PATCH_ROLLOUT_STATUS_B64} | base64 -d | python3",
+            f"echo {_PATCH_TRAINING_ROLE_B64} | base64 -d | python3",
+            f"echo {_PATCH_ASYNC_TIMING_FLUSH_B64} | base64 -d | python3",
+        )
     if _has_hybrid_spec:
         train_image = train_image.run_commands(
             f"echo {_PATCH_TORCH_LOAD_B64} | base64 -d | python3",
@@ -1045,10 +1039,6 @@ def build_slime_app(
         "substep_finish",
         *(f"substep:{s}" for s in SUBSTEP_ORDER),
     )
-    if slime.async_mode:
-        STEP_TIME_KEY_SUFFIXES += tuple(
-            f"substep:{substep}:finish" for substep in SUBSTEP_ORDER
-        )
 
     async def write_step_times(
         run_id: str, num_steps: int
@@ -1069,17 +1059,6 @@ def build_slime_app(
         if slime.async_mode:
             async for key in step_times_dict.keys.aio():
                 match key:
-                    case (
-                        key_run_id,
-                        "substep_boundary",
-                        _,
-                        _,
-                        _,
-                        ("start" | "finish"),
-                    ) if key_run_id == run_id:
-                        keys.append(key)
-                    case (key_run_id, "timing_event_batch", _) if key_run_id == run_id:
-                        keys.append(key)
                     case (key_run_id, "timing_event", *_) if key_run_id == run_id:
                         keys.append(key)
         stored_values: dict[Hashable, object] = {}
@@ -1089,79 +1068,28 @@ def build_slime_app(
             stored_values.update(zip(batch, values))
 
         recorded_times: dict[str, float] = {}
-        timing_events: list[Mapping[str, object]] = []
-        update_boundaries: AsyncUpdateBoundaries = {}
+        timing_events: list[Mapping[str, Any]] = []
         for key, value in stored_values.items():
             if isinstance(key, str):
                 if isinstance(value, (int, float)):
                     recorded_times[key] = float(value)
                 continue
             match key:
-                case (
-                    key_run_id,
-                    "substep_boundary",
-                    step,
-                    phase,
-                    update,
-                    ("start" | "finish") as boundary,
-                ) if key_run_id == run_id:
-                    if not isinstance(value, (int, float, str)):
-                        continue
-                    try:
-                        step = int(step)
-                        update = int(update)
-                        timestamp = float(value)
-                    except (TypeError, ValueError):
-                        continue
-                    if (
-                        step <= 0
-                        or update < 0
-                        or not isinstance(phase, str)
-                        or not math.isfinite(timestamp)
-                    ):
-                        continue
-                    updates = update_boundaries.setdefault((step, phase), {})
-                    updates.setdefault(("", update), {})[boundary] = timestamp
-                case (key_run_id, "timing_event_batch", _) if key_run_id == run_id:
-                    if isinstance(value, list):
-                        for event in value:
-                            if isinstance(event, Mapping):
-                                timing_events.append(
-                                    {
-                                        field: item
-                                        for field, item in event.items()
-                                        if isinstance(field, str)
-                                    }
-                                )
                 case (key_run_id, "timing_event", *_) if key_run_id == run_id:
                     if isinstance(value, Mapping):
-                        timing_events.append(
-                            {
-                                field: item
-                                for field, item in value.items()
-                                if isinstance(field, str)
-                            }
-                        )
+                        timing_events.append(value)
 
-        reconciled_boundaries = record_async_step_times(
+        update_timestamps: AsyncUpdateTimestamps = record_async_step_times(
             recorded_times, run_id, timing_events
         )
-        for phase, updates in reconciled_boundaries.items():
-            stored_updates = update_boundaries.setdefault(phase, {})
-            for update, boundaries in updates.items():
-                stored_updates.setdefault(update, {}).update(boundaries)
-        timing_data = aggregate_step_times(
+        step_times, substep_times, substep_timing_intervals = aggregate_step_times(
             recorded_times,
             run_id,
             num_steps,
             SUBSTEP_ORDER,
             OPTIONAL_SUBSTEPS,
-            update_boundaries=update_boundaries,
-            include_intervals=True,
+            update_timestamps=update_timestamps,
         )
-        if len(timing_data) != 3:
-            raise RuntimeError("Detailed step timing aggregation returned no intervals")
-        step_times, substep_times, substep_timing_intervals = timing_data
         return step_times, substep_times, substep_timing_intervals, keys
 
     async def clear_step_times(keys: list[Hashable]) -> None:
@@ -1515,9 +1443,7 @@ def build_slime_app(
                 metadata = dict(latest_run_record.metadata or {})
                 if any(substep_timing_intervals.values()):
                     merged_intervals = dict(
-                        metadata.get("substep_timing_intervals")
-                        or metadata.get("substep_spans")
-                        or {}
+                        metadata.get("substep_timing_intervals") or {}
                     )
                     for step, intervals in substep_timing_intervals.items():
                         if intervals:
@@ -1526,7 +1452,6 @@ def build_slime_app(
                                 **intervals,
                             }
                     metadata["substep_timing_intervals"] = merged_intervals
-                    metadata["substep_spans"] = merged_intervals
                 latest_run_record.metadata = metadata
             except Exception as exc:
                 print(f"Failed to read step times: {exc}")

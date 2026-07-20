@@ -82,8 +82,7 @@
   function stepTimingForRollout(rolloutId) {
     const st = run?.step_times || null;
     const sub = run?.substep_times || null;
-    const timingIntervals =
-      run?.metadata?.substep_timing_intervals || run?.metadata?.substep_spans || null;
+    const timingIntervals = run?.metadata?.substep_timing_intervals || null;
     if (!st && !sub) return null;
     const candidates = [String(Number(rolloutId) + 1), String(rolloutId)];
     const key = candidates.find((k) => (st && st[k]) || (sub && sub[k]));
@@ -1217,8 +1216,7 @@
               <StepTimings
                 stepTimes={run.step_times}
                 substepTimes={run.substep_times}
-                substepTimingIntervals={run?.metadata?.substep_timing_intervals ||
-                  run?.metadata?.substep_spans}
+                substepTimingIntervals={run?.metadata?.substep_timing_intervals}
                 layout="timeline"
                 asyncMode={run?.config?.recipe?.async_mode === true}
                 downloadName={`step_substep_times_${runId}.json`}
@@ -1820,4 +1818,3 @@
     {/if}
   {/if}
 </section>
-

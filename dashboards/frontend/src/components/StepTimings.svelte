@@ -10,8 +10,6 @@
     downloadName = "step_substep_times.json",
   } = $props();
 
-  let detailedTimingIntervals = $derived(substepTimingIntervals);
-
   const SUBSTEP_LABELS = {
     evaluate_rollouts: "Eval (before)",
     generate_rollouts: "Generate rollouts",
@@ -105,9 +103,8 @@
       step_times: stepTimes || {},
       substep_times: substepTimes || {},
     };
-    if (detailedTimingIntervals) {
-      payload.substep_timing_intervals = detailedTimingIntervals;
-      payload.substep_spans = detailedTimingIntervals;
+    if (substepTimingIntervals) {
+      payload.substep_timing_intervals = substepTimingIntervals;
     }
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
@@ -127,7 +124,7 @@
       const subs = (substepTimes || {})[k] || {};
       const substeps = Object.entries(subs)
         .map(([name, v]) => {
-          const detailed = detailedTimingIntervals?.[k]?.[name];
+          const detailed = substepTimingIntervals?.[k]?.[name];
           const hasDetails = Array.isArray(detailed) && detailed.length > 0;
           const values = hasDetails ? detailed : [v];
           const segments = [];
@@ -187,7 +184,11 @@
 
   function tooltipLabel(step, sub) {
     const repeated =
-      step.timeline.filter((interval) => interval.sub.name === sub.name).length > 1;
+      step.timeline.filter(
+        (interval) =>
+          interval.sub.name === sub.name &&
+          interval.sub.trainingRole === sub.trainingRole,
+      ).length > 1;
     if (TRAINING_CHILDREN.has(sub.name) && sub.innerStep != null) {
       const role = sub.trainingRole
         ? `${sub.trainingRole[0].toUpperCase()}${sub.trainingRole.slice(1)} `
@@ -869,10 +870,6 @@
   }
 
   .tl-bar {
-    height: 18px;
-  }
-
-  .bar.tl-bar.async-lane-track {
     height: 14px;
   }
 
