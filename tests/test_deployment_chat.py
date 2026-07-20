@@ -1,0 +1,63 @@
+from types import SimpleNamespace
+
+from modal_training_gym.common import deployment as deployment_module
+from modal_training_gym.common.deployment import ModelDeployment
+
+
+def test_chat_serializes_tool_arguments_without_mutating_messages(monkeypatch) -> None:
+    structured_message = {
+        "content": "",
+        "tool_calls": [{"function": {"name": "lookup", "arguments": "{}"}}],
+    }
+
+    class _Response:
+        status_code = 200
+
+        @staticmethod
+        def raise_for_status() -> None:
+            return None
+
+        @staticmethod
+        def json() -> dict:
+            return {"choices": [{"message": structured_message}]}
+
+    request_body = {}
+
+    def post(url, *, json, timeout, headers):
+        request_body.update(json)
+        return _Response()
+
+    import requests
+
+    monkeypatch.setattr(requests, "post", post)
+    monkeypatch.setattr(deployment_module, "_modal_proxy_auth_headers", lambda: {})
+    deployment = ModelDeployment.model_construct(
+        deployment_id="test",
+        deployment_config=SimpleNamespace(served_model_name="test-model"),
+        url="https://example.test",
+    )
+    messages = [
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call_0",
+                    "type": "function",
+                    "function": {
+                        "name": "lookup",
+                        "arguments": {"key": "value"},
+                    },
+                }
+            ],
+        }
+    ]
+
+    response = deployment.chat(messages, ensure_ready=False)
+
+    assert response == structured_message
+    assert request_body["model"] == "test-model"
+    assert request_body["messages"][0]["tool_calls"][0]["function"]["arguments"] == (
+        '{"key": "value"}'
+    )
+    assert messages[0]["tool_calls"][0]["function"]["arguments"] == {"key": "value"}
