@@ -1141,8 +1141,7 @@ def build_slime_app(
                     await data_volume.commit.aio()
                 dataset.validate_prepared(prompt_data)
                 for ep in (eval_paths or {}).values():
-                    if os.path.exists(ep):
-                        dataset.validate_prepared(ep)
+                    dataset.validate_prepared(ep)
 
             await _set_framework_status_async(SlimeStatus.CONVERT_MODEL)
             prepare_slime_config(slime, model, tempfile.mkdtemp())

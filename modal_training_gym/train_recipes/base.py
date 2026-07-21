@@ -45,8 +45,9 @@ class BaseTrainRecipe(ABC):
         ext = "jsonl" if fmt == "jsonl" else "parquet"
         split = getattr(ds, "hf_split", "train")
         prompt_data = f"{DATA_PATH}/{name}/{split}.{ext}"
-        eval_prompt_data = {"eval": f"{DATA_PATH}/{name}/eval.{ext}"}
-        return prompt_data, eval_prompt_data
+        if getattr(ds, "writes_eval_paths", True):
+            return prompt_data, {"eval": f"{DATA_PATH}/{name}/eval.{ext}"}
+        return prompt_data, None
 
     @classmethod
     def _dataset_to_fields(cls, ds: "DatasetConfig") -> dict[str, Any]:
