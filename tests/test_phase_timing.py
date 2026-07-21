@@ -277,6 +277,9 @@ def test_timing_worker_start_failure_is_nonfatal(monkeypatch, capsys):
     def fail_to_start():
         raise RuntimeError("unavailable")
 
+    monkeypatch.setattr(reporting, "_TIMING_WORKER_STARTED", False)
+    monkeypatch.setattr(reporting, "_TIMING_DROPPED_EVENTS", 0)
+    monkeypatch.setattr(reporting, "_TIMING_REPORTED_DROPS", 0)
     monkeypatch.setattr(reporting, "_ensure_timing_worker", fail_to_start)
 
     reporting._enqueue_async_timing_event(
@@ -289,6 +292,7 @@ def test_timing_worker_start_failure_is_nonfatal(monkeypatch, capsys):
     )
 
     assert not reporting.flush_async_timing_events()
+    assert reporting.flush_async_timing_events()
     assert "Failed to queue async timing event" in capsys.readouterr().out
 
 

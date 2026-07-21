@@ -257,20 +257,18 @@ def _timing_worker() -> None:
 
 def flush_async_timing_events(timeout_seconds: float = 5.0) -> bool:
     global _TIMING_REPORTED_DROPS, _TIMING_REPORTED_FAILURES
-    if not _TIMING_WORKER_STARTED:
-        return True
-
-    barrier = threading.Event()
-    deadline = time.monotonic() + timeout_seconds
-    try:
-        _TIMING_QUEUE.put(barrier, timeout=timeout_seconds)
-    except Exception as exc:
-        print(f"Failed to flush async timing events: {exc}")
-        return False
-    flushed = barrier.wait(max(0.0, deadline - time.monotonic()))
-    if not flushed:
-        print("Timed out flushing async timing events")
-        return False
+    if _TIMING_WORKER_STARTED:
+        barrier = threading.Event()
+        deadline = time.monotonic() + timeout_seconds
+        try:
+            _TIMING_QUEUE.put(barrier, timeout=timeout_seconds)
+        except Exception as exc:
+            print(f"Failed to flush async timing events: {exc}")
+            return False
+        flushed = barrier.wait(max(0.0, deadline - time.monotonic()))
+        if not flushed:
+            print("Timed out flushing async timing events")
+            return False
     complete = (
         _TIMING_DROPPED_EVENTS == _TIMING_REPORTED_DROPS
         and _TIMING_FAILED_EVENTS == _TIMING_REPORTED_FAILURES

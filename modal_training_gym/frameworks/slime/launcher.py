@@ -387,8 +387,12 @@ def aggregate_step_times(
                 f"{run_id}:{current_step_num}:substep:{substep}"
             )
             intervals: list[dict[str, int | float | str]] = []
-            updates = update_timestamps.get((current_step_num, substep), {})
-            for (training_role, update), timestamps in sorted(updates.items()):
+            phase_update_timestamps = update_timestamps.get(
+                (current_step_num, substep), {}
+            )
+            for (training_role, update_id), timestamps in sorted(
+                phase_update_timestamps.items()
+            ):
                 try:
                     start = timestamps["start"]
                     finish = timestamps["finish"]
@@ -397,7 +401,7 @@ def aggregate_step_times(
                 if finish < start:
                     continue
                 interval: dict[str, int | float | str] = {
-                    "step_id": update,
+                    "step_id": update_id,
                     "start": round(start, 3),
                     "duration_s": round(finish - start, 3),
                 }
@@ -1424,34 +1428,39 @@ def build_slime_app(
                     substep_timing_intervals,
                     step_time_keys_read,
                 ) = await write_step_times(training_run_id, slime.num_rollout)
-                latest_run_record.step_times = {
-                    **(latest_run_record.step_times or {}),
-                    **{
-                        step: timing
-                        for step, timing in step_times.items()
-                        if any(value is not None for value in timing.values())
-                    },
+                recorded_steps = {
+                    step
+                    for step, timing in step_times.items()
+                    if any(value is not None for value in timing.values())
+                    or substep_times.get(step)
+                    or substep_timing_intervals.get(step)
                 }
+                merged_step_times = dict(latest_run_record.step_times or {})
+                for step in recorded_steps:
+                    timing = step_times[step]
+                    if any(value is not None for value in timing.values()):
+                        merged_step_times[step] = timing
+                    else:
+                        merged_step_times.pop(step, None)
+                latest_run_record.step_times = merged_step_times
                 merged_substep_times = dict(latest_run_record.substep_times or {})
-                for step, timings in substep_times.items():
-                    if timings:
-                        merged_substep_times[step] = {
-                            **merged_substep_times.get(step, {}),
-                            **timings,
-                        }
+                for step in recorded_steps:
+                    if timings := substep_times.get(step):
+                        merged_substep_times[step] = timings
+                    else:
+                        merged_substep_times.pop(step, None)
                 latest_run_record.substep_times = merged_substep_times
                 metadata = dict(latest_run_record.metadata or {})
-                if any(substep_timing_intervals.values()):
-                    merged_intervals = dict(
-                        metadata.get("substep_timing_intervals") or {}
-                    )
-                    for step, intervals in substep_timing_intervals.items():
-                        if intervals:
-                            merged_intervals[step] = {
-                                **merged_intervals.get(step, {}),
-                                **intervals,
-                            }
+                merged_intervals = dict(metadata.get("substep_timing_intervals") or {})
+                for step in recorded_steps:
+                    if intervals := substep_timing_intervals.get(step):
+                        merged_intervals[step] = intervals
+                    else:
+                        merged_intervals.pop(step, None)
+                if merged_intervals:
                     metadata["substep_timing_intervals"] = merged_intervals
+                else:
+                    metadata.pop("substep_timing_intervals", None)
                 latest_run_record.metadata = metadata
             except Exception as exc:
                 print(f"Failed to read step times: {exc}")

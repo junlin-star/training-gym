@@ -135,7 +135,9 @@ def record_async_step_times(
         )
     update_timestamps: AsyncUpdateTimestamps = {}
 
-    def record_first(rollout_step: int, key: str, event_time: float) -> None:
+    def record_first_aggregate_timestamp(
+        rollout_step: int, key: str, event_time: float
+    ) -> None:
         step_window_start = step_times.get(
             f"{training_run_id}:{rollout_step}:substep_start"
         )
@@ -166,10 +168,12 @@ def record_async_step_times(
             continue
         if update_id is not None and step_event in ("phase_start", "phase_finish"):
             timestamp_kind = step_event.removeprefix("phase_")
-            updates = update_timestamps.setdefault((rollout_step, phase), {})
-            updates.setdefault((training_role, update_id), {})[timestamp_kind] = (
-                event_ts
+            phase_update_timestamps = update_timestamps.setdefault(
+                (rollout_step, phase), {}
             )
+            phase_update_timestamps.setdefault((training_role, update_id), {})[
+                timestamp_kind
+            ] = event_ts
             if step_event == "phase_finish":
                 continue
 
@@ -181,19 +185,19 @@ def record_async_step_times(
         elif step_event == "substep_start":
             step_times[f"{training_run_id}:{rollout_step}:substep_start"] = event_time
         elif step_event == "substep_finish":
-            record_first(
+            record_first_aggregate_timestamp(
                 rollout_step,
                 f"{training_run_id}:{rollout_step}:substep_finish",
                 event_time,
             )
         elif step_event == "phase_start":
-            record_first(
+            record_first_aggregate_timestamp(
                 rollout_step,
                 f"{training_run_id}:{rollout_step}:substep:{phase}",
                 event_time,
             )
         elif step_event == "phase_finish":
-            record_first(
+            record_first_aggregate_timestamp(
                 rollout_step,
                 f"{training_run_id}:{rollout_step}:substep:{phase}:finish",
                 event_time,
