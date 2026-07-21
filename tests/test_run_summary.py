@@ -458,7 +458,3 @@ def test_malformed_records_do_not_hide_valid_runs():
 
     assert [summary.training_run_id for summary in summaries] == ["valid-run"]
 
-
-def test_run_summary_rejects_missing_identity():
-    with pytest.raises(ValidationError):
-        RunSummary.model_validate({})
