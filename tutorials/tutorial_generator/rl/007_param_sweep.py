@@ -202,8 +202,7 @@ def _preview():
     for cfg in configs:
         print(
             f"  lr={cfg.recipe.lr:<8} "
-            f"temp={cfg.recipe.rollout_temperature}  "
-            f"-> {cfg.training_run_id}"
+            f"temp={cfg.recipe.rollout_temperature}"
         )
 
 
