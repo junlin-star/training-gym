@@ -1,11 +1,9 @@
 from __future__ import annotations
 
 import pytest
-from pydantic import ValidationError
 
 from modal_training_gym.common import run_summary as run_summary_module
 from modal_training_gym.common.run_summary import (
-    RunSummary,
     build_run_summaries,
     build_run_summary,
 )
