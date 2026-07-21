@@ -16,6 +16,7 @@ from enum import Enum
 import inspect
 import os
 import threading
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, field_serializer, field_validator
 
@@ -288,12 +289,24 @@ class DeploymentStatus(Enum):
     INACTIVE = "inactive"
 
 
-def update_deployment_status(deployment_id: str, status: str) -> None:
-    """Update a deployment's status in both individual record and summary."""
+def update_deployment_status(
+    deployment_id: str,
+    status: str,
+    *,
+    seed: dict[str, Any] | None = None,
+) -> bool:
+    """Update a deployment's status in both individual record and summary.
+
+    Returns ``True`` when the write succeeds. If the canonical record is
+    missing, ``seed`` (e.g. a summary-only row) is used to create it.
+    """
     try:
         payload = vol_get(MetadataStore.DEPLOYMENTS, deployment_id)
     except KeyError:
-        return
+        if seed is None:
+            return False
+        payload = dict(seed)
+        payload["deployment_id"] = deployment_id
     payload["status"] = status
     vol_put(MetadataStore.DEPLOYMENTS, deployment_id, payload)
     vol_upsert_summary_item(
@@ -306,6 +319,7 @@ def update_deployment_status(deployment_id: str, status: str) -> None:
         ),
         reverse=True,
     )
+    return True
 
 
 class _CrashloopDetector:

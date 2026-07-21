@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 _LIVE_APP_STATES: frozenset[int] | None = None
 
 
@@ -44,12 +46,29 @@ def get_app_lifecycle_state(app_id: str) -> int | None:
         return None
 
 
-def app_live_status(app_id: str) -> bool | None:
-    """Return whether the Modal app is live, or ``None`` if state is unknown."""
-    state = get_app_lifecycle_state(app_id)
+def app_live_from_state(state: int | None) -> bool | None:
+    """Map a lifecycle state enum to live/unknown."""
     if state is None:
         return None
     return state in live_app_states()
+
+
+def app_live_status(app_id: str) -> bool | None:
+    """Return whether the Modal app is live, or ``None`` if state is unknown."""
+    return app_live_from_state(get_app_lifecycle_state(app_id))
+
+
+def resolve_app_liveness(
+    app_id: str,
+    *,
+    get_lifecycle_state: Callable[[str], int | None] | None = None,
+) -> tuple[int | None, bool | None]:
+    """Fetch lifecycle once and derive live status from that state."""
+    if not app_id:
+        return None, None
+    get_state = get_lifecycle_state or get_app_lifecycle_state
+    modal_app_state = get_state(app_id)
+    return modal_app_state, app_live_from_state(modal_app_state)
 
 
 def app_is_live(app_id: str) -> bool:

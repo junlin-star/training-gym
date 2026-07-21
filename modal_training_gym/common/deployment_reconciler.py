@@ -10,10 +10,7 @@ from modal_training_gym.common.deployment import (
     DeploymentStatus,
     update_deployment_status,
 )
-from modal_training_gym.common.modal_lifecycle import (
-    app_live_status,
-    get_app_lifecycle_state,
-)
+from modal_training_gym.common.modal_lifecycle import resolve_app_liveness
 from modal_training_gym.utils.metadata import (
     MetadataStore,
     vol_get_summary_items_healed,
@@ -100,21 +97,16 @@ def _load_active_deployments() -> list[dict[str, Any]]:
 def reconcile_orphan_deployments(
     *,
     dry_run: bool = False,
-    check_app_live: Callable[[str], bool | None] | None = None,
     get_lifecycle_state: Callable[[str], int | None] | None = None,
 ) -> list[DeployReconcileResult]:
     """Terminalize orphaned deployments. Returns reconciled deployment summaries."""
-    check_live = check_app_live or app_live_status
-    get_state = get_lifecycle_state or get_app_lifecycle_state
-
     results: list[DeployReconcileResult] = []
     for deployment in _load_active_deployments():
         app_id = str(deployment.get("modal_app_id") or "").strip()
-        modal_app_state: int | None = None
-        app_live: bool | None = None
-        if app_id:
-            modal_app_state = get_state(app_id)
-            app_live = check_live(app_id)
+        modal_app_state, app_live = resolve_app_liveness(
+            app_id,
+            get_lifecycle_state=get_lifecycle_state,
+        )
 
         decision = reconcile_decision(
             deployment,
@@ -125,20 +117,33 @@ def reconcile_orphan_deployments(
             continue
 
         deployment_id = _deployment_id(deployment)
-        results.append(
-            DeployReconcileResult(
-                deployment_id=deployment_id,
-                reason=decision.reason,
-                previous_status=_deployment_status(deployment),
-            )
+        previous_status = _deployment_status(deployment)
+        result = DeployReconcileResult(
+            deployment_id=deployment_id,
+            reason=decision.reason,
+            previous_status=previous_status,
         )
-        if not dry_run:
-            try:
-                update_deployment_status(
-                    deployment_id,
-                    DeploymentStatus.STOPPED.value,
-                )
-            except Exception as exc:
-                print(f"WARNING: failed to reconcile {deployment_id}: {exc}")
+        if dry_run:
+            results.append(result)
+            continue
+
+        try:
+            wrote = update_deployment_status(
+                deployment_id,
+                DeploymentStatus.STOPPED.value,
+                seed=deployment,
+            )
+        except Exception as exc:
+            print(f"WARNING: failed to reconcile {deployment_id}: {exc}")
+            continue
+
+        if not wrote:
+            print(
+                f"WARNING: failed to reconcile {deployment_id}: "
+                "status write did not persist"
+            )
+            continue
+
+        results.append(result)
 
     return results
