@@ -397,16 +397,16 @@ export async function fetchRollout(trainingRunId, rolloutId) {
 
 // Historical Modal logs for a run, served from the durable storage.
 //
-// Returns the newest `tail` lines within the (since, until] window, oldest
+// Returns the newest `maxLines` lines within the (since, until] window, oldest
 // first, plus a `nextUntil` cursor for paging further back through history.
 export async function fetchRunLogs(
   trainingRunId,
-  { since, until, tail, search, signal } = {},
+  { since, until, maxLines, search, signal } = {},
 ) {
   const params = new URLSearchParams();
   if (since != null && since !== "") params.set("since", String(since));
   if (until != null && until !== "") params.set("until", String(until));
-  if (tail != null) params.set("tail", String(tail));
+  if (maxLines != null) params.set("tail", String(maxLines));
   if (search) params.set("search", search);
   const qs = params.toString();
   const res = await fetch(

@@ -23,6 +23,11 @@
     fetchRunLogs,
   } from "../lib/api.js";
 
+  // Number of historical log lines requested per page.
+  const HIST_PAGE = 500;
+  // Maximum number of historical log lines retained in the browser.
+  const HIST_BUFFER_MAX = 2000;
+
   let {
     runId,
     allRuns,
@@ -553,26 +558,17 @@
   // ── Historical logs ─────
   let isRunning = $derived(runStatus === "running");
 
-  const HIST_PAGE = 500;
-  const HIST_BUFFER_MAX = 2000;
-  let histLines = $state([]);
-  let histLoading = $state(false);
-  let histLoadingOlder = $state(false);
-  let histLoadingNewer = $state(false);
-  let histError = $state("");
-  let histHasMore = $state(false);
-  let histNewerWindows = $state([]);
-  let histNextUntil = $state(null);
-  let histTailEl = $state(null);
-  let histSeq = 0;
-  let histController = null;
-  let histLastScrollTop = 0;
-  let histRestoringScroll = false;
+  let histLines = $state([]), histNewerWindows = $state([]);
+  let histLoading = $state(false),
+    histLoadingOlder = $state(false),
+    histLoadingNewer = $state(false);
+  let histError = $state(""), histHasMore = $state(false);
+  let histNextUntil = $state(null), histTailEl = $state(null);
+  let histSeq = 0, histLastScrollTop = 0;
+  let histController = null, histRestoringScroll = false;
 
-  let histSinceText = $state("");
-  let histUntilText = $state("");
-  let histSince = $state("");
-  let histUntil = $state("");
+  let histRangeInput = $state({ since: "", until: "" });
+  let histRange = $state({ since: "", until: "" });
 
   function epochToLocalInput(epoch) {
     if (!epoch) return "";
@@ -597,12 +593,9 @@
   }
 
   $effect(() => {
-    const since = histSinceText;
-    const until = histUntilText;
+    const { since, until } = histRangeInput;
     const handle = window.setTimeout(() => {
-      const range = histRangeFromText(since, until);
-      histSince = range.since;
-      histUntil = range.until;
+      histRange = histRangeFromText(since, until);
     }, 350);
     return () => window.clearTimeout(handle);
   });
@@ -623,10 +616,8 @@
     const sinceText = epochToLocalInput(startedAt);
     const untilText = epochToLocalInput(endedAt);
     const range = histRangeFromText(sinceText, untilText);
-    histSinceText = sinceText;
-    histUntilText = untilText;
-    histSince = range.since;
-    histUntil = range.until;
+    histRangeInput = { since: sinceText, until: untilText };
+    histRange = range;
   });
 
   // Expand server entries into per-line rows (a single ClickHouse entry can
@@ -730,7 +721,7 @@
     histError = "";
     try {
       const data = await fetchRunLogs(id, {
-        tail: HIST_PAGE,
+        maxLines: HIST_PAGE,
         search,
         since,
         until,
@@ -787,7 +778,7 @@
       const data = await fetchRunLogs(runId, {
         since,
         until,
-        tail: HIST_PAGE,
+        maxLines: HIST_PAGE,
         search: logSearch,
         signal,
       });
@@ -857,7 +848,7 @@
       return;
     }
     return loadHistPage("older", {
-      since: histSince,
+      since: histRange.since,
       until: histNextUntil,
     });
   }
@@ -899,8 +890,8 @@
       runId,
       {
         search: logSearch,
-        since: histSince,
-        until: histUntil,
+        since: histRange.since,
+        until: histRange.until,
       },
       histController?.signal,
     );
@@ -909,8 +900,10 @@
   function resetHistRange() {
     const startedAt = run?.started_at || run?.created_at || 0;
     const endedAt = run?.ended_at || run?.completed_at || 0;
-    histSinceText = epochToLocalInput(startedAt);
-    histUntilText = epochToLocalInput(endedAt);
+    histRangeInput = {
+      since: epochToLocalInput(startedAt),
+      until: epochToLocalInput(endedAt),
+    };
   }
 
   // Load the newest page when the Logs tab opens on a finished run, and reload
@@ -920,8 +913,7 @@
     const tab = activeTab;
     const running = isRunning;
     const search = logSearch;
-    const since = histSince;
-    const until = histUntil;
+    const { since, until } = histRange;
 
     resetHist();
     if (tab !== "logs" || !id || running) return;
@@ -1650,7 +1642,7 @@
               class="w-[160px] bg-(--color-c-gray-10,#1c1c1c) text-(--text) [border:1px_solid_var(--border,#3a3a3a)] rounded-[5px] p-[5px_8px] text-[12px] [font-family:inherit] [font-variant-numeric:tabular-nums] focus:outline-none focus:[border-color:color-mix(in_srgb,var(--accent)_55%,transparent)]"
               type="text"
               placeholder="YYYY-MM-DD HH:MM"
-              bind:value={histSinceText}
+              bind:value={histRangeInput.since}
               aria-label="Show logs since"
             />
             <span class="text-(--muted-strong) text-[13px]">→</span>
@@ -1658,7 +1650,7 @@
               class="w-[160px] bg-(--color-c-gray-10,#1c1c1c) text-(--text) [border:1px_solid_var(--border,#3a3a3a)] rounded-[5px] p-[5px_8px] text-[12px] [font-family:inherit] [font-variant-numeric:tabular-nums] focus:outline-none focus:[border-color:color-mix(in_srgb,var(--accent)_55%,transparent)]"
               type="text"
               placeholder="YYYY-MM-DD HH:MM"
-              bind:value={histUntilText}
+              bind:value={histRangeInput.until}
               aria-label="Show logs until"
             />
             <button
