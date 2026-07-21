@@ -1,14 +1,19 @@
 const SERVER = "/api";
 
-async function errorFromResponse(res) {
-  let detail = `HTTP ${res.status}`;
+
+/**
+ * @param {Response} res
+ * @returns {Promise<string>}
+ */
+async function getErrorFromResponse(res) {
+  let detail = res.statusText;
   try {
     const body = await res.json();
     if (body?.detail) detail = String(body.detail);
-  } catch {
-    // Non-JSON error body — keep the status-code message.
+  } catch (error) {
+    if (!(error instanceof SyntaxError)) throw error;
   }
-  return new Error(detail);
+  return detail ? `HTTP ${res.status}: ${detail}` : `HTTP ${res.status}`;
 }
 
 function safeStr(v) {
@@ -217,7 +222,9 @@ export async function fetchRuns({ signal } = {}) {
     fetch(`${SERVER}/runs`, { signal }),
     fetch(`${SERVER}/train-results`, { signal }),
   ]);
-  if (!runsRes.ok) throw await errorFromResponse(runsRes);
+  if (!runsRes.ok) {
+    throw new Error(await getErrorFromResponse(runsRes));
+  }
   const runs = await runsRes.json();
   const trainResults = resultsRes.ok ? await resultsRes.json() : [];
 
@@ -322,7 +329,9 @@ export async function fetchRuns({ signal } = {}) {
 
 export async function fetchEvals({ signal } = {}) {
   const res = await fetch(`${SERVER}/evals`, { signal });
-  if (!res.ok) throw await errorFromResponse(res);
+  if (!res.ok) {
+    throw new Error(await getErrorFromResponse(res));
+  }
   const evals = await res.json();
   const seen = new Set();
   return evals.filter((e) => {
@@ -404,7 +413,9 @@ export async function fetchRunLogs(
     `${SERVER}/runs/${encodeURIComponent(trainingRunId)}/logs` + (qs ? `?${qs}` : ""),
     { signal },
   );
-  if (!res.ok) throw await errorFromResponse(res);
+  if (!res.ok) {
+    throw new Error(await getErrorFromResponse(res));
+  }
   const data = await res.json();
   return {
     logs: Array.isArray(data.logs) ? data.logs : [],
