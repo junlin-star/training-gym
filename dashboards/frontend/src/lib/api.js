@@ -1,5 +1,17 @@
 const SERVER = "/api";
 
+
+async function getErrorFromResponse(res) {
+  let detail = res.statusText;
+  try {
+    const body = await res.json();
+    if (body?.detail) detail = String(body.detail);
+  } catch (error) {
+    if (!(error instanceof SyntaxError)) throw error;
+  }
+  return detail ? `HTTP ${res.status}: ${detail}` : `HTTP ${res.status}`;
+}
+
 function safeStr(v) {
   if (v && typeof v === "object" && "value" in v) return v.value;
   return v != null ? String(v) : "";
@@ -206,7 +218,9 @@ export async function fetchRuns({ signal } = {}) {
     fetch(`${SERVER}/runs`, { signal }),
     fetch(`${SERVER}/train-results`, { signal }),
   ]);
-  if (!runsRes.ok) throw new Error(`HTTP ${runsRes.status}`);
+  if (!runsRes.ok) {
+    throw new Error(await getErrorFromResponse(runsRes));
+  }
   const runs = await runsRes.json();
   const trainResults = resultsRes.ok ? await resultsRes.json() : [];
 
@@ -311,7 +325,9 @@ export async function fetchRuns({ signal } = {}) {
 
 export async function fetchEvals({ signal } = {}) {
   const res = await fetch(`${SERVER}/evals`, { signal });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  if (!res.ok) {
+    throw new Error(await getErrorFromResponse(res));
+  }
   const evals = await res.json();
   const seen = new Set();
   return evals.filter((e) => {
@@ -373,6 +389,38 @@ export async function fetchRollout(trainingRunId, rolloutId) {
   );
   if (!res.ok) return null;
   return await res.json();
+}
+
+// Historical Modal logs for a run, served from the durable storage.
+//
+// Returns the newest `maxLines` lines within the (since, until] window, oldest
+// first, plus a `nextUntil` cursor for paging further back through history.
+// When omitted, `maxLines` defaults to 100 on the server.
+// `since` defaults to the run's start (then creation time or the Unix epoch);
+// `until` defaults to the run's end/completion time, or now when unavailable.
+export async function fetchRunLogs(
+  trainingRunId,
+  { since, until, maxLines, search, signal } = {},
+) {
+  const params = new URLSearchParams();
+  if (since != null && since !== "") params.set("since", String(since));
+  if (until != null && until !== "") params.set("until", String(until));
+  if (maxLines != null) params.set("max_lines", String(maxLines));
+  if (search) params.set("search", search);
+  const qs = params.toString();
+  const res = await fetch(
+    `${SERVER}/runs/${encodeURIComponent(trainingRunId)}/logs` + (qs ? `?${qs}` : ""),
+    { signal },
+  );
+  if (!res.ok) {
+    throw new Error(await getErrorFromResponse(res));
+  }
+  const data = await res.json();
+  return {
+    logs: Array.isArray(data.logs) ? data.logs : [],
+    hasMore: !!data.has_more,
+    nextUntil: data.next_until ?? null,
+  };
 }
 
 // Per-step advantage distribution summaries (one row per training step, each

@@ -995,12 +995,12 @@ def fastapi_app():
         training_run_id: str,
         since: str = "",
         until: str = "",
-        tail: int = 100,
+        max_lines: int = 100,
         search: str = "",
     ):
         """Historical log fetch for a run, backed by Modal's ``AppFetchLogs``.
 
-        Returns the most recent ``tail`` entries within the ``[since, until]``
+        Returns the most recent ``max_lines`` entries within the ``[since, until]``
         window, oldest-first.
 
         Query params:
@@ -1008,7 +1008,7 @@ def fastapi_app():
             relative age (``30m`` / ``2h`` / ``1d`` / ``45s`` = "N ago").
             ``since`` is exclusive and ``until`` is inclusive. Defaults to the run's
             lifetime.
-          - ``tail``: max entries to return (default 100). Throws if negative or too large.
+          - ``max_lines``: max entries to return (default 100). Throws if negative or too large.
             These are the newest entries in the window (ClickHouse caps a single
             fetch at 20000).
           - ``search``: case-insensitive substring filter.
@@ -1020,8 +1020,8 @@ def fastapi_app():
         """
         from modal_proto import api_pb2
 
-        if tail < 0:
-            raise HTTPException(status_code=400, detail="Tail must be positive")
+        if max_lines < 0:
+            raise HTTPException(status_code=400, detail="max_lines must be positive")
 
         run = await _get_run_or_404(training_run_id)
 
@@ -1058,7 +1058,7 @@ def fastapi_app():
             app_id=app_id,
             since=_to_timestamp(since_ts),
             until=_to_timestamp(until_ts),
-            limit=tail,
+            limit=max_lines,
             search_text=search.strip(),
         )
         try:
@@ -1067,7 +1067,7 @@ def fastapi_app():
             raise HTTPException(status_code=502, detail=f"AppFetchLogs: {exc!s}")
 
         logs = _parse_log_batches(resp.batches)
-        has_more, next_until = _compute_next_page(logs, tail)
+        has_more, next_until = _compute_next_page(logs, max_lines)
 
         return JSONResponse(
             {

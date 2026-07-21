@@ -1,4 +1,5 @@
 <script>
+  import { tick } from "svelte";
   import { ArrowLeft, ChevronLeft, ChevronRight, Download, ExternalLink, Minimize2, X } from "lucide-svelte";
   import Tabs from "../components/Tabs.svelte";
   import RunSummary from "../components/RunSummary.svelte";
@@ -19,7 +20,13 @@
     fetchRollout,
     fetchRunAdvantages,
     fetchRunAdvantageStep,
+    fetchRunLogs,
   } from "../lib/api.js";
+
+  // Number of historical log lines requested per page.
+  const HIST_PAGE = 500;
+  // Maximum number of historical log lines retained in the browser.
+  const HIST_BUFFER_MAX = 2000;
 
   let {
     runId,
@@ -547,6 +554,378 @@
     logLines = [];
     logDropped = 0;
   }
+
+  // ── Historical logs ─────
+  let isRunning = $derived(runStatus === "running");
+
+  let histLines = $state([]), histNewerWindows = $state([]);
+  let histLoading = $state(false),
+    histLoadingOlder = $state(false),
+    histLoadingNewer = $state(false);
+  let histError = $state(""), histHasMore = $state(false);
+  let histNextUntil = $state(null), histTailEl = $state(null);
+  let histSeq = 0, histLastScrollTop = 0;
+  let histController = null, histRestoringScroll = false;
+
+  let histRangeInput = $state({ since: "", until: "" });
+  let histRange = $state({ since: "", until: "" });
+
+  function epochToLocalInput(epoch) {
+    if (!epoch) return "";
+    const d = new Date(Number(epoch) * 1000);
+    const p = (x) => String(x).padStart(2, "0");
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+  }
+  function localInputToEpoch(str) {
+    if (!str || !str.trim()) return null;
+    const ms = new Date(str.trim().replace(" ", "T")).getTime();
+    return Number.isNaN(ms) ? null : Math.floor(ms / 1000);
+  }
+
+  function histRangeFromText(sinceText, untilText) {
+    const since = localInputToEpoch(sinceText);
+    const until = localInputToEpoch(untilText);
+    return {
+      since: since != null ? String(since) : "",
+      // The picker has minute precision, so include the entire final minute.
+      until: until != null ? String(until + 59.999999999) : "",
+    };
+  }
+
+  $effect(() => {
+    const { since, until } = histRangeInput;
+    const handle = window.setTimeout(() => {
+      histRange = histRangeFromText(since, until);
+    }, 350);
+    return () => window.clearTimeout(handle);
+  });
+
+  // Seed the pickers with the run's lifetime the first time we view a finished
+  // run.
+  let histPrefilledFor = null;
+  $effect(() => {
+    const id = runId;
+    const running = isRunning;
+    if (!id || running || histPrefilledFor === id) return;
+
+    const startedAt = run?.started_at || run?.created_at || 0;
+    const endedAt = run?.ended_at || run?.completed_at || 0;
+    if (!startedAt && !endedAt) return;
+
+    histPrefilledFor = id;
+    const sinceText = epochToLocalInput(startedAt);
+    const untilText = epochToLocalInput(endedAt);
+    const range = histRangeFromText(sinceText, untilText);
+    histRangeInput = { since: sinceText, until: untilText };
+    histRange = range;
+  });
+
+  // Expand server entries into per-line rows (a single ClickHouse entry can
+  // carry an embedded newline), matching how the live stream splits lines.
+  function pushHistRows(target, entries) {
+    for (const entry of entries) {
+      const task_id = entry.task_id || "";
+      const ts = entry.ts || 0;
+      const ts_ns = entry.ts_ns || 0;
+      for (const part of String(entry.line ?? "").split(/\r?\n/)) {
+        if (!part.length) continue;
+        target.push({ id: histSeq++, task_id, line: part, ts, ts_ns });
+      }
+    }
+  }
+
+  function resetHist() {
+    histLines = [];
+    histError = "";
+    histHasMore = false;
+    histNewerWindows = [];
+    histNextUntil = null;
+    histLoading = false;
+    histLoadingOlder = false;
+    histLoadingNewer = false;
+    histLastScrollTop = 0;
+    histRestoringScroll = false;
+  }
+
+  function histRowTime(row) {
+    if (!row) return 0;
+    if (row.ts_ns) return Number(row.ts_ns) / 1_000_000_000;
+    return Number(row.ts) || 0;
+  }
+
+  function histCursorBefore(row) {
+    if (!row) return null;
+    if (row.ts_ns) return (Number(row.ts_ns) - 1) / 1_000_000_000;
+    const ts = Number(row.ts) || 0;
+    return ts > 0 ? ts - 0.000000001 : null;
+  }
+
+  // Capture a visible row and its exact viewport position. Restoring this
+  // after replacing the bounded window avoids any perceptible jump.
+  function captureHistAnchor() {
+    const el = histTailEl;
+    if (!el) return null;
+    const containerTop = el.getBoundingClientRect().top;
+    const rows = el.querySelectorAll("[data-hist-id]");
+    for (const node of rows) {
+      const rect = node.getBoundingClientRect();
+      if (rect.bottom >= containerTop) {
+        return {
+          id: node.dataset.histId,
+          top: rect.top,
+          scrollTop: el.scrollTop,
+        };
+      }
+    }
+    return null;
+  }
+
+  async function restoreHistAnchor(anchor) {
+    if (!histTailEl || !anchor) return;
+    histRestoringScroll = true;
+    await tick();
+    if (!histTailEl) {
+      histRestoringScroll = false;
+      return;
+    }
+    const node = histTailEl.querySelector(`[data-hist-id="${anchor.id}"]`);
+    if (node) {
+      histTailEl.scrollTop += node.getBoundingClientRect().top - anchor.top;
+    } else {
+      histTailEl.scrollTop = anchor.scrollTop;
+    }
+    histLastScrollTop = histTailEl.scrollTop;
+    requestAnimationFrame(() => {
+      if (histTailEl) histLastScrollTop = histTailEl.scrollTop;
+      histRestoringScroll = false;
+    });
+  }
+
+  function rememberTrimmedNewer(kept, dropped) {
+    if (!kept.length || !dropped.length) return;
+    const since = histRowTime(kept[kept.length - 1]);
+    const until = histRowTime(dropped[dropped.length - 1]);
+    if (since > 0 && until >= since) {
+      histNewerWindows = [...histNewerWindows, { since, until }];
+    }
+  }
+
+  function markTrimmedOlder(kept, dropped) {
+    if (!kept.length || !dropped.length) return;
+    histHasMore = true;
+    histNextUntil = histCursorBefore(kept[0]);
+  }
+
+  async function loadHistInitial(id, { search, since, until }, signal) {
+    histLoading = true;
+    histError = "";
+    try {
+      const data = await fetchRunLogs(id, {
+        maxLines: HIST_PAGE,
+        search,
+        since,
+        until,
+        signal,
+      });
+      if (signal?.aborted) return;
+      histNewerWindows = [];
+      const rows = [];
+      pushHistRows(rows, data.logs);
+      const droppedOlder =
+        rows.length > HIST_BUFFER_MAX
+          ? rows.slice(0, rows.length - HIST_BUFFER_MAX)
+          : [];
+      histLines =
+        rows.length > HIST_BUFFER_MAX
+          ? rows.slice(-HIST_BUFFER_MAX)
+          : rows;
+      if (droppedOlder.length) {
+        markTrimmedOlder(histLines, droppedOlder);
+      } else {
+        histHasMore = data.hasMore;
+        histNextUntil = data.nextUntil;
+      }
+      // Land on the newest line, like the live tail does.
+      queueMicrotask(() => {
+        if (histTailEl) {
+          histRestoringScroll = true;
+          histTailEl.scrollTop = histTailEl.scrollHeight;
+          histLastScrollTop = histTailEl.scrollTop;
+          requestAnimationFrame(() => {
+            histRestoringScroll = false;
+          });
+        }
+      });
+    } catch (err) {
+      if (signal?.aborted) return;
+      histError = String(err?.message || err);
+    } finally {
+      if (!signal?.aborted) histLoading = false;
+    }
+  }
+
+  async function loadHistPage(direction, { since, until }) {
+    const loadingOlder = direction === "older";
+    if (loadingOlder) {
+      histLoadingOlder = true;
+    } else {
+      histLoadingNewer = true;
+    }
+    histError = "";
+    const anchor = captureHistAnchor();
+    const signal = histController?.signal;
+    try {
+      const data = await fetchRunLogs(runId, {
+        since,
+        until,
+        maxLines: HIST_PAGE,
+        search: logSearch,
+        signal,
+      });
+      if (signal?.aborted) return;
+      const rows = [];
+      pushHistRows(rows, data.logs);
+      if (loadingOlder && !rows.length) {
+        histHasMore = false;
+        histNextUntil = null;
+        return;
+      }
+
+      const adjacent =
+        rows.length <= HIST_PAGE
+          ? rows
+          : loadingOlder
+            ? rows.slice(-HIST_PAGE)
+            : rows.slice(0, HIST_PAGE);
+      const merged = loadingOlder
+        ? adjacent.concat(histLines)
+        : histLines.concat(adjacent);
+
+      if (loadingOlder) {
+        const dropped = merged.slice(HIST_BUFFER_MAX);
+        histLines = merged.slice(0, HIST_BUFFER_MAX);
+        rememberTrimmedNewer(histLines, dropped);
+        if (rows.length > HIST_PAGE) {
+          histHasMore = true;
+          histNextUntil = histCursorBefore(adjacent[0]);
+        } else {
+          histHasMore = data.hasMore;
+          histNextUntil = data.nextUntil;
+        }
+      } else {
+        const dropped = merged.slice(
+          0,
+          Math.max(0, merged.length - HIST_BUFFER_MAX),
+        );
+        histLines = merged.slice(-HIST_BUFFER_MAX);
+        markTrimmedOlder(histLines, dropped);
+        histNewerWindows = histNewerWindows.slice(0, -1);
+      }
+
+      await restoreHistAnchor(anchor);
+    } catch (err) {
+      if (signal?.aborted) return;
+      histError = String(err?.message || err);
+    } finally {
+      if (!signal?.aborted) {
+        if (loadingOlder) {
+          histLoadingOlder = false;
+        } else {
+          histLoadingNewer = false;
+        }
+      }
+    }
+  }
+
+  function loadHistOlder() {
+    if (
+      !histHasMore ||
+      histNextUntil == null ||
+      histLoadingOlder ||
+      histLoadingNewer ||
+      histLoading
+    ) {
+      return;
+    }
+    return loadHistPage("older", {
+      since: histRange.since,
+      until: histNextUntil,
+    });
+  }
+
+  function loadHistNewer() {
+    if (
+      !histNewerWindows.length ||
+      histLoadingNewer ||
+      histLoadingOlder ||
+      histLoading
+    ) {
+      return;
+    }
+    const range = histNewerWindows[histNewerWindows.length - 1];
+    return loadHistPage("newer", range);
+  }
+
+  // Load only in the direction the user moved. Scroll restoration after a
+  // page swap is ignored, preventing older/newer fetches from ping-ponging.
+  function onHistScroll() {
+    const el = histTailEl;
+    if (!el || histRestoringScroll) return;
+    const top = el.scrollTop;
+    const delta = top - histLastScrollTop;
+    histLastScrollTop = top;
+    if (delta < 0 && top <= 40) {
+      void loadHistOlder();
+      return;
+    }
+    if (delta > 0) {
+      const distanceFromBottom = el.scrollHeight - top - el.clientHeight;
+      if (distanceFromBottom <= 40) void loadHistNewer();
+    }
+  }
+
+  function jumpHistToLatest() {
+    if (!runId || histLoading || histLoadingOlder || histLoadingNewer) return;
+    void loadHistInitial(
+      runId,
+      {
+        search: logSearch,
+        since: histRange.since,
+        until: histRange.until,
+      },
+      histController?.signal,
+    );
+  }
+
+  function resetHistRange() {
+    const startedAt = run?.started_at || run?.created_at || 0;
+    const endedAt = run?.ended_at || run?.completed_at || 0;
+    histRangeInput = {
+      since: epochToLocalInput(startedAt),
+      until: epochToLocalInput(endedAt),
+    };
+  }
+
+  // Load the newest page when the Logs tab opens on a finished run, and reload
+  // when the debounced search/since/until change.
+  $effect(() => {
+    const id = runId;
+    const tab = activeTab;
+    const running = isRunning;
+    const search = logSearch;
+    const { since, until } = histRange;
+
+    resetHist();
+    if (tab !== "logs" || !id || running) return;
+
+    const controller = new AbortController();
+    histController = controller;
+    void loadHistInitial(id, { search, since, until }, controller.signal);
+    return () => {
+      controller.abort();
+      if (histController === controller) histController = null;
+    };
+  });
 
   function _seriesStats(getY) {
     if (!rolloutSummaries.length) return null;
@@ -1151,6 +1530,7 @@
       </div>
     {:else if activeTab === "logs"}
       <div class="tab-panel">
+      {#if isRunning}
       <div class="flex justify-end mb-[8px]">
         <span class="inline-flex items-center gap-[6px] text-[11px] text-(--muted) uppercase tracking-[0.04em]">
           {#if logState === "streaming"}
@@ -1240,6 +1620,96 @@
             </span>
           {/if}
         </div>
+      {/if}
+      {:else}
+        <!-- Finished run: page through the durable copy on demand. -->
+        <div class="flex flex-col gap-[12px] mb-[12px] p-[12px_14px] rounded-[8px] bg-(--color-c-gray-08,#161616) [border:1px_solid_var(--border,#2f2f2f)]">
+          <div class="flex items-center gap-[12px]">
+            <input
+              class="flex-1 min-w-0 bg-(--color-c-gray-10,#1c1c1c) text-(--text) [border:1px_solid_var(--border,#3a3a3a)] rounded-[5px] p-[6px_10px] text-[12px] [font-family:inherit] focus:outline-none focus:[border-color:color-mix(in_srgb,var(--accent)_55%,transparent)]"
+              type="search"
+              placeholder="filter substring…"
+              bind:value={logSearchInput}
+              aria-label="Filter log lines"
+            />
+            <span class="inline-flex items-center gap-[6px] text-[11px] text-(--muted) uppercase tracking-[0.04em] shrink-0">
+              <span class="dot dot-dim"></span> stored logs
+            </span>
+          </div>
+          <div class="flex flex-wrap items-center gap-[10px]">
+            <span class="text-(--muted) text-[11px] uppercase tracking-[0.04em]">Time range</span>
+            <input
+              class="w-[160px] bg-(--color-c-gray-10,#1c1c1c) text-(--text) [border:1px_solid_var(--border,#3a3a3a)] rounded-[5px] p-[5px_8px] text-[12px] [font-family:inherit] [font-variant-numeric:tabular-nums] focus:outline-none focus:[border-color:color-mix(in_srgb,var(--accent)_55%,transparent)]"
+              type="text"
+              placeholder="YYYY-MM-DD HH:MM"
+              bind:value={histRangeInput.since}
+              aria-label="Show logs since"
+            />
+            <span class="text-(--muted-strong) text-[13px]">→</span>
+            <input
+              class="w-[160px] bg-(--color-c-gray-10,#1c1c1c) text-(--text) [border:1px_solid_var(--border,#3a3a3a)] rounded-[5px] p-[5px_8px] text-[12px] [font-family:inherit] [font-variant-numeric:tabular-nums] focus:outline-none focus:[border-color:color-mix(in_srgb,var(--accent)_55%,transparent)]"
+              type="text"
+              placeholder="YYYY-MM-DD HH:MM"
+              bind:value={histRangeInput.until}
+              aria-label="Show logs until"
+            />
+            <button
+              class="log-button text-[11px] px-[10px] py-[4px]"
+              onclick={resetHistRange}
+              title="Reset to the run's time range"
+            >
+              Reset
+            </button>
+          </div>
+        </div>
+
+        {#if histError}
+          <div class="detail-empty">Failed to load logs: {histError}</div>
+        {/if}
+
+        {#if histLoading && !histLines.length}
+          <div class="detail-empty">Loading logs…</div>
+        {:else if !histLines.length}
+          <div class="detail-empty">
+            {#if logSearch}
+              No log lines matching "{logSearch}".
+            {:else}
+              No logs recorded for this run.
+            {/if}
+          </div>
+        {:else}
+          <div class="bg-(--color-c-gray-08,#0e0e0e) rounded-[6px] p-[8px_12px] max-h-[420px] overflow-y-auto overflow-x-auto [overflow-anchor:none] [font-family:ui-monospace,SFMono-Regular,Menlo,monospace] text-[12px] leading-[1.45] text-(--text)" bind:this={histTailEl} onscroll={onHistScroll}>
+            {#if histHasMore}
+              <div class="text-center text-[10px] text-(--muted) pb-[6px]">
+                {histLoadingOlder ? "Loading older lines…" : "Scroll up for older lines"}
+              </div>
+            {/if}
+            {#each histLines as entry (entry.id)}
+              <div class="flex gap-[10px] whitespace-pre" data-hist-id={entry.id}>
+                <span class="shrink-0 text-(--muted) text-[10px] min-w-[64px] overflow-hidden text-ellipsis">{entry.task_id || ""}</span>
+                <span class="flex-1 whitespace-pre-wrap break-all">{entry.line}</span>
+              </div>
+            {/each}
+            {#if histNewerWindows.length}
+              <div class="text-center text-[10px] text-(--muted) pt-[6px]">
+                {histLoadingNewer ? "Loading newer lines…" : "Scroll down for newer lines"}
+              </div>
+            {/if}
+          </div>
+          <div class="mt-[6px] text-[11px] text-(--muted) [font-variant-numeric:tabular-nums] flex items-center gap-[8px]">
+            <span>Showing {histLines.length} line{histLines.length === 1 ? "" : "s"}</span>
+            {#if histNewerWindows.length}
+              <span class="h-[12px] w-px bg-(--border)"></span>
+              <button
+                type="button"
+                class="text-(--accent) underline-offset-2 hover:underline bg-transparent border-0 p-0 cursor-pointer text-[11px]"
+                onclick={jumpHistToLatest}
+              >
+                Jump to latest
+              </button>
+            {/if}
+          </div>
+        {/if}
       {/if}
       </div>
     {/if}
