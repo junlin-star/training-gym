@@ -1,10 +1,6 @@
 const SERVER = "/api";
 
 
-/**
- * @param {Response} res
- * @returns {Promise<string>}
- */
 async function getErrorFromResponse(res) {
   let detail = res.statusText;
   try {
