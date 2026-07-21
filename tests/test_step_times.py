@@ -83,9 +83,11 @@ def test_fresh_retry_displays_only_new_attempt_and_archives_previous_attempt():
 
     assert run.step_times == {"15": {"start": 200, "end": 205, "duration_s": 5}}
     assert set(run.substep_times or {}) == {"15"}
-    archived = (run.metadata or {})["timing_attempts"]["1"]
-    assert set(archived["step_times"]) == {str(step) for step in range(1, 16)}
-    assert set(archived) == {"step_times", "substep_times"}
+    attempts = (run.metadata or {})["timing_attempts"]
+    assert set(attempts["1"]["step_times"]) == {str(step) for step in range(1, 16)}
+    assert set(attempts["2"]["step_times"]) == {"15"}
+    assert set(attempts["1"]) == {"step_times", "substep_times"}
+    assert set(attempts["2"]) == {"step_times", "substep_times"}
 
 
 def test_checkpoint_retry_keeps_only_steps_before_new_attempt_boundary():
@@ -120,8 +122,10 @@ def test_checkpoint_retry_keeps_only_steps_before_new_attempt_boundary():
         {"step_id": 0, "start": 140.0, "duration_s": 5.0}
     ]
     assert "substep_timing_intervals" not in (run.metadata or {})
-    archived = (run.metadata or {})["timing_attempts"]["1"]
-    assert set(archived["step_times"]) == {str(step) for step in range(1, 18)}
+    attempts = (run.metadata or {})["timing_attempts"]
+    assert set(attempts["1"]["step_times"]) == {str(step) for step in range(1, 18)}
+    assert set(attempts["2"]["step_times"]) == {str(step) for step in range(1, 17)}
+    assert "17" not in attempts["2"]["step_times"]
     restored = TrainingRun.model_validate(run.model_dump(mode="json"))
     assert restored.substep_times["14"][ROLLOUT_LOGGING]["intervals"] == [
         {"step_id": 0, "start": 140.0, "duration_s": 5.0}
@@ -141,6 +145,35 @@ def test_retry_without_new_timing_keeps_existing_display():
 
     assert set(run.step_times or {}) == {"1", "2", "3"}
     assert run.metadata is None
+
+
+def test_later_retry_preserves_every_attempt_snapshot():
+    run = _run_with_timings(2)
+    run.metadata = {
+        "timing_attempts": {
+            "1": {
+                "step_times": {"1": {"start": 10, "end": 15, "duration_s": 5}},
+                "substep_times": {
+                    "1": {ROLLOUT_LOGGING: {"start": 10.0, "duration_s": 5.0}}
+                },
+            }
+        }
+    }
+
+    reconcile_attempt_step_times(
+        run,
+        {"1": {"start": 300, "end": 305, "duration_s": 5}},
+        {"1": {ROLLOUT_LOGGING: {"start": 300.0, "duration_s": 5.0}}},
+        training_attempt=3,
+        resumed_from_checkpoint=False,
+    )
+
+    attempts = (run.metadata or {})["timing_attempts"]
+    assert set(attempts) == {"1", "2", "3"}
+    assert set(attempts["2"]["step_times"]) == {"1", "2"}
+    assert attempts["3"]["step_times"] == {
+        "1": {"start": 300, "end": 305, "duration_s": 5}
+    }
 
 
 def test_aggregate_async_step_times_returns_detailed_updates():

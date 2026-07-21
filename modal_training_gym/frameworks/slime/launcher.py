@@ -601,16 +601,17 @@ def reconcile_attempt_step_times(
                     timing["intervals"] = intervals
 
     previous_step_times = dict(run_record.step_times or {})
-    if training_attempt > 1 and (previous_step_times or previous_substep_times):
+    timing_attempts: dict[str, Any] = {}
+    if training_attempt > 1:
         stored_attempts = metadata.get("timing_attempts")
         timing_attempts = (
             dict(stored_attempts) if isinstance(stored_attempts, Mapping) else {}
         )
-        timing_attempts[str(training_attempt - 1)] = {
-            "step_times": previous_step_times,
-            "substep_times": previous_substep_times,
-        }
-        metadata["timing_attempts"] = timing_attempts
+        if previous_step_times or previous_substep_times:
+            timing_attempts[str(training_attempt - 1)] = {
+                "step_times": previous_step_times,
+                "substep_times": previous_substep_times,
+            }
 
     if resumed_from_checkpoint:
         first_new_step = min(int(step) for step in steps_with_current_timing)
@@ -629,6 +630,13 @@ def reconcile_attempt_step_times(
     else:
         displayed_step_times = current_step_times
         displayed_substep_times = current_substep_times
+
+    if training_attempt > 1:
+        timing_attempts[str(training_attempt)] = {
+            "step_times": displayed_step_times,
+            "substep_times": displayed_substep_times,
+        }
+        metadata["timing_attempts"] = timing_attempts
 
     run_record.step_times = displayed_step_times
     run_record.substep_times = displayed_substep_times
