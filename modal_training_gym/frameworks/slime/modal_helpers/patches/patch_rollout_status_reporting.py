@@ -93,9 +93,7 @@ def _patch_async_file(path: Path) -> None:
         "    for rollout_id in range(args.start_rollout_id, args.num_rollout):\n",
         "    for rollout_id in range(args.start_rollout_id, args.num_rollout):\n"
         f"        # {STEP_START_MARKER}\n"
-        "        _tg_report('generate_rollouts', args, rollout_id, 'start')\n"
-        f"        # {SUBSTEP_START_MARKER}\n"
-        "        _tg_report('generate_rollouts', args, rollout_id, 'substep_start')\n",
+        "        _tg_report('generate_rollouts', args, rollout_id, 'start')\n",
         "step start",
     )
     replace_once(
@@ -207,8 +205,6 @@ def _patch_async_file(path: Path) -> None:
         "            _tg_report('evaluate_rollouts_end', args, rollout_id, 'phase_finish')\n\n"
         "    ray.get(rollout_manager.dispose.remote())\n",
         "            _tg_report('evaluate_rollouts_end', args, rollout_id, 'phase_finish')\n"
-        f"        # {SUBSTEP_FINISH_MARKER}\n"
-        "        _tg_report('training', args, rollout_id, 'substep_finish')\n"
         f"        # {STEP_FINISH_MARKER}\n"
         "        _tg_report('training', args, rollout_id, 'finish')\n\n"
         "    ray.get(rollout_manager.dispose.remote())\n",

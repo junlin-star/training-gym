@@ -1,9 +1,9 @@
 from modal_training_gym.common.status import SlimeStatus
-from modal_training_gym.common.step_timing import (
-    record_async_step_times,
-    record_sync_step_time,
+from modal_training_gym.common.step_timing import record_sync_step_time
+from modal_training_gym.frameworks.slime.launcher import (
+    aggregate_async_step_times,
+    aggregate_sync_step_times,
 )
-from modal_training_gym.frameworks.slime.launcher import aggregate_step_times
 
 EVAL_BEFORE = SlimeStatus.EVAL_ROLLOUT_LOGGING.value
 EVAL_AFTER = f"{EVAL_BEFORE}_end"
@@ -37,11 +37,8 @@ RUN_ID = "run-hooks"
 STEP = 1
 
 
-def test_record_async_step_times_returns_update_timestamps():
-    recorded = {}
-    update_timestamps = record_async_step_times(
-        recorded,
-        RUN_ID,
+def test_aggregate_async_step_times_returns_detailed_updates():
+    _, substep_times, intervals = aggregate_async_step_times(
         [
             {
                 "training_run_id": RUN_ID,
@@ -60,17 +57,20 @@ def test_record_async_step_times_returns_update_timestamps():
                 "event_ts": 12.75,
             },
         ],
+        1,
+        [SlimeStatus.TRAIN_MODEL.value],
     )
 
-    assert update_timestamps[(1, SlimeStatus.TRAIN_MODEL.value)][("", 2)] == {
+    assert substep_times["1"][SlimeStatus.TRAIN_MODEL.value] == {
         "start": 10.25,
-        "finish": 12.75,
+        "duration_s": 2.5,
     }
-    assert recorded[f"{RUN_ID}:1:substep:{SlimeStatus.TRAIN_MODEL.value}"] == 10.25
+    assert intervals["1"][SlimeStatus.TRAIN_MODEL.value] == [
+        {"step_id": 2, "start": 10.25, "duration_s": 2.5}
+    ]
 
 
-def test_record_async_step_times_prefers_latest_attempt_per_phase():
-    recorded = {}
+def test_aggregate_async_step_times_prefers_latest_attempt():
     events = []
     for attempt, start, finish in ((1, 10.0, 11.0), (2, 20.0, 23.0)):
         for step_event, event_ts in (("phase_start", start), ("phase_finish", finish)):
@@ -86,15 +86,142 @@ def test_record_async_step_times_prefers_latest_attempt_per_phase():
                 }
             )
 
-    update_timestamps = record_async_step_times(recorded, RUN_ID, reversed(events))
+    _, substep_times, intervals = aggregate_async_step_times(
+        reversed(events),
+        1,
+        [SlimeStatus.TRAIN_MODEL.value],
+    )
 
-    assert update_timestamps[(1, SlimeStatus.TRAIN_MODEL.value)][("", 0)] == {
+    assert substep_times["1"][SlimeStatus.TRAIN_MODEL.value] == {
         "start": 20.0,
-        "finish": 23.0,
+        "duration_s": 3.0,
     }
+    assert intervals["1"][SlimeStatus.TRAIN_MODEL.value] == [
+        {"step_id": 0, "start": 20.0, "duration_s": 3.0}
+    ]
 
 
-def test_record_async_step_times_keeps_training_roles_separate():
+def test_aggregate_async_step_times_does_not_mix_attempts():
+    events = [
+        {
+            "training_attempt": 1,
+            "progress_current": 1,
+            "phase": SlimeStatus.TRAINING.value,
+            "step_event": "phase_start",
+            "event_ts": 10.0,
+        },
+        {
+            "training_attempt": 1,
+            "progress_current": 1,
+            "phase": SlimeStatus.TRAINING.value,
+            "step_event": "phase_finish",
+            "event_ts": 15.0,
+        },
+        {
+            "training_attempt": 2,
+            "progress_current": 1,
+            "phase": ROLLOUT_LOGGING,
+            "step_event": "phase_start",
+            "event_ts": 20.0,
+        },
+        {
+            "training_attempt": 2,
+            "progress_current": 1,
+            "phase": ROLLOUT_LOGGING,
+            "step_event": "phase_finish",
+            "event_ts": 22.0,
+        },
+    ]
+
+    _, substep_times, _ = aggregate_async_step_times(
+        events,
+        1,
+        [ROLLOUT_LOGGING, SlimeStatus.TRAINING.value],
+    )
+
+    assert substep_times["1"] == {ROLLOUT_LOGGING: {"start": 20.0, "duration_s": 2.0}}
+
+
+def test_aggregate_async_step_times_does_not_infer_missing_finishes():
+    events = [
+        {
+            "progress_current": 1,
+            "phase": SlimeStatus.TRAIN_MODEL.value,
+            "step_event": "phase_start",
+            "step_id": 0,
+            "event_ts": 10.0,
+        },
+        {
+            "progress_current": 1,
+            "phase": OPTIMIZER_STEP,
+            "step_event": "phase_start",
+            "step_id": 0,
+            "event_ts": 12.0,
+        },
+        {
+            "progress_current": 1,
+            "phase": OPTIMIZER_STEP,
+            "step_event": "phase_finish",
+            "step_id": 0,
+            "event_ts": 13.0,
+        },
+    ]
+
+    _, substep_times, intervals = aggregate_async_step_times(
+        events,
+        1,
+        [SlimeStatus.TRAIN_MODEL.value, OPTIMIZER_STEP],
+    )
+
+    assert substep_times["1"][SlimeStatus.TRAIN_MODEL.value] == {
+        "start": 10.0,
+        "duration_s": None,
+    }
+    assert SlimeStatus.TRAIN_MODEL.value not in intervals["1"]
+    assert substep_times["1"][OPTIMIZER_STEP]["duration_s"] == 1.0
+
+
+def test_aggregate_async_step_times_includes_incomplete_update_in_phase_start():
+    events = [
+        {
+            "progress_current": 1,
+            "phase": SlimeStatus.TRAIN_MODEL.value,
+            "step_event": "phase_start",
+            "step_id": 0,
+            "event_ts": 8.0,
+        },
+        {
+            "progress_current": 1,
+            "phase": SlimeStatus.TRAIN_MODEL.value,
+            "step_event": "phase_start",
+            "step_id": 1,
+            "event_ts": 10.0,
+        },
+        {
+            "progress_current": 1,
+            "phase": SlimeStatus.TRAIN_MODEL.value,
+            "step_event": "phase_finish",
+            "step_id": 1,
+            "event_ts": 12.0,
+        },
+    ]
+
+    _, substep_times, intervals = aggregate_async_step_times(
+        events,
+        1,
+        [SlimeStatus.TRAIN_MODEL.value],
+    )
+
+    assert substep_times["1"][SlimeStatus.TRAIN_MODEL.value] == {
+        "start": 8.0,
+        "duration_s": 2.0,
+    }
+    assert intervals["1"][SlimeStatus.TRAIN_MODEL.value] == [
+        {"step_id": 1, "start": 10.0, "duration_s": 2.0}
+    ]
+
+
+def test_aggregate_async_step_times_keeps_training_roles_separate():
     events = []
     for role, start, finish in (("actor", 10.0, 12.0), ("critic", 9.0, 13.0)):
         for step_event, event_ts in (("phase_start", start), ("phase_finish", finish)):
@@ -110,24 +237,15 @@ def test_record_async_step_times_keeps_training_roles_separate():
                 }
             )
 
-    update_timestamps = record_async_step_times({}, RUN_ID, events)
-
-    assert update_timestamps[(1, SlimeStatus.TRAIN_MODEL.value)] == {
-        ("actor", 0): {"start": 10.0, "finish": 12.0},
-        ("critic", 0): {"start": 9.0, "finish": 13.0},
-    }
-
-    _, _, intervals = aggregate_step_times(
-        {
-            f"{RUN_ID}:1:start": 9.0,
-            f"{RUN_ID}:1:finish": 13.0,
-        },
-        RUN_ID,
+    _, substep_times, intervals = aggregate_async_step_times(
+        events,
         1,
         [SlimeStatus.TRAIN_MODEL.value],
-        set(),
-        update_timestamps=update_timestamps,
     )
+    assert substep_times["1"][SlimeStatus.TRAIN_MODEL.value] == {
+        "start": 9.0,
+        "duration_s": 6.0,
+    }
     assert intervals["1"][SlimeStatus.TRAIN_MODEL.value] == [
         {
             "step_id": 0,
@@ -200,7 +318,7 @@ def build_step_times_dict(
 def aggregate_durations(
     schedule: list[tuple[float, str]],
 ) -> dict[str, float | None]:
-    _, substep_times, _ = aggregate_step_times(
+    _, substep_times = aggregate_sync_step_times(
         build_step_times_dict(schedule),
         RUN_ID,
         STEP,
@@ -214,7 +332,7 @@ def aggregate_durations(
 
 
 def test_substep_times_aggregation():
-    step_times, substep_times, _ = aggregate_step_times(
+    step_times, substep_times = aggregate_sync_step_times(
         build_step_times_dict(STEP_SCHEDULE),
         RUN_ID,
         STEP,
@@ -252,7 +370,7 @@ def test_replayed_step_replaces_stale_substep_times():
     ]
     build_step_times_dict(retry_schedule, offset=100.0, into=step_times_dict)
 
-    step_times, substep_times, _ = aggregate_step_times(
+    step_times, substep_times = aggregate_sync_step_times(
         step_times_dict,
         RUN_ID,
         STEP,
@@ -278,7 +396,7 @@ def test_replayed_step_replaces_stale_substep_times():
 
 
 def test_fractional_events_preserve_integer_step_format():
-    step_times, substep_times, _ = aggregate_step_times(
+    step_times, substep_times = aggregate_sync_step_times(
         {
             f"{RUN_ID}:1:start": 2.875,
             f"{RUN_ID}:1:finish": 18.999,
@@ -300,7 +418,7 @@ def test_fractional_events_preserve_integer_step_format():
 
 
 def test_step_times_keep_integer_format():
-    step_times, _, _ = aggregate_step_times(
+    step_times, _ = aggregate_sync_step_times(
         {
             f"{RUN_ID}:1:start": 2.875,
             f"{RUN_ID}:1:finish": 3.125,
@@ -458,7 +576,7 @@ def test_substep_times_clamped_to_window():
         (18.0, "substep_finish"),
         (20.0, "step_complete"),
     ]
-    step_times, substep_times, _ = aggregate_step_times(
+    step_times, substep_times = aggregate_sync_step_times(
         build_step_times_dict(schedule),
         RUN_ID,
         STEP,
@@ -486,7 +604,7 @@ def test_substep_times_multiple_steps():
     build_step_times_dict(STEP_SCHEDULE, step=1, into=step_times_dict)
     build_step_times_dict(STEP_SCHEDULE, step=2, offset=100.0, into=step_times_dict)
 
-    step_times, substep_times, _ = aggregate_step_times(
+    step_times, substep_times = aggregate_sync_step_times(
         step_times_dict,
         RUN_ID,
         3,
@@ -532,7 +650,6 @@ def test_substep_times_adverse_timings():
 
 
 def test_async_substeps_keep_explicit_overlapping_durations():
-    step_times_dict: dict[str, float] = {}
     timing_events = []
 
     def record(
@@ -556,7 +673,6 @@ def test_async_substeps_keep_explicit_overlapping_durations():
 
     record(1, 6.0, ROLLOUT_LOGGING, "phase_start")
     record(1, 10.0, ROLLOUT_LOGGING, "start")
-    record(1, 10.0, ROLLOUT_LOGGING, "substep_start")
     record(1, 11.0, ROLLOUT_LOGGING, "phase_finish")
     record(2, 12.0, ROLLOUT_LOGGING, "phase_start")
     record(1, 11.0, SlimeStatus.TRAINING.value, "phase_start")
@@ -576,18 +692,15 @@ def test_async_substeps_keep_explicit_overlapping_durations():
     record(1, 20.0, WEIGHT_SYNC, "phase_finish")
     record(1, 20.0, EVAL_AFTER, "phase_start")
     record(1, 21.0, EVAL_AFTER, "phase_finish")
-    record(1, 21.0, SlimeStatus.TRAINING.value, "substep_finish")
     record(1, 21.0, SlimeStatus.TRAINING.value, "finish")
 
     record(2, 21.0, ROLLOUT_LOGGING, "start")
-    record(2, 21.0, ROLLOUT_LOGGING, "substep_start")
     record(2, 22.0, SlimeStatus.TRAINING.value, "phase_start")
     record(2, 22.0, SlimeStatus.TRAIN_MODEL.value, "phase_start", step_id=0)
     record(2, 24.0, SlimeStatus.TRAIN_MODEL.value, "phase_finish", step_id=0)
     record(2, 24.0, OPTIMIZER_STEP, "phase_start", step_id=0)
     record(2, 25.0, OPTIMIZER_STEP, "phase_finish", step_id=0)
     record(2, 25.0, SlimeStatus.TRAINING.value, "phase_finish")
-    record(2, 25.0, SlimeStatus.TRAINING.value, "substep_finish")
     record(2, 25.0, SlimeStatus.TRAINING.value, "finish")
 
     for training_run_id, step_id, event, timestamp in (
@@ -607,8 +720,6 @@ def test_async_substeps_keep_explicit_overlapping_durations():
             }
         )
 
-    update_timestamps = record_async_step_times(step_times_dict, RUN_ID, timing_events)
-
     async_order = [
         ROLLOUT_LOGGING,
         SlimeStatus.TRAINING.value,
@@ -618,13 +729,10 @@ def test_async_substeps_keep_explicit_overlapping_durations():
         WEIGHT_SYNC,
         EVAL_AFTER,
     ]
-    step_times, substep_times, substep_timing_intervals = aggregate_step_times(
-        step_times_dict,
-        RUN_ID,
+    step_times, substep_times, substep_timing_intervals = aggregate_async_step_times(
+        timing_events,
         2,
         async_order,
-        {CHECKPOINT_SAVE, WEIGHT_SYNC, EVAL_AFTER},
-        update_timestamps=update_timestamps,
     )
 
     assert step_times["1"] == {"start": 10, "end": 21, "duration_s": 11}

@@ -47,8 +47,6 @@ def train(args):
     for rollout_id in range(args.start_rollout_id, args.num_rollout):
         # PATCHED_TRAINING_GYM_STEP_START
         _tg_report('generate_rollouts', args, rollout_id, 'start')
-        # PATCHED_TRAINING_GYM_SUBSTEP_START
-        _tg_report('generate_rollouts', args, rollout_id, 'substep_start')
         # Sync the last generation
         if rollout_data_next_future is not None:
             rollout_data_curr_ref = ray.get(rollout_data_next_future)
@@ -111,8 +109,6 @@ def train(args):
             _tg_report('evaluate_rollouts_end', args, rollout_id, 'phase_start')
             ray.get(rollout_manager.eval.remote(rollout_id))
             _tg_report('evaluate_rollouts_end', args, rollout_id, 'phase_finish')
-        # PATCHED_TRAINING_GYM_SUBSTEP_FINISH
-        _tg_report('training', args, rollout_id, 'substep_finish')
         # PATCHED_TRAINING_GYM_STEP_FINISH
         _tg_report('training', args, rollout_id, 'finish')
 
