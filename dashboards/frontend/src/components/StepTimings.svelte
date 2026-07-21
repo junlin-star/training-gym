@@ -99,13 +99,21 @@
   }
 
   function downloadJson() {
+    const downloadedSubstepTimes = {};
+    for (const [step, timings] of Object.entries(substepTimes || {})) {
+      downloadedSubstepTimes[step] = {};
+      for (const [name, timing] of Object.entries(timings || {})) {
+        const legacyIntervals = substepTimingIntervals?.[step]?.[name];
+        downloadedSubstepTimes[step][name] =
+          !Array.isArray(timing?.intervals) && Array.isArray(legacyIntervals)
+            ? { ...timing, intervals: legacyIntervals }
+            : timing;
+      }
+    }
     const payload = {
       step_times: stepTimes || {},
-      substep_times: substepTimes || {},
+      substep_times: downloadedSubstepTimes,
     };
-    if (substepTimingIntervals) {
-      payload.substep_timing_intervals = substepTimingIntervals;
-    }
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -124,7 +132,9 @@
       const subs = (substepTimes || {})[k] || {};
       const substeps = Object.entries(subs)
         .map(([name, v]) => {
-          const detailed = substepTimingIntervals?.[k]?.[name];
+          const detailed = Array.isArray(v?.intervals)
+            ? v.intervals
+            : substepTimingIntervals?.[k]?.[name];
           const hasDetails = Array.isArray(detailed) && detailed.length > 0;
           const values = hasDetails ? detailed : [v];
           const segments = [];

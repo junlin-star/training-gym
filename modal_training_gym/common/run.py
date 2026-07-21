@@ -9,7 +9,7 @@ import os
 import time
 from collections.abc import Awaitable, Callable, MutableMapping
 from enum import Enum
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, TypeAlias, cast
 
 from pydantic import BaseModel, PrivateAttr, computed_field, field_validator
 
@@ -28,6 +28,10 @@ if TYPE_CHECKING:
     from modal_training_gym.common.training_rollout import TrainingRolloutResult
 
 TRAINING_RUNS_STORE_NAME = MetadataStore.TRAINING_RUNS.value
+
+TimingInterval: TypeAlias = dict[str, int | float | str]
+SubstepTiming: TypeAlias = dict[str, float | None | list[TimingInterval]]
+SubstepTimes: TypeAlias = dict[str, dict[str, SubstepTiming]]
 
 
 class FrameworkStatusUpdate(BaseModel):
@@ -91,7 +95,7 @@ class TrainingRun(BaseModel):
     updated_at: int = 0
     duration_seconds: int | None = None
     step_times: dict[str, dict[str, int | None]] | None = None
-    substep_times: dict[str, dict[str, dict[str, float | None]]] | None = None
+    substep_times: SubstepTimes | None = None
     # Terminal failure message (Ray driver error / exception) for a failed run,
     # so the cause is queryable from the record and shown on the dashboard even
     # after logs roll off. None while running / on success.
