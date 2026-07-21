@@ -8,7 +8,7 @@ try:
         report_step_event as _tg_report,
     )
 except ImportError:
-    def _tg_report(status, args=None, rollout_id=None, step_event=''): pass
+    def _tg_report(status, args=None, rollout_id=None, step_event='', **kwargs): pass
     def _tg_flush_timings(): pass
 
 import ray
@@ -42,7 +42,10 @@ def train(args):
 
     # async train loop.
     # PATCHED_TRAINING_GYM_ASYNC_INITIAL_GENERATION
-    _tg_report('generate_rollouts', args, args.start_rollout_id, 'phase_start')
+    _tg_report(
+        'generate_rollouts', args, args.start_rollout_id, 'phase_start',
+        timeline_lane='rollout', display_name='Rollout + reward',
+    )
     rollout_data_next_future = rollout_manager.generate.remote(args.start_rollout_id)
     for rollout_id in range(args.start_rollout_id, args.num_rollout):
         # PATCHED_TRAINING_GYM_STEP_START
@@ -56,11 +59,17 @@ def train(args):
         # Start the next rollout early.
         if rollout_id + 1 < args.num_rollout:
             # PATCHED_TRAINING_GYM_ASYNC_NEXT_GENERATION
-            _tg_report('generate_rollouts', args, rollout_id + 1, 'phase_start')
+            _tg_report(
+                'generate_rollouts', args, rollout_id + 1, 'phase_start',
+                timeline_lane='rollout', display_name='Rollout + reward',
+            )
             rollout_data_next_future = rollout_manager.generate.remote(rollout_id + 1)
 
         # PATCHED_TRAINING_GYM_ASYNC_TRAIN_START
-        _tg_report('training', args, rollout_id, 'phase_start')
+        _tg_report(
+            'training', args, rollout_id, 'phase_start',
+            timeline_lane='training', display_name='Training',
+        )
         if args.use_critic:
             actor_trains_this_step = rollout_id >= args.num_critic_only_steps
             value_refs = critic_model.async_train(rollout_id, rollout_data_curr_ref)
@@ -71,11 +80,17 @@ def train(args):
         else:
             ray.get(actor_model.async_train(rollout_id, rollout_data_curr_ref))
         # PATCHED_TRAINING_GYM_ASYNC_TRAIN_FINISH
-        _tg_report('training', args, rollout_id, 'phase_finish')
+        _tg_report(
+            'training', args, rollout_id, 'phase_finish',
+            timeline_lane='training', display_name='Training',
+        )
 
         if should_run_periodic_action(rollout_id, args.save_interval, num_rollout_per_epoch, args.num_rollout):
             # PATCHED_TRAINING_GYM_ASYNC_CHECKPOINT
-            _tg_report('checkpoint_save', args, rollout_id, 'phase_start')
+            _tg_report(
+                'checkpoint_save', args, rollout_id, 'phase_start',
+                timeline_lane='coordination', display_name='Checkpoint save',
+            )
             if (not args.use_critic) or rollout_id >= args.num_critic_only_steps:
                 actor_model.save_model(
                     rollout_id,
@@ -93,7 +108,10 @@ def train(args):
 
         if (rollout_id + 1) % args.update_weights_interval == 0:
             # PATCHED_TRAINING_GYM_ASYNC_WEIGHT_SYNC
-            _tg_report('weight_sync', args, rollout_id, 'phase_start')
+            _tg_report(
+                'weight_sync', args, rollout_id, 'phase_start',
+                timeline_lane='coordination', display_name='Weight sync',
+            )
             # sync generate before update weights to prevent update weight in the middle of generation
             rollout_data_curr_ref = ray.get(x) if (x := rollout_data_next_future) is not None else None
             if x is not None:
@@ -106,7 +124,10 @@ def train(args):
 
         if should_run_periodic_action(rollout_id, args.eval_interval, num_rollout_per_epoch):
             # PATCHED_TRAINING_GYM_ASYNC_EVAL
-            _tg_report('evaluate_rollouts_end', args, rollout_id, 'phase_start')
+            _tg_report(
+                'evaluate_rollouts_end', args, rollout_id, 'phase_start',
+                timeline_lane='rollout', display_name='Eval (after)',
+            )
             ray.get(rollout_manager.eval.remote(rollout_id))
             _tg_report('evaluate_rollouts_end', args, rollout_id, 'phase_finish')
         # PATCHED_TRAINING_GYM_STEP_FINISH

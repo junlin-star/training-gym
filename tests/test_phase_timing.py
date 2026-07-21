@@ -44,27 +44,122 @@ def test_async_train_hook_reports_inner_model_and_optimizer_intervals(monkeypatc
 
     args = SimpleNamespace(async_mode=True)
     optimizer = _Optimizer()
-    phase_reporting.before_train_step_hook(args, 2, 3, object(), optimizer, object())
+    phase_reporting.before_train_step_hook(args, 2, 0, object(), optimizer, object())
 
     assert optimizer.step() == "updated"
     assert reports == [
         (
             (SlimeStatus.TRAIN_MODEL, args, 2, "phase_start"),
-            {"step_id": 3, "event_ts": 100.0},
+            {
+                "step_id": 0,
+                "event_ts": 100.0,
+                "timeline_lane": "training",
+                "parent_phase": "training",
+                "display_name": "Forward / backward",
+            },
         ),
         (
             (SlimeStatus.TRAIN_MODEL, args, 2, "phase_finish"),
-            {"step_id": 3, "event_ts": 104.0},
+            {
+                "step_id": 0,
+                "event_ts": 104.0,
+                "timeline_lane": "training",
+                "parent_phase": "training",
+                "display_name": "Forward / backward",
+            },
         ),
         (
             (SlimeStatus.OPTIMIZER_STEP, args, 2, "phase_start"),
-            {"step_id": 3, "event_ts": 104.0},
+            {
+                "step_id": 0,
+                "event_ts": 104.0,
+                "timeline_lane": "training",
+                "parent_phase": "training",
+                "display_name": "Optimizer step",
+            },
         ),
         (
             (SlimeStatus.OPTIMIZER_STEP, args, 2, "phase_finish"),
-            {"step_id": 3, "event_ts": 105.5},
+            {
+                "step_id": 0,
+                "event_ts": 105.5,
+                "timeline_lane": "training",
+                "parent_phase": "training",
+                "display_name": "Optimizer step",
+            },
         ),
     ]
+
+
+def test_async_train_hook_profiles_log_prob_forwards_without_synchronizing(
+    monkeypatch,
+):
+    reports = []
+    wall_times = iter((90.0, 92.0, 95.0, 100.0))
+    slime = ModuleType("slime")
+    slime.__path__ = []
+    slime_utils = ModuleType("slime.utils")
+    slime_utils.__path__ = []
+    slime_timer = ModuleType("slime.utils.timer")
+    slime_timer.Timer = lambda: SimpleNamespace(
+        log_dict=lambda: {
+            "ref_log_probs": 1.5,
+            "teacher_log_probs": 2.0,
+            "log_probs": 4.837,
+        }
+    )
+    monkeypatch.setitem(sys.modules, "slime", slime)
+    monkeypatch.setitem(sys.modules, "slime.utils", slime_utils)
+    monkeypatch.setitem(sys.modules, "slime.utils.timer", slime_timer)
+    monkeypatch.setattr(phase_reporting, "_call_hook", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        phase_reporting,
+        "report_step_event",
+        lambda *args, **kwargs: reports.append((args, kwargs)),
+    )
+    monkeypatch.setattr(phase_reporting.time, "time", lambda: next(wall_times))
+    monkeypatch.setattr(phase_reporting, "_LOG_PROB_STARTS", {})
+
+    args = SimpleNamespace(async_mode=True)
+    phase_reporting.before_log_prob_hook(args, object(), "ref_")
+    phase_reporting.before_log_prob_hook(args, object(), "teacher_")
+    phase_reporting.before_log_prob_hook(args, object(), "")
+    phase_reporting.before_train_step_hook(args, 2, 0, object(), _Optimizer(), object())
+
+    assert [args[0] for args, _ in reports] == [
+        SlimeStatus.REFERENCE_LOG_PROBS,
+        SlimeStatus.REFERENCE_LOG_PROBS,
+        SlimeStatus.TEACHER_LOG_PROBS,
+        SlimeStatus.TEACHER_LOG_PROBS,
+        SlimeStatus.COMPUTE_LOG_PROBS,
+        SlimeStatus.COMPUTE_LOG_PROBS,
+        SlimeStatus.TRAIN_MODEL,
+    ]
+    assert [kwargs["event_ts"] for _, kwargs in reports] == pytest.approx(
+        [90.0, 91.5, 92.0, 94.0, 95.0, 99.837, 100.0]
+    )
+    for _, kwargs in reports[:6]:
+        assert kwargs["step_id"] == 0
+        assert kwargs["timeline_lane"] == "training"
+        assert kwargs["parent_phase"] == SlimeStatus.TRAINING.value
+    assert [kwargs["display_name"] for _, kwargs in reports[:6:2]] == [
+        "Reference log probabilities",
+        "Teacher log probabilities",
+        "Policy log probabilities",
+    ]
+
+
+def test_critic_forward_is_not_recorded_as_policy_log_probs(monkeypatch):
+    monkeypatch.setattr(phase_reporting, "_call_hook", lambda *args, **kwargs: None)
+    monkeypatch.setattr(phase_reporting, "_LOG_PROB_STARTS", {})
+
+    phase_reporting.before_log_prob_hook(
+        SimpleNamespace(async_mode=True, training_gym_role="critic"),
+        object(),
+        "",
+    )
+
+    assert phase_reporting._LOG_PROB_STARTS == {}
 
 
 def test_sync_train_hook_keeps_existing_optimizer_report(monkeypatch):
@@ -134,12 +229,18 @@ def test_async_step_boundaries_are_enqueued(monkeypatch):
         step_event="phase_start",
         step_id=2,
         event_ts=123.0,
+        timeline_lane="training",
+        parent_phase="training",
+        display_name="Actor update",
     )
 
     assert reports[0]["step_event"] == "phase_start"
     assert reports[0]["step_id"] == 2
     assert reports[0]["event_ts"] == 123.0
     assert reports[0]["training_role"] == "actor"
+    assert reports[0]["timeline_lane"] == "training"
+    assert reports[0]["parent_phase"] == "training"
+    assert reports[0]["display_name"] == "Actor update"
 
 
 def test_training_attempt_is_only_added_to_async_timing_events(monkeypatch):
@@ -342,7 +443,16 @@ def test_optimizer_timing_wrapper_is_reused_across_updates(monkeypatch):
 
     assert optimizer.step == wrapped_step
     optimizer.step()
-    assert [kwargs["step_id"] for _, kwargs in reports] == [0, 0, 0, 0, 1, 1, 1, 1]
+    assert [kwargs.get("step_id") for _, kwargs in reports] == [
+        0,
+        0,
+        0,
+        0,
+        1,
+        1,
+        1,
+        1,
+    ]
     assert [args[0][0] for args in reports] == [
         SlimeStatus.TRAIN_MODEL,
         SlimeStatus.TRAIN_MODEL,

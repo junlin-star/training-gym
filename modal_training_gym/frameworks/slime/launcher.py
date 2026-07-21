@@ -107,6 +107,10 @@ _SYNC_OPTIONAL_SUBSTEPS = {
 _ASYNC_SUBSTEP_ORDER = [
     Substep.GENERATE_ROLLOUTS.value,
     SlimeStatus.TRAINING.value,
+    SlimeStatus.COMPUTE_LOG_PROBS.value,
+    SlimeStatus.REFERENCE_LOG_PROBS.value,
+    SlimeStatus.TEACHER_LOG_PROBS.value,
+    SlimeStatus.VALUE_INFERENCE.value,
     SlimeStatus.TRAIN_MODEL.value,
     Substep.OPTIMIZER_STEP.value,
     Substep.CHECKPOINT_SAVE.value,
@@ -150,6 +154,9 @@ _PATCH_ROLLOUT_STATUS_B64 = encode_patch(
     "patch_rollout_status_reporting", _SLIME_PATCHES
 )
 _PATCH_TRAINING_ROLE_B64 = encode_patch("patch_training_role", _SLIME_PATCHES)
+_PATCH_CRITIC_VALUE_TIMING_B64 = encode_patch(
+    "patch_critic_value_timing", _SLIME_PATCHES
+)
 _PATCH_ASYNC_TIMING_FLUSH_B64 = encode_patch("patch_async_timing_flush", _SLIME_PATCHES)
 _PATCH_ADVANTAGE_DIST_B64 = encode_patch("patch_advantage_distribution", _SLIME_PATCHES)
 _PATCH_LOG_ELIDE_B64 = encode_patch("patch_log_elide", _SLIME_PATCHES)
@@ -421,6 +428,7 @@ def aggregate_async_step_times(
 ]:
     """Aggregate async events directly into stored timing metadata."""
     aggregated_events: list[tuple[int, str, str, float, int | None, int, str]] = []
+    phase_metadata: dict[tuple[int, int, str], dict[str, str]] = {}
     for event in events:
         try:
             rollout_step = int(event["progress_current"])
@@ -451,22 +459,22 @@ def aggregate_async_step_times(
                 training_role,
             )
         )
+        metadata = {
+            field: value
+            for field in ("timeline_lane", "parent_phase", "display_name")
+            if isinstance(value := event.get(field), str) and value
+        }
+        if metadata:
+            phase_metadata[event_attempt, rollout_step, phase] = metadata
 
     if attempt is not None:
         aggregated_events = [
             event for event in aggregated_events if event[5] == attempt
         ]
 
-    latest_attempts: dict[tuple[int, str], int] = {}
-    for rollout_step, _, _, _, _, training_attempt, training_role in aggregated_events:
-        rollout_role = (rollout_step, training_role)
-        latest_attempts[rollout_role] = max(
-            training_attempt,
-            latest_attempts.get(rollout_role, training_attempt),
-        )
-
     step_timestamps: dict[int, dict[str, float]] = {}
     phase_timestamps: dict[tuple[int, str], dict[str, float]] = {}
+    selected_phase_metadata: dict[tuple[int, str], dict[str, str]] = {}
     update_timestamps: dict[
         tuple[int, str], dict[tuple[str, int], dict[str, float]]
     ] = {}
@@ -476,11 +484,11 @@ def aggregate_async_step_times(
         step_event,
         event_ts,
         update_id,
-        training_attempt,
+        event_attempt,
         training_role,
     ) in sorted(aggregated_events, key=lambda event: event[3]):
-        if training_attempt != latest_attempts[(rollout_step, training_role)]:
-            continue
+        if metadata := phase_metadata.get((event_attempt, rollout_step, phase)):
+            selected_phase_metadata[rollout_step, phase] = metadata
         if step_event in ("start", "finish"):
             step_timestamps.setdefault(rollout_step, {})[step_event] = event_ts
         elif step_event in ("phase_start", "phase_finish"):
@@ -497,6 +505,10 @@ def aggregate_async_step_times(
 
     step_times: dict[str, dict[str, int | None]] = {}
     substep_times: SubstepTimes = {}
+    phases = [
+        *substep_order,
+        *sorted({event[1] for event in aggregated_events}.difference(substep_order)),
+    ]
     for rollout_step in range(1, num_steps + 1):
         step_key = str(rollout_step)
         timestamps = step_timestamps.get(rollout_step, {})
@@ -511,7 +523,7 @@ def aggregate_async_step_times(
         }
         substep_times[step_key] = {}
 
-        for phase in substep_order:
+        for phase in phases:
             intervals: list[TimingInterval] = []
             update_starts: list[float] = []
             completed_duration = 0.0
@@ -556,6 +568,17 @@ def aggregate_async_step_times(
                 "start": round(phase_start, 3),
                 "duration_s": duration,
             }
+            metadata = selected_phase_metadata.get((rollout_step, phase), {})
+            if metadata and duration is not None:
+                if not intervals:
+                    intervals.append(
+                        {
+                            "start": round(phase_start, 3),
+                            "duration_s": duration,
+                        }
+                    )
+                for interval in intervals:
+                    interval.update(metadata)
             if intervals:
                 timing["intervals"] = intervals
             substep_times[step_key][phase] = timing
@@ -884,6 +907,7 @@ def build_slime_app(
         train_image = train_image.uv_pip_install("modal==1.5.2").run_commands(
             f"echo {_PATCH_ROLLOUT_STATUS_B64} | base64 -d | python3",
             f"echo {_PATCH_TRAINING_ROLE_B64} | base64 -d | python3",
+            f"echo {_PATCH_CRITIC_VALUE_TIMING_B64} | base64 -d | python3",
             f"echo {_PATCH_ASYNC_TIMING_FLUSH_B64} | base64 -d | python3",
         )
     if _has_hybrid_spec:

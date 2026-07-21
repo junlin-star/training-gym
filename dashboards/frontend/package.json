@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "test:timings": "node --test src/lib/asyncTimingProfile.test.js",
     "preview": "vite preview"
   },
   "devDependencies": {

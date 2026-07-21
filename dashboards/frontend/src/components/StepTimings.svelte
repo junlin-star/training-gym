@@ -1,5 +1,6 @@
 <script>
   import { Download, ZoomIn, ZoomOut } from "lucide-svelte";
+  import { phaseBreakdown } from "../lib/asyncTimingProfile.js";
 
   let {
     stepTimes = null,
@@ -38,14 +39,39 @@
     ...SUBSTEP_LABELS,
     generate_rollouts: "Rollout + reward",
     training: "Training",
+    compute_log_probs: "Policy log probabilities",
+    reference_log_probs: "Reference log probabilities",
+    teacher_log_probs: "Teacher log probabilities",
+    value_inference: "Critic value inference",
     train_model: "Forward / backward",
   };
 
   const ASYNC_SUBSTEP_COLORS = {
     ...SUBSTEP_COLORS,
     training: "var(--color-c-dataviz-primary-7, #648fe0)",
+    reference_log_probs: "#fb923c",
+    teacher_log_probs: "#c084fc",
+    value_inference: "var(--color-c-dataviz-paired-1, #78a967)",
     train_model: "var(--color-c-dataviz-paired-4, #6cabc1)",
     optimizer_step: "var(--color-c-dataviz-paired-7, #8956fa)",
+  };
+
+  const ASYNC_SUBSTEP_DESCRIPTIONS = {
+    training:
+      "Wall time waiting for the training workers, from dispatch through their return.",
+    compute_log_probs:
+      "A current-policy forward pass used when Slime cannot reuse log probabilities from the training loss.",
+    reference_log_probs:
+      "A frozen reference-policy forward pass used to calculate KL-related log probabilities.",
+    teacher_log_probs:
+      "A teacher-model forward pass used for on-policy distillation.",
+    value_inference:
+      "A critic forward pass that computes value estimates used by the value loss and actor advantages.",
+    train_model:
+      "Host interval through forward/backward and gradient preparation, ending when optimizer.step() is called.",
+    optimizer_step:
+      "Host interval of optimizer.step(). CUDA is asynchronous, so it can include waiting for earlier GPU work and is not isolated optimizer-kernel time.",
+    checkpoint_save: "Checkpoint persistence, shown separately from training.",
   };
 
   const SUBSTEP_ORDER = Object.keys(SUBSTEP_LABELS);
@@ -53,14 +79,25 @@
     "evaluate_rollouts",
     "generate_rollouts",
     "training",
+    "compute_log_probs",
+    "reference_log_probs",
+    "teacher_log_probs",
+    "value_inference",
     "train_model",
     "optimizer_step",
     "checkpoint_save",
     "weight_sync",
     "offload_rollout",
-    "compute_log_probs",
     "offload_train",
     "evaluate_rollouts_end",
+  ];
+  const FALLBACK_COLORS = [
+    "#60a5fa",
+    "#34d399",
+    "#a78bfa",
+    "#fbbf24",
+    "#f472b6",
+    "#22d3ee",
   ];
 
   // Timeline zoom bounds: 1 = fit-to-width, MAX_ZOOM = deepest magnification.
@@ -74,14 +111,19 @@
   }
 
   function colorFor(name) {
-    return SUBSTEP_COLORS[name] || "var(--color-c-gray-40, #5e5e5e)";
+    if (SUBSTEP_COLORS[name]) return SUBSTEP_COLORS[name];
+    let hash = 0;
+    for (const character of name) hash = (hash * 31 + character.charCodeAt(0)) >>> 0;
+    return FALLBACK_COLORS[hash % FALLBACK_COLORS.length];
   }
 
-  function asyncLabelFor(name) {
-    return ASYNC_SUBSTEP_LABELS[name] || labelFor(name);
+  function asyncLabelFor(phase) {
+    const name = typeof phase === "string" ? phase : phase.name;
+    return ASYNC_SUBSTEP_LABELS[name] || phase?.displayName || labelFor(name);
   }
 
-  function asyncColorFor(name) {
+  function asyncColorFor(phase) {
+    const name = typeof phase === "string" ? phase : phase.name;
     return ASYNC_SUBSTEP_COLORS[name] || colorFor(name);
   }
 
@@ -137,6 +179,7 @@
             : substepTimingIntervals?.[k]?.[name];
           const hasDetails = Array.isArray(detailed) && detailed.length > 0;
           const values = hasDetails ? detailed : [v];
+          const descriptor = hasDetails ? detailed[0] : v;
           const segments = [];
           for (const [index, value] of values.entries()) {
             if (value?.start == null || value?.duration_s == null) continue;
@@ -151,6 +194,18 @@
                 hasDetails && typeof value.training_role === "string"
                   ? value.training_role
                   : null,
+              timelineLane:
+                typeof value?.timeline_lane === "string"
+                  ? value.timeline_lane
+                  : (descriptor?.timeline_lane ?? null),
+              parentPhase:
+                typeof value?.parent_phase === "string"
+                  ? value.parent_phase
+                  : (descriptor?.parent_phase ?? null),
+              displayName:
+                typeof value?.display_name === "string"
+                  ? value.display_name
+                  : descriptor?.display_name,
               start,
               duration,
               end: start + duration,
@@ -160,6 +215,16 @@
             name,
             start: v?.start ?? null,
             duration: v?.duration_s ?? null,
+            timelineLane:
+              typeof descriptor?.timeline_lane === "string"
+                ? descriptor.timeline_lane
+                : null,
+            parentPhase:
+              typeof descriptor?.parent_phase === "string"
+                ? descriptor.parent_phase
+                : null,
+            displayName:
+              typeof descriptor?.display_name === "string" ? descriptor.display_name : null,
             segments,
           };
         })
@@ -176,12 +241,16 @@
         for (const item of sub.segments) {
           step.timeline.push({
             step,
-            sub: { name: sub.name, ...item },
+            sub: {
+              name: sub.name,
+              ...item,
+            },
             start: item.start,
             end: item.end,
           });
         }
       }
+      step.timeline.sort((a, b) => a.start - b.start);
       return step;
     });
     out.sort((a, b) => (Number(a.key) || 0) - (Number(b.key) || 0));
@@ -189,8 +258,51 @@
   });
 
   let hasData = $derived(steps.length > 0);
+  let phaseDefinitions = $derived.by(() => {
+    const definitions = {};
+    for (const step of steps) {
+      for (const sub of step.substeps) definitions[sub.name] ??= sub;
+    }
+    return definitions;
+  });
 
-  const TRAINING_CHILDREN = new Set(["train_model", "optimizer_step"]);
+  function isTrainingChild(sub) {
+    return sub.parentPhase === "training";
+  }
+
+  function isNestedDetail(step, sub) {
+    return (
+      sub.parentPhase != null &&
+      sub.parentPhase !== "training" &&
+      step.substeps.some((phase) => phase.name === sub.parentPhase)
+    );
+  }
+
+  function phaseProfile(step, parent) {
+    const breakdown = phaseBreakdown(step.timeline, parent);
+    if (!breakdown) return null;
+    const rows = breakdown.phases.map((phase) => {
+      const role = phase.role
+        ? `${phase.role[0].toUpperCase()}${phase.role.slice(1)} `
+        : "";
+      return {
+        key: phase.key,
+        label: `${role}${asyncLabelFor(phase.phase)}`,
+        duration: phase.duration,
+      };
+    });
+    const largest = rows.reduce((current, row) =>
+      row.duration > current.duration ? row : current,
+    );
+    const summary =
+      largest.duration >= breakdown.total / 2
+        ? `Mostly ${largest.label.toLowerCase()} · ${fmtSecs(largest.duration)} of ${fmtSecs(breakdown.total)}`
+        : `${rows.length} measured ${rows.length === 1 ? "phase" : "phases"} · ${fmtSecs(breakdown.measured)} of ${fmtSecs(breakdown.total)}`;
+    if (breakdown.other > 0.0005) {
+      rows.push({ key: "other", label: "Other work", duration: breakdown.other });
+    }
+    return { summary, rows };
+  }
 
   function tooltipLabel(step, sub) {
     const repeated =
@@ -199,19 +311,23 @@
           interval.sub.name === sub.name &&
           interval.sub.trainingRole === sub.trainingRole,
       ).length > 1;
-    if (TRAINING_CHILDREN.has(sub.name) && sub.innerStep != null) {
+    if (isTrainingChild(sub) && sub.innerStep != null) {
       const role = sub.trainingRole
         ? `${sub.trainingRole[0].toUpperCase()}${sub.trainingRole.slice(1)} `
         : "";
       const update = repeated ? ` ${sub.innerStep + 1}` : "";
-      return `${role}${asyncLabelFor(sub.name)}${update}`;
+      return `${role}${asyncLabelFor(sub)}${update}`;
     }
-    return asyncMode ? asyncLabelFor(sub.name) : labelFor(sub.name);
+    return asyncMode ? asyncLabelFor(sub) : labelFor(sub.name);
+  }
+
+  function tooltipDescription(sub) {
+    return asyncMode ? ASYNC_SUBSTEP_DESCRIPTIONS[sub.name] : null;
   }
 
   function trainingUpdates(step) {
     return step.timeline
-      .filter((interval) => TRAINING_CHILDREN.has(interval.sub.name))
+      .filter((interval) => isTrainingChild(interval.sub))
       .sort((a, b) => a.start - b.start);
   }
 
@@ -219,9 +335,12 @@
     const hasUpdates = trainingUpdates(step).length > 0;
     return hasUpdates
       ? step.substeps.filter(
-          (sub) => sub.name !== "training" && !TRAINING_CHILDREN.has(sub.name),
+          (sub) =>
+            sub.name !== "training" &&
+            !isTrainingChild(sub) &&
+            !isNestedDetail(step, sub),
         )
-      : step.substeps;
+      : step.substeps.filter((sub) => !isNestedDetail(step, sub));
   }
 
   let asyncTimeline = $derived.by(() => {
@@ -232,14 +351,12 @@
     for (const step of steps) {
       const hasUpdates = trainingUpdates(step).length > 0;
       for (const span of step.timeline) {
-        if (TRAINING_CHILDREN.has(span.sub.name)) training.push(span);
+        if (isTrainingChild(span.sub)) training.push(span);
         else if (span.sub.name === "training" && hasUpdates) trainingWindows.push(span);
-        else if (
-          span.sub.name === "generate_rollouts" ||
-          span.sub.name.startsWith("evaluate_rollouts")
-        ) {
-          rollout.push(span);
-        } else if (span.sub.name === "training") training.push(span);
+        else if (span.sub.timelineLane === "rollout") rollout.push(span);
+        else if (span.sub.timelineLane === "training") training.push(span);
+        else if (span.sub.timelineLane === "coordination") coordination.push(span);
+        else if (span.sub.name === "training") training.push(span);
         else coordination.push(span);
       }
     }
@@ -269,14 +386,21 @@
     if (asyncMode) {
       for (const step of steps) {
         for (const sub of topLevelSubsteps(step)) seen.add(sub.name);
-        for (const span of trainingUpdates(step)) seen.add(span.sub.name);
+        for (const span of step.timeline) {
+          if (span.sub.timelineLane === "training") {
+            seen.add(span.sub.name);
+          }
+        }
       }
       if (asyncTimeline.trainingWindows.length) seen.add("training");
     } else {
       for (const step of steps) for (const sub of step.substeps) seen.add(sub.name);
     }
     const order = asyncMode ? ASYNC_SUBSTEP_ORDER : SUBSTEP_ORDER;
-    return order.filter((n) => seen.has(n));
+    return [
+      ...order.filter((name) => seen.has(name)),
+      ...[...seen].filter((name) => !order.includes(name)).sort(),
+    ];
   });
 
   let tip = $state(null);
@@ -349,6 +473,8 @@
       label: tooltipLabel(step, sub),
       stepLabel: asyncMode ? `Rollout ${step.rolloutId}` : `Step ${step.n}`,
       dur: sub.duration,
+      description: tooltipDescription(sub),
+      profile: phaseProfile(step, sub),
     };
   }
 
@@ -380,6 +506,8 @@
       label: tooltipLabel(step, sub),
       stepLabel: asyncMode ? `Rollout ${step.rolloutId}` : `Step ${step.n}`,
       dur: sub.duration,
+      description: tooltipDescription(sub),
+      profile: phaseProfile(step, sub),
     };
   }
 
@@ -415,12 +543,17 @@
 {/snippet}
 
 {#snippet asyncSegment(span)}
-  {@const trainingChild = TRAINING_CHILDREN.has(span.sub.name)}
+  {@const trainingChild = isTrainingChild(span.sub)}
+  {@const trainingDetail =
+    span.sub.timelineLane === "training" &&
+    span.sub.parentPhase != null &&
+    span.sub.parentPhase !== "training"}
   <div
     class="seg async-seg"
     class:training-inner-seg={trainingChild}
+    class:training-detail-seg={trainingDetail}
     class:active={pinned && isActive(span.step, span.sub)}
-    style={`left:${((span.start - asyncTimeline.start) / asyncTimeline.duration) * 100}%;width:${(span.sub.duration / asyncTimeline.duration) * 100}%;background:${asyncColorFor(span.sub.name)}`}
+    style={`left:${((span.start - asyncTimeline.start) / asyncTimeline.duration) * 100}%;width:${(span.sub.duration / asyncTimeline.duration) * 100}%;background:${asyncColorFor(span.sub)}`}
     role="button"
     tabindex="0"
     onmouseenter={(e) => showTip(e, span.step, span.sub)}
@@ -440,7 +573,7 @@
   <div
     class="training-window"
     class:active={pinned && isActive(span.step, span.sub)}
-    style={`left:${((span.start - asyncTimeline.start) / asyncTimeline.duration) * 100}%;width:${(span.sub.duration / asyncTimeline.duration) * 100}%;--training-color:${asyncColorFor(span.sub.name)}`}
+    style={`left:${((span.start - asyncTimeline.start) / asyncTimeline.duration) * 100}%;width:${(span.sub.duration / asyncTimeline.duration) * 100}%;--training-color:${asyncColorFor(span.sub)}`}
     role="button"
     tabindex="0"
     onmouseenter={(e) => showTip(e, span.step, span.sub)}
@@ -479,8 +612,8 @@
         <div class="legend">
           {#each legend as name (name)}
             <span class="legend-item">
-              <span class="swatch" style:background={asyncMode ? asyncColorFor(name) : colorFor(name)}></span>
-              {asyncMode ? asyncLabelFor(name) : labelFor(name)}
+              <span class="swatch" style:background={asyncMode ? asyncColorFor(phaseDefinitions[name] || name) : colorFor(name)}></span>
+              {asyncMode ? asyncLabelFor(phaseDefinitions[name] || name) : labelFor(name)}
             </span>
           {/each}
         </div>
@@ -538,7 +671,7 @@
         </div>
       </div>
       <div class="tl-hint">
-        Blue outline = total training time · unfilled space = preprocessing and other training work · scroll to zoom
+        Blue outline = total training wall time · inner bars are reported operations · scroll to zoom
       </div>
     {:else if layout === "timeline"}
       <div class="tl-viewport" bind:this={viewport} use:wheelZoom>
@@ -591,6 +724,18 @@
       <span class="tg-tip-dur">
         {tip.dur == null ? "unknown (report dropped)" : fmtSecs(tip.dur)}
       </span>
+      {#if tip.description}
+        <span class="tg-tip-description">{tip.description}</span>
+      {/if}
+      {#if tip.profile}
+        <span class="tg-tip-summary">{tip.profile.summary}</span>
+        <span class="tg-tip-profile">
+          {#each tip.profile.rows as row (row.key)}
+            <span>{row.label}</span>
+            <span>{fmtSecs(row.duration)}</span>
+          {/each}
+        </span>
+      {/if}
     </div>
   {/if}
 {/if}
@@ -656,6 +801,13 @@
     top: 2px;
     z-index: 3;
     height: calc(100% - 4px);
+    border-radius: 1px;
+  }
+
+  .async-seg.training-detail-seg {
+    top: 4px;
+    z-index: 4;
+    height: calc(100% - 8px);
     border-radius: 1px;
   }
 
@@ -926,5 +1078,29 @@
   .tg-tip-dur {
     color: var(--muted);
     font-variant-numeric: tabular-nums;
+  }
+
+  .tg-tip-summary {
+    color: var(--text);
+    margin-top: 4px;
+  }
+
+  .tg-tip-description {
+    max-width: 360px;
+    margin-top: 4px;
+    color: var(--muted);
+    white-space: normal;
+  }
+
+  .tg-tip-profile {
+    display: grid;
+    grid-template-columns: auto auto;
+    column-gap: 12px;
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .tg-tip-profile span:nth-child(even) {
+    text-align: right;
   }
 </style>

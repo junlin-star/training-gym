@@ -98,6 +98,20 @@ CUSTOM_BEFORE_LOG_PROB_HOOK_PATH_KEY = (
 CUSTOM_BEFORE_TRAIN_STEP_HOOK_PATH_KEY = (
     "training_gym_custom_megatron_before_train_step_hook_path"
 )
+_LOG_PROB_PHASES = {
+    "": (SlimeStatus.COMPUTE_LOG_PROBS, "log_probs", "Policy log probabilities"),
+    "ref_": (
+        SlimeStatus.REFERENCE_LOG_PROBS,
+        "ref_log_probs",
+        "Reference log probabilities",
+    ),
+    "teacher_": (
+        SlimeStatus.TEACHER_LOG_PROBS,
+        "teacher_log_probs",
+        "Teacher log probabilities",
+    ),
+}
+_LOG_PROB_STARTS: dict[str, float] = {}
 
 
 def _hook_path_from_args(args: Any, path_key: str) -> str | None:
@@ -241,9 +255,15 @@ def log_eval_rollout_data(
 
 
 def before_log_prob_hook(args: Any, model: Any, store_prefix: str) -> None:
-    # NOTE: this hook runs in the Megatron train actor, which has no current
-    # rollout_id, so the compute_log_probs substep is reported (id-tagged) from
-    # the driver loop right before actor_model.async_train(); see the patch.
+    if (
+        getattr(args, "training_gym_role", None) != "critic"
+        and store_prefix in _LOG_PROB_PHASES
+        and (
+            bool(getattr(args, "async_mode", False))
+            or os.environ.get("TRAINING_GYM_ASYNC_MODE") == "1"
+        )
+    ):
+        _LOG_PROB_STARTS[store_prefix] = time.time()
     _call_hook(
         CUSTOM_BEFORE_LOG_PROB_HOOK_PATH_KEY,
         args,
@@ -278,6 +298,9 @@ def _install_optimizer_timing(optimizer: object) -> None:
             "phase_finish",
             step_id=step_id,
             event_ts=optimizer_started,
+            timeline_lane="training",
+            parent_phase=SlimeStatus.TRAINING.value,
+            display_name="Forward / backward",
         )
         report_step_event(
             SlimeStatus.OPTIMIZER_STEP,
@@ -286,6 +309,9 @@ def _install_optimizer_timing(optimizer: object) -> None:
             "phase_start",
             step_id=step_id,
             event_ts=optimizer_started,
+            timeline_lane="training",
+            parent_phase=SlimeStatus.TRAINING.value,
+            display_name="Optimizer step",
         )
 
         try:
@@ -299,6 +325,9 @@ def _install_optimizer_timing(optimizer: object) -> None:
                 "phase_finish",
                 step_id=step_id,
                 event_ts=optimizer_finished,
+                timeline_lane="training",
+                parent_phase=SlimeStatus.TRAINING.value,
+                display_name="Optimizer step",
             )
 
     setattr(optimizer, "step", timed_step)
@@ -313,6 +342,7 @@ def before_train_step_hook(
     optimizer: Any,
     opt_param_scheduler: Any,
 ) -> None:
+    global _LOG_PROB_STARTS
     async_mode = (
         bool(getattr(args, "async_mode", False))
         or os.environ.get("TRAINING_GYM_ASYNC_MODE") == "1"
@@ -356,13 +386,54 @@ def before_train_step_hook(
             _OPTIMIZER_TIMING_CONTEXT,
             (args, rollout_id, step_id),
         )
+        update_started = time.time()
+        if step_id == 0:
+            log_prob_starts = _LOG_PROB_STARTS
+            _LOG_PROB_STARTS = {}
+            if log_prob_starts:
+                try:
+                    from slime.utils.timer import Timer
+                except ImportError:
+                    pass
+                else:
+                    timers = Timer().log_dict()
+                    for store_prefix, started in log_prob_starts.items():
+                        phase, timer_name, display_name = _LOG_PROB_PHASES[store_prefix]
+                        duration = timers.get(timer_name)
+                        if duration is None:
+                            continue
+                        report_step_event(
+                            phase,
+                            args,
+                            rollout_id,
+                            "phase_start",
+                            step_id=step_id,
+                            event_ts=started,
+                            timeline_lane="training",
+                            parent_phase=SlimeStatus.TRAINING.value,
+                            display_name=display_name,
+                        )
+                        report_step_event(
+                            phase,
+                            args,
+                            rollout_id,
+                            "phase_finish",
+                            step_id=step_id,
+                            event_ts=started + float(duration),
+                            timeline_lane="training",
+                            parent_phase=SlimeStatus.TRAINING.value,
+                            display_name=display_name,
+                        )
         report_step_event(
             SlimeStatus.TRAIN_MODEL,
             args,
             rollout_id,
             "phase_start",
             step_id=step_id,
-            event_ts=time.time(),
+            event_ts=update_started,
+            timeline_lane="training",
+            parent_phase=SlimeStatus.TRAINING.value,
+            display_name="Forward / backward",
         )
 
 
@@ -373,11 +444,16 @@ def report_step_event(
     step_event: str = "",
     step_id: int | None = None,
     event_ts: float | None = None,
+    *,
+    timeline_lane: str | None = None,
+    parent_phase: str | None = None,
+    display_name: str | None = None,
 ) -> None:
     """Report one step/substep event tagged with the ``status`` phase.
 
     ``status`` may be a plain string — the patched slime train.py passes phase
-    names as literals so the injected code stays stdlib-only.
+    names as literals so the injected code stays stdlib-only. The optional
+    descriptors let new phases render without dashboard-specific phase rules.
     """
     payload = {
         **_run_context(args),
@@ -393,6 +469,12 @@ def report_step_event(
         payload["step_event"] = step_event
     if step_id is not None:
         payload["step_id"] = step_id
+    if timeline_lane is not None:
+        payload["timeline_lane"] = timeline_lane
+    if parent_phase is not None:
+        payload["parent_phase"] = parent_phase
+    if display_name is not None:
+        payload["display_name"] = display_name
     if (
         bool(getattr(args, "async_mode", False))
         or os.environ.get("TRAINING_GYM_ASYNC_MODE") == "1"

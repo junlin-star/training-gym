@@ -43,7 +43,7 @@ PREAMBLE = (
     "        report_step_event as _tg_report,\n"
     "    )\n"
     "except ImportError:\n"
-    "    def _tg_report(status, args=None, rollout_id=None, step_event=''): pass\n"
+    "    def _tg_report(status, args=None, rollout_id=None, step_event='', **kwargs): pass\n"
     "\n"
 )
 
@@ -58,7 +58,7 @@ ASYNC_PREAMBLE = (
     "        report_step_event as _tg_report,\n"
     "    )\n"
     "except ImportError:\n"
-    "    def _tg_report(status, args=None, rollout_id=None, step_event=''): pass\n"
+    "    def _tg_report(status, args=None, rollout_id=None, step_event='', **kwargs): pass\n"
     "    def _tg_flush_timings(): pass\n"
     "\n"
 )
@@ -84,7 +84,10 @@ def _patch_async_file(path: Path) -> None:
         ASYNC_INITIAL_GENERATION_MARKER,
         "    rollout_data_next_future = rollout_manager.generate.remote(args.start_rollout_id)\n",
         f"    # {ASYNC_INITIAL_GENERATION_MARKER}\n"
-        "    _tg_report('generate_rollouts', args, args.start_rollout_id, 'phase_start')\n"
+        "    _tg_report(\n"
+        "        'generate_rollouts', args, args.start_rollout_id, 'phase_start',\n"
+        "        timeline_lane='rollout', display_name='Rollout + reward',\n"
+        "    )\n"
         "    rollout_data_next_future = rollout_manager.generate.remote(args.start_rollout_id)\n",
         "initial generation",
     )
@@ -112,7 +115,10 @@ def _patch_async_file(path: Path) -> None:
         "            rollout_data_next_future = rollout_manager.generate.remote(rollout_id + 1)\n",
         "        if rollout_id + 1 < args.num_rollout:\n"
         f"            # {ASYNC_NEXT_GENERATION_MARKER}\n"
-        "            _tg_report('generate_rollouts', args, rollout_id + 1, 'phase_start')\n"
+        "            _tg_report(\n"
+        "                'generate_rollouts', args, rollout_id + 1, 'phase_start',\n"
+        "                timeline_lane='rollout', display_name='Rollout + reward',\n"
+        "            )\n"
         "            rollout_data_next_future = rollout_manager.generate.remote(rollout_id + 1)\n",
         "next generation",
     )
@@ -120,7 +126,10 @@ def _patch_async_file(path: Path) -> None:
         ASYNC_TRAIN_START_MARKER,
         "        if args.use_critic:\n",
         f"        # {ASYNC_TRAIN_START_MARKER}\n"
-        "        _tg_report('training', args, rollout_id, 'phase_start')\n"
+        "        _tg_report(\n"
+        "            'training', args, rollout_id, 'phase_start',\n"
+        "            timeline_lane='training', display_name='Training',\n"
+        "        )\n"
         "        if args.use_critic:\n",
         "model training start",
     )
@@ -132,7 +141,10 @@ def _patch_async_file(path: Path) -> None:
         "        else:\n"
         "            ray.get(actor_model.async_train(rollout_id, rollout_data_curr_ref))\n"
         f"        # {ASYNC_TRAIN_FINISH_MARKER}\n"
-        "        _tg_report('training', args, rollout_id, 'phase_finish')\n\n"
+        "        _tg_report(\n"
+        "            'training', args, rollout_id, 'phase_finish',\n"
+        "            timeline_lane='training', display_name='Training',\n"
+        "        )\n\n"
         "        if should_run_periodic_action(",
         "model training finish",
     )
@@ -142,7 +154,10 @@ def _patch_async_file(path: Path) -> None:
         "            if (not args.use_critic) or rollout_id >= args.num_critic_only_steps:\n",
         "        if should_run_periodic_action(rollout_id, args.save_interval, num_rollout_per_epoch, args.num_rollout):\n"
         f"            # {ASYNC_CHECKPOINT_MARKER}\n"
-        "            _tg_report('checkpoint_save', args, rollout_id, 'phase_start')\n"
+        "            _tg_report(\n"
+        "                'checkpoint_save', args, rollout_id, 'phase_start',\n"
+        "                timeline_lane='coordination', display_name='Checkpoint save',\n"
+        "            )\n"
         "            if (not args.use_critic) or rollout_id >= args.num_critic_only_steps:\n",
         "checkpoint start",
     )
@@ -164,7 +179,10 @@ def _patch_async_file(path: Path) -> None:
         "            # sync generate before update weights to prevent update weight in the middle of generation\n",
         "        if (rollout_id + 1) % args.update_weights_interval == 0:\n"
         f"            # {ASYNC_WEIGHT_SYNC_MARKER}\n"
-        "            _tg_report('weight_sync', args, rollout_id, 'phase_start')\n"
+        "            _tg_report(\n"
+        "                'weight_sync', args, rollout_id, 'phase_start',\n"
+        "                timeline_lane='coordination', display_name='Weight sync',\n"
+        "            )\n"
         "            # sync generate before update weights to prevent update weight in the middle of generation\n",
         "weight sync start",
     )
@@ -195,7 +213,10 @@ def _patch_async_file(path: Path) -> None:
         "            ray.get(rollout_manager.eval.remote(rollout_id))\n",
         "        if should_run_periodic_action(rollout_id, args.eval_interval, num_rollout_per_epoch):\n"
         f"            # {ASYNC_EVAL_MARKER}\n"
-        "            _tg_report('evaluate_rollouts_end', args, rollout_id, 'phase_start')\n"
+        "            _tg_report(\n"
+        "                'evaluate_rollouts_end', args, rollout_id, 'phase_start',\n"
+        "                timeline_lane='rollout', display_name='Eval (after)',\n"
+        "            )\n"
         "            ray.get(rollout_manager.eval.remote(rollout_id))\n"
         "            _tg_report('evaluate_rollouts_end', args, rollout_id, 'phase_finish')\n",
         "evaluation",
@@ -280,7 +301,7 @@ def _patch_file(path: Path) -> None:
         src = src.replace(
             "except ImportError:\n",
             "except ImportError:\n"
-            "    def _tg_report(status, args=None, rollout_id=None, step_event=''): pass\n",
+            "    def _tg_report(status, args=None, rollout_id=None, step_event='', **kwargs): pass\n",
             1,
         )
 

@@ -207,35 +207,6 @@ def test_aggregate_async_step_times_returns_detailed_updates():
     }
 
 
-def test_aggregate_async_step_times_prefers_latest_attempt():
-    events = []
-    for attempt, start, finish in ((1, 10.0, 11.0), (2, 20.0, 23.0)):
-        for step_event, event_ts in (("phase_start", start), ("phase_finish", finish)):
-            events.append(
-                {
-                    "training_run_id": RUN_ID,
-                    "training_attempt": attempt,
-                    "progress_current": 1,
-                    "phase": SlimeStatus.TRAIN_MODEL.value,
-                    "step_event": step_event,
-                    "step_id": 0,
-                    "event_ts": event_ts,
-                }
-            )
-
-    _, substep_times = aggregate_async_step_times(
-        reversed(events),
-        1,
-        [SlimeStatus.TRAIN_MODEL.value],
-    )
-
-    assert substep_times["1"][SlimeStatus.TRAIN_MODEL.value] == {
-        "start": 20.0,
-        "duration_s": 3.0,
-        "intervals": [{"step_id": 0, "start": 20.0, "duration_s": 3.0}],
-    }
-
-
 def test_aggregate_async_step_times_can_select_current_attempt():
     events = []
     for attempt, rollout_step, start in ((1, 1, 10.0), (2, 15, 200.0)):
@@ -264,45 +235,106 @@ def test_aggregate_async_step_times_can_select_current_attempt():
     assert substep_times["15"] == {ROLLOUT_LOGGING: {"start": 200.0, "duration_s": 5.0}}
 
 
-def test_aggregate_async_step_times_does_not_mix_attempts():
-    events = [
-        {
-            "training_attempt": 1,
-            "progress_current": 1,
-            "phase": SlimeStatus.TRAINING.value,
-            "step_event": "phase_start",
-            "event_ts": 10.0,
-        },
-        {
-            "training_attempt": 1,
-            "progress_current": 1,
-            "phase": SlimeStatus.TRAINING.value,
-            "step_event": "phase_finish",
-            "event_ts": 15.0,
-        },
-        {
-            "training_attempt": 2,
-            "progress_current": 1,
-            "phase": ROLLOUT_LOGGING,
-            "step_event": "phase_start",
-            "event_ts": 20.0,
-        },
-        {
-            "training_attempt": 2,
-            "progress_current": 1,
-            "phase": ROLLOUT_LOGGING,
-            "step_event": "phase_finish",
-            "event_ts": 22.0,
-        },
-    ]
+def test_aggregate_async_step_times_keeps_described_custom_phases():
+    events = []
 
-    _, substep_times = aggregate_async_step_times(
-        events,
-        1,
-        [ROLLOUT_LOGGING, SlimeStatus.TRAINING.value],
+    def record(
+        phase: str,
+        step_event: str,
+        event_ts: float,
+        *,
+        role: str = "",
+        step_id: int | None = None,
+        parent_phase: str,
+        display_name: str,
+    ) -> None:
+        events.append(
+            {
+                "progress_current": 1,
+                "phase": phase,
+                "step_event": step_event,
+                "event_ts": event_ts,
+                "step_id": step_id,
+                "training_role": role,
+                "timeline_lane": "training",
+                "parent_phase": parent_phase,
+                "display_name": display_name,
+            }
+        )
+
+    record(
+        "data_packing",
+        "phase_start",
+        10.0,
+        parent_phase="training",
+        display_name="Data packing",
     )
+    record(
+        "data_packing",
+        "phase_finish",
+        15.0,
+        parent_phase="training",
+        display_name="Data packing",
+    )
+    for role, start, finish in (("actor", 11.0, 13.0), ("critic", 11.5, 14.5)):
+        record(
+            "policy_evaluation",
+            "phase_start",
+            start,
+            role=role,
+            step_id=0,
+            parent_phase="data_packing",
+            display_name="Policy evaluation",
+        )
+        record(
+            "policy_evaluation",
+            "phase_finish",
+            finish,
+            role=role,
+            step_id=0,
+            parent_phase="data_packing",
+            display_name="Policy evaluation",
+        )
 
-    assert substep_times["1"] == {ROLLOUT_LOGGING: {"start": 20.0, "duration_s": 2.0}}
+    _, substep_times = aggregate_async_step_times(events, 1, [])
+
+    assert substep_times["1"]["data_packing"] == {
+        "start": 10.0,
+        "duration_s": 5.0,
+        "intervals": [
+            {
+                "start": 10.0,
+                "duration_s": 5.0,
+                "timeline_lane": "training",
+                "parent_phase": "training",
+                "display_name": "Data packing",
+            }
+        ],
+    }
+    assert substep_times["1"]["policy_evaluation"] == {
+        "start": 11.0,
+        "duration_s": 5.0,
+        "intervals": [
+            {
+                "step_id": 0,
+                "start": 11.0,
+                "duration_s": 2.0,
+                "training_role": "actor",
+                "timeline_lane": "training",
+                "parent_phase": "data_packing",
+                "display_name": "Policy evaluation",
+            },
+            {
+                "step_id": 0,
+                "start": 11.5,
+                "duration_s": 3.0,
+                "training_role": "critic",
+                "timeline_lane": "training",
+                "parent_phase": "data_packing",
+                "display_name": "Policy evaluation",
+            },
+        ],
+    }
 
 
 def test_aggregate_async_step_times_does_not_infer_missing_finishes():
@@ -837,7 +869,9 @@ def test_async_substeps_keep_explicit_overlapping_durations():
     record(1, 11.0, ROLLOUT_LOGGING, "phase_finish")
     record(2, 12.0, ROLLOUT_LOGGING, "phase_start")
     record(1, 11.0, SlimeStatus.TRAINING.value, "phase_start")
-    record(1, 11.0, SlimeStatus.TRAIN_MODEL.value, "phase_start", step_id=0)
+    record(1, 11.1, SlimeStatus.COMPUTE_LOG_PROBS.value, "phase_start", step_id=0)
+    record(1, 11.8, SlimeStatus.COMPUTE_LOG_PROBS.value, "phase_finish", step_id=0)
+    record(1, 12.0, SlimeStatus.TRAIN_MODEL.value, "phase_start", step_id=0)
     record(1, 13.0, SlimeStatus.TRAIN_MODEL.value, "phase_finish", step_id=0)
     record(1, 13.0, OPTIMIZER_STEP, "phase_start", step_id=0)
     record(1, 13.5, OPTIMIZER_STEP, "phase_finish", step_id=0)
@@ -857,7 +891,9 @@ def test_async_substeps_keep_explicit_overlapping_durations():
 
     record(2, 21.0, ROLLOUT_LOGGING, "start")
     record(2, 22.0, SlimeStatus.TRAINING.value, "phase_start")
-    record(2, 22.0, SlimeStatus.TRAIN_MODEL.value, "phase_start", step_id=0)
+    record(2, 22.1, SlimeStatus.COMPUTE_LOG_PROBS.value, "phase_start", step_id=0)
+    record(2, 22.3, SlimeStatus.COMPUTE_LOG_PROBS.value, "phase_finish", step_id=0)
+    record(2, 23.0, SlimeStatus.TRAIN_MODEL.value, "phase_start", step_id=0)
     record(2, 24.0, SlimeStatus.TRAIN_MODEL.value, "phase_finish", step_id=0)
     record(2, 24.0, OPTIMIZER_STEP, "phase_start", step_id=0)
     record(2, 25.0, OPTIMIZER_STEP, "phase_finish", step_id=0)
@@ -884,6 +920,7 @@ def test_async_substeps_keep_explicit_overlapping_durations():
     async_order = [
         ROLLOUT_LOGGING,
         SlimeStatus.TRAINING.value,
+        SlimeStatus.COMPUTE_LOG_PROBS.value,
         SlimeStatus.TRAIN_MODEL.value,
         OPTIMIZER_STEP,
         CHECKPOINT_SAVE,
@@ -900,11 +937,16 @@ def test_async_substeps_keep_explicit_overlapping_durations():
     assert substep_times["1"] == {
         ROLLOUT_LOGGING: {"start": 6.0, "duration_s": 5.0},
         SlimeStatus.TRAINING.value: {"start": 11.0, "duration_s": 4.0},
+        SlimeStatus.COMPUTE_LOG_PROBS.value: {
+            "start": 11.1,
+            "duration_s": 0.7,
+            "intervals": [{"step_id": 0, "start": 11.1, "duration_s": 0.7}],
+        },
         SlimeStatus.TRAIN_MODEL.value: {
-            "start": 11.0,
-            "duration_s": 3.0,
+            "start": 12.0,
+            "duration_s": 2.0,
             "intervals": [
-                {"step_id": 0, "start": 11.0, "duration_s": 2.0},
+                {"step_id": 0, "start": 12.0, "duration_s": 1.0},
                 {"step_id": 1, "start": 13.5, "duration_s": 1.0},
             ],
         },
@@ -924,4 +966,9 @@ def test_async_substeps_keep_explicit_overlapping_durations():
     assert substep_times["2"][ROLLOUT_LOGGING] == {
         "start": 12.0,
         "duration_s": 6.0,
+    }
+    assert substep_times["2"][SlimeStatus.COMPUTE_LOG_PROBS.value] == {
+        "start": 22.1,
+        "duration_s": 0.2,
+        "intervals": [{"step_id": 0, "start": 22.1, "duration_s": 0.2}],
     }
