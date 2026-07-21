@@ -264,10 +264,16 @@
   async function loadRollouts(signal) {
     if (!runId) return;
     try {
+      const wasEmpty = rolloutSummaries.length === 0;
       const rows = await fetchRunRollouts(runId, { signal });
       if (signal?.aborted) return;
       rolloutSummaries = rows;
       rolloutsError = "";
+
+      // Reveal the first rollout
+      if (wasEmpty && rolloutSummaries.length > 0 && expandedRolloutId === null) {
+        toggleRolloutDetail(rolloutSummaries[0].rollout_id);
+      }
     } catch (err) {
       if (signal?.aborted) return;
       // Keep the rollouts we already have on a transient poll failure — only
