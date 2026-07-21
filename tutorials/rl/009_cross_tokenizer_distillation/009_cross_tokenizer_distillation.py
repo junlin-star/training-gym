@@ -71,7 +71,6 @@ base_model = Qwen3_6_35B()
 MAX_TURNS = 16
 CURRICULUM_TAIL_MIN = 1
 EVAL_TAIL_STEPS = CURRICULUM_TAIL_MIN
-ROLLOUT_LOG_EVERY = 8
 STUDENT_ENABLE_THINKING = False
 OPD_SKIP_ON_TEACHER_FAILURE = True
 
@@ -95,14 +94,12 @@ def curriculum_rollout(args, rollout_id, data_source, evaluation=False):
         args.curriculum_tail = CURRICULUM_TAIL_MIN
 
     T = args.curriculum_tail
-    print(f"[curriculum] iter={rollout_id} tail={T}", flush=True)
-
     result = generate_rollout(args, rollout_id, data_source, evaluation=False)
 
     # Fixed schedule: lengthen the remaining horizon by one after every rollout.
     args.curriculum_tail = T + 1
     print(
-        f"[curriculum] advance tail={T} -> {args.curriculum_tail}",
+        f"[curriculum] iter={rollout_id} tail={T} -> {args.curriculum_tail}",
         flush=True,
     )
     return result
@@ -320,12 +317,7 @@ def bfcl_eval_fn(deployment: ModelDeployment, example: dict) -> EvalRowResult:
     served = deployment.deployment_config.served_model_name
     is_student = served != "deepseek-v4-flash"
 
-    def _log(msg):
-        who = "student" if is_student else "teacher"
-        print(f"[eval:{who}:{task_id} K={K}] {msg}", flush=True)
-
     deployment.wait_until_ready(timeout=DEPLOYMENT_READY_TIMEOUT)
-    _log(f"start tail={EVAL_TAIL_STEPS} max_turns={EVAL_MAX_TURNS}")
 
     episode = run_bfcl_episode(
         label,
@@ -339,7 +331,6 @@ def bfcl_eval_fn(deployment: ModelDeployment, example: dict) -> EvalRowResult:
         parse_response=_actions_from_message,
         max_turns=EVAL_MAX_TURNS,
         max_consecutive_errors=MAX_CONSECUTIVE_TOOL_ERRORS,
-        log=_log,
     )
     first_call = episode.first_call
     model_calls = episode.calls
@@ -353,10 +344,6 @@ def bfcl_eval_fn(deployment: ModelDeployment, example: dict) -> EvalRowResult:
         label.get("tool_schemas", {}),
         bool(task_passed),
         EVAL_TAIL_STEPS,
-    )
-    _log(
-        f"done exit={episode.exit_reason} passed={bool(task_passed)} "
-        f"reward={shaped_score:.3f} exec_ok={sum(exec_successes)}/{len(exec_successes)}"
     )
 
     return EvalRowResult(
@@ -550,30 +537,14 @@ async def cross_tokenizer_reward(args, sample, **kwargs):
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
                 status = getattr(e, "status", None)
                 if status == 400:
-                    print(
-                        f"[rm] OPD skipped: 400 for {len(sample.tokens)}-token sample",
-                        flush=True,
-                    )
                     return skip_opd
                 is_retryable = status in (503, 502, 504, 429, None)
                 if attempt == max_attempts - 1 or not is_retryable:
-                    print(
-                        f"[rm] OPD skipped: teacher /generate failed after {attempt + 1} "
-                        f"attempts (status={status}, tokens={len(sample.tokens)}); "
-                        "continuing training without OPD for this trajectory",
-                        flush=True,
-                    )
                     return skip_opd
                 base = min(30.0, 2 ** min(attempt, 5))
                 wait = base + random.uniform(0, base * 0.25)
-                print(
-                    f"[rm] teacher /generate attempt {attempt + 1}/{max_attempts} "
-                    f"status={status}; retry in {wait:.1f}s",
-                    flush=True,
-                )
                 await asyncio.sleep(wait)
 
-    print("[rm] OPD skipped: teacher /generate exhausted all retries", flush=True)
     return skip_opd
 
 async def tool_step_generate(args, sample, sampling_params):
@@ -633,7 +604,6 @@ async def tool_step_generate(args, sample, sampling_params):
     user_open, _rest = after_assistant.split("\x00USER\x00", 1)
     user_close = _rest[: len(_rest) - len(gen_suffix)]
     stop_tok = obs_open.split("\n", 1)[0]
-    verbose = ROLLOUT_LOG_EVERY > 0 and (getattr(sample, "index", 0) % ROLLOUT_LOG_EVERY == 0)
 
     def _log(msg):
         print(f"[rollout:{task_id} T={T} K={K}] {msg}", flush=True)
@@ -652,9 +622,6 @@ async def tool_step_generate(args, sample, sampling_params):
         sample.response = ""
         sample.loss_mask = [0]
         return sample
-
-    if verbose:
-        _log(f"start N={N} prompt_tokens={len(prompt_ids)} max_turns={max_turns}")
 
     try:
         env = await asyncio.to_thread(build_env, label, K)
@@ -699,11 +666,7 @@ async def tool_step_generate(args, sample, sampling_params):
                 trajectory_text += user_segment
                 response_segments.append((user_segment, 0))
                 current_turn = next_turn
-                if verbose:
-                    _log(f"turn {turn} advancing to user turn {current_turn}")
                 continue
-            if verbose:
-                _log(f"turn {turn} no further tool calls")
             break
 
         student_calls.append(
@@ -718,8 +681,6 @@ async def tool_step_generate(args, sample, sampling_params):
             finish_type = "stop"
             break
         exec_successes.append(not is_error)
-        if verbose:
-            _log(f"turn {turn} tool={action.name} -> {'ERR' if is_error else 'ok'}")
         seg_open = (
             obs_open[len(stop_tok):] if model_text.endswith(stop_tok) else obs_open
         )
@@ -745,12 +706,6 @@ async def tool_step_generate(args, sample, sampling_params):
         tool_schemas,
         bool(task_passed),
         T,
-    )
-
-    _log(
-        f"done turns={len(student_calls)} "
-        f"exec_ok={sum(exec_successes)}/{len(exec_successes)} "
-        f"finish={finish_type} passed={bool(task_passed)} reward={shaped:.3f}"
     )
 
     response_token_ids: list[int] = []
@@ -872,16 +827,13 @@ def cross_tokenizer_post_process(args, samples, **kwargs):
             for ok in ((getattr(s, "metadata", {}) or {}).get("exec_successes") or [])
         ]
         exec_ok = (sum(1 for ok in all_exec if ok) / len(all_exec)) if all_exec else 0.0
-        mean_reward = sum(rewards) / n
         print(
-            f"[group] tail={cur_tail} "
-            f"reward[min/mean/max]={min(rewards):.2f}/{mean_reward:.2f}/{max(rewards):.2f} "
+            f"[bfcl] tail={cur_tail} "
             f"pass={n_pass}/{n} first_call={first_call_hits}/{n} exec_ok={exec_ok:.2f}",
             flush=True,
         )
 
     unaligned = total_resp = opd_dropped = 0
-    stream_mismatch_example = None
     for sample, reward in zip(samples, raw_rewards):
         r_meta = (reward or {}).get("meta_info", {})
         raw_logprobs = r_meta.get("input_token_logprobs", [])
@@ -892,24 +844,6 @@ def cross_tokenizer_post_process(args, samples, **kwargs):
 
         resp_tokens = sample.tokens[-sample.response_length:]
         s_texts = [tokenizer.decode([tid], skip_special_tokens=True) for tid in resp_tokens]
-        join_t, join_s = "".join(t_texts), "".join(s_texts)
-        if stream_mismatch_example is None and join_t != join_s:
-            import difflib
-
-            bits = []
-            for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(
-                a=join_s, b=join_t
-            ).get_opcodes():
-                if tag == "equal":
-                    continue
-                bits.append(
-                    f"{tag}: S[{i1}:{i2}]={join_s[i1:i2]!r} T[{j1}:{j2}]={join_t[j1:j2]!r}"
-                )
-                if len(bits) >= 3:
-                    break
-            stream_mismatch_example = (
-                f"len_s={len(join_s)} len_t={len(join_t)}; " + " | ".join(bits)
-            )
         aligned, covered = align_cross_tokenizer(t_texts, t_lps, s_texts, return_coverage=True)
 
         if not raw_logprobs and OPD_SKIP_ON_TEACHER_FAILURE:
@@ -925,21 +859,14 @@ def cross_tokenizer_post_process(args, samples, **kwargs):
         total_resp += int(resp_covered.numel())
 
     if total_resp:
-        gap_frac = unaligned / total_resp
         print(
-            f"[align] teacher_align_gap={unaligned}/{total_resp} "
-            f"({gap_frac:.1%}) response tokens unaligned — high => cross-tokenizer misalignment",
+            f"[simct] aligned={1 - (unaligned / total_resp):.1%}",
             flush=True,
         )
-        if stream_mismatch_example is not None:
-            print(
-                f"[align] teacher/student char-stream mismatch: {stream_mismatch_example}",
-                flush=True,
-            )
     if opd_dropped:
         print(
-            f"[opd] disabled OPD for {opd_dropped}/{len(samples)} trajectories "
-            "(teacher unavailable — NaN sentinel; GRPO gradient kept)",
+            f"[opd] dropped={opd_dropped}/{len(samples)} "
+            "(teacher unavailable; GRPO retained)",
             flush=True,
         )
 
@@ -1052,7 +979,7 @@ def _main_impl() -> None:
     teacher_eval = None
     print("--- Evaluating teacher (DeepSeek V4 Flash)... ---")
     try:
-        teacher_eval = eval_config.evaluate(teacher_deployment, debug=True, max_concurrency=4)
+        teacher_eval = eval_config.evaluate(teacher_deployment, max_concurrency=4)
         print(f"Teacher shaped reward: {teacher_eval.mean:.3f}")
         _print_eval_summary("Teacher", teacher_eval)
     except Exception as e:
@@ -1063,7 +990,7 @@ def _main_impl() -> None:
 
     print("--- Evaluating base student (shaped live reward + terminal verdict metadata)... ---")
     try:
-        base_eval = eval_config.evaluate(base_deployment, debug=True, max_concurrency=4)
+        base_eval = eval_config.evaluate(base_deployment, max_concurrency=4)
         print(f"Base shaped reward: {base_eval.mean:.3f}")
         _print_eval_summary("Base", base_eval)
     except Exception as e:
@@ -1104,8 +1031,6 @@ def _main_impl() -> None:
             custom_generate_function=tool_step_generate,
             custom_reward_post_process_function=cross_tokenizer_post_process,
             rollout_function=curriculum_rollout,
-            capture_trace=True,
-            trace_sample_limit=16,
             image_overlay=lambda img: img.pip_install(
                 "modal~=1.5.2",
                 "huggingface_hub~=1.12.0",
@@ -1140,8 +1065,8 @@ def _main_impl() -> None:
             global_batch_size=16,
             lr=1e-6,
             kl_loss_coef=0.02,
-            # Keep recipe defaults: every-step + optimizer dumps OOM the 1TB train node.
-            save_interval=20,
+            # The demo has five rollouts, so save one model-only checkpoint at the end.
+            save_interval=5,
             no_save_optim=True,
 
             environment={
@@ -1158,7 +1083,6 @@ def _main_impl() -> None:
                 "rm_url": TEACHER_GENERATE_URL,
                 "teacher_rm_concurrency": TEACHER_RM_CONCURRENCY,
                 "max_turns": MAX_TURNS,
-                "log_multi_turn": True,
             },
         ),
     )
@@ -1189,7 +1113,7 @@ def _main_impl() -> None:
     print(f"Trained student URL: {trained_deployment.url}")
 
     print("--- Evaluating trained student (shaped live reward + terminal verdict metadata)... ---")
-    trained_eval = eval_config.evaluate(trained_deployment, debug=True, max_concurrency=4)
+    trained_eval = eval_config.evaluate(trained_deployment, max_concurrency=4)
     print(f"Trained shaped reward: {trained_eval.mean:.3f}")
 
     if base_eval is None:
