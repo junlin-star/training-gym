@@ -82,3 +82,23 @@ def test_runs_route_keeps_runs_when_train_result_store_fails(
     assert response.status_code == 200
     assert len(response.json()) == 1
     assert response.json()[0]["has_train_result"] is False
+
+
+def test_runs_route_isolates_invalid_run_records(fake_volume, monkeypatch, tmp_path):
+    _save_records()
+    runs = metadata.vol_get_summary_items(MetadataStore.TRAINING_RUNS_SUMMARY)
+    assert runs is not None
+    invalid_run = {
+        **runs[0],
+        "training_run_id": "invalid-run",
+        "step_times": {"1": {"phase": {"not": "an integer"}}},
+    }
+    metadata.vol_put_summary_items(
+        MetadataStore.TRAINING_RUNS_SUMMARY, [invalid_run, runs[0]]
+    )
+
+    with _client(monkeypatch, tmp_path) as client:
+        response = client.get("/api/runs")
+
+    assert response.status_code == 200
+    assert [run["training_run_id"] for run in response.json()] == ["run-route-1"]

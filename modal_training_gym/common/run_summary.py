@@ -7,7 +7,7 @@ import math
 from typing import Any
 from urllib.parse import quote
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from modal_training_gym.common.modal_urls import modal_app_dashboard_url
 
@@ -94,10 +94,7 @@ class GroupTags(BaseModel):
 
 
 class RunSummary(BaseModel):
-    """Stable, typed run-list item shared by the dashboard and CLI."""
-
     training_run_id: str
-    # Transitional alias used by the current dashboard routes.
     run_id: str
     status: str = "running"
     framework: str = ""
@@ -125,7 +122,6 @@ class RunSummary(BaseModel):
     wandb_links: list[WandbLink] = Field(default_factory=list)
     resume_state: ResumeState | None = None
 
-    # Fields consumed by the existing dashboard detail and deployment views.
     config: JsonDict = Field(default_factory=dict)
     metadata: JsonDict | None = None
     error_message: str = ""
@@ -508,17 +504,25 @@ def build_run_summaries(
     runs: list[JsonDict], train_results: list[JsonDict] | None = None
 ) -> list[RunSummary]:
     """Join, normalize, de-duplicate, and sort persisted run-list records."""
-    results_by_id = {
-        _text(result.get("training_run_id")): result
-        for result in train_results or []
-        if _text(result.get("training_run_id"))
-    }
+    results_by_id: dict[str, JsonDict] = {}
+    for result in train_results or []:
+        if not isinstance(result, dict):
+            continue
+        result_id = _text(result.get("training_run_id"))
+        if result_id:
+            results_by_id[result_id] = result
+
     deduped: dict[str, RunSummary] = {}
     for index, run in enumerate(runs):
+        if not isinstance(run, dict):
+            continue
         run_id = _text(run.get("run_id") or run.get("training_run_id"))
-        summary = build_run_summary(
-            run, results_by_id.get(run_id), fallback_index=index
-        )
+        try:
+            summary = build_run_summary(
+                run, results_by_id.get(run_id), fallback_index=index
+            )
+        except ValidationError:
+            continue
         existing = deduped.get(summary.training_run_id)
         if existing is None or (summary.created_at, summary.started_at) >= (
             existing.created_at,

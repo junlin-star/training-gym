@@ -443,9 +443,20 @@ def test_wrappers_with_additional_keys_are_unwrapped():
     assert summary.modal_app_url == "https://modal.com/apps/example"
 
 
-def test_malformed_record_fails_the_full_build():
-    with pytest.raises(AttributeError):
-        build_run_summaries([_run(), None])  # type: ignore[list-item]
+def test_malformed_records_do_not_hide_valid_runs():
+    summaries = build_run_summaries(
+        [
+            _run(training_run_id="valid-run"),
+            _run(
+                training_run_id="invalid-run",
+                step_times={"1": {"phase": {"not": "an integer"}}},
+            ),
+            None,  # type: ignore[list-item]
+        ],
+        [None],  # type: ignore[list-item]
+    )
+
+    assert [summary.training_run_id for summary in summaries] == ["valid-run"]
 
 
 def test_run_summary_rejects_missing_identity():
