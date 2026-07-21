@@ -10,6 +10,7 @@
   import StatusPill from "../components/StatusPill.svelte";
   import TimeAgo from "../components/TimeAgo.svelte";
   import { formatTagValue, getGroupTags, smoothedStageLabel } from "../lib/format.js";
+  import { toggleInSet } from "../lib/set.js";
 
   let {
     allRuns,
@@ -159,10 +160,7 @@
   let collapsedGroupKeys = $state(new Set());
 
   function toggleGroupSection(key) {
-    const next = new Set(collapsedGroupKeys);
-    if (next.has(key)) next.delete(key);
-    else next.add(key);
-    collapsedGroupKeys = next;
+    collapsedGroupKeys = toggleInSet(collapsedGroupKeys, key);
   }
 
   $effect(() => {

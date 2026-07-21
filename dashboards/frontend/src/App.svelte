@@ -434,23 +434,19 @@
       .sort((a, b) => (b.created_at || 0) - (a.created_at || 0)),
   );
 
-  function trainingGroupKey(run, groupBy) {
-    if (groupBy === "group") return getGroup(run);
-    if (groupBy === "dataset") return safeText(run.config_summary?.dataset_name) || "(no dataset)";
-    if (groupBy === "model") return modelName(run);
-    return "";
-  }
+  const trainingGroupKeyFns = {
+    group: getGroup,
+    dataset: (run) => safeText(run.config_summary?.dataset_name) || "(no dataset)",
+    model: modelName,
+  };
+
+  const trainingGroupKey = (run, groupBy) => trainingGroupKeyFns[groupBy]?.(run) ?? "";
 
   // Buckets inherit filteredRuns' recency sort: groups come out ordered by
   // newest member and runs stay sorted within each group.
   let trainingRunGroups = $derived.by(() => {
     if (trainingGroupBy === "none") return [];
-    const buckets = new Map();
-    for (const run of filteredRuns) {
-      const key = trainingGroupKey(run, trainingGroupBy);
-      if (!buckets.has(key)) buckets.set(key, []);
-      buckets.get(key).push(run);
-    }
+    const buckets = Map.groupBy(filteredRuns, (run) => trainingGroupKey(run, trainingGroupBy));
     return [...buckets].map(([key, runs]) => ({
       key,
       runs,

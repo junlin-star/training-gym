@@ -16,6 +16,7 @@
   import ResizableTable from "../components/ResizableTable.svelte";
   import StatusPill from "../components/StatusPill.svelte";
   import TimeAgo from "../components/TimeAgo.svelte";
+  import { toggleInSet } from "../lib/set.js";
 
   let {
     allEvals,
@@ -258,10 +259,7 @@
   }
 
   function toggleGroup(evalConfigId) {
-    const next = new Set(expandedConfigIds);
-    if (next.has(evalConfigId)) next.delete(evalConfigId);
-    else next.add(evalConfigId);
-    expandedConfigIds = next;
+    expandedConfigIds = toggleInSet(expandedConfigIds, evalConfigId);
   }
 
   $effect(() => {
@@ -370,10 +368,7 @@
   });
 
   function toggleStatusFilter(status) {
-    const next = new Set(activeStatusFilters);
-    if (next.has(status)) next.delete(status);
-    else next.add(status);
-    activeStatusFilters = next;
+    activeStatusFilters = toggleInSet(activeStatusFilters, status);
   }
 
   function selectAllStatusFilters() {
@@ -385,10 +380,7 @@
   }
 
   function toggleDatasetFilter(dataset) {
-    const next = new Set(activeDatasetFilters);
-    if (next.has(dataset)) next.delete(dataset);
-    else next.add(dataset);
-    activeDatasetFilters = next;
+    activeDatasetFilters = toggleInSet(activeDatasetFilters, dataset);
   }
 
   function selectAllDatasetFilters() {
@@ -443,10 +435,7 @@
   }
 
   function toggleExample(index) {
-    const next = new Set(expandedExamples);
-    if (next.has(index)) next.delete(index);
-    else next.add(index);
-    expandedExamples = next;
+    expandedExamples = toggleInSet(expandedExamples, index);
   }
 
   let drawerRows = $derived.by(() => {
