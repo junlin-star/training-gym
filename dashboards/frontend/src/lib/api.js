@@ -399,6 +399,9 @@ export async function fetchRollout(trainingRunId, rolloutId) {
 //
 // Returns the newest `maxLines` lines within the (since, until] window, oldest
 // first, plus a `nextUntil` cursor for paging further back through history.
+// When omitted, `maxLines` defaults to 100 on the server.
+// `since` defaults to the run's start (then creation time or the Unix epoch);
+// `until` defaults to the run's end/completion time, or now when unavailable.
 export async function fetchRunLogs(
   trainingRunId,
   { since, until, maxLines, search, signal } = {},
@@ -406,7 +409,7 @@ export async function fetchRunLogs(
   const params = new URLSearchParams();
   if (since != null && since !== "") params.set("since", String(since));
   if (until != null && until !== "") params.set("until", String(until));
-  if (maxLines != null) params.set("tail", String(maxLines));
+  if (maxLines != null) params.set("max_lines", String(maxLines));
   if (search) params.set("search", search);
   const qs = params.toString();
   const res = await fetch(
