@@ -35,30 +35,48 @@
     evaluate_rollouts_end: "#818cf8",
   };
 
-  const ASYNC_SUBSTEP_LABELS = {
-    ...SUBSTEP_LABELS,
-    generate_rollouts: "Rollout + reward",
-    training: "Training",
+  const TRAINING_SUBSTEP_LABELS = {
+    data_preprocess: "Load & transfer training batch",
     compute_log_probs: "Policy log probabilities",
     reference_log_probs: "Reference log probabilities",
     teacher_log_probs: "Teacher log probabilities",
     value_inference: "Critic value inference",
     train_model: "Forward / backward",
+    optimizer_step: "Optimizer step",
+    ref_model_update: "Update reference model",
+    training_model_wake: "Load training model",
+    training_model_offload: "Offload training model",
   };
 
-  const ASYNC_SUBSTEP_COLORS = {
-    ...SUBSTEP_COLORS,
-    training: "var(--color-c-dataviz-primary-7, #648fe0)",
+  const ASYNC_SUBSTEP_LABELS = {
+    ...SUBSTEP_LABELS,
+    generate_rollouts: "Rollout + reward",
+    training: "Training",
+    ...TRAINING_SUBSTEP_LABELS,
+  };
+
+  const TRAINING_SUBSTEP_COLORS = {
+    data_preprocess: "var(--color-c-dataviz-paired-3, #d6a84b)",
+    compute_log_probs: SUBSTEP_COLORS.compute_log_probs,
     reference_log_probs: "#fb923c",
     teacher_log_probs: "#c084fc",
     value_inference: "var(--color-c-dataviz-paired-1, #78a967)",
     train_model: "var(--color-c-dataviz-paired-4, #6cabc1)",
     optimizer_step: "var(--color-c-dataviz-paired-7, #8956fa)",
+    ref_model_update: "var(--color-c-dataviz-paired-6, #b48ad6)",
+    training_model_wake: SUBSTEP_COLORS.offload_rollout,
+    training_model_offload: SUBSTEP_COLORS.offload_train,
   };
 
-  const ASYNC_SUBSTEP_DESCRIPTIONS = {
-    training:
-      "Wall time waiting for the training workers, from dispatch through their return.",
+  const ASYNC_SUBSTEP_COLORS = {
+    ...SUBSTEP_COLORS,
+    training: "var(--color-c-dataviz-primary-7, #648fe0)",
+    ...TRAINING_SUBSTEP_COLORS,
+  };
+
+  const TRAINING_SUBSTEP_DESCRIPTIONS = {
+    data_preprocess:
+      "Fetches rollout data, shards it for the training workers, builds training tensors, and enqueues their GPU transfers.",
     compute_log_probs:
       "A current-policy forward pass used when Slime cannot reuse log probabilities from the training loss.",
     reference_log_probs:
@@ -71,6 +89,18 @@
       "Host interval through forward/backward and gradient preparation, ending when optimizer.step() is called.",
     optimizer_step:
       "Host interval of optimizer.step(). CUDA is asynchronous, so it can include waiting for earlier GPU work and is not isolated optimizer-kernel time.",
+    ref_model_update:
+      "Copies the current actor weights into the reference-model backup when the configured reference update interval fires.",
+    training_model_wake:
+      "Restores an offloaded training model and its distributed process groups before this worker trains.",
+    training_model_offload:
+      "Releases training-model memory and distributed process groups after this worker finishes training.",
+  };
+
+  const ASYNC_SUBSTEP_DESCRIPTIONS = {
+    training:
+      "Wall time waiting for the training workers, from dispatch through their return.",
+    ...TRAINING_SUBSTEP_DESCRIPTIONS,
     checkpoint_save: "Checkpoint persistence, shown separately from training.",
   };
 
@@ -79,12 +109,16 @@
     "evaluate_rollouts",
     "generate_rollouts",
     "training",
+    "data_preprocess",
     "compute_log_probs",
     "reference_log_probs",
     "teacher_log_probs",
     "value_inference",
     "train_model",
     "optimizer_step",
+    "ref_model_update",
+    "training_model_wake",
+    "training_model_offload",
     "checkpoint_save",
     "weight_sync",
     "offload_rollout",
@@ -194,6 +228,18 @@
                 hasDetails && typeof value.training_role === "string"
                   ? value.training_role
                   : null,
+              slowestRank:
+                hasDetails && Number.isInteger(value.slowest_rank)
+                  ? value.slowest_rank
+                  : null,
+              reportedRankCount:
+                hasDetails && Number.isInteger(value.reported_rank_count)
+                  ? value.reported_rank_count
+                  : null,
+              trainingWorldSize:
+                hasDetails && Number.isInteger(value.training_world_size)
+                  ? value.training_world_size
+                  : null,
               timelineLane:
                 typeof value?.timeline_lane === "string"
                   ? value.timeline_lane
@@ -267,7 +313,7 @@
   });
 
   function isTrainingChild(sub) {
-    return sub.parentPhase === "training";
+    return sub.parentPhase === "training" && sub.timelineLane === "training";
   }
 
   function isNestedDetail(step, sub) {
@@ -311,7 +357,7 @@
           interval.sub.name === sub.name &&
           interval.sub.trainingRole === sub.trainingRole,
       ).length > 1;
-    if (isTrainingChild(sub) && sub.innerStep != null) {
+    if (sub.innerStep != null) {
       const role = sub.trainingRole
         ? `${sub.trainingRole[0].toUpperCase()}${sub.trainingRole.slice(1)} `
         : "";
@@ -323,6 +369,17 @@
 
   function tooltipDescription(sub) {
     return asyncMode ? ASYNC_SUBSTEP_DESCRIPTIONS[sub.name] : null;
+  }
+
+  function rankSummary(sub) {
+    if (sub.slowestRank == null || sub.reportedRankCount == null) return null;
+    if (sub.trainingWorldSize == null) {
+      return `Slowest of ${sub.reportedRankCount} reported ranks · global rank ${sub.slowestRank}`;
+    }
+    if (sub.reportedRankCount < sub.trainingWorldSize) {
+      return `Slowest reported: global rank ${sub.slowestRank} · ${sub.reportedRankCount}/${sub.trainingWorldSize} ranks reported`;
+    }
+    return `Slowest of ${sub.trainingWorldSize} ranks · global rank ${sub.slowestRank}`;
   }
 
   function trainingUpdates(step) {
@@ -387,7 +444,7 @@
       for (const step of steps) {
         for (const sub of topLevelSubsteps(step)) seen.add(sub.name);
         for (const span of step.timeline) {
-          if (span.sub.timelineLane === "training") {
+          if (span.sub.parentPhase != null) {
             seen.add(span.sub.name);
           }
         }
@@ -473,6 +530,7 @@
       label: tooltipLabel(step, sub),
       stepLabel: asyncMode ? `Rollout ${step.rolloutId}` : `Step ${step.n}`,
       dur: sub.duration,
+      rankSummary: rankSummary(sub),
       description: tooltipDescription(sub),
       profile: phaseProfile(step, sub),
     };
@@ -506,6 +564,7 @@
       label: tooltipLabel(step, sub),
       stepLabel: asyncMode ? `Rollout ${step.rolloutId}` : `Step ${step.n}`,
       dur: sub.duration,
+      rankSummary: rankSummary(sub),
       description: tooltipDescription(sub),
       profile: phaseProfile(step, sub),
     };
@@ -544,14 +603,11 @@
 
 {#snippet asyncSegment(span)}
   {@const trainingChild = isTrainingChild(span.sub)}
-  {@const trainingDetail =
-    span.sub.timelineLane === "training" &&
-    span.sub.parentPhase != null &&
-    span.sub.parentPhase !== "training"}
+  {@const nestedDetail = span.sub.parentPhase != null && span.sub.parentPhase !== "training"}
   <div
     class="seg async-seg"
     class:training-inner-seg={trainingChild}
-    class:training-detail-seg={trainingDetail}
+    class:nested-detail-seg={nestedDetail}
     class:active={pinned && isActive(span.step, span.sub)}
     style={`left:${((span.start - asyncTimeline.start) / asyncTimeline.duration) * 100}%;width:${(span.sub.duration / asyncTimeline.duration) * 100}%;background:${asyncColorFor(span.sub)}`}
     role="button"
@@ -724,6 +780,9 @@
       <span class="tg-tip-dur">
         {tip.dur == null ? "unknown (report dropped)" : fmtSecs(tip.dur)}
       </span>
+      {#if tip.rankSummary}
+        <span class="tg-tip-rank">{tip.rankSummary}</span>
+      {/if}
       {#if tip.description}
         <span class="tg-tip-description">{tip.description}</span>
       {/if}
@@ -804,7 +863,7 @@
     border-radius: 1px;
   }
 
-  .async-seg.training-detail-seg {
+  .async-seg.nested-detail-seg {
     top: 4px;
     z-index: 4;
     height: calc(100% - 8px);
@@ -1077,6 +1136,12 @@
 
   .tg-tip-dur {
     color: var(--muted);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .tg-tip-rank {
+    color: var(--muted);
+    font-size: 10px;
     font-variant-numeric: tabular-nums;
   }
 

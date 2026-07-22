@@ -18,6 +18,19 @@ class Substep(str, Enum):
     EVAL_AFTER = f"{SlimeStatus.EVAL_ROLLOUT_LOGGING.value}_end"
 
 
+class TrainingSubstep(str, Enum):
+    DATA_PREPROCESS = "data_preprocess"
+    POLICY_LOG_PROBS = SlimeStatus.COMPUTE_LOG_PROBS.value
+    REFERENCE_LOG_PROBS = SlimeStatus.REFERENCE_LOG_PROBS.value
+    TEACHER_LOG_PROBS = SlimeStatus.TEACHER_LOG_PROBS.value
+    VALUE_INFERENCE = SlimeStatus.VALUE_INFERENCE.value
+    FORWARD_BACKWARD = SlimeStatus.TRAIN_MODEL.value
+    OPTIMIZER_STEP = SlimeStatus.OPTIMIZER_STEP.value
+    REFERENCE_MODEL_UPDATE = "ref_model_update"
+    TRAINING_MODEL_WAKE = "training_model_wake"
+    TRAINING_MODEL_OFFLOAD = "training_model_offload"
+
+
 def record_sync_step_time(
     step_times: MutableMapping[str, float],
     training_run_id: str,

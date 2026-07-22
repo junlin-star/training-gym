@@ -39,17 +39,22 @@ _TIMING_FAILED_EVENTS = 0
 _TIMING_REPORTED_DROPS = 0
 _TIMING_REPORTED_FAILURES = 0
 _PHASE_PATH = "/api/framework-status"
+_ASYNC_STEP_TIMES_PATH = "/api/async-step-times"
 _ROLLOUT_PATH = "/api/training-rollouts"
 _ADVANTAGE_PATH = "/api/advantage-distributions"
 _PHASE_TIMEOUT_SECONDS = 1.0
 _STEP_EVENT_TIMEOUT_SECONDS = 5.0
+_ASYNC_STEP_TIMES_TIMEOUT_SECONDS = 15.0
 _ROLLOUT_TIMEOUT_SECONDS = 10.0
 _TIMING_DELIVERY_ATTEMPTS = 5
 _TIMING_RETRY_DELAY_SECONDS = 0.1
 
 TimingKey: TypeAlias = tuple[str, str, int, str, int, str, str, int]
+RankTimingKey: TypeAlias = tuple[str, str, int, str, int, int]
 TimingEvent: TypeAlias = tuple[TimingKey, dict[str, Any]]
-TimingQueueItem: TypeAlias = TimingEvent | threading.Event
+RankTimingBatch: TypeAlias = tuple[RankTimingKey, dict[str, Any]]
+TimingQueueItem: TypeAlias = TimingEvent | RankTimingBatch | threading.Event
+_RANK_TIMING_EVENTS: dict[RankTimingKey, list[dict[str, Any]]] = {}
 
 
 def _arg_value(args: Any, key: str) -> Any:
@@ -131,6 +136,10 @@ def _rollout_url() -> str:
     return _derive_url(_ROLLOUT_PATH)
 
 
+def _async_step_times_url() -> str:
+    return _derive_url(_ASYNC_STEP_TIMES_PATH)
+
+
 def _advantage_url() -> str:
     return _derive_url(_ADVANTAGE_PATH)
 
@@ -196,11 +205,25 @@ def _enqueue_async_timing_event(payload: Mapping[str, Any]) -> None:
         phase = str(payload["phase"])
         step_event = str(payload["step_event"])
         step_id = int(payload.get("step_id", -1))
+        training_rank = payload.get("training_rank")
+        training_rank = int(training_rank) if training_rank is not None else None
     except (KeyError, TypeError, ValueError):
         print("Skipping async timing event without a complete identity")
         return
     if not training_run_id or not phase or not step_event:
         print("Skipping async timing event without a complete identity")
+        return
+
+    if training_rank is not None:
+        key: RankTimingKey = (
+            training_run_id,
+            "rank_timing",
+            training_attempt,
+            training_role,
+            rollout_id,
+            training_rank,
+        )
+        _RANK_TIMING_EVENTS.setdefault(key, []).append(dict(payload))
         return
 
     key: TimingKey = (
@@ -252,16 +275,68 @@ def _timing_worker() -> None:
                 "Failed to write async timing event after "
                 f"{_TIMING_DELIVERY_ATTEMPTS} attempts: {error}"
             )
+        elif payload.get("step_event") == "finish":
+            _post(
+                {
+                    "_url": _async_step_times_url(),
+                    "_timeout": _ASYNC_STEP_TIMES_TIMEOUT_SECONDS,
+                    **payload,
+                }
+            )
         _TIMING_QUEUE.task_done()
 
 
-def flush_async_timing_events(timeout_seconds: float = 5.0) -> bool:
+def flush_async_timing_events(
+    timeout_seconds: float = _ASYNC_STEP_TIMES_TIMEOUT_SECONDS + 5.0,
+) -> bool:
+    global _RANK_TIMING_EVENTS, _TIMING_DROPPED_EVENTS
     global _TIMING_REPORTED_DROPS, _TIMING_REPORTED_FAILURES
+    deadline = time.monotonic() + timeout_seconds
+    rank_events = _RANK_TIMING_EVENTS
+    _RANK_TIMING_EVENTS = {}
+    if rank_events:
+        try:
+            _ensure_timing_worker()
+            shared_fields = (
+                "training_run_id",
+                "training_attempt",
+                "training_role",
+                "rollout_id",
+                "training_rank",
+                "training_world_size",
+                "progress_current",
+                "progress_total",
+                "progress_unit",
+            )
+            for key, events in rank_events.items():
+                first_event = events[0]
+                batch = {
+                    field: first_event[field]
+                    for field in shared_fields
+                    if field in first_event
+                }
+                batch["events"] = [
+                    {
+                        field: value
+                        for field, value in event.items()
+                        if field not in shared_fields
+                    }
+                    for event in events
+                ]
+                _TIMING_QUEUE.put(
+                    (key, batch),
+                    timeout=max(0.0, deadline - time.monotonic()),
+                )
+        except Exception as exc:
+            _TIMING_DROPPED_EVENTS += 1
+            print(f"Failed to queue distributed timing batch: {exc}")
     if _TIMING_WORKER_STARTED:
         barrier = threading.Event()
-        deadline = time.monotonic() + timeout_seconds
         try:
-            _TIMING_QUEUE.put(barrier, timeout=timeout_seconds)
+            _TIMING_QUEUE.put(
+                barrier,
+                timeout=max(0.0, deadline - time.monotonic()),
+            )
         except Exception as exc:
             print(f"Failed to flush async timing events: {exc}")
             return False

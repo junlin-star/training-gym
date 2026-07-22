@@ -9,7 +9,7 @@ import os
 import time
 from collections.abc import Awaitable, Callable, MutableMapping
 from enum import Enum
-from typing import TYPE_CHECKING, Any, TypeAlias, cast
+from typing import TYPE_CHECKING, Any, NotRequired, TypeAlias, TypedDict, cast
 
 from pydantic import BaseModel, PrivateAttr, computed_field, field_validator
 
@@ -29,9 +29,36 @@ if TYPE_CHECKING:
 
 TRAINING_RUNS_STORE_NAME = MetadataStore.TRAINING_RUNS.value
 
-TimingInterval: TypeAlias = dict[str, int | float | str]
-SubstepTiming: TypeAlias = dict[str, float | None | list[TimingInterval]]
-SubstepTimes: TypeAlias = dict[str, dict[str, SubstepTiming]]
+
+class StepTiming(TypedDict):
+    start: int | None
+    end: int | None
+    duration_s: int | None
+
+
+class SubstepTimingInterval(TypedDict):
+    start: float
+    duration_s: float
+    step_id: NotRequired[int]
+    training_role: NotRequired[str]
+    slowest_rank: NotRequired[int]
+    reported_rank_count: NotRequired[int]
+    training_world_size: NotRequired[int]
+    timeline_lane: NotRequired[str]
+    parent_phase: NotRequired[str]
+    display_name: NotRequired[str]
+
+
+class SingleSubstepTiming(TypedDict):
+    start: float
+    duration_s: float | None
+    intervals: NotRequired[list[SubstepTimingInterval]]
+
+
+StepTimes: TypeAlias = dict[str, StepTiming]
+SubstepTimes: TypeAlias = dict[str, dict[str, SingleSubstepTiming]]
+TimingInterval: TypeAlias = SubstepTimingInterval
+SubstepTiming: TypeAlias = SingleSubstepTiming
 
 
 class FrameworkStatusUpdate(BaseModel):
@@ -94,7 +121,7 @@ class TrainingRun(BaseModel):
     completed_at: int | None = None
     updated_at: int = 0
     duration_seconds: int | None = None
-    step_times: dict[str, dict[str, int | None]] | None = None
+    step_times: StepTimes | None = None
     substep_times: SubstepTimes | None = None
     # Terminal failure message (Ray driver error / exception) for a failed run,
     # so the cause is queryable from the record and shown on the dashboard even
@@ -255,12 +282,30 @@ class TrainingRun(BaseModel):
     def _touch(self) -> None:
         self.updated_at = int(time.time())
 
+    def _storage_payload(self) -> dict[str, Any]:
+        payload = self.model_dump(mode="json")
+        metadata = dict(payload.get("metadata") or {})
+        stored_intervals = metadata.get("substep_timing_intervals")
+        stored_intervals = (
+            dict(stored_intervals) if isinstance(stored_intervals, dict) else {}
+        )
+        for step, timings in (payload.get("substep_times") or {}).items():
+            for phase, timing in timings.items():
+                intervals = timing.pop("intervals", None)
+                if intervals:
+                    step_intervals = stored_intervals.setdefault(step, {})
+                    step_intervals[phase] = intervals
+        if stored_intervals:
+            metadata["substep_timing_intervals"] = stored_intervals
+            payload["metadata"] = metadata
+        return payload
+
     def save(self, *, is_async: bool = False) -> None | Awaitable[None]:
         self._touch()
         return vol_put_with_summary(
             MetadataStore.TRAINING_RUNS,
             self.training_run_id,
-            self.model_dump(mode="json"),
+            self._storage_payload(),
             summary_store=MetadataStore.TRAINING_RUNS_SUMMARY,
             item_id_key="training_run_id",
             sort_key=self._summary_sort_key,

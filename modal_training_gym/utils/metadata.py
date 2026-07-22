@@ -11,6 +11,7 @@ from typing import Any
 
 METADATA_VOLUME_NAME = "training-gym-metadata"
 STEP_TIMES_DICT_NAME = "training-gym-step-times"
+STEP_TIMING_SNAPSHOTS_DICT_NAME = "training-gym-step-timing-snapshots"
 
 
 class MetadataStore(Enum):
@@ -129,6 +130,12 @@ def _step_times_dict():
     import modal
 
     return modal.Dict.from_name(STEP_TIMES_DICT_NAME, create_if_missing=True)
+
+
+def _step_timing_snapshots_dict():
+    import modal
+
+    return modal.Dict.from_name(STEP_TIMING_SNAPSHOTS_DICT_NAME, create_if_missing=True)
 
 
 def _safe_reload(vol, *, is_async: bool = False):

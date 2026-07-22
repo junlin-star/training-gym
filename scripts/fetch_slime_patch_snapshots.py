@@ -1,4 +1,4 @@
-"""Fetch Slime source snapshots used by the local rollout-patcher golden test.
+"""Fetch pinned Slime source snapshots used by build-time patch golden tests.
 
 The source files exist only inside the pinned Slime image, so this maintenance
 utility uses Modal to read that image. Normal pytest collection never imports or
@@ -17,6 +17,8 @@ TESTDATA_DIR = REPO_ROOT / "tests" / "testdata"
 SLIME_SOURCE_PATHS = {
     "train.py": "/root/slime/train.py",
     "train_async.py": "/root/slime/train_async.py",
+    "slime_actor/megatron_actor.py": "/root/slime/slime/backends/megatron_utils/actor.py",
+    "slime_actor/train_actor.py": "/root/slime/slime/ray/train_actor.py",
 }
 
 app = modal.App("fetch-slime-snapshots")
@@ -32,4 +34,6 @@ def read_sources() -> dict[str, str]:
 def main() -> None:
     TESTDATA_DIR.mkdir(exist_ok=True)
     for name, source in read_sources.remote().items():
-        (TESTDATA_DIR / f"{name}.input").write_text(source)
+        path = TESTDATA_DIR / f"{name}.input"
+        path.parent.mkdir(exist_ok=True)
+        path.write_text(source)
