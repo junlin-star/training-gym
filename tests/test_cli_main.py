@@ -48,6 +48,20 @@ def test_root_without_command_shows_help(runner):
     assert "Usage:" in result.stderr
 
 
+def test_main_returns_help_exit_code(capsys):
+    assert cli_module.main(["--help"]) == 0
+    captured = capsys.readouterr()
+    assert "Usage:" in captured.out
+    assert captured.err == ""
+
+
+def test_main_returns_no_command_exit_code(capsys):
+    assert cli_module.main([]) == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "Usage:" in captured.err
+
+
 def test_setup_dispatches_to_existing_function(runner, monkeypatch):
     setup = Mock()
     monkeypatch.setattr("modal_training_gym.cli.setup.setup", setup)
