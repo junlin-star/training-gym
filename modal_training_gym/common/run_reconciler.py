@@ -7,10 +7,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from modal_training_gym.common.modal_lifecycle import (
-    app_live_status,
-    get_app_lifecycle_state,
-)
+from modal_training_gym.common.modal_lifecycle import resolve_app_liveness
 from modal_training_gym.common.run import TrainingRun, TrainingRunStatus
 from modal_training_gym.utils.metadata import (
     MetadataStore,
@@ -189,22 +186,20 @@ def reconcile_orphan_runs(
     *,
     dry_run: bool = False,
     now: int | None = None,
-    check_app_live: Callable[[str], bool | None] | None = None,
+    get_lifecycle_state: Callable[[str], int | None] | None = None,
     has_train_result: Callable[[str], bool] | None = None,
 ) -> list[ReconcileResult]:
     """Terminalize orphaned ``running`` runs. Returns reconciled run summaries."""
     now_ts = int(now if now is not None else time.time())
-    check_live = check_app_live or app_live_status
     has_result = has_train_result or _default_has_train_result
 
     results: list[ReconcileResult] = []
     for run in _load_running_runs():
         app_id = str(run.modal_app_id or "").strip()
-        modal_app_state: int | None = None
-        app_live: bool | None = None
-        if app_id:
-            modal_app_state = get_app_lifecycle_state(app_id)
-            app_live = check_live(app_id)
+        modal_app_state, app_live = resolve_app_liveness(
+            app_id,
+            get_lifecycle_state=get_lifecycle_state,
+        )
 
         decision = reconcile_decision(
             run,
@@ -232,17 +227,21 @@ def reconcile_orphan_runs(
         if run.started_at:
             run.duration_seconds = max(0, finished_at - run.started_at)
 
-        results.append(
-            ReconcileResult(
-                training_run_id=run.training_run_id,
-                reason=decision.reason,
-                previous_status=previous_status,
-            )
+        result = ReconcileResult(
+            training_run_id=run.training_run_id,
+            reason=decision.reason,
+            previous_status=previous_status,
         )
-        if not dry_run:
-            try:
-                run.save()
-            except Exception as exc:
-                print(f"WARNING: failed to reconcile {run.training_run_id}: {exc}")
+        if dry_run:
+            results.append(result)
+            continue
+
+        try:
+            run.save()
+        except Exception as exc:
+            print(f"WARNING: failed to reconcile {run.training_run_id}: {exc}")
+            continue
+
+        results.append(result)
 
     return results

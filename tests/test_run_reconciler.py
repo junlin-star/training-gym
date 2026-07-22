@@ -234,7 +234,7 @@ def test_reconcile_orphan_runs_persists_cancelled_status(fake_volume, monkeypatc
 
     results = reconcile_orphan_runs(
         now=now,
-        check_app_live=lambda _app_id: None,
+        get_lifecycle_state=lambda _app_id: None,
         has_train_result=lambda _run_id: False,
     )
     assert len(results) == 1
@@ -263,7 +263,7 @@ def test_reconcile_orphan_runs_skips_run_with_train_result(fake_volume):
 
     results = reconcile_orphan_runs(
         now=now,
-        check_app_live=lambda _app_id: False,
+        get_lifecycle_state=lambda _app_id: 99,
         has_train_result=lambda run_id: run_id == "orphan-2",
     )
     assert results == []

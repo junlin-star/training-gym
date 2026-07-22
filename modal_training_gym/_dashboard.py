@@ -362,17 +362,24 @@ def compact_summaries() -> None:
 
 
 @app.function(schedule=modal.Cron("*/30 * * * *"), secrets=_function_secrets())
-def reconcile_orphan_training_runs() -> None:
-    """Reconcile orphaned pending training runs every 30 minutes."""
-    from modal_training_gym.common.run_reconciler import reconcile_orphan_runs
+def reconcile() -> None:
+    """Reconcile orphaned training runs and deployments every 30 minutes."""
+    from modal_training_gym.common.reconcile import reconcile as _reconcile
 
-    results = reconcile_orphan_runs()
-    if results:
-        print(f"Reconciled {len(results)} orphaned run(s):")
-        for result in results:
+    outcome = _reconcile()
+    if outcome.runs:
+        print(f"Reconciled {len(outcome.runs)} orphaned run(s):")
+        for result in outcome.runs:
             print(f"  {result.training_run_id}: {result.reason}")
     else:
         print("No orphaned runs to reconcile.")
+
+    if outcome.deployments:
+        print(f"Reconciled {len(outcome.deployments)} orphaned deployment(s):")
+        for result in outcome.deployments:
+            print(f"  {result.deployment_id}: {result.reason}")
+    else:
+        print("No orphaned deployments to reconcile.")
 
 
 @app.function(
