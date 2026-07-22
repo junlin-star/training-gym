@@ -539,8 +539,7 @@ def build_miles_app(
                 await data_volume.commit.aio()
             dataset.validate_prepared(prompt_data)
             for ep in (eval_paths or {}).values():
-                if os.path.exists(ep):
-                    dataset.validate_prepared(ep)
+                dataset.validate_prepared(ep)
 
         if cluster.is_head:
             try:

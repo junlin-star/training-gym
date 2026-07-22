@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this repo is
 
-`modal-training-gym` is a pip-installable Python package that provides framework-aware launchers for distributed training on Modal's multi-node GPU clusters. Users import framework configs, attach a model + dataset, and `modal run` — the package handles image construction, cluster topology, Ray/NCCL bring-up, volume mounts, and checkpointing.
+`modal-training-gym` is a pip-installable Python package that provides framework-aware launchers for distributed training on Modal's multi-node GPU clusters. The current entrypoint is `TrainConfig` + a recipe (`SlimeRecipe` / `MilesConfig`), then `.train()` / `.launch()` — the package handles image construction, cluster topology, Ray/NCCL bring-up, volume mounts, and checkpointing.
 
 ## Commands
 
@@ -36,31 +36,17 @@ uv run python scripts/generate_all.py                 # full regen + build
 uv run modal deploy docs-next/docs_next_app.py        # docs site → gym.modal.dev
 uv run modal deploy dashboards/app.py                  # observability dashboard
 
-# Validate tutorials (runs on Modal — costs GPU time)
-uv run python scripts/validate_tutorials.py --list           # show discovered targets
-uv run python scripts/validate_tutorials.py --preflight-only # local checks only
-uv run python scripts/validate_tutorials.py --only slime_gsm8k  # single tutorial
+# Validate model configs / map a diff to affected tutorials
+uv run python scripts/validate_model_configs.py list
+uv run python scripts/validate_model_configs.py check -m qwen3-4b
+git diff | uv run python scripts/diff_impact.py
 ```
 
 ## Architecture
 
-### Two-class framework pattern
+### TrainConfig + recipe
 
-Every framework exposes two config classes:
-
-- **`<F>FrameworkConfig`** — Modal infra (gpu, image, n_nodes) + framework CLI flags. Pydantic with `extra="forbid"`.
-- **`<F>Config`** — Composes `dataset: DatasetConfig`, `model: ModelConfig`, `wandb: WandbConfig`, and `framework_config`. Exposes `build_app()`.
-
-```
-SlimeConfig.build_app()
-  → build_slime_app(slime=self)  [in launcher.py]
-    → returns modal.App with:
-        app.download()          — ModelConfig.download()
-        app.prepare_dataset()   — DatasetConfig.prepare()
-        app.train()             — Ray cluster submit → TrainResult
-```
-
-SlimeConfig is a Pydantic dataclass following the two-class composition pattern.
+`TrainConfig` composes `dataset`, `model`, and a recipe (`SlimeRecipe` or `MilesConfig`). Call `.train()` or `.launch()` — there is no public `build_app()`. Recipes carry Modal infra + framework CLI flags (`extra="forbid"`).
 
 ### Train pipeline
 
@@ -75,15 +61,15 @@ Every framework mounts three Modal Volumes:
 
 ### Model presets
 
-Models can declare `training: ModelTrainingConfig` or framework-specific presets (e.g. `SlimePreset`) with tuned parallelism/GPU settings. Framework configs apply these as defaults to unset fields during `__post_init__`.
+Known-model presets live under `train_recipes/` (e.g. `Qwen3_4b_Recipe`); `TrainConfig.merge_model_recipe` (bool, default `True`) merges them onto unset recipe fields.
 
 ### Cloudpickle caller resolution
 
-`build_app()` factories use `resolve_caller_module()` (in `common/framework.py`) to find the user's tutorial module by walking the stack past `modal_training_gym.*` frames. This enables cloudpickle to serialize inline `DatasetConfig`/`ModelConfig` subclasses by value to remote containers.
+Launchers use `resolve_caller_module()` (in `common/framework.py`) to find the user's tutorial module by walking the stack past `modal_training_gym.*` frames. This enables cloudpickle to serialize inline `DatasetConfig`/`ModelConfig` subclasses by value to remote containers.
 
 ### TrainResult persistence
 
-`TrainResult` is a dataclass written to a `modal.Dict` (keyed by `{app_name}-train-results`). Created by each framework's `train()` on rank 0. Loaded by eval scripts via `TrainResult.load(app_name)`. The `.model` property reconstructs a `ModelConfig` pointing at the checkpoint for serving.
+`TrainResult` is a dataclass written to the metadata volume (`MetadataStore.TRAIN_RESULTS`, keyed by `training_run_id`). Created by each framework's `train()` on rank 0. Loaded by eval scripts via `TrainResult.load(training_run_id)`. The `.model` property reconstructs a `ModelConfig` pointing at the checkpoint for serving.
 
 ### Tutorial system
 
@@ -104,7 +90,7 @@ Each source declares `TUTORIAL_METADATA` dict with `framework`, `cluster_shape`,
 ## Working rules
 
 - Use `uv` for all Python operations. Never install packages at the system level.
-- Never edit `tutorials/<name>/<name>.py` or `.ipynb` — they are generated. Edit `tutorials/tutorial_generator/<name>.py` and run the generator.
+- Never edit `tutorials/<bucket>/<name>/<name>.py` or `.ipynb` — they are generated. Edit `tutorials/tutorial_generator/<bucket>/<name>.py` and run the generator.
 - Ruff excludes `tutorials/**` — generated tutorial code is not linted.
 - Python 3.12 is pinned. Modal's `serialized=True` requires local ↔ remote Python version match.
 - Modal Secrets `huggingface-secret` (HF_TOKEN) and `wandb-secret` (WANDB_API_KEY) are required for remote runs.

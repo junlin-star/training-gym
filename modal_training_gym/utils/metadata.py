@@ -9,6 +9,8 @@ from enum import Enum
 from functools import partial
 from typing import Any
 
+from modal.exception import InvalidError, NotFoundError
+
 METADATA_VOLUME_NAME = "training-gym-metadata"
 STEP_TIMES_DICT_NAME = "training-gym-step-times"
 
@@ -155,8 +157,6 @@ def _store_path(store: MetadataStore | str) -> str:
 
 def vol_remove(store: MetadataStore | str, key: str) -> bool:
     """Delete a single item from a store. Returns True if removed."""
-    from modal.exception import InvalidError, NotFoundError
-
     vol = _metadata_volume()
     path = f"{_store_path(store)}/{key}.json"
     try:
@@ -239,7 +239,7 @@ def vol_list(
                     if entry.path.endswith(".json"):
                         chunks = [c async for c in vol.read_file.aio(entry.path)]
                         results.append(json.loads(b"".join(chunks)))
-            except FileNotFoundError:
+            except (FileNotFoundError, NotFoundError):
                 pass
             return results
 
@@ -256,7 +256,7 @@ def vol_list(
                     data = b"".join(vol.read_file(entry.path))
                     results.append(json.loads(data))
             return results
-        except FileNotFoundError:
+        except (FileNotFoundError, NotFoundError):
             return results
         except Exception as exc:
             if "rate limit" in str(exc).lower() and attempt < 2:
@@ -285,7 +285,7 @@ def vol_list_prefix(store: MetadataStore | str, prefix: str) -> list[dict[str, A
             if not name.startswith(prefix):
                 continue
             results.append(json.loads(b"".join(vol.read_file(entry.path))))
-    except FileNotFoundError:
+    except (FileNotFoundError, NotFoundError):
         return results
     return results
 
@@ -303,7 +303,7 @@ def vol_count_items(store: MetadataStore | str) -> int:
         return sum(
             1 for e in vol.iterdir(_store_path(store)) if e.path.endswith(".json")
         )
-    except FileNotFoundError:
+    except (FileNotFoundError, NotFoundError):
         return 0
 
 

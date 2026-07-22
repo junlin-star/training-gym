@@ -15,6 +15,8 @@ import json
 import os
 from typing import Any
 
+from modal_training_gym.common.sample import Sample
+
 # Import path of the run model's response parser (a (str) -> ParsedResponse
 # callable). The launcher exports it; the recorder resolves and applies it.
 RESPONSE_PARSER_PATH_ENV = "TRAINING_GYM_RESPONSE_PARSER_PATH"
@@ -70,11 +72,35 @@ def _coerce_text(value: Any) -> str:
     return str(value)
 
 
-def _coerce_score(value: Any) -> float:
-    try:
+# Metadata key for the dashboard score when ``sample.reward`` is not a float
+# yet (common with OPD: reward holds the teacher ``/generate`` payload until
+# post-process). Custom generate / RM hooks should set:
+#
+#   sample.metadata["shaped_reward"] = float(task_score)
+#
+# Extraction maps that onto gym ``Sample.score``; do not grow gym Sample with
+# slime/OPD fields like ``reward: dict``.
+_SHAPED_REWARD_KEY = "shaped_reward"
+
+
+def _sample_score(sample: Sample, reward: float | None = None) -> float:
+    """Resolve reward score from a training gym Sample.
+
+    Resolution order:
+
+    1. Numeric ``reward`` (normal GRPO / post-process).
+    2. ``sample.metadata["shaped_reward"]`` — set this in custom generate/RM
+       when the framework reward must stay non-scalar until later (OPD).
+    3. ``0.0``.
+    """
+    if reward is not None:
+        return float(reward)
+
+    value = sample.metadata.get(_SHAPED_REWARD_KEY)
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
         return float(value)
-    except (TypeError, ValueError):
-        return 0.0
+
+    return 0.0
 
 
 _RESPONSE_PARSER: Any = None
@@ -461,7 +487,7 @@ def _sample_to_dict(
 
     prompt = get("prompt") if attrs is not None else get("prompt", "")
     response = get("response") if attrs is not None else get("response", "")
-    reward = get("reward") if attrs is not None else get("reward", 0.0)
+    reward = get("reward") if attrs is not None else get("reward", None)
 
     metadata: dict[str, Any] = {}
     for key in ("response_length", "prompt_length", "rollout_id", "rollout_idx"):
@@ -481,6 +507,8 @@ def _sample_to_dict(
             "eval_detail",
             "training_response_source",
             "training_assistant_turns",
+            _SHAPED_REWARD_KEY,
+            "task_passed",
         ):
             if key in sample_meta and sample_meta[key] is not None:
                 metadata[key] = sample_meta[key]
@@ -521,8 +549,15 @@ def _sample_to_dict(
         metadata["image"] = image_uri
 
     response_text = _coerce_text(response)
+    # Score via gym Sample: numeric reward, else metadata["shaped_reward"] (OPD).
+    numeric_reward = (
+        float(reward)
+        if isinstance(reward, (int, float)) and not isinstance(reward, bool)
+        else None
+    )
+    score = _sample_score(Sample(metadata=metadata), numeric_reward)
     out: dict[str, Any] = {
-        "score": _coerce_score(reward),
+        "score": score,
         "prompt": _coerce_text(prompt),
         "response": response_text,
         "metadata": metadata,

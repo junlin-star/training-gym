@@ -635,7 +635,7 @@ table.resizable-table.sticky-first-column tr.row-selected td:first-child {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  padding: 10px 16px;
+  padding: 10px 0;
   margin-bottom: -1px;
   border: 0;
   border-bottom: 2px solid transparent;
@@ -652,6 +652,7 @@ table.resizable-table.sticky-first-column tr.row-selected td:first-child {
 
 .tab:hover {
   color: var(--text-bright);
+  border-bottom-color: var(--muted);
 }
 
 .tab.tabs-active {
@@ -1599,6 +1600,7 @@ table.training-runs-table tr.run-row:hover:not(.row-selected) td:first-child {
 }
 
 table.training-runs-table td.row-open-cell {
+  position: relative;
   padding: 0;
 }
 
@@ -1627,7 +1629,18 @@ table.training-runs-table td.row-open-cell {
   color: var(--text-bright);
 }
 
+/* Make the entire table cell clickable */
+.cell-open-button::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+}
+
 .cell-open-button:focus-visible {
+  outline: none;
+}
+
+.cell-open-button:focus-visible::after {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
 }
@@ -1682,12 +1695,11 @@ table.training-runs-table td.row-open-cell {
 
 /* ===== pages/TrainingRunDetailPage.svelte ===== */
 .detail {
-  padding: 0 0 24px;
   color: var(--text);
   display: flex;
   flex-direction: column;
-  height: calc(100vh - 145px);
-  max-height: calc(100vh - 145px);
+  height: calc(100vh - 129px);
+  max-height: calc(100vh - 129px);
   min-height: 0;
   overflow: hidden;
 }
@@ -1729,30 +1741,28 @@ table.training-runs-table td.row-open-cell {
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
-  padding-top: 20px;
+  padding: 20px 24px 24px;
 }
 
 .summary-tab {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(280px, 340px);
-  gap: 32px;
-  align-items: start;
   flex: 1 1 auto;
   min-height: 0;
   overflow: hidden;
-  padding-top: 20px;
 }
 
 .summary-tab-main {
   min-height: 0;
+  max-height: 100%;
   overflow-y: auto;
   overscroll-behavior: contain;
-  padding-right: 4px;
+  padding: 20px 24px 24px;
 }
 
 .summary-tab-side {
   border-left: 1px solid var(--border, #2f2f2f);
-  padding-left: 24px;
+  padding: 20px 24px 24px;
   max-height: 100%;
   min-height: 0;
   overflow-y: auto;
@@ -1765,7 +1775,18 @@ table.training-runs-table td.row-open-cell {
   overflow-y: visible;
 }
 
+.detail.embedded .summary-tab {
+  gap: 32px;
+}
+
+.detail.embedded .tab-panel,
+.detail.embedded .summary-tab-main {
+  padding: 20px 0 0;
+  max-height: none;
+}
+
 .detail.embedded .summary-tab-side {
+  padding: 20px 0 0 24px;
   max-height: none;
   overflow-y: visible;
 }
@@ -1773,20 +1794,18 @@ table.training-runs-table td.row-open-cell {
 @media (max-width: 900px) {
   .summary-tab {
     grid-template-columns: 1fr;
-    gap: 20px;
     overflow-y: auto;
   }
 
   .summary-tab-main {
     overflow-y: visible;
-    padding-right: 0;
+    max-height: none;
+    padding-bottom: 20px;
   }
 
   .summary-tab-side {
     border-left: 0;
-    padding-left: 0;
     border-top: 1px solid var(--border, #2f2f2f);
-    padding-top: 16px;
     max-height: none;
     overflow-y: visible;
   }

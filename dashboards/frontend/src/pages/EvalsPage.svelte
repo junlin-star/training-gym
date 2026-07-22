@@ -518,7 +518,7 @@
   }}
 />
 
-<section class="summary-sticky grid [grid-template-columns:repeat(3,minmax(0,1fr))] gap-[14px] mb-[24px] max-[1080px]:[grid-template-columns:repeat(2,minmax(0,1fr))] max-[900px]:[grid-template-columns:1fr]">
+<section class="summary-sticky grid [grid-template-columns:repeat(3,minmax(0,1fr))] gap-[14px] p-[0_24px] mb-[24px] max-[1080px]:[grid-template-columns:repeat(2,minmax(0,1fr))] max-[900px]:[grid-template-columns:1fr]">
   <article class="summary-card">
     <span class="summary-label">Total runs</span>
     <strong>{allEvals.length}</strong>
@@ -533,7 +533,7 @@
   </article>
 </section>
 
-<section class="[border:0] [background:transparent] p-0">
+<section class="[border:0] [background:transparent] p-[0_24px_16px] max-[900px]:pb-[24px]">
   <div class="mb-[24px] flex items-center gap-[0.4rem] max-[900px]:flex-col max-[900px]:[align-items:stretch]">
     <label class="inline-flex items-center gap-[0.42rem] [border:1px_solid_var(--border)] rounded-[7px] bg-(--panel) min-w-[220px] w-[min(320px,100%)] p-[0.24rem_0.55rem] max-[900px]:w-full" aria-label="Search eval runs">
       <span class="search-icon"><Search size={13} /></span>

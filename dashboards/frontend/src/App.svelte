@@ -845,7 +845,7 @@
   <div class="grid grid-cols-[232px_minmax(0,1fr)] min-h-0 bg-(--bg) max-[900px]:grid-cols-[1fr]">
     <Sidebar {navItems} {activePage} onNavigate={setActivePage} />
 
-    <main class="p-[16px_24px] max-[900px]:p-[24px]">
+    <main class="min-w-0">
       <DashboardHeader
         title={pageMeta[activePage].title}
         {statusText}
