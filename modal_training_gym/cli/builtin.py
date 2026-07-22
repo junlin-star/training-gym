@@ -25,7 +25,7 @@ def open_command() -> None:
 
 @click.command("set-proxy-auth", cls=TrainingGymCommand)
 def set_proxy_auth_command() -> None:
-    """Set or replace the Modal proxy-auth tokens."""
+    """Set/replace the Modal proxy-auth tokens (MODAL_KEY / MODAL_SECRET)"""
     from .setup import set_proxy_auth
 
     set_proxy_auth()
@@ -39,7 +39,7 @@ def set_proxy_auth_command() -> None:
     help="Password to set (prompted securely if omitted; empty disables auth).",
 )
 def set_password_command(password: str | None) -> None:
-    """Set or clear the dashboard password and redeploy."""
+    """Set or clear the dashboard password (Basic Auth) and redeploy."""
     from .setup import set_password
 
     set_password(password=password)
