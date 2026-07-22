@@ -1441,7 +1441,7 @@ docs = [
 
 [package.metadata]
 requires-dist = [
-    { name = "click" },
+    { name = "click", specifier = ">=8.2,<9" },
     { name = "cloudpickle" },
     { name = "datasets" },
     { name = "fastapi" },
