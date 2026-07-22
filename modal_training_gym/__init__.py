@@ -16,6 +16,11 @@ _EXPORTS = {
     "Sample": ("modal_training_gym.common.sample", "Sample"),
     "extract_code": ("modal_training_gym.common.eval", "extract_code"),
     "HarborEval": ("modal_training_gym.common.eval", "HarborEval"),
+    "Gemma4_26B_A4B": ("modal_training_gym.common.models", "Gemma4_26B_A4B"),
+    "Gemma4_26b_A4b_Recipe": (
+        "modal_training_gym.train_recipes.slime_recipe",
+        "Gemma4_26b_A4b_Recipe",
+    ),
     "GLM_4_7": ("modal_training_gym.common.models", "GLM_4_7"),
     "HFModelConfiguration": (
         "modal_training_gym.common.models",
@@ -91,6 +96,8 @@ __all__ = [
     "Kimi_K2_6_LoRA_Recipe",
     "Kimi_K2_5_LoRA_Recipe",
     "DatasetConfig",
+    "Gemma4_26B_A4B",
+    "Gemma4_26b_A4b_Recipe",
     "GLM_4_7",
     "HarborDataset",
     "DeploymentConfig",
