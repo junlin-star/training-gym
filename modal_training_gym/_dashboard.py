@@ -39,14 +39,12 @@ from starlette.requests import Request
 from modal_training_gym.common.advantage_distribution import AdvantageDistribution
 from modal_training_gym.common.run import FrameworkStatusUpdate, TrainingRun
 from modal_training_gym.common.run_summary import (
+    JsonDict,
     RunSummary,
     build_run_summaries,
 )
 from modal_training_gym.common.training_rollout import TrainingRolloutResult
 
-# A JSON object as stored in the metadata volume (summary rows, result
-# payloads). ``object`` values — not ``Any`` — so readers must narrow.
-JsonDict = dict[str, object]
 SummaryLoader = Callable[[], Awaitable[list[JsonDict]]]
 
 
