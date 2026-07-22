@@ -7,11 +7,17 @@ from __future__ import annotations
 
 import os
 import time
-from collections.abc import Awaitable, Callable, MutableMapping
+from collections.abc import Awaitable, Callable, Mapping, MutableMapping
 from enum import Enum
 from typing import TYPE_CHECKING, Any, NotRequired, TypeAlias, TypedDict, cast
 
-from pydantic import BaseModel, PrivateAttr, computed_field, field_validator
+from pydantic import (
+    BaseModel,
+    PrivateAttr,
+    computed_field,
+    field_validator,
+    model_validator,
+)
 
 from modal_training_gym.common.framework import Framework
 from modal_training_gym.common.status import FrameworkStatus, resolve_framework_status
@@ -57,8 +63,6 @@ class SingleSubstepTiming(TypedDict):
 
 StepTimes: TypeAlias = dict[str, StepTiming]
 SubstepTimes: TypeAlias = dict[str, dict[str, SingleSubstepTiming]]
-TimingInterval: TypeAlias = SubstepTimingInterval
-SubstepTiming: TypeAlias = SingleSubstepTiming
 
 
 class FrameworkStatusUpdate(BaseModel):
@@ -136,6 +140,36 @@ class TrainingRun(BaseModel):
     # Runtime-only handles attached by ``TrainConfig.launch()``; never persisted.
     _function_call: Any = PrivateAttr(default=None)
     _status_display: Any = PrivateAttr(default=None)
+
+    @model_validator(mode="after")
+    def _hydrate_substep_timing_intervals(self) -> TrainingRun:
+        metadata = dict(self.metadata or {})
+        stored_intervals = metadata.pop("substep_timing_intervals", None)
+        if not isinstance(stored_intervals, Mapping):
+            return self
+
+        substep_times: SubstepTimes = {
+            step: {
+                phase: cast(SingleSubstepTiming, dict(timing))
+                for phase, timing in timings.items()
+            }
+            for step, timings in (self.substep_times or {}).items()
+        }
+        for step, phases in stored_intervals.items():
+            if not isinstance(step, str) or not isinstance(phases, Mapping):
+                continue
+            for phase, intervals in phases.items():
+                timing = substep_times.get(step, {}).get(phase)
+                if (
+                    isinstance(phase, str)
+                    and timing is not None
+                    and isinstance(intervals, list)
+                ):
+                    timing["intervals"] = intervals
+
+        self.substep_times = substep_times or self.substep_times
+        self.metadata = metadata or None
+        return self
 
     @computed_field
     @property

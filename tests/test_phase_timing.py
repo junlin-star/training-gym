@@ -1,6 +1,7 @@
 import inspect
 import sys
 import threading
+from queue import Queue
 from types import ModuleType, SimpleNamespace
 
 import pytest
@@ -14,19 +15,18 @@ class _Optimizer:
     def step(self):
         return "updated"
 
+    def zero_grad(self):
+        return "cleared"
 
-def test_existing_training_substeps_remain_framework_statuses():
-    legacy_status_substeps = {
+
+def test_training_substeps_only_reuse_existing_framework_statuses():
+    framework_status_substeps = {
         TrainingSubstep.POLICY_LOG_PROBS,
-        TrainingSubstep.REFERENCE_LOG_PROBS,
-        TrainingSubstep.TEACHER_LOG_PROBS,
-        TrainingSubstep.VALUE_INFERENCE,
-        TrainingSubstep.FORWARD_BACKWARD,
         TrainingSubstep.OPTIMIZER_STEP,
     }
     for substep in TrainingSubstep:
         resolved = resolve_framework_status(substep.value, "slime")
-        if substep in legacy_status_substeps:
+        if substep in framework_status_substeps:
             assert resolved is not None
         else:
             assert resolved is None
@@ -159,6 +159,33 @@ def test_async_train_hook_reports_inner_model_and_optimizer_intervals(monkeypatc
             },
         ),
     ]
+
+
+def test_async_train_hook_closes_forward_backward_when_optimizer_is_skipped(
+    monkeypatch,
+):
+    reports = []
+    wall_times = iter((100.0, 104.0))
+    monotonic_times = iter((10.0, 14.0))
+    monkeypatch.setattr(phase_reporting, "_call_hook", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        phase_reporting,
+        "report_step_event",
+        lambda *args, **kwargs: reports.append((args, kwargs)),
+    )
+    monkeypatch.setattr(phase_reporting.time, "time", lambda: next(wall_times))
+    monkeypatch.setattr(
+        phase_reporting.time, "monotonic", lambda: next(monotonic_times)
+    )
+
+    args = SimpleNamespace(async_mode=True)
+    optimizer = _Optimizer()
+    phase_reporting.before_train_step_hook(args, 2, 0, object(), optimizer, object())
+
+    assert optimizer.zero_grad() == "cleared"
+    assert [report[0][3] for report in reports] == ["phase_start", "phase_finish"]
+    assert all(report[0][0] is TrainingSubstep.FORWARD_BACKWARD for report in reports)
+    assert reports[1][1]["event_ts"] == 104.0
 
 
 def test_async_train_hook_profiles_log_prob_forwards_without_synchronizing(
@@ -467,7 +494,7 @@ def test_timing_delivery_failure_is_nonfatal(monkeypatch, capsys):
     )
 
 
-def test_completed_step_is_saved_after_its_timing_event(monkeypatch):
+def test_completed_step_is_queued_after_its_timing_event(monkeypatch):
     writes = []
     posts = []
 
@@ -476,10 +503,7 @@ def test_completed_step_is_saved_after_its_timing_event(monkeypatch):
             writes.append((key, value))
 
     monkeypatch.setattr(reporting, "_step_times_dict", Store)
-    monkeypatch.setattr(
-        reporting, "_async_step_times_url", lambda: "https://dashboard/step-times"
-    )
-    monkeypatch.setattr(reporting, "_post", posts.append)
+    monkeypatch.setattr(reporting, "_enqueue_async_step_times", posts.append)
 
     reporting._enqueue_async_timing_event(
         {
@@ -497,8 +521,6 @@ def test_completed_step_is_saved_after_its_timing_event(monkeypatch):
     assert len(writes) == 1
     assert posts == [
         {
-            "_url": "https://dashboard/step-times",
-            "_timeout": reporting._ASYNC_STEP_TIMES_TIMEOUT_SECONDS,
             "training_run_id": "run-1",
             "training_attempt": 1,
             "rollout_id": 0,
@@ -514,6 +536,63 @@ def test_completed_step_is_saved_after_its_timing_event(monkeypatch):
         .default
         > reporting._ASYNC_STEP_TIMES_TIMEOUT_SECONDS
     )
+
+
+def test_completed_step_http_does_not_block_timing_flush(monkeypatch):
+    store = {}
+    report_queue = Queue()
+    monkeypatch.setattr(reporting, "_step_times_dict", lambda: store)
+    monkeypatch.setattr(reporting, "_REPORT_QUEUE", report_queue)
+    monkeypatch.setattr(reporting, "_ensure_worker", lambda: None)
+    monkeypatch.setattr(
+        reporting, "_async_step_times_url", lambda: "https://dashboard/step-times"
+    )
+
+    payload = {
+        "training_run_id": "run-1",
+        "rollout_id": 0,
+        "phase": "training",
+        "step_event": "finish",
+    }
+    reporting._enqueue_async_timing_event(payload)
+
+    assert reporting.flush_async_timing_events()
+    assert report_queue.get_nowait() == {
+        "_url": "https://dashboard/step-times",
+        "_timeout": reporting._ASYNC_STEP_TIMES_TIMEOUT_SECONDS,
+        **payload,
+    }
+
+
+def test_timing_worker_survives_unexpected_delivery_error(monkeypatch):
+    store = {}
+    monkeypatch.setattr(reporting, "_step_times_dict", lambda: store)
+    monkeypatch.setattr(
+        reporting,
+        "_enqueue_async_step_times",
+        lambda payload: (_ for _ in ()).throw(RuntimeError("broken delivery")),
+    )
+
+    reporting._enqueue_async_timing_event(
+        {
+            "training_run_id": "run-1",
+            "rollout_id": 0,
+            "phase": "training",
+            "step_event": "finish",
+        }
+    )
+    assert not reporting.flush_async_timing_events()
+
+    reporting._enqueue_async_timing_event(
+        {
+            "training_run_id": "run-1",
+            "rollout_id": 1,
+            "phase": "training",
+            "step_event": "phase_start",
+        }
+    )
+    assert reporting.flush_async_timing_events()
+    assert len(store) == 2
 
 
 def test_training_roles_use_distinct_timing_keys(monkeypatch):

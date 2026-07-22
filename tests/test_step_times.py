@@ -1,7 +1,9 @@
 from pydantic import BaseModel
 
 from modal_training_gym.common.async_step_timing import (
+    aggregate_async_step_times,
     apply_step_timing_snapshot,
+    reconcile_attempt_step_times,
     reconcile_completed_step_times,
 )
 from modal_training_gym.common.framework import Framework
@@ -9,11 +11,7 @@ from modal_training_gym.common.run import TrainingRun
 from modal_training_gym.common.status import SlimeStatus
 from modal_training_gym.common.step_timing import TrainingSubstep
 from modal_training_gym.common.step_timing import record_sync_step_time
-from modal_training_gym.frameworks.slime.launcher import (
-    aggregate_async_step_times,
-    aggregate_sync_step_times,
-    reconcile_attempt_step_times,
-)
+from modal_training_gym.frameworks.slime.launcher import aggregate_sync_step_times
 
 EVAL_BEFORE = SlimeStatus.EVAL_ROLLOUT_LOGGING.value
 EVAL_AFTER = f"{EVAL_BEFORE}_end"
@@ -113,6 +111,9 @@ def test_new_timing_types_keep_the_legacy_persisted_substep_shape():
     old_dashboard_run = OldDashboardRun.model_validate(stored)
     assert old_dashboard_run.substep_times == stored["substep_times"]
     assert run.substep_times["1"]["train_model"]["intervals"][0]["step_id"] == 0
+    restored = TrainingRun.model_validate(stored)
+    assert restored.substep_times == run.substep_times
+    assert "substep_timing_intervals" not in (restored.metadata or {})
 
 
 def test_fresh_retry_displays_only_new_attempt_and_archives_previous_attempt():
@@ -144,9 +145,9 @@ def test_fresh_retry_displays_only_new_attempt_and_archives_previous_attempt():
     assert set(run.substep_times or {}) == {"15"}
     attempts = (run.metadata or {})["timing_attempts"]
     assert set(attempts["1"]["step_times"]) == {str(step) for step in range(1, 16)}
-    assert set(attempts["2"]["step_times"]) == {"15"}
     assert set(attempts["1"]) == {"step_times", "substep_times"}
-    assert set(attempts["2"]) == {"step_times", "substep_times"}
+    assert set(attempts) == {"1"}
+    assert (run.metadata or {})["timing_attempt"] == 2
 
 
 def test_reconciling_each_step_does_not_overwrite_the_previous_attempt():
@@ -170,7 +171,9 @@ def test_reconciling_each_step_does_not_overwrite_the_previous_attempt():
 
     attempts = (run.metadata or {})["timing_attempts"]
     assert attempts["1"]["step_times"] == previous_attempt
-    assert set(attempts["2"]["step_times"]) == {"1", "2"}
+    assert set(attempts) == {"1"}
+    assert set(run.step_times or {}) == {"1", "2"}
+    assert (run.metadata or {})["timing_attempt"] == 2
 
 
 def test_reconciling_completed_steps_builds_the_live_first_attempt():
@@ -200,6 +203,7 @@ def test_reconciling_completed_steps_builds_the_live_first_attempt():
 
     assert set(run.step_times or {}) == {"1", "2"}
     assert set(run.substep_times or {}) == {"1", "2"}
+    assert (run.metadata or {})["timing_attempt"] == 1
 
 
 def test_previous_attempt_snapshot_fills_missing_canonical_timing():
@@ -220,6 +224,7 @@ def test_previous_attempt_snapshot_fills_missing_canonical_timing():
 
     assert set(run.step_times or {}) == {"1", "2"}
     assert set(run.substep_times or {}) == {"1", "2"}
+    assert (run.metadata or {})["timing_attempt"] == 1
 
 
 def test_current_attempt_snapshot_replaces_canonical_timing():
@@ -238,15 +243,45 @@ def test_current_attempt_snapshot_replaces_canonical_timing():
 
     assert run.step_times == snapshot["step_times"]
     assert run.substep_times == snapshot["substep_times"]
+    assert (run.metadata or {})["timing_attempt"] == 2
+
+
+def test_previous_attempt_snapshot_does_not_overwrite_canonical_timing():
+    run = _run_with_timings(1)
+    snapshot = {
+        "step_times": {"1": {"start": 10, "end": None, "duration_s": None}},
+        "substep_times": {"1": {ROLLOUT_LOGGING: {"start": 10.0, "duration_s": None}}},
+    }
+
+    apply_step_timing_snapshot(
+        run,
+        snapshot,
+        snapshot_attempt=1,
+        training_attempt=2,
+    )
+
+    assert run.step_times == {"1": {"start": 10, "end": 15, "duration_s": 5}}
+    assert run.substep_times == {
+        "1": {ROLLOUT_LOGGING: {"start": 10.0, "duration_s": 5.0}}
+    }
 
 
 def test_checkpoint_retry_keeps_only_steps_before_new_attempt_boundary():
     run = _run_with_timings(17)
-    run.metadata = {
-        "substep_timing_intervals": {
-            "14": {ROLLOUT_LOGGING: [{"step_id": 0, "start": 140.0, "duration_s": 5.0}]}
+    run = TrainingRun.model_validate(
+        {
+            **run.model_dump(mode="json"),
+            "metadata": {
+                "substep_timing_intervals": {
+                    "14": {
+                        ROLLOUT_LOGGING: [
+                            {"step_id": 0, "start": 140.0, "duration_s": 5.0}
+                        ]
+                    }
+                }
+            },
         }
-    }
+    )
     new_step_times = {
         "15": {"start": 200, "end": 205, "duration_s": 5},
         "16": {"start": 210, "end": 215, "duration_s": 5},
@@ -274,12 +309,45 @@ def test_checkpoint_retry_keeps_only_steps_before_new_attempt_boundary():
     assert "substep_timing_intervals" not in (run.metadata or {})
     attempts = (run.metadata or {})["timing_attempts"]
     assert set(attempts["1"]["step_times"]) == {str(step) for step in range(1, 18)}
-    assert set(attempts["2"]["step_times"]) == {str(step) for step in range(1, 17)}
-    assert "17" not in attempts["2"]["step_times"]
+    assert set(attempts) == {"1"}
+    assert (run.metadata or {})["timing_attempt"] == 2
     restored = TrainingRun.model_validate(run.model_dump(mode="json"))
     assert restored.substep_times["14"][ROLLOUT_LOGGING]["intervals"] == [
         {"step_id": 0, "start": 140.0, "duration_s": 5.0}
     ]
+
+
+def test_completed_checkpoint_steps_keep_the_old_prefix_and_one_owner():
+    run = _run_with_timings(17)
+
+    for step in (15, 16):
+        reconcile_completed_step_times(
+            run,
+            {
+                str(step): {
+                    "start": step * 20,
+                    "end": step * 20 + 5,
+                    "duration_s": 5,
+                }
+            },
+            {
+                str(step): {
+                    ROLLOUT_LOGGING: {
+                        "start": step * 20.0,
+                        "duration_s": 5.0,
+                    }
+                }
+            },
+            training_attempt=2,
+            resumed_from_checkpoint=True,
+        )
+
+    assert set(run.step_times or {}) == {str(step) for step in range(1, 17)}
+    assert run.step_times["14"]["start"] == 140
+    assert run.step_times["15"]["start"] == 300
+    assert run.step_times["16"]["start"] == 320
+    assert (run.metadata or {})["timing_attempt"] == 2
+    assert set((run.metadata or {})["timing_attempts"]) == {"1"}
 
 
 def test_retry_without_new_timing_keeps_existing_display():
@@ -294,12 +362,37 @@ def test_retry_without_new_timing_keeps_existing_display():
     )
 
     assert set(run.step_times or {}) == {"1", "2", "3"}
-    assert run.metadata is None
+    assert run.metadata == {"timing_attempt": 1}
+
+
+def test_retry_without_timing_is_not_mislabeled_by_a_later_attempt():
+    run = _run_with_timings(1)
+
+    reconcile_attempt_step_times(
+        run,
+        {"1": {"start": None, "end": None, "duration_s": None}},
+        {"1": {}},
+        training_attempt=2,
+        resumed_from_checkpoint=False,
+    )
+    reconcile_attempt_step_times(
+        run,
+        {"1": {"start": 300, "end": 305, "duration_s": 5}},
+        {"1": {ROLLOUT_LOGGING: {"start": 300.0, "duration_s": 5.0}}},
+        training_attempt=3,
+        resumed_from_checkpoint=False,
+    )
+
+    attempts = (run.metadata or {})["timing_attempts"]
+    assert set(attempts) == {"1"}
+    assert attempts["1"]["step_times"]["1"]["start"] == 10
+    assert (run.metadata or {})["timing_attempt"] == 3
 
 
 def test_later_retry_preserves_every_attempt_snapshot():
     run = _run_with_timings(2)
     run.metadata = {
+        "timing_attempt": 2,
         "timing_attempts": {
             "1": {
                 "step_times": {"1": {"start": 10, "end": 15, "duration_s": 5}},
@@ -307,7 +400,7 @@ def test_later_retry_preserves_every_attempt_snapshot():
                     "1": {ROLLOUT_LOGGING: {"start": 10.0, "duration_s": 5.0}}
                 },
             }
-        }
+        },
     }
 
     reconcile_attempt_step_times(
@@ -319,11 +412,10 @@ def test_later_retry_preserves_every_attempt_snapshot():
     )
 
     attempts = (run.metadata or {})["timing_attempts"]
-    assert set(attempts) == {"1", "2", "3"}
+    assert set(attempts) == {"1", "2"}
     assert set(attempts["2"]["step_times"]) == {"1", "2"}
-    assert attempts["3"]["step_times"] == {
-        "1": {"start": 300, "end": 305, "duration_s": 5}
-    }
+    assert run.step_times == {"1": {"start": 300, "end": 305, "duration_s": 5}}
+    assert (run.metadata or {})["timing_attempt"] == 3
 
 
 def test_aggregate_async_step_times_returns_detailed_updates():
@@ -383,35 +475,6 @@ def test_aggregate_async_step_times_can_select_current_attempt():
 
     assert substep_times["1"] == {}
     assert substep_times["15"] == {ROLLOUT_LOGGING: {"start": 200.0, "duration_s": 5.0}}
-
-
-def test_aggregate_async_step_times_can_select_one_completed_step():
-    events = []
-    for rollout_step, start in ((1, 10.0), (2, 20.0)):
-        for step_event, event_ts in (
-            ("start", start),
-            ("phase_start", start),
-            ("phase_finish", start + 2),
-            ("finish", start + 3),
-        ):
-            events.append(
-                {
-                    "progress_current": rollout_step,
-                    "phase": ROLLOUT_LOGGING,
-                    "step_event": step_event,
-                    "event_ts": event_ts,
-                }
-            )
-
-    step_times, substep_times = aggregate_async_step_times(
-        events,
-        2,
-        [ROLLOUT_LOGGING],
-        selected_step=2,
-    )
-
-    assert step_times == {"2": {"start": 20, "end": 23, "duration_s": 3}}
-    assert substep_times == {"2": {ROLLOUT_LOGGING: {"start": 20.0, "duration_s": 2.0}}}
 
 
 def test_aggregate_async_step_times_keeps_described_custom_phases():
@@ -492,7 +555,7 @@ def test_aggregate_async_step_times_keeps_described_custom_phases():
     }
     assert substep_times["1"]["policy_evaluation"] == {
         "start": 11.0,
-        "duration_s": 5.0,
+        "duration_s": 3.5,
         "intervals": [
             {
                 "step_id": 0,
@@ -616,7 +679,7 @@ def test_aggregate_async_step_times_keeps_training_roles_separate():
     )
     assert substep_times["1"][TrainingSubstep.FORWARD_BACKWARD.value] == {
         "start": 9.0,
-        "duration_s": 6.0,
+        "duration_s": 4.0,
         "intervals": [
             {
                 "step_id": 0,

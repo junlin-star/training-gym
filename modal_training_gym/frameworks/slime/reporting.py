@@ -215,7 +215,7 @@ def _enqueue_async_timing_event(payload: Mapping[str, Any]) -> None:
         return
 
     if training_rank is not None:
-        key: RankTimingKey = (
+        rank_key: RankTimingKey = (
             training_run_id,
             "rank_timing",
             training_attempt,
@@ -223,10 +223,10 @@ def _enqueue_async_timing_event(payload: Mapping[str, Any]) -> None:
             rollout_id,
             training_rank,
         )
-        _RANK_TIMING_EVENTS.setdefault(key, []).append(dict(payload))
+        _RANK_TIMING_EVENTS.setdefault(rank_key, []).append(dict(payload))
         return
 
-    key: TimingKey = (
+    event_key: TimingKey = (
         training_run_id,
         "timing_event",
         training_attempt,
@@ -238,7 +238,7 @@ def _enqueue_async_timing_event(payload: Mapping[str, Any]) -> None:
     )
     try:
         _ensure_timing_worker()
-        _TIMING_QUEUE.put_nowait((key, dict(payload)))
+        _TIMING_QUEUE.put_nowait((event_key, dict(payload)))
     except Full:
         _TIMING_DROPPED_EVENTS += 1
         if _TIMING_DROPPED_EVENTS == 1:
@@ -248,42 +248,57 @@ def _enqueue_async_timing_event(payload: Mapping[str, Any]) -> None:
         print(f"Failed to queue async timing event: {exc}")
 
 
+def _enqueue_async_step_times(payload: Mapping[str, Any]) -> None:
+    url = _async_step_times_url()
+    if not url:
+        return
+    try:
+        _ensure_worker()
+        _REPORT_QUEUE.put_nowait(
+            {
+                "_url": url,
+                "_timeout": _ASYNC_STEP_TIMES_TIMEOUT_SECONDS,
+                **payload,
+            }
+        )
+    except Exception:
+        pass
+
+
 def _timing_worker() -> None:
     global _TIMING_FAILED_EVENTS
     while True:
         item = _TIMING_QUEUE.get()
-        if isinstance(item, threading.Event):
-            item.set()
-            _TIMING_QUEUE.task_done()
-            continue
+        try:
+            if isinstance(item, threading.Event):
+                item.set()
+                continue
 
-        key, payload = item
-        error: Exception | None = None
-        # TODO: ask Joy about design of retries
-        for attempt in range(1, _TIMING_DELIVERY_ATTEMPTS + 1):
-            try:
-                _step_times_dict()[key] = payload
-                error = None
-                break
-            except Exception as exc:
-                error = exc
-                if attempt < _TIMING_DELIVERY_ATTEMPTS:
-                    time.sleep(_TIMING_RETRY_DELAY_SECONDS * attempt)
-        if error is not None:
+            key, payload = item
+            error: Exception | None = None
+            # TODO: ask Joy about design of retries
+            for attempt in range(1, _TIMING_DELIVERY_ATTEMPTS + 1):
+                try:
+                    _step_times_dict()[key] = payload
+                    error = None
+                    break
+                except Exception as exc:
+                    error = exc
+                    if attempt < _TIMING_DELIVERY_ATTEMPTS:
+                        time.sleep(_TIMING_RETRY_DELAY_SECONDS * attempt)
+            if error is not None:
+                _TIMING_FAILED_EVENTS += 1
+                print(
+                    "Failed to write async timing event after "
+                    f"{_TIMING_DELIVERY_ATTEMPTS} attempts: {error}"
+                )
+            elif payload.get("step_event") == "finish":
+                _enqueue_async_step_times(payload)
+        except Exception as exc:
             _TIMING_FAILED_EVENTS += 1
-            print(
-                "Failed to write async timing event after "
-                f"{_TIMING_DELIVERY_ATTEMPTS} attempts: {error}"
-            )
-        elif payload.get("step_event") == "finish":
-            _post(
-                {
-                    "_url": _async_step_times_url(),
-                    "_timeout": _ASYNC_STEP_TIMES_TIMEOUT_SECONDS,
-                    **payload,
-                }
-            )
-        _TIMING_QUEUE.task_done()
+            print(f"Failed to process async timing event: {exc}")
+        finally:
+            _TIMING_QUEUE.task_done()
 
 
 def flush_async_timing_events(

@@ -164,7 +164,6 @@ _PATCH_TRAINING_ROLE_B64 = encode_patch("patch_training_role", _SLIME_PATCHES)
 _PATCH_TRAINING_SUBSTEP_TIMING_B64 = encode_patch(
     "patch_training_substep_timing", _SLIME_PATCHES
 )
-_PATCH_ASYNC_TIMING_FLUSH_B64 = encode_patch("patch_async_timing_flush", _SLIME_PATCHES)
 _PATCH_ADVANTAGE_DIST_B64 = encode_patch("patch_advantage_distribution", _SLIME_PATCHES)
 _PATCH_LOG_ELIDE_B64 = encode_patch("patch_log_elide", _SLIME_PATCHES)
 # Backport of NVIDIA/Megatron-LM #3845: dequantize quantized CUDA tensors in the
@@ -662,7 +661,6 @@ def build_slime_app(
             f"echo {_PATCH_ROLLOUT_STATUS_B64} | base64 -d | python3",
             f"echo {_PATCH_TRAINING_ROLE_B64} | base64 -d | python3",
             f"echo {_PATCH_TRAINING_SUBSTEP_TIMING_B64} | base64 -d | python3",
-            f"echo {_PATCH_ASYNC_TIMING_FLUSH_B64} | base64 -d | python3",
         )
     if _has_hybrid_spec:
         train_image = train_image.run_commands(
@@ -998,9 +996,10 @@ def build_slime_app(
         if slime.async_mode:
             async for key in step_times_dict.keys.aio():
                 match key:
-                    case (key_run_id, timing_kind, *_) if (
+                    case (key_run_id, timing_kind, key_attempt, *_) if (
                         key_run_id == run_id
                         and timing_kind in ("timing_event", "rank_timing")
+                        and key_attempt == training_attempt
                     ):
                         keys.append(key)
         else:
@@ -1065,13 +1064,21 @@ def build_slime_app(
             return None
         return latest_position[0], snapshot
 
-    async def clear_step_times(run_id: str, keys: list[Hashable]) -> None:
+    async def clear_step_times(
+        run_id: str,
+        keys: list[Hashable],
+        *,
+        clear_snapshots: bool,
+    ) -> None:
         step_times_dict = ModalDict.from_name(
             "training-gym-step-times", create_if_missing=True
         )
         for offset in range(0, len(keys), STEP_TIME_DICT_BATCH_SIZE):
             batch = keys[offset : offset + STEP_TIME_DICT_BATCH_SIZE]
             await asyncio.gather(*(step_times_dict.pop.aio(k, None) for k in batch))
+
+        if not clear_snapshots:
+            return
 
         snapshot_store = ModalDict.from_name(
             STEP_TIMING_SNAPSHOTS_DICT_NAME, create_if_missing=True
@@ -1401,6 +1408,7 @@ def build_slime_app(
                 run_record, training_run_id
             )
 
+            snapshot_read_succeeded = not slime.async_mode
             if slime.async_mode:
                 try:
                     stored_snapshot = await load_latest_step_timing_snapshot(
@@ -1415,6 +1423,7 @@ def build_slime_app(
                             snapshot_attempt=snapshot_attempt,
                             training_attempt=training_attempt,
                         )
+                    snapshot_read_succeeded = True
                 except Exception as exc:
                     print(f"Failed to read live step timing snapshot: {exc}")
 
@@ -1423,20 +1432,25 @@ def build_slime_app(
                 (
                     step_times,
                     substep_times,
-                    step_time_keys_read,
+                    timing_keys,
                 ) = await write_step_times(
                     training_run_id, slime.num_rollout, training_attempt
                 )
-                reconcile_attempt_step_times(
-                    latest_run_record,
-                    step_times,
-                    substep_times,
-                    training_attempt=training_attempt,
-                    resumed_from_checkpoint=(latest_run_record.metadata or {}).get(
-                        "resumed_from_checkpoint"
+                if slime.async_mode:
+                    reconcile_attempt_step_times(
+                        latest_run_record,
+                        step_times,
+                        substep_times,
+                        training_attempt=training_attempt,
+                        resumed_from_checkpoint=(latest_run_record.metadata or {}).get(
+                            "resumed_from_checkpoint"
+                        )
+                        is True,
                     )
-                    is True,
-                )
+                else:
+                    latest_run_record.step_times = step_times
+                    latest_run_record.substep_times = substep_times
+                step_time_keys_read = timing_keys
             except Exception as exc:
                 print(f"Failed to read step times: {exc}")
 
@@ -1447,7 +1461,12 @@ def build_slime_app(
             else:
                 if step_time_keys_read is not None:
                     try:
-                        await clear_step_times(training_run_id, step_time_keys_read)
+                        await clear_step_times(
+                            training_run_id,
+                            step_time_keys_read,
+                            clear_snapshots=slime.async_mode
+                            and snapshot_read_succeeded,
+                        )
                     except Exception as exc:
                         print(f"Failed to clear step times: {exc}")
 

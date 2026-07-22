@@ -19,6 +19,10 @@ def test_training_substep_timing_patch_matches_pinned_slime(tmp_path, request):
         (TESTDATA / "megatron_actor.py.output").write_text(patched)
     else:
         assert patched == (TESTDATA / "megatron_actor.py.output").read_text()
+    assert patched.index("result = self.train_critic(rollout_id, rollout_data)") < (
+        patched.index("_tg_flush_timings()")
+    )
+    assert patched.index("_tg_flush_timings()") < patched.index("return result")
 
     patch_training_substep_timing._patch_file(actor)
     assert actor.read_text() == patched

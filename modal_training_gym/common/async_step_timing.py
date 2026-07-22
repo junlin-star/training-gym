@@ -19,7 +19,7 @@ class _PhaseMetadata(TypedDict, total=False):
     display_name: str
 
 
-class _AggregatedTimingEvent(TypedDict):
+class _TimingEvent(TypedDict):
     rollout_step: int
     phase: str
     step_event: str
@@ -38,10 +38,9 @@ def aggregate_async_step_times(
     substep_order: list[str],
     *,
     attempt: int | None = None,
-    selected_step: int | None = None,
 ) -> tuple[StepTimes, SubstepTimes]:
     """Aggregate async events directly into stored timing metadata."""
-    aggregated_events: list[_AggregatedTimingEvent] = []
+    timing_events: list[_TimingEvent] = []
     phase_metadata: dict[tuple[int, str], _PhaseMetadata] = {}
     for stored_event in events:
         stored_batch = stored_event.get("events")
@@ -83,8 +82,6 @@ def aggregate_async_step_times(
                 continue
             if attempt is not None and event_attempt != attempt:
                 continue
-            if selected_step is not None and rollout_step != selected_step:
-                continue
             phase = event.get("phase")
             step_event = event.get("step_event")
             training_role = event.get(
@@ -106,7 +103,7 @@ def aggregate_async_step_times(
                 event_monotonic = None
             if event_monotonic is not None and not math.isfinite(event_monotonic):
                 event_monotonic = None
-            aggregated_events.append(
+            timing_events.append(
                 {
                     "rollout_step": rollout_step,
                     "phase": phase,
@@ -135,10 +132,10 @@ def aggregate_async_step_times(
         tuple[int, str],
         dict[
             tuple[str, int | None, int | None],
-            dict[str, _AggregatedTimingEvent],
+            dict[str, _TimingEvent],
         ],
     ] = {}
-    for event in sorted(aggregated_events, key=lambda event: event["event_ts"]):
+    for event in sorted(timing_events, key=lambda event: event["event_ts"]):
         rollout_step = event["rollout_step"]
         phase = event["phase"]
         step_event = event["step_event"]
@@ -168,14 +165,9 @@ def aggregate_async_step_times(
     substep_times: SubstepTimes = {}
     phases = [
         *substep_order,
-        *sorted(
-            {event["phase"] for event in aggregated_events}.difference(substep_order)
-        ),
+        *sorted({event["phase"] for event in timing_events}.difference(substep_order)),
     ]
-    rollout_steps = (
-        range(1, num_steps + 1) if selected_step is None else (selected_step,)
-    )
-    for current_step in rollout_steps:
+    for current_step in range(1, num_steps + 1):
         step_key = str(current_step)
         timestamps = step_timestamps.get(current_step, {})
         start = int(timestamps["start"]) if "start" in timestamps else None
@@ -192,14 +184,13 @@ def aggregate_async_step_times(
         for phase in phases:
             intervals: list[SubstepTimingInterval] = []
             phase_starts: list[float] = []
-            completed_duration = 0.0
-            has_completed_occurrence = False
+            completed_ranges: list[tuple[float, float]] = []
             logical_occurrences: dict[
                 tuple[str, int | None],
                 list[
                     tuple[
                         int | None,
-                        dict[str, _AggregatedTimingEvent],
+                        dict[str, _TimingEvent],
                     ]
                 ],
             ] = {}
@@ -256,12 +247,12 @@ def aggregate_async_step_times(
                         -(occurrence[1] if occurrence[1] is not None else 0),
                     ),
                 )
-                completed_duration += duration
-                has_completed_occurrence = True
+                interval_start = start_event["event_ts"]
+                completed_ranges.append((interval_start, interval_start + duration))
                 if update_id is None and not training_role and slowest_rank is None:
                     continue
                 interval: SubstepTimingInterval = {
-                    "start": round(start_event["event_ts"], 3),
+                    "start": round(interval_start, 3),
                     "duration_s": round(duration, 3),
                 }
                 if update_id is not None:
@@ -289,9 +280,18 @@ def aggregate_async_step_times(
 
             if phase_starts:
                 phase_start = min(phase_starts)
-                duration = (
-                    round(completed_duration, 3) if has_completed_occurrence else None
-                )
+                duration = None
+                if completed_ranges:
+                    completed_ranges.sort()
+                    covered_duration = 0.0
+                    range_start, range_end = completed_ranges[0]
+                    for next_start, next_end in completed_ranges[1:]:
+                        if next_start <= range_end:
+                            range_end = max(range_end, next_end)
+                        else:
+                            covered_duration += range_end - range_start
+                            range_start, range_end = next_start, next_end
+                    duration = round(covered_duration + range_end - range_start, 3)
             else:
                 continue
 
@@ -339,9 +339,6 @@ def reconcile_attempt_step_times(
         step: timings for step, timings in new_substep_times.items() if timings
     }
     steps_with_current_timing = current_step_times.keys() | current_substep_times.keys()
-    if not steps_with_current_timing:
-        return
-
     metadata = dict(run_record.metadata or {})
     previous_substep_times: SubstepTimes = {
         step: {
@@ -350,26 +347,30 @@ def reconcile_attempt_step_times(
         }
         for step, timings in (run_record.substep_times or {}).items()
     }
-    legacy_intervals = metadata.pop("substep_timing_intervals", {})
-    if isinstance(legacy_intervals, Mapping):
-        for step, phases in legacy_intervals.items():
-            if not isinstance(step, str) or not isinstance(phases, Mapping):
-                continue
-            for phase, intervals in phases.items():
-                if not isinstance(phase, str) or not isinstance(intervals, list):
-                    continue
-                timing = previous_substep_times.get(step, {}).get(phase)
-                if timing is not None:
-                    timing["intervals"] = intervals
-
     previous_step_times = dict(run_record.step_times or {})
-    timing_attempts: dict[str, Any] = {}
-    if training_attempt > 1:
-        stored_attempts = metadata.get("timing_attempts")
-        timing_attempts = (
-            dict(stored_attempts) if isinstance(stored_attempts, Mapping) else {}
-        )
-        previous_attempt = str(training_attempt - 1)
+    displayed_attempt = _displayed_timing_attempt(
+        metadata,
+        has_displayed_timing=bool(previous_step_times or previous_substep_times),
+    )
+    stored_attempts = metadata.get("timing_attempts")
+    timing_attempts = (
+        dict(stored_attempts) if isinstance(stored_attempts, Mapping) else {}
+    )
+
+    if not steps_with_current_timing:
+        if displayed_attempt is not None:
+            metadata["timing_attempt"] = displayed_attempt
+            timing_attempts.pop(str(displayed_attempt), None)
+        if timing_attempts:
+            metadata["timing_attempts"] = timing_attempts
+        else:
+            metadata.pop("timing_attempts", None)
+        run_record.metadata = metadata or None
+        return
+
+    timing_attempts.pop(str(training_attempt), None)
+    if displayed_attempt is not None and displayed_attempt != training_attempt:
+        previous_attempt = str(displayed_attempt)
         if previous_attempt not in timing_attempts and (
             previous_step_times or previous_substep_times
         ):
@@ -396,12 +397,11 @@ def reconcile_attempt_step_times(
         displayed_step_times = current_step_times
         displayed_substep_times = current_substep_times
 
-    if training_attempt > 1:
-        timing_attempts[str(training_attempt)] = {
-            "step_times": displayed_step_times,
-            "substep_times": displayed_substep_times,
-        }
+    metadata["timing_attempt"] = training_attempt
+    if timing_attempts:
         metadata["timing_attempts"] = timing_attempts
+    else:
+        metadata.pop("timing_attempts", None)
 
     run_record.step_times = displayed_step_times
     run_record.substep_times = displayed_substep_times
@@ -416,11 +416,17 @@ def reconcile_completed_step_times(
     training_attempt: int,
     resumed_from_checkpoint: bool,
 ) -> None:
-    stored_attempts = (run_record.metadata or {}).get("timing_attempts")
-    continuing_attempt = training_attempt <= 1 or (
-        isinstance(stored_attempts, Mapping)
-        and str(training_attempt) in stored_attempts
+    continuing_attempt = (
+        training_attempt <= 1
+        or _displayed_timing_attempt(
+            run_record.metadata or {},
+            has_displayed_timing=bool(
+                run_record.step_times or run_record.substep_times
+            ),
+        )
+        == training_attempt
     )
+
     if continuing_attempt:
         step_times = {**(run_record.step_times or {}), **step_times}
         substep_times = {**(run_record.substep_times or {}), **substep_times}
@@ -431,6 +437,19 @@ def reconcile_completed_step_times(
         training_attempt=training_attempt,
         resumed_from_checkpoint=resumed_from_checkpoint,
     )
+
+
+def _displayed_timing_attempt(
+    metadata: Mapping[str, Any],
+    *,
+    has_displayed_timing: bool,
+) -> int | None:
+    if not has_displayed_timing:
+        return None
+    try:
+        return int(metadata["timing_attempt"])
+    except (KeyError, TypeError, ValueError):
+        return 1
 
 
 def apply_step_timing_snapshot(
@@ -444,20 +463,32 @@ def apply_step_timing_snapshot(
     snapshot_substep_times = snapshot.get("substep_times") or {}
     if snapshot_attempt < training_attempt:
         run_record.step_times = {
-            **(run_record.step_times or {}),
             **snapshot_step_times,
+            **(run_record.step_times or {}),
         }
         run_record.substep_times = {
-            **(run_record.substep_times or {}),
             **snapshot_substep_times,
+            **(run_record.substep_times or {}),
         }
     else:
         run_record.step_times = snapshot_step_times
         run_record.substep_times = snapshot_substep_times
+    metadata = dict(run_record.metadata or {})
+    if snapshot_attempt >= training_attempt or "timing_attempt" not in metadata:
+        metadata["timing_attempt"] = snapshot_attempt
+    displayed_attempt = metadata["timing_attempt"]
     if "timing_attempts" in snapshot:
-        metadata = dict(run_record.metadata or {})
+        existing_attempts = metadata.get("timing_attempts") or {}
+        snapshot_attempts = snapshot["timing_attempts"] or {}
+        if snapshot_attempt < training_attempt:
+            timing_attempts = {**snapshot_attempts, **existing_attempts}
+        else:
+            timing_attempts = {**existing_attempts, **snapshot_attempts}
         metadata["timing_attempts"] = {
-            **(metadata.get("timing_attempts") or {}),
-            **snapshot["timing_attempts"],
+            attempt: timing
+            for attempt, timing in timing_attempts.items()
+            if str(attempt) != str(displayed_attempt)
         }
-        run_record.metadata = metadata
+        if not metadata["timing_attempts"]:
+            metadata.pop("timing_attempts")
+    run_record.metadata = metadata

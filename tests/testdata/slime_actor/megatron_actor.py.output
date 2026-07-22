@@ -25,6 +25,7 @@ from slime.utils.timer import Timer, inverse_timer, timer, with_defer
 from slime.utils.types import RolloutBatch
 # PATCHED_TRAINING_GYM_TRAINING_SUBSTEP_TIMING
 from modal_training_gym.frameworks.slime.phase_reporting import (
+    flush_async_timing_events as _tg_flush_timings,
     record_step_interval as _tg_record_interval,
 )
 
@@ -416,6 +417,7 @@ class MegatronTrainRayActor(TrainRayActor):
             ):
                 self.sleep()
 
+        _tg_flush_timings()
         return result
 
     def train_critic(self, rollout_id: int, rollout_data: RolloutBatch):

@@ -77,16 +77,14 @@
     return value.toFixed(3);
   }
 
-  // Map a rollout to its step timing. Step keys are 1-indexed; rollout ids are
-  // 0-indexed, so step N corresponds to rollout N-1 (fall back to a direct match).
+  // Step keys are 1-indexed while rollout ids are 0-indexed.
   function stepTimingForRollout(rolloutId) {
     const st = run?.step_times || null;
     const sub = run?.substep_times || null;
     const timingIntervals = run?.metadata?.substep_timing_intervals || null;
     if (!st && !sub) return null;
-    const candidates = [String(Number(rolloutId) + 1), String(rolloutId)];
-    const key = candidates.find((k) => (st && st[k]) || (sub && sub[k]));
-    if (!key) return null;
+    const key = String(Number(rolloutId) + 1);
+    if (!(st && st[key]) && !(sub && sub[key])) return null;
     return {
       stepTimes: st && st[key] ? { [key]: st[key] } : null,
       substepTimes: sub && sub[key] ? { [key]: sub[key] } : null,

@@ -55,6 +55,7 @@ def _patch_file(path: Path) -> None:
     reporter = (
         f"# {MARKER}\n"
         "from modal_training_gym.frameworks.slime.phase_reporting import (\n"
+        "    flush_async_timing_events as _tg_flush_timings,\n"
         "    record_step_interval as _tg_record_interval,\n"
         ")\n"
     )
@@ -86,6 +87,7 @@ def _patch_file(path: Path) -> None:
         '                display_name="Offload training model",\n'
         "            ):\n"
         "                self.sleep()\n\n"
+        "        _tg_flush_timings()\n"
         "        return result\n"
     )
     value_inference = (

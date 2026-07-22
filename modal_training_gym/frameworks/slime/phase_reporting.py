@@ -298,29 +298,39 @@ def _install_optimizer_timing(optimizer: object) -> None:
     if getattr(optimizer, _OPTIMIZER_TIMING_INSTALLED, False):
         return
     original_step: Callable[..., object] = getattr(optimizer, "step")
+    original_zero_grad = getattr(optimizer, "zero_grad", None)
 
-    @wraps(original_step)
-    def timed_step(*args: object, **kwargs: object) -> object:
+    def finish_forward_backward():
         context = getattr(optimizer, _OPTIMIZER_TIMING_CONTEXT, None)
         if context is None:
-            return original_step(*args, **kwargs)
+            return None
         setattr(optimizer, _OPTIMIZER_TIMING_CONTEXT, None)
         hook_args, rollout_id, step_id = context
-
-        optimizer_started = time.time()
-        optimizer_started_monotonic = time.monotonic()
+        finished = time.time()
+        finished_monotonic = time.monotonic()
         report_step_event(
             TrainingSubstep.FORWARD_BACKWARD,
             hook_args,
             rollout_id,
             "phase_finish",
             step_id=step_id,
-            event_ts=optimizer_started,
-            event_monotonic=optimizer_started_monotonic,
+            event_ts=finished,
+            event_monotonic=finished_monotonic,
             timeline_lane="training",
             parent_phase=SlimeStatus.TRAINING.value,
             display_name="Forward / backward",
         )
+        return context, finished, finished_monotonic
+
+    @wraps(original_step)
+    def timed_step(*args: object, **kwargs: object) -> object:
+        finished_forward_backward = finish_forward_backward()
+        if finished_forward_backward is None:
+            return original_step(*args, **kwargs)
+        context, optimizer_started, optimizer_started_monotonic = (
+            finished_forward_backward
+        )
+        hook_args, rollout_id, step_id = context
         report_step_event(
             TrainingSubstep.OPTIMIZER_STEP,
             hook_args,
@@ -353,6 +363,14 @@ def _install_optimizer_timing(optimizer: object) -> None:
             )
 
     setattr(optimizer, "step", timed_step)
+    if callable(original_zero_grad):
+
+        @wraps(original_zero_grad)
+        def timed_zero_grad(*args: object, **kwargs: object) -> object:
+            finish_forward_backward()
+            return original_zero_grad(*args, **kwargs)
+
+        setattr(optimizer, "zero_grad", timed_zero_grad)
     setattr(optimizer, _OPTIMIZER_TIMING_INSTALLED, True)
 
 

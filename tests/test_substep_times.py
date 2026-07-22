@@ -52,3 +52,17 @@ def test_patch_matches_golden(slime_inputs, tmp_path, request):
 
         patcher._patch_file(work)
         assert work.read_text() == actual, f"patch is not idempotent for {name}"
+
+
+def test_async_patch_does_not_write_partial_changes(slime_inputs, tmp_path, capsys):
+    source = slime_inputs["train_async.py"].replace(
+        "            ray.get(rollout_manager.eval.remote(rollout_id))\n",
+        "            ray.get(rollout_manager.changed_eval.remote(rollout_id))\n",
+    )
+    work = tmp_path / "train_async.py"
+    work.write_text(source)
+
+    patcher._patch_file(work)
+
+    assert work.read_text() == source
+    assert "Could not patch train_async.py" in capsys.readouterr().out

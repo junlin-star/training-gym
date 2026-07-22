@@ -518,11 +518,13 @@
     );
   }
 
-  function showTip(e, step, sub) {
-    if (pinned) return;
-    tip = {
-      x: e.clientX,
-      y: e.clientY,
+  function tooltipFor(e, step, sub) {
+    const bounds = e.currentTarget?.getBoundingClientRect();
+    const hasPointerCoordinates =
+      typeof e.clientX === "number" && typeof e.clientY === "number";
+    return {
+      x: hasPointerCoordinates ? e.clientX : (bounds?.left ?? 0) + (bounds?.width ?? 0) / 2,
+      y: hasPointerCoordinates ? e.clientY : (bounds?.top ?? 0),
       rolloutId: step.rolloutId,
       trainingRole: sub.trainingRole ?? null,
       innerStep: sub.innerStep ?? null,
@@ -534,6 +536,11 @@
       description: tooltipDescription(sub),
       profile: phaseProfile(step, sub),
     };
+  }
+
+  function showTip(e, step, sub) {
+    if (pinned) return;
+    tip = tooltipFor(e, step, sub);
   }
 
   function moveTip(e) {
@@ -554,20 +561,7 @@
       return;
     }
     pinned = true;
-    tip = {
-      x: e.clientX,
-      y: e.clientY,
-      rolloutId: step.rolloutId,
-      trainingRole: sub.trainingRole ?? null,
-      innerStep: sub.innerStep ?? null,
-      name: sub.name,
-      label: tooltipLabel(step, sub),
-      stepLabel: asyncMode ? `Rollout ${step.rolloutId}` : `Step ${step.n}`,
-      dur: sub.duration,
-      rankSummary: rankSummary(sub),
-      description: tooltipDescription(sub),
-      profile: phaseProfile(step, sub),
-    };
+    tip = tooltipFor(e, step, sub);
   }
 
   function clearPin() {
@@ -588,6 +582,7 @@
     style:background={sub.duration == null ? undefined : colorFor(sub.name)}
     role="button"
     tabindex="0"
+    aria-label={`${tooltipLabel(step, sub)}, ${fmtSecs(sub.duration)}`}
     onmouseenter={(e) => showTip(e, step, sub)}
     onmousemove={moveTip}
     onmouseleave={hideTip}
@@ -612,6 +607,7 @@
     style={`left:${((span.start - asyncTimeline.start) / asyncTimeline.duration) * 100}%;width:${(span.sub.duration / asyncTimeline.duration) * 100}%;background:${asyncColorFor(span.sub)}`}
     role="button"
     tabindex="0"
+    aria-label={`${tooltipLabel(span.step, span.sub)}, ${fmtSecs(span.sub.duration)}`}
     onmouseenter={(e) => showTip(e, span.step, span.sub)}
     onmousemove={moveTip}
     onmouseleave={hideTip}
@@ -632,6 +628,7 @@
     style={`left:${((span.start - asyncTimeline.start) / asyncTimeline.duration) * 100}%;width:${(span.sub.duration / asyncTimeline.duration) * 100}%;--training-color:${asyncColorFor(span.sub)}`}
     role="button"
     tabindex="0"
+    aria-label={`${tooltipLabel(span.step, span.sub)}, ${fmtSecs(span.sub.duration)}`}
     onmouseenter={(e) => showTip(e, span.step, span.sub)}
     onmousemove={moveTip}
     onmouseleave={hideTip}

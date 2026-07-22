@@ -241,6 +241,7 @@ def _patch_async_file(path: Path) -> None:
     )
     if failed:
         print(f"WARNING: Could not patch {path.name} for: {', '.join(failed)}")
+        return
     path.write_text(src)
     print(f"Patched {path.name} with async rollout status reporting")
 

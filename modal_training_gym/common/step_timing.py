@@ -21,10 +21,10 @@ class Substep(str, Enum):
 class TrainingSubstep(str, Enum):
     DATA_PREPROCESS = "data_preprocess"
     POLICY_LOG_PROBS = SlimeStatus.COMPUTE_LOG_PROBS.value
-    REFERENCE_LOG_PROBS = SlimeStatus.REFERENCE_LOG_PROBS.value
-    TEACHER_LOG_PROBS = SlimeStatus.TEACHER_LOG_PROBS.value
-    VALUE_INFERENCE = SlimeStatus.VALUE_INFERENCE.value
-    FORWARD_BACKWARD = SlimeStatus.TRAIN_MODEL.value
+    REFERENCE_LOG_PROBS = "reference_log_probs"
+    TEACHER_LOG_PROBS = "teacher_log_probs"
+    VALUE_INFERENCE = "value_inference"
+    FORWARD_BACKWARD = "train_model"
     OPTIMIZER_STEP = SlimeStatus.OPTIMIZER_STEP.value
     REFERENCE_MODEL_UPDATE = "ref_model_update"
     TRAINING_MODEL_WAKE = "training_model_wake"
