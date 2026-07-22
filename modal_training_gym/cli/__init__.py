@@ -50,8 +50,8 @@ def main(argv: list[str] | None = None) -> int:
         exc.show(file=sys.stderr)
         return int(exc.exit_code)
     except click.Abort:
-        print_error("Aborted!")
-        return int(ExitCode.UNEXPECTED)
+        print_error("Interrupted.")
+        return int(ExitCode.INTERRUPTED)
     except KeyboardInterrupt:
         print_error("Interrupted.")
         return int(ExitCode.INTERRUPTED)

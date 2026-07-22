@@ -197,3 +197,16 @@ def test_main_maps_interrupts(monkeypatch, capsys):
     captured = capsys.readouterr()
     assert captured.out == ""
     assert captured.err == "Interrupted.\n"
+
+
+def test_main_maps_click_keyboard_interrupt_to_130(monkeypatch, capsys):
+    def interrupt():
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr("modal_training_gym.cli.setup.setup", interrupt)
+
+    assert cli_module.main(["setup"]) == 130
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "Interrupted." in captured.err
+    assert "Aborted!" not in captured.err
