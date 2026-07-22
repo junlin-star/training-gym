@@ -1409,14 +1409,17 @@ name = "modal-training-gym"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "click" },
     { name = "cloudpickle" },
     { name = "datasets" },
     { name = "fastapi" },
+    { name = "httpx" },
     { name = "modal" },
     { name = "msgspec" },
     { name = "openai" },
     { name = "pydantic" },
     { name = "randomname" },
+    { name = "rich" },
     { name = "transformers" },
 ]
 
@@ -1438,14 +1441,17 @@ docs = [
 
 [package.metadata]
 requires-dist = [
+    { name = "click" },
     { name = "cloudpickle" },
     { name = "datasets" },
     { name = "fastapi" },
+    { name = "httpx" },
     { name = "modal", specifier = "==1.5.2" },
     { name = "msgspec" },
     { name = "openai" },
     { name = "pydantic" },
     { name = "randomname" },
+    { name = "rich" },
     { name = "transformers", specifier = ">=5.12.1" },
 ]
 
