@@ -22,16 +22,16 @@ from .output import print_error
     cls=TrainingGymGroup,
     context_settings={"help_option_names": ["-h", "--help"]},
 )
-def cli() -> None:
+def entrypoint_cli() -> None:
     """Launch, inspect, and manage training runs."""
 
 
 def _register_commands() -> None:
-    cli.add_command(setup_command, panel="Configuration")
-    cli.add_command(set_password_command, panel="Configuration")
-    cli.add_command(set_proxy_auth_command, panel="Configuration")
-    cli.add_command(open_command, panel="Utilities")
-    cli.add_command(cleanup_command, panel="Utilities")
+    entrypoint_cli.add_command(setup_command, panel="Configuration")
+    entrypoint_cli.add_command(set_password_command, panel="Configuration")
+    entrypoint_cli.add_command(set_proxy_auth_command, panel="Configuration")
+    entrypoint_cli.add_command(open_command, panel="Utilities")
+    entrypoint_cli.add_command(cleanup_command, panel="Utilities")
 
 
 _register_commands()
@@ -40,7 +40,7 @@ _register_commands()
 def main(argv: list[str] | None = None) -> int:
     """Run the CLI and return a process exit code."""
     try:
-        result = cli.main(
+        result = entrypoint_cli.main(
             args=argv,
             prog_name="training-gym",
             standalone_mode=False,
@@ -50,9 +50,6 @@ def main(argv: list[str] | None = None) -> int:
         exc.show(file=sys.stderr)
         return int(exc.exit_code)
     except click.Abort:
-        print_error("Interrupted.")
-        return int(ExitCode.INTERRUPTED)
-    except KeyboardInterrupt:
         print_error("Interrupted.")
         return int(ExitCode.INTERRUPTED)
     except Exception as exc:
