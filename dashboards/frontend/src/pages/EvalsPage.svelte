@@ -11,10 +11,12 @@
   import ConversationView from "../components/ConversationView.svelte";
   import Drawer from "../components/Drawer.svelte";
   import FilterBulkActions from "../components/FilterBulkActions.svelte";
+  import GroupSection from "../components/GroupSection.svelte";
   import MinimalTableSkeleton from "../components/MinimalTableSkeleton.svelte";
   import ResizableTable from "../components/ResizableTable.svelte";
   import StatusPill from "../components/StatusPill.svelte";
   import TimeAgo from "../components/TimeAgo.svelte";
+  import { toggleInSet } from "../lib/set.js";
 
   let {
     allEvals,
@@ -257,10 +259,7 @@
   }
 
   function toggleGroup(evalConfigId) {
-    const next = new Set(expandedConfigIds);
-    if (next.has(evalConfigId)) next.delete(evalConfigId);
-    else next.add(evalConfigId);
-    expandedConfigIds = next;
+    expandedConfigIds = toggleInSet(expandedConfigIds, evalConfigId);
   }
 
   $effect(() => {
@@ -369,10 +368,7 @@
   });
 
   function toggleStatusFilter(status) {
-    const next = new Set(activeStatusFilters);
-    if (next.has(status)) next.delete(status);
-    else next.add(status);
-    activeStatusFilters = next;
+    activeStatusFilters = toggleInSet(activeStatusFilters, status);
   }
 
   function selectAllStatusFilters() {
@@ -384,10 +380,7 @@
   }
 
   function toggleDatasetFilter(dataset) {
-    const next = new Set(activeDatasetFilters);
-    if (next.has(dataset)) next.delete(dataset);
-    else next.add(dataset);
-    activeDatasetFilters = next;
+    activeDatasetFilters = toggleInSet(activeDatasetFilters, dataset);
   }
 
   function selectAllDatasetFilters() {
@@ -442,10 +435,7 @@
   }
 
   function toggleExample(index) {
-    const next = new Set(expandedExamples);
-    if (next.has(index)) next.delete(index);
-    else next.add(index);
-    expandedExamples = next;
+    expandedExamples = toggleInSet(expandedExamples, index);
   }
 
   let drawerRows = $derived.by(() => {
@@ -685,93 +675,86 @@
           <div class="page-empty">No evals match the current filters.</div>
         {/if}
         {#each filteredGroups as group (group.evalConfigId)}
-          <section class="[border:1px_solid_var(--border)] rounded-[8px] [background:transparent] overflow-hidden">
-            <button class="[border:0] w-full text-left [background:transparent] text-inherit cursor-pointer flex justify-between items-center gap-[0.8rem] p-[0.75rem_0.9rem]" onclick={() => toggleGroup(group.evalConfigId)}>
-              <div class="min-w-0">
-                <div class="text-(--text-bright) text-[0.86rem] [font-weight:600] overflow-hidden text-ellipsis whitespace-nowrap">{group.evalConfigId || group.meta.dataset}</div>
-                <div class="text-(--muted) text-[0.74rem] overflow-hidden text-ellipsis whitespace-nowrap">{groupSubtitle(group)}</div>
-              </div>
-              <div class="flex items-center gap-[0.35rem] [flex-wrap:wrap] [justify-content:flex-end]">
-                {#if nonPlaceholderText(group.meta.model)}
-                  <span class="group-meta-pill">{group.meta.model}</span>
-                {/if}
-                {#if nonPlaceholderText(group.meta.split)}
-                  <span class="group-meta-pill">split: {group.meta.split}</span>
-                {/if}
-                <span class="group-meta-pill">total evals: {group.totalEvals}</span>
-                <span class="group-meta-pill">avg: {group.avgAccuracy.toFixed(4)}</span>
-                {#if group.latestCreatedAt}
-                  <span class="group-meta-pill [font-variant-numeric:tabular-nums]">
-                    <TimeAgo timestamp={group.latestCreatedAt} showJustNow falsyRepresentation="—" />
-                  </span>
-                {/if}
-                <ChevronDown
-                  size={14}
-                  style={`color: var(--muted); transform: ${expandedConfigIds.has(group.evalConfigId) ? "rotate(180deg)" : "rotate(0deg)"};`}
-                />
-              </div>
-            </button>
+          <GroupSection
+            title={group.evalConfigId || group.meta.dataset}
+            subtitle={groupSubtitle(group)}
+            expanded={expandedConfigIds.has(group.evalConfigId)}
+            onToggle={() => toggleGroup(group.evalConfigId)}
+          >
+            {#snippet meta()}
+              {#if nonPlaceholderText(group.meta.model)}
+                <span class="group-meta-pill">{group.meta.model}</span>
+              {/if}
+              {#if nonPlaceholderText(group.meta.split)}
+                <span class="group-meta-pill">split: {group.meta.split}</span>
+              {/if}
+              <span class="group-meta-pill">total evals: {group.totalEvals}</span>
+              <span class="group-meta-pill">avg: {group.avgAccuracy.toFixed(4)}</span>
+              {#if group.latestCreatedAt}
+                <span class="group-meta-pill [font-variant-numeric:tabular-nums]">
+                  <TimeAgo timestamp={group.latestCreatedAt} showJustNow falsyRepresentation="—" />
+                </span>
+              {/if}
+            {/snippet}
 
-            {#if expandedConfigIds.has(group.evalConfigId)}
-              <div class="table-wrap freeze-header" style="--frozen-table-offset: 360px;">
-                <ResizableTable class="evals-runs-table" columns={evalColumns} stickyFirstColumn>
-                  <tbody>
-                    {#each group.visibleRuns as run, runIndex (run.eval.eval_id || `${group.evalConfigId}-${run.eval.created_at || 0}-${runIndex}`)}
-                      {@const linkedDeployment = findDeploymentRow(run, group)}
-                      {@const deploymentName = evalDeploymentName(run, linkedDeployment)}
-                      {@const deploymentRef = deploymentRefValue(linkedDeployment)}
-                      {@const trainingRunId = linkedTrainingRunId(linkedDeployment)}
-                      {@const baseModel = evalBaseModel(run, group, linkedDeployment)}
-                      {@const dataset = groupDataset(group)}
-                      <tr
-                        class="eval-row-clickable"
-                        class:row-selected={selectedEval?.run?.eval?.eval_id === run.eval.eval_id}
-                        onclick={(event) => {
-                          if (event.target.closest(".cross-link")) return;
-                          openEvalDrawer(run, group);
-                        }}
-                      >
-                        <td class="evals-mono evals-name-cell" title={deploymentName}>
-                          <span class="truncate-text">{deploymentName}</span>
-                        </td>
-                        <td class="evals-dataset-cell" title={dataset}>
-                          <span class="truncate-text">{dataset}</span>
-                        </td>
-                        <td class="evals-mono evals-deployment-cell" title={deploymentRef || "—"}>
-                          <span class="truncate-text">{deploymentRef || "—"}</span>
-                        </td>
-                        <td class="max-w-0" title={trainingRunId || "—"}>
-                          {#if trainingRunId}
-                            <button
-                              class="cross-link"
-                              onclick={() => onOpenTrainingRun?.(trainingRunId)}
-                            >
-                              {trainingRunId}
-                            </button>
-                          {:else}
-                            —
-                          {/if}
-                        </td>
-                        <td class="base-model-cell" title={baseModel}>
-                          <span class="truncate-text">{baseModel}</span>
-                        </td>
-                        <td>
-                          <StatusPill status={run.pillStatus} label={run.statusLabel} />
-                        </td>
-                        <td class="text-(--text-bright) font-[600]">
-                          {run.status === "Failed" ? "—" : run.avgScore.toFixed(4)}
-                        </td>
-                        <td>{run.totalRows ? run.totalRows : "—"}</td>
-                        <td class="created-cell">
-                          <TimeAgo timestamp={run.createdAt} showJustNow falsyRepresentation="—" />
-                        </td>
-                      </tr>
-                    {/each}
-                  </tbody>
-                </ResizableTable>
-              </div>
-            {/if}
-          </section>
+            <div class="table-wrap freeze-header" style="--frozen-table-offset: 360px;">
+              <ResizableTable class="evals-runs-table" columns={evalColumns} stickyFirstColumn>
+                <tbody>
+                  {#each group.visibleRuns as run, runIndex (run.eval.eval_id || `${group.evalConfigId}-${run.eval.created_at || 0}-${runIndex}`)}
+                    {@const linkedDeployment = findDeploymentRow(run, group)}
+                    {@const deploymentName = evalDeploymentName(run, linkedDeployment)}
+                    {@const deploymentRef = deploymentRefValue(linkedDeployment)}
+                    {@const trainingRunId = linkedTrainingRunId(linkedDeployment)}
+                    {@const baseModel = evalBaseModel(run, group, linkedDeployment)}
+                    {@const dataset = groupDataset(group)}
+                    <tr
+                      class="eval-row-clickable"
+                      class:row-selected={selectedEval?.run?.eval?.eval_id === run.eval.eval_id}
+                      onclick={(event) => {
+                        if (event.target.closest(".cross-link")) return;
+                        openEvalDrawer(run, group);
+                      }}
+                    >
+                      <td class="evals-mono evals-name-cell" title={deploymentName}>
+                        <span class="truncate-text">{deploymentName}</span>
+                      </td>
+                      <td class="evals-dataset-cell" title={dataset}>
+                        <span class="truncate-text">{dataset}</span>
+                      </td>
+                      <td class="evals-mono evals-deployment-cell" title={deploymentRef || "—"}>
+                        <span class="truncate-text">{deploymentRef || "—"}</span>
+                      </td>
+                      <td class="max-w-0" title={trainingRunId || "—"}>
+                        {#if trainingRunId}
+                          <button
+                            class="cross-link"
+                            onclick={() => onOpenTrainingRun?.(trainingRunId)}
+                          >
+                            {trainingRunId}
+                          </button>
+                        {:else}
+                          —
+                        {/if}
+                      </td>
+                      <td class="base-model-cell" title={baseModel}>
+                        <span class="truncate-text">{baseModel}</span>
+                      </td>
+                      <td>
+                        <StatusPill status={run.pillStatus} label={run.statusLabel} />
+                      </td>
+                      <td class="text-(--text-bright) font-[600]">
+                        {run.status === "Failed" ? "—" : run.avgScore.toFixed(4)}
+                      </td>
+                      <td>{run.totalRows ? run.totalRows : "—"}</td>
+                      <td class="created-cell">
+                        <TimeAgo timestamp={run.createdAt} showJustNow falsyRepresentation="—" />
+                      </td>
+                    </tr>
+                  {/each}
+                </tbody>
+              </ResizableTable>
+            </div>
+          </GroupSection>
         {/each}
       </div>
     {/if}
