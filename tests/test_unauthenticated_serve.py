@@ -70,12 +70,18 @@ def test_sglang_serve_forwards_unauthenticated() -> None:
 def _serve_vllm(cfg: DeploymentConfig) -> tuple[object, MagicMock]:
     fake_app = MagicMock()
     fake_app.app_id = "ap-test"
-    fake_app.serve.get_web_url.return_value = "https://example.modal.run"
+    fake_server = MagicMock()
+    fake_server.get_url = MagicMock(return_value="https://example.modal.run")
+    fake_app.Server = fake_server
     with (
         patch(
             "modal_training_gym.deploy_recipes.vllm_recipe.serve_vllm.build_vllm_serve_app",
             return_value=fake_app,
         ) as mock_build,
+        patch(
+            "modal_training_gym.common.deployment._run_coro",
+            return_value="https://example.modal.run",
+        ),
         patch(
             "modal_training_gym.common.deployment.ModelDeployment.save",
             return_value=None,
