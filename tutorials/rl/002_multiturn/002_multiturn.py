@@ -350,7 +350,10 @@ def _main_impl() -> None:
 
     # ## Serve and evaluate the base model
 
-    base_deployment = DeploymentConfig(model=Qwen3_4B()).serve()
+    base_deployment = DeploymentConfig(
+        model=Qwen3_4B(),
+        unauthenticated=True,
+    ).serve()
     print(f"Base model URL: {base_deployment.url}")
     eval_config = EvalConfig(
         dataset=eval_dataset,
@@ -433,6 +436,7 @@ def _main_impl() -> None:
         checkpoint=checkpoint,
         app_name="qwen3-4b-guessing-multiturn-serve",
         served_model_name="qwen3-4b-guessing-multiturn",
+        unauthenticated=True,
     ).serve()
     print(f"Trained model URL: {trained_deployment.url}")
 

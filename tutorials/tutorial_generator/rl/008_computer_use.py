@@ -358,7 +358,10 @@ def _eval_helpers():
 @code
 def _eval_base():
     base_model = Qwen3_VL_8B()
-    base_deployment = DeploymentConfig(model=base_model).serve()
+    base_deployment = DeploymentConfig(
+        model=base_model,
+        unauthenticated=True,
+    ).serve()
     print(f"Base model URL: {base_deployment.url}")
 
     eval_config = EvalConfig(dataset=eval_dataset, eval_fn=grounding_eval_fn)
@@ -449,6 +452,7 @@ def _eval_trained():
         checkpoint=checkpoint,
         app_name="qwen3-vl-8b-grounding-serve",
         served_model_name="qwen3-vl-8b-grounding",
+        unauthenticated=True,
     ).serve()
     print(f"Trained model URL: {trained_deployment.url}")
 

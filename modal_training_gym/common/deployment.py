@@ -11,14 +11,16 @@ the live endpoint URL and convenience methods for generation and eval.
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
-from enum import Enum
 import inspect
 import json
 import os
 import threading
+import warnings
+from dataclasses import dataclass
+from enum import Enum
 from typing import Any
 
+from modal.experimental import list_deployed_apps
 from pydantic import BaseModel, ConfigDict, field_serializer, field_validator
 
 from modal_training_gym.common.checkpoint import (
@@ -28,12 +30,11 @@ from modal_training_gym.common.checkpoint import (
 )
 from modal_training_gym.common.errors import TrainingGymConfigError
 from modal_training_gym.common.ids import create_hash
-from modal_training_gym.common.models import ModelConfig
 from modal_training_gym.common.modal_urls import modal_app_dashboard_url
+from modal_training_gym.common.models import ModelConfig
+from modal_training_gym.deploy_recipes.base import DeployRecipeType
 from modal_training_gym.deploy_recipes.sglang_recipe import SglangRecipe
 from modal_training_gym.deploy_recipes.vllm_recipe import VllmRecipe
-from modal_training_gym.deploy_recipes.base import DeployRecipeType
-from modal.experimental import list_deployed_apps
 from modal_training_gym.utils.metadata import (
     MetadataStore,
     vol_get,
@@ -98,11 +99,13 @@ def _modal_proxy_auth_headers() -> dict[str, str]:
 def _raise_for_proxy_auth(status_code: int, url: str) -> None:
     """Turn a 401 into an actionable proxy-auth hint.
 
-    Served endpoints (``DeploymentConfig.serve()``) sit behind Modal proxy auth.
-    A 401 almost always means the ``MODAL_KEY`` / ``MODAL_SECRET`` proxy-auth
-    token pair is missing from the environment (so :func:`_modal_proxy_auth_headers`
-    returned no headers) rather than a real authorization problem — surface that
-    instead of a bare ``HTTPError``/``TimeoutError``. No-op for any other status.
+    SGLang endpoints are public by default (``unauthenticated=True``). When
+    an endpoint was served with ``unauthenticated=False``, a 401 almost
+    always means the ``MODAL_KEY`` / ``MODAL_SECRET`` proxy-auth token pair
+    is missing from the environment (so :func:`_modal_proxy_auth_headers`
+    returned no headers) rather than a real authorization problem — surface
+    that instead of a bare ``HTTPError``/``TimeoutError``. No-op for any
+    other status.
     """
     if status_code != 401:
         return
@@ -119,7 +122,9 @@ def _raise_for_proxy_auth(status_code: int, url: str) -> None:
         "https://modal.com/settings/proxy-auth-tokens and export MODAL_KEY (wk-…) "
         "and MODAL_SECRET (ws-…) in the shell that runs the eval/serve. For calls "
         "issued from remote workers (e.g. a custom rm/reward function), also "
-        "forward the pair into the worker via a modal.Secret."
+        "forward the pair into the worker via a modal.Secret. SGLang endpoints "
+        "are public by default; pass DeploymentConfig(unauthenticated=False) to "
+        "require proxy auth."
     )
 
 
@@ -162,6 +167,7 @@ class DeploymentConfig:
 
     app_name: str | None = None
     served_model_name: str | None = None
+    unauthenticated: bool = True
 
     def _checkpoints_volume_name(self) -> str | None:
         if self.checkpoint is not None and self.checkpoint.checkpoints_volume_name:
@@ -246,8 +252,19 @@ class DeploymentConfig:
                 checkpoints_volume=checkpoints_volume,
                 checkpoints_mount_path=checkpoints_mount_path,
                 deployment_id=deployment_id,
+                unauthenticated=self.unauthenticated,
             )
         elif isinstance(recipe, VllmRecipe):
+            # unauthenticated is SGLang-only; vLLM's http_server has no
+            # proxy-auth. Default True is a silent no-op; warn only
+            # when the caller explicitly requests authenticated access.
+            if self.unauthenticated is False:
+                warnings.warn(
+                    "DeploymentConfig(unauthenticated=False) is not supported for "
+                    "VllmRecipe: modal.experimental.http_server has no proxy-auth, so the endpoint remains publicly reachable. Use "
+                    "SglangRecipe if you need Modal proxy auth.",
+                    stacklevel=2,
+                )
             from modal_training_gym.deploy_recipes.vllm_recipe.serve_vllm import (
                 build_vllm_serve_app,
             )
@@ -417,6 +434,7 @@ class ModelDeployment(BaseModel):
         model = deployment_config.get("model")
         if isinstance(model, dict):
             deployment_config["model"] = ModelConfig(**model)
+        deployment_config.setdefault("unauthenticated", True)
         return DeploymentConfig(**deployment_config)
 
     @field_serializer("deployment_config")
@@ -441,6 +459,7 @@ class ModelDeployment(BaseModel):
             },
             "app_name": value.app_name,
             "served_model_name": value.served_model_name,
+            "unauthenticated": value.unauthenticated,
         }
 
     # TODO(atoniolo76): A future PR should update all existing tutorials to

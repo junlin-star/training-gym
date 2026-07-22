@@ -186,6 +186,7 @@ def _deploy_model():
     deployment = DeploymentConfig(
         model=Qwen3_8B(),
         recipe=recipe,
+        unauthenticated=True,
     ).serve()
     deployment.wait_until_ready()
     print(f"Model URL: {deployment.url}")
