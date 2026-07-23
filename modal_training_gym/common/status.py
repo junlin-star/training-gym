@@ -13,7 +13,8 @@ class SlimeStatus(str, Enum):
     ROLLOUT_LOGGING = "generate_rollouts"
     EVAL_ROLLOUT_LOGGING = "evaluate_rollouts"
     COMPUTE_LOG_PROBS = "compute_log_probs"
-    OPTIMIZER_STEP = "optimizer_step"  # before train step
+    TRAIN_MODEL = "train_model"
+    OPTIMIZER_STEP = "optimizer_step"
     WEIGHT_SYNC = "weight_sync"
     OFFLOAD_ROLLOUT = "offload_rollout"
     OFFLOAD_TRAIN = "offload_train"

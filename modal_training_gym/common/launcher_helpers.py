@@ -237,6 +237,7 @@ async def init_training_run_record(
     wandb_cfg: "WandbConfig | None",
     wandb_entity: str,
     framework_status_token: str,
+    on_attempt_started: Callable[[Any, int], None] | None = None,
 ) -> tuple[Any, str, str]:
     """Create or resume the ``TrainingRun`` record for this attempt and persist
     the framework-status token. Returns
@@ -267,6 +268,8 @@ async def init_training_run_record(
     attempt_count = mark_training_attempt_started(
         run_record, started_at=int(time.time())
     )
+    if on_attempt_started is not None:
+        on_attempt_started(run_record, attempt_count)
     wandb_run_id = ""
     if wandb_cfg is not None:
         wandb_run_id = wandb_run_id_for_attempt(training_run_id, attempt_count)
@@ -385,6 +388,12 @@ async def build_terminal_run_record(run_record: Any, training_run_id: str) -> An
 
     latest_run_record.status = run_record.status
     latest_run_record.ended_at = finished_at
+    latest_metadata = dict(latest_run_record.metadata or {})
+    attempt_metadata = run_record.metadata or {}
+    for key in ("last_attempt_status", "last_attempt_ended_at"):
+        if key in attempt_metadata:
+            latest_metadata[key] = attempt_metadata[key]
+    latest_run_record.metadata = latest_metadata
     # Propagate the terminal error onto the re-fetched record so the save
     # below persists it (the fresh fetch wouldn't carry it).
     if run_record.error_message:

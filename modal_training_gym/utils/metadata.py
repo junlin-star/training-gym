@@ -23,6 +23,7 @@ class MetadataStore(Enum):
     TRAIN_RESULTS_SUMMARY = "train-results-summary"
     TRAINING_ROLLOUTS = "training-rollouts"
     TRAINING_ROLLOUTS_SUMMARY = "training-rollouts-summary"
+    TRAINING_LATEST_ROLLOUTS = "training-latest-rollouts"
     # Per-step, per-group advantage distributions. slime only logs the mean
     # advantage per step; this store keeps the full per-sample distribution so
     # the dashboard can render per-group spread. Written one shard file per

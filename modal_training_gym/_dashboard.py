@@ -37,13 +37,31 @@ from starlette.requests import Request
 # Used as endpoint parameter annotations, so — like ``Request`` above — these
 # must resolve from this module's globals.
 from modal_training_gym.common.advantage_distribution import AdvantageDistribution
-from modal_training_gym.common.run import FrameworkStatusUpdate, TrainingRun
+from modal_training_gym.common.run import (
+    FrameworkStatusUpdate,
+    TrainingTimingEvent,
+    TrainingRun,
+)
 from modal_training_gym.common.run_summary import (
     JsonDict,
     RunSummary,
     build_run_summaries,
 )
+from modal_training_gym.common.step_timing import (
+    TRAINING_ROLE_FINISH_EVENT,
+    SYNCHRONOUS_TRAINING_ROLES,
+    StepTimes,
+    SubstepTimes,
+    advance_synchronous_timing_watermark,
+    aggregate_completed_step_times,
+    merge_step_times,
+    synchronous_timing_watermark,
+    training_role_finish_marker_key,
+    training_timing_event_index_key,
+    training_timing_event_key,
+)
 from modal_training_gym.common.training_rollout import TrainingRolloutResult
+from modal_training_gym.utils.metadata import _step_times_dict
 
 SummaryLoader = Callable[[], Awaitable[list[JsonDict]]]
 
@@ -55,6 +73,130 @@ class LogEntry(TypedDict):
     fd: int
     ts: float | None
     ts_ns: int | None
+
+
+def _read_synchronous_step_timing_events(
+    training_run_id: str,
+    training_attempt: int,
+    first_step: int,
+    last_step: int,
+) -> list[dict[str, object]]:
+    timing_event_store = _step_times_dict()
+    training_timing_events = []
+    for step in range(first_step, last_step + 1):
+        rollout_id = step - 1
+        for role in SYNCHRONOUS_TRAINING_ROLES:
+            index_key = training_timing_event_index_key(
+                training_run_id,
+                training_attempt,
+                role,
+                rollout_id,
+            )
+            for key in timing_event_store.get(index_key, []):
+                event = timing_event_store.get(key)
+                if isinstance(event, dict):
+                    training_timing_events.append(event)
+    return training_timing_events
+
+
+def _completed_synchronous_step_timing_update(
+    run: TrainingRun,
+    completed_step: int,
+    training_attempt: int,
+) -> tuple[StepTimes, SubstepTimes, int]:
+    persisted_through_step = synchronous_timing_watermark(run, training_attempt)
+    if completed_step <= persisted_through_step:
+        return {}, {}, persisted_through_step
+    first_step_to_reconcile = max(persisted_through_step + 1, 1)
+    first_step_to_read = max(persisted_through_step, 1)
+    training_timing_events = _read_synchronous_step_timing_events(
+        run.training_run_id,
+        training_attempt,
+        first_step_to_read,
+        completed_step,
+    )
+    step_times, substep_times = aggregate_completed_step_times(
+        training_timing_events,
+        run.training_run_id,
+        completed_step,
+        training_attempt=training_attempt,
+        first_step=first_step_to_read,
+    )
+    missing_step = next(
+        (
+            step
+            for step in range(first_step_to_reconcile, completed_step + 1)
+            if str(step) not in step_times
+        ),
+        None,
+    )
+    if missing_step is not None:
+        raise RuntimeError(f"Timing event for step {missing_step} is not available")
+    return step_times, substep_times, persisted_through_step
+
+
+def _record_training_timing_event(event: TrainingTimingEvent) -> None:
+    timing_event_store = _step_times_dict()
+    event_data = event.model_dump()
+    event_key = training_timing_event_key(event_data)
+    timing_event_store[event_key] = event_data
+    event_index_key = training_timing_event_index_key(
+        event.training_run_id,
+        event.training_attempt,
+        event.training_role,
+        event.rollout_id,
+        event.training_rank,
+    )
+    stored_event_keys = timing_event_store.get(event_index_key)
+    indexed_event_keys = (
+        list(stored_event_keys) if isinstance(stored_event_keys, list) else []
+    )
+    if event_key not in indexed_event_keys:
+        indexed_event_keys.append(event_key)
+        timing_event_store[event_index_key] = indexed_event_keys
+    if event.step_event == TRAINING_ROLE_FINISH_EVENT:
+        marker_key = training_role_finish_marker_key(
+            event.training_run_id,
+            event.training_attempt,
+            event.rollout_id,
+            event.training_role,
+            event.training_rank,
+        )
+        timing_event_store[marker_key] = event_key
+
+
+def _missing_finished_training_roles(
+    training_run_id: str,
+    training_attempt: int,
+    rollout_id: int,
+    expected_training_roles: Iterable[str],
+) -> list[str]:
+    timing_event_store = _step_times_dict()
+    return [
+        role
+        for role in expected_training_roles
+        if timing_event_store.get(
+            training_role_finish_marker_key(
+                training_run_id,
+                training_attempt,
+                rollout_id,
+                role,
+            )
+        )
+        is None
+    ]
+
+
+def _rollout_summary_sort_key(rollout: object) -> tuple[int, int]:
+    if not isinstance(rollout, dict):
+        return (-1, -1)
+    try:
+        return (
+            int(rollout.get("created_at", -1)),
+            int(rollout.get("rollout_id", -1)),
+        )
+    except (TypeError, ValueError):
+        return (-1, -1)
 
 
 REPO_URL = "https://github.com/modal-projects/training-gym.git"
@@ -116,6 +258,7 @@ DASHBOARD_PASSWORD_SECRET_NAME = "_training-gym-dashboard-password"
 PASSWORD_EXEMPT_PATHS = frozenset(
     {
         "/api/framework-status",
+        "/api/timing-events",
         "/api/training-rollouts",
         "/api/advantage-distributions",
     }
@@ -413,6 +556,8 @@ def fastapi_app():
         summary_items_from_payload,
         vol_get,
         vol_get_summary_items_healed,
+        vol_list,
+        vol_put,
         vol_put_summary_items,
     )
 
@@ -455,6 +600,8 @@ def fastapi_app():
     cache_locks = {key: asyncio.Lock() for key in cache_keys}
     # Hold strong refs to background refresh tasks so they aren't GC'd mid-flight.
     refresh_tasks: set[asyncio.Task[list[JsonDict]]] = set()
+    framework_status_tokens: dict[str, str] = {}
+    framework_status_token_lock = asyncio.Lock()
     web.mount("/assets", StaticFiles(directory=f"{STATIC_DIR}/assets"), name="assets")
 
     # ── Shared Modal client ───────────────────────────────────────────────
@@ -633,6 +780,39 @@ def fastapi_app():
 
     async def load_runs() -> list[JsonDict]:
         run_records = await load_list_summary(MetadataStore.TRAINING_RUNS_SUMMARY)
+        latest_rollouts = {
+            str(rollout["training_run_id"]): rollout
+            for rollout in await run_in_threadpool(
+                vol_list, MetadataStore.TRAINING_LATEST_ROLLOUTS
+            )
+            if rollout.get("training_run_id")
+        }
+
+        enriched_run_records = []
+        for run in run_records:
+            latest_rollout = latest_rollouts.get(str(run.get("training_run_id") or ""))
+            enriched_run = dict(run)
+            metadata = (
+                dict(enriched_run["metadata"])
+                if isinstance(enriched_run.get("metadata"), dict)
+                else {}
+            )
+            if _rollout_summary_sort_key(
+                metadata.get("latest_rollout")
+            ) > _rollout_summary_sort_key(latest_rollout):
+                enriched_run_records.append(enriched_run)
+                continue
+            if latest_rollout is None:
+                enriched_run_records.append(enriched_run)
+                continue
+            metadata["latest_rollout"] = {
+                key: latest_rollout[key]
+                for key in ("rollout_id", "mean", "total", "created_at")
+                if key in latest_rollout
+            }
+            enriched_run["metadata"] = metadata
+            enriched_run_records.append(enriched_run)
+
         try:
             result_records = await load_list_summary(
                 MetadataStore.TRAIN_RESULTS_SUMMARY
@@ -642,7 +822,10 @@ def fastapi_app():
             result_records = []
         return [
             summary.model_dump(mode="json")
-            for summary in build_run_summaries(run_records, result_records)
+            for summary in build_run_summaries(
+                enriched_run_records,
+                result_records,
+            )
         ]
 
     async def load_train_results() -> list[JsonDict]:
@@ -717,22 +900,37 @@ def fastapi_app():
     async def _require_framework_status_token(
         training_run_id: str, authorization: str | None
     ) -> None:
-        try:
-            expected_token = str(
-                (
-                    await run_in_threadpool(
-                        vol_get,
-                        MetadataStore.FRAMEWORK_STATUS_TOKENS,
-                        training_run_id,
-                    )
-                ).get("token", "")
-            )
-        except KeyError:
-            expected_token = ""
-        if not expected_token or not _secrets.compare_digest(
-            _bearer_token(authorization), expected_token
-        ):
-            raise HTTPException(status_code=403, detail="Invalid status token")
+        supplied_token = _bearer_token(authorization)
+        expected_token = framework_status_tokens.get(training_run_id, "")
+        if expected_token and _secrets.compare_digest(supplied_token, expected_token):
+            return
+
+        async with framework_status_token_lock:
+            expected_token = framework_status_tokens.get(training_run_id, "")
+            if expected_token and _secrets.compare_digest(
+                supplied_token, expected_token
+            ):
+                return
+            try:
+                expected_token = str(
+                    (
+                        await run_in_threadpool(
+                            vol_get,
+                            MetadataStore.FRAMEWORK_STATUS_TOKENS,
+                            training_run_id,
+                        )
+                    ).get("token", "")
+                )
+            except KeyError:
+                expected_token = ""
+            if expected_token:
+                framework_status_tokens[training_run_id] = expected_token
+            if expected_token and _secrets.compare_digest(
+                supplied_token, expected_token
+            ):
+                return
+
+        raise HTTPException(status_code=403, detail="Invalid status token")
 
     async def _get_run_or_404(training_run_id: str) -> TrainingRun:
         try:
@@ -760,8 +958,17 @@ def fastapi_app():
         update: FrameworkStatusUpdate,
         authorization: str | None = Header(default=None),
     ):
-        run = await _get_run_or_404(update.training_run_id)
         await _require_framework_status_token(update.training_run_id, authorization)
+        run = await _get_run_or_404(update.training_run_id)
+        current_attempt = int((run.metadata or {}).get("attempt_count") or 1)
+        if update.training_attempt is not None:
+            if update.training_attempt < current_attempt:
+                return JSONResponse({"status": "ignored", "reason": "stale_attempt"})
+            if update.training_attempt > current_attempt:
+                raise HTTPException(
+                    status_code=503,
+                    detail="Training attempt is not visible yet",
+                )
 
         status = await run_in_threadpool(run.apply_framework_status, update)
         if status is None:
@@ -772,9 +979,115 @@ def fastapi_app():
                     f"for {run.framework.value}"
                 ),
             )
+        if update.step_event == "substep_finish" and update.progress_current:
+            completed_step = update.progress_current
+            rollout_id = (
+                update.rollout_id
+                if update.rollout_id is not None
+                else completed_step - 1
+            )
+            completion_event = TrainingTimingEvent(
+                training_run_id=update.training_run_id,
+                training_attempt=current_attempt,
+                training_role="driver",
+                rollout_id=rollout_id,
+                progress_current=completed_step,
+                phase=update.phase,
+                step_event=update.step_event,
+                step_id=update.step_id if update.step_id is not None else -1,
+                event_ts=update.event_ts
+                if update.event_ts is not None
+                else time.time(),
+            )
+            try:
+                await run_in_threadpool(_record_training_timing_event, completion_event)
+                missing_training_roles = await run_in_threadpool(
+                    _missing_finished_training_roles,
+                    update.training_run_id,
+                    current_attempt,
+                    rollout_id,
+                    update.expected_training_roles or (),
+                )
+                if missing_training_roles:
+                    raise RuntimeError(
+                        "Waiting for timing events from "
+                        + ", ".join(missing_training_roles)
+                    )
+                (
+                    step_times,
+                    substep_times,
+                    reconciliation_watermark,
+                ) = await run_in_threadpool(
+                    _completed_synchronous_step_timing_update,
+                    run,
+                    completed_step,
+                    current_attempt,
+                )
+                latest_run = await _get_run_or_404(update.training_run_id)
+                latest_attempt = int(
+                    (latest_run.metadata or {}).get("attempt_count") or 1
+                )
+                if latest_attempt != current_attempt:
+                    if latest_attempt > current_attempt:
+                        return JSONResponse(
+                            {"status": "ignored", "reason": "stale_attempt"}
+                        )
+                    raise RuntimeError("Training attempt is not visible yet")
+                latest_watermark = synchronous_timing_watermark(
+                    latest_run, current_attempt
+                )
+                if (
+                    latest_watermark != reconciliation_watermark
+                    and latest_watermark < completed_step
+                ):
+                    (
+                        step_times,
+                        substep_times,
+                        _,
+                    ) = await run_in_threadpool(
+                        _completed_synchronous_step_timing_update,
+                        latest_run,
+                        completed_step,
+                        current_attempt,
+                    )
+
+                merge_step_times(latest_run, step_times, substep_times)
+                persisted_through_step = advance_synchronous_timing_watermark(
+                    latest_run, current_attempt
+                )
+                if persisted_through_step < completed_step:
+                    raise RuntimeError(
+                        f"Timing event for step {persisted_through_step + 1} "
+                        "is not available"
+                    )
+                run = latest_run
+                status = await run_in_threadpool(run.apply_framework_status, update)
+                if status is None:
+                    raise RuntimeError(
+                        f"Framework status {update.phase!r} became invalid"
+                    )
+            except Exception as exc:
+                print(
+                    f"Failed to persist synchronous step "
+                    f"{completed_step} timing "
+                    f"for {update.training_run_id}: {exc}"
+                )
+                raise HTTPException(
+                    status_code=503,
+                    detail="Failed to persist completed step timing",
+                ) from exc
         await run.save(is_async=True)
         invalidate_cache("runs")
         return JSONResponse({"status": "ok", "framework_status": status.value})
+
+    @web.post("/api/timing-events")
+    async def record_training_timing_event(
+        event: TrainingTimingEvent,
+        authorization: str | None = Header(default=None),
+    ):
+        await _require_framework_status_token(event.training_run_id, authorization)
+        await run_in_threadpool(_record_training_timing_event, event)
+        return JSONResponse({"status": "ok"})
 
     # ── Training rollouts ────────────────────────────────────────────────
 
@@ -783,12 +1096,28 @@ def fastapi_app():
         result: TrainingRolloutResult,
         authorization: str | None = Header(default=None),
     ):
-        run = await _get_run_or_404(result.training_run_id)
         await _require_framework_status_token(result.training_run_id, authorization)
+        await _get_run_or_404(result.training_run_id)
 
         await result.save(is_async=True)
-        run.record_latest_rollout(result)
-        await run.save(is_async=True)
+        latest_rollout = result.to_summary()
+        try:
+            stored_latest_rollout = await run_in_threadpool(
+                vol_get,
+                MetadataStore.TRAINING_LATEST_ROLLOUTS,
+                result.training_run_id,
+            )
+        except KeyError:
+            stored_latest_rollout = None
+        if _rollout_summary_sort_key(latest_rollout) >= _rollout_summary_sort_key(
+            stored_latest_rollout
+        ):
+            await run_in_threadpool(
+                vol_put,
+                MetadataStore.TRAINING_LATEST_ROLLOUTS,
+                result.training_run_id,
+                latest_rollout,
+            )
         invalidate_cache("runs")
 
         return JSONResponse(

@@ -10,19 +10,24 @@ from __future__ import annotations
 
 import os
 import re
+from importlib import import_module
 
-from modal_training_gym.utils.gpu import GPUType
 from modal_training_gym.common.modal_refs import (
     ModalCaptureError,
     register_modal_cloudpickle_reducers,
 )
-from modal_training_gym.utils.metadata import (
-    METADATA_VOLUME_NAME,
-    MetadataStore,
-    vol_get,
-    vol_list,
-    vol_put,
-)
+
+_LAZY_EXPORTS = {
+    "GPUType": ("modal_training_gym.utils.gpu", "GPUType"),
+    "METADATA_VOLUME_NAME": (
+        "modal_training_gym.utils.metadata",
+        "METADATA_VOLUME_NAME",
+    ),
+    "MetadataStore": ("modal_training_gym.utils.metadata", "MetadataStore"),
+    "vol_get": ("modal_training_gym.utils.metadata", "vol_get"),
+    "vol_list": ("modal_training_gym.utils.metadata", "vol_list"),
+    "vol_put": ("modal_training_gym.utils.metadata", "vol_put"),
+}
 
 COMMON_TRAINING_GYM_TAGS: dict[str, str] = {
     "training": "True",
@@ -97,3 +102,13 @@ __all__ = [
     "vol_list",
     "vol_put",
 ]
+
+
+def __getattr__(name: str):
+    target = _LAZY_EXPORTS.get(name)
+    if target is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    module_name, attribute = target
+    value = getattr(import_module(module_name), attribute)
+    globals()[name] = value
+    return value

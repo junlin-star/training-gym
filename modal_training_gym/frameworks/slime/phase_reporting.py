@@ -15,22 +15,26 @@ This module keeps the reporting entry points (``report_*``, ``log_*``,
 
 from __future__ import annotations
 
+import os
 import time
-from typing import Any
+from functools import wraps
+from typing import Any, Callable
 
 from modal_training_gym.common.status import SlimeStatus
+from modal_training_gym.common.step_timing import TRAINING_ROLE_FINISH_EVENT
 
 from .advantage_reporting import (
     _advantage_samples_payload as _advantage_samples_payload,
     report_advantage_distribution as report_advantage_distribution,
 )
 from .reporting import (
-    _STEP_EVENT_TIMEOUT_SECONDS,
     _enqueue,
+    _enqueue_completed_step_status,
     _enqueue_rollout,
-    _post_framework_status,
+    _enqueue_timing_event,
     _run_context,
     _step_progress,
+    flush_dashboard_reports,
 )
 from .reporting import (
     _advantage_url as _advantage_url,
@@ -112,11 +116,19 @@ def _hook_path_from_args(args: Any, path_key: str) -> str | None:
 def report_phase(
     status: SlimeStatus,
     args: Any = None,
+    *,
+    record_timing: bool = True,
     **extra: Any,
 ) -> None:
-    _enqueue(
-        {**_run_context(args), "phase": status.value, "event_ts": time.time(), **extra}
-    )
+    payload = {
+        **_run_context(args),
+        "phase": status.value,
+        "event_ts": time.time(),
+        **extra,
+    }
+    if record_timing and payload.get("rollout_id") is not None:
+        _enqueue_timing_event(payload)
+    _enqueue(payload)
 
 
 def report_rollout_samples(
@@ -181,6 +193,7 @@ def log_rollout_data(
     report_phase(
         SlimeStatus.ROLLOUT_LOGGING,
         args,
+        record_timing=False,
         **progress,
         rollout_id=rollout_id,
         sample_count=len(samples) if hasattr(samples, "__len__") else None,
@@ -213,6 +226,7 @@ def log_eval_rollout_data(
     report_phase(
         SlimeStatus.EVAL_ROLLOUT_LOGGING,
         args,
+        record_timing=False,
         **_step_progress(args, rollout_id),
         rollout_id=rollout_id,
         sample_count=len(data) if hasattr(data, "__len__") else None,
@@ -252,13 +266,21 @@ def before_train_step_hook(
     optimizer: Any,
     opt_param_scheduler: Any,
 ) -> None:
-    report_phase(
-        SlimeStatus.OPTIMIZER_STEP,
-        args,
-        **_step_progress(args, rollout_id),
-        rollout_id=rollout_id,
-        step_id=step_id,
+    async_mode = (
+        bool(getattr(args, "async_mode", False))
+        or os.environ.get("TRAINING_GYM_ASYNC_MODE") == "1"
     )
+    training_role = str(getattr(args, "training_gym_role", None) or "actor")
+    primary_rank = _is_primary_training_rank()
+    if primary_rank:
+        report_phase(
+            SlimeStatus.OPTIMIZER_STEP if async_mode else SlimeStatus.TRAIN_MODEL,
+            args,
+            **_step_progress(args, rollout_id),
+            rollout_id=rollout_id,
+            step_id=step_id,
+            training_role=training_role,
+        )
     _call_hook(
         CUSTOM_BEFORE_TRAIN_STEP_HOOK_PATH_KEY,
         args,
@@ -269,6 +291,142 @@ def before_train_step_hook(
         optimizer,
         opt_param_scheduler,
     )
+    if primary_rank and not async_mode:
+        before_optimizer_hook(
+            args,
+            rollout_id,
+            step_id,
+            optimizer,
+            training_role=training_role,
+        )
+
+
+_OPTIMIZER_STEP_TIMING_CONTEXT = "_training_gym_optimizer_step_timing_context"
+_OPTIMIZER_STEP_TIMING_INSTALLED = "_training_gym_optimizer_step_timing_installed"
+
+
+def _is_primary_training_rank() -> bool:
+    try:
+        import torch.distributed as dist
+    except ImportError:
+        return True
+    return not dist.is_available() or not dist.is_initialized() or dist.get_rank() == 0
+
+
+def before_optimizer_hook(
+    args: Any,
+    rollout_id: int,
+    step_id: int,
+    optimizer: object,
+    *,
+    training_role: str = "actor",
+) -> None:
+    if not getattr(optimizer, _OPTIMIZER_STEP_TIMING_INSTALLED, False):
+        original_step: Callable[..., object] = getattr(optimizer, "step")
+        original_zero_grad: Callable[..., object] = getattr(optimizer, "zero_grad")
+
+        def finish_train_model() -> tuple[Any, int, int, str, float] | None:
+            context = getattr(optimizer, _OPTIMIZER_STEP_TIMING_CONTEXT, None)
+            if context is None:
+                return None
+            setattr(optimizer, _OPTIMIZER_STEP_TIMING_CONTEXT, None)
+            hook_args, current_rollout_id, current_step_id, current_role = context
+            finished_at = time.time()
+            report_step_event(
+                SlimeStatus.TRAIN_MODEL,
+                hook_args,
+                current_rollout_id,
+                "phase_finish",
+                step_id=current_step_id,
+                event_ts=finished_at,
+                training_role=current_role,
+            )
+            return (
+                hook_args,
+                current_rollout_id,
+                current_step_id,
+                current_role,
+                finished_at,
+            )
+
+        @wraps(original_step)
+        def timed_step(*step_args: object, **step_kwargs: object) -> object:
+            context = finish_train_model()
+            if context is None:
+                return original_step(*step_args, **step_kwargs)
+            (
+                hook_args,
+                current_rollout_id,
+                current_step_id,
+                current_role,
+                optimizer_started,
+            ) = context
+            report_step_event(
+                SlimeStatus.OPTIMIZER_STEP,
+                hook_args,
+                current_rollout_id,
+                "phase_start",
+                step_id=current_step_id,
+                event_ts=optimizer_started,
+                training_role=current_role,
+            )
+            try:
+                return original_step(*step_args, **step_kwargs)
+            finally:
+                report_step_event(
+                    SlimeStatus.OPTIMIZER_STEP,
+                    hook_args,
+                    current_rollout_id,
+                    "phase_finish",
+                    step_id=current_step_id,
+                    event_ts=time.time(),
+                    training_role=current_role,
+                )
+
+        @wraps(original_zero_grad)
+        def timed_zero_grad(
+            *zero_grad_args: object, **zero_grad_kwargs: object
+        ) -> object:
+            finish_train_model()
+            return original_zero_grad(*zero_grad_args, **zero_grad_kwargs)
+
+        setattr(optimizer, "step", timed_step)
+        setattr(optimizer, "zero_grad", timed_zero_grad)
+        setattr(optimizer, _OPTIMIZER_STEP_TIMING_INSTALLED, True)
+
+    setattr(
+        optimizer,
+        _OPTIMIZER_STEP_TIMING_CONTEXT,
+        (args, rollout_id, step_id, training_role),
+    )
+    report_step_event(
+        SlimeStatus.TRAIN_MODEL,
+        args,
+        rollout_id,
+        "phase_start",
+        step_id=step_id,
+        training_role=training_role,
+    )
+
+
+def report_training_role_finished(
+    args: Any,
+    rollout_id: int,
+    training_role: str,
+) -> None:
+    if (
+        os.environ.get("TRAINING_GYM_ASYNC_MODE") == "1"
+        or not _is_primary_training_rank()
+    ):
+        return
+    report_step_event(
+        SlimeStatus.TRAINING,
+        args,
+        rollout_id,
+        TRAINING_ROLE_FINISH_EVENT,
+        training_role=str(getattr(training_role, "value", training_role)),
+    )
+    flush_dashboard_reports(timeout_seconds=2.0)
 
 
 def report_step_event(
@@ -276,6 +434,15 @@ def report_step_event(
     args: Any = None,
     rollout_id: int | None = None,
     step_event: str = "",
+    *,
+    step_id: int | None = None,
+    event_ts: float | None = None,
+    event_monotonic: float | None = None,
+    training_role: str = "driver",
+    timeline_lane: str | None = None,
+    parent_phase: str | None = None,
+    display_name: str | None = None,
+    expected_training_roles: list[str] | None = None,
 ) -> None:
     """Report one step/substep event tagged with the ``status`` phase.
 
@@ -287,27 +454,46 @@ def report_step_event(
         "phase": status.value if isinstance(status, SlimeStatus) else str(status),
         **_step_progress(args, rollout_id),
         "rollout_id": rollout_id,
-        "event_ts": time.time(),
+        "event_ts": event_ts if event_ts is not None else time.time(),
+        "training_role": training_role,
     }
+    if event_monotonic is not None:
+        payload["event_monotonic"] = event_monotonic
     if step_event:
         payload["step_event"] = step_event
-    match step_event:
-        case "start":
-            _post_framework_status(payload, _STEP_EVENT_TIMEOUT_SECONDS)
-        case "finish":
-            if rollout_id is not None:
-                _post_framework_status(payload, _STEP_EVENT_TIMEOUT_SECONDS)
-        case _:
+    if step_id is not None:
+        payload["step_id"] = step_id
+    if timeline_lane is not None:
+        payload["timeline_lane"] = timeline_lane
+    if parent_phase is not None:
+        payload["parent_phase"] = parent_phase
+    if display_name is not None:
+        payload["display_name"] = display_name
+    if rollout_id is not None:
+        _enqueue_timing_event(payload)
+    if expected_training_roles is not None:
+        payload["expected_training_roles"] = expected_training_roles
+    if step_event in {"phase_start", "phase_finish", TRAINING_ROLE_FINISH_EVENT}:
+        return
+    if step_event == "substep_finish":
+        if os.environ.get("TRAINING_GYM_ASYNC_MODE") == "1":
+            payload.pop("step_event", None)
             _enqueue(payload)
+        else:
+            _enqueue_completed_step_status(payload)
+    else:
+        _enqueue(payload)
 
 
 __all__ = [
     "before_log_prob_hook",
+    "before_optimizer_hook",
     "before_train_step_hook",
     "report_advantage_distribution",
     "report_phase",
     "report_rollout_samples",
     "report_step_event",
+    "report_training_role_finished",
     "log_eval_rollout_data",
     "log_rollout_data",
 ]

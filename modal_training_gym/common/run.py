@@ -7,18 +7,17 @@ from __future__ import annotations
 
 import os
 import time
-from collections.abc import Awaitable, Callable, MutableMapping
+from collections.abc import Awaitable, Callable
 from enum import Enum
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, PrivateAttr, computed_field, field_validator
 
 from modal_training_gym.common.framework import Framework
 from modal_training_gym.common.status import FrameworkStatus, resolve_framework_status
-from modal_training_gym.common.step_timing import record_step_time_event
+from modal_training_gym.common.step_timing import SubstepTimes
 from modal_training_gym.utils.metadata import (
     MetadataStore,
-    _step_times_dict,
     vol_get,
     vol_put_with_summary,
 )
@@ -41,6 +40,7 @@ class FrameworkStatusUpdate(BaseModel):
 
     training_run_id: str
     phase: str
+    training_attempt: int | None = None
     is_active: bool | None = None
     progress_current: int | None = None
     progress_total: int | None = None
@@ -48,12 +48,16 @@ class FrameworkStatusUpdate(BaseModel):
     rollout_id: int | None = None
     step_id: int | None = None
     step_event: str = ""
-    # Client-side timestamp of the event (time.time() in the reporting
-    # process); step timings use it so queue/network latency doesn't skew them.
     event_ts: float | None = None
+    expected_training_roles: list[str] | None = None
 
     @field_validator(
-        "progress_current", "progress_total", "rollout_id", "step_id", mode="before"
+        "training_attempt",
+        "progress_current",
+        "progress_total",
+        "rollout_id",
+        "step_id",
+        mode="before",
     )
     @classmethod
     def _non_negative_int_or_none(cls, value: object) -> int | None:
@@ -64,6 +68,28 @@ class FrameworkStatusUpdate(BaseModel):
         except ValueError:
             return None
         return parsed if parsed >= 0 else None
+
+
+class TrainingTimingEvent(BaseModel):
+    """One fine-grained timing boundary reported during training."""
+
+    training_run_id: str
+    training_attempt: int
+    training_role: str = "driver"
+    rollout_id: int
+    progress_current: int
+    progress_total: int | None = None
+    progress_unit: str | None = None
+    phase: str
+    step_event: str = ""
+    step_id: int = -1
+    event_ts: float
+    event_monotonic: float | None = None
+    training_rank: int | None = None
+    training_world_size: int | None = None
+    timeline_lane: str | None = None
+    parent_phase: str | None = None
+    display_name: str | None = None
 
 
 class TrainingRunStatus(Enum):
@@ -91,7 +117,7 @@ class TrainingRun(BaseModel):
     updated_at: int = 0
     duration_seconds: int | None = None
     step_times: dict[str, dict[str, int | None]] | None = None
-    substep_times: dict[str, dict[str, dict[str, float | None]]] | None = None
+    substep_times: SubstepTimes | None = None
     # Terminal failure message (Ray driver error / exception) for a failed run,
     # so the cause is queryable from the record and shown on the dashboard even
     # after logs roll off. None while running / on success.
@@ -183,10 +209,10 @@ class TrainingRun(BaseModel):
     ) -> FrameworkStatus | None:
         """Apply one framework-status report to this run (without saving).
 
-        Sets ``framework_status``, merges the report into the
-        ``framework_progress`` metadata blob, and records step start/finish
-        times. Returns the resolved status, or ``None`` (run untouched) when
-        ``update.phase`` isn't a valid status for this run's framework.
+        Sets ``framework_status`` and merges the report into the
+        ``framework_progress`` metadata blob. Returns the resolved status, or
+        ``None`` (run untouched) when ``update.phase`` isn't a valid status for
+        this run's framework.
         """
         status = resolve_framework_status(update.phase, str(self.framework.value))
         if status is None:
@@ -226,15 +252,6 @@ class TrainingRun(BaseModel):
         metadata["framework_progress"] = progress
         self.metadata = metadata
 
-        current_step = progress.get("current")
-        record_step_time_event(
-            cast(MutableMapping[str, Any], _step_times_dict()),
-            self.training_run_id,
-            current_step,
-            status.value,
-            update.step_event.strip(),
-            update.event_ts or time.time(),
-        )
         return status
 
     def record_latest_rollout(self, rollout: TrainingRolloutResult) -> None:

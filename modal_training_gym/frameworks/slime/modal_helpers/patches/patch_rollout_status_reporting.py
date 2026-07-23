@@ -31,7 +31,7 @@ PREAMBLE = (
     "        report_step_event as _tg_report,\n"
     "    )\n"
     "except ImportError:\n"
-    "    def _tg_report(status, args=None, rollout_id=None, step_event=''): pass\n"
+    "    def _tg_report(status, args=None, rollout_id=None, step_event='', **kwargs): pass\n"
     "\n"
 )
 
@@ -88,7 +88,7 @@ def _patch_file(path: Path) -> None:
         src = src.replace(
             "except ImportError:\n",
             "except ImportError:\n"
-            "    def _tg_report(status, args=None, rollout_id=None, step_event=''): pass\n",
+            "    def _tg_report(status, args=None, rollout_id=None, step_event='', **kwargs): pass\n",
             1,
         )
 
@@ -226,7 +226,16 @@ def _patch_file(path: Path) -> None:
             return (
                 f"{match.group(0)}"
                 f"{indent}# {SUBSTEP_FINISH_MARKER}: end-of-iteration substep boundary\n"
-                f"{indent}_tg_report('weight_sync', args, rollout_id, 'substep_finish')\n"
+                f"{indent}_tg_expected_training_roles = []\n"
+                f"{indent}if not args.debug_rollout_only:\n"
+                f"{indent}    if args.use_critic:\n"
+                f"{indent}        _tg_expected_training_roles.append('critic')\n"
+                f"{indent}    if actor_trains_this_step:\n"
+                f"{indent}        _tg_expected_training_roles.append('actor')\n"
+                f"{indent}_tg_report(\n"
+                f"{indent}    'weight_sync', args, rollout_id, 'substep_finish',\n"
+                f"{indent}    expected_training_roles=_tg_expected_training_roles,\n"
+                f"{indent})\n"
             )
 
         src, substep_finish_count = substep_finish_pattern.subn(

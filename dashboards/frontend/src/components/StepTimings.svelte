@@ -13,6 +13,7 @@
     generate_rollouts: "Generate rollouts",
     offload_rollout: "Offload rollout",
     compute_log_probs: "Compute log probs",
+    train_model: "Train model",
     optimizer_step: "Optimizer step",
     checkpoint_save: "Checkpoint save",
     offload_train: "Offload train",
@@ -25,6 +26,7 @@
     generate_rollouts: "#34d399",
     offload_rollout: "#a78bfa",
     compute_log_probs: "#fbbf24",
+    train_model: "#fb923c",
     optimizer_step: "#f87171",
     weight_sync: "#22d3ee",
     checkpoint_save: "#f472b6",
@@ -80,11 +82,21 @@
       const st = (stepTimes || {})[k] || null;
       const subs = (substepTimes || {})[k] || {};
       const substeps = Object.entries(subs)
-        .map(([name, v]) => ({
-          name,
-          start: v?.start ?? null,
-          duration: v?.duration_s ?? null,
-        }))
+        .flatMap(([name, value]) => {
+          const intervals = Array.isArray(value?.intervals) ? value.intervals : [];
+          const values = intervals.length ? intervals : [value];
+          return values.map((interval, index) => {
+            const role = interval?.training_role || "";
+            const label = labelFor(name);
+            return {
+              key: `${name}-${role}-${interval?.training_rank ?? ""}-${interval?.step_id ?? ""}-${index}`,
+              name,
+              label: role ? `${role[0].toUpperCase()}${role.slice(1)} ${label}` : label,
+              start: interval?.start ?? null,
+              duration: interval?.duration_s ?? null,
+            };
+          });
+        })
         .sort((a, b) => (a.start ?? 0) - (b.start ?? 0));
       return {
         key: k,
@@ -154,12 +166,23 @@
   }
 
   function isActive(step, sub) {
-    return tip && tip.step === step.n && tip.name === sub.name;
+    return tip && tip.step === step.n && tip.key === sub.key;
   }
 
   function showTip(e, step, sub) {
     if (pinned) return;
-    tip = { x: e.clientX, y: e.clientY, step: step.n, name: sub.name, dur: sub.duration };
+    tip = tipForEvent(e, step, sub);
+  }
+
+  function tipForEvent(e, step, sub) {
+    return {
+      x: e.clientX,
+      y: e.clientY,
+      step: step.n,
+      key: sub.key,
+      name: sub.label,
+      dur: sub.duration,
+    };
   }
 
   function moveTip(e) {
@@ -180,7 +203,7 @@
       return;
     }
     pinned = true;
-    tip = { x: e.clientX, y: e.clientY, step: step.n, name: sub.name, dur: sub.duration };
+    tip = tipForEvent(e, step, sub);
   }
 
   function clearPin() {
@@ -278,7 +301,7 @@
               </div>
               {#if step.substeps.length}
                 <div class="bar tl-bar">
-                  {#each step.substeps as sub (sub.name)}
+                  {#each step.substeps as sub (sub.key)}
                     {@render segment(step, sub)}
                   {/each}
                 </div>
@@ -299,7 +322,7 @@
           </div>
           {#if step.substeps.length}
             <div class="bar">
-              {#each step.substeps as sub (sub.name)}
+              {#each step.substeps as sub (sub.key)}
                 {@render segment(step, sub)}
               {/each}
             </div>
@@ -314,7 +337,7 @@
   {#if tip}
     <div class="tg-tip" class:pinned style:left={`${tip.x}px`} style:top={`${tip.y}px`}>
       <span class="tg-tip-step">Step {tip.step}</span>
-      <span class="tg-tip-name">{labelFor(tip.name)}</span>
+      <span class="tg-tip-name">{tip.name}</span>
       <span class="tg-tip-dur">
         {tip.dur == null ? "unknown (report dropped)" : fmtSecs(tip.dur)}
       </span>

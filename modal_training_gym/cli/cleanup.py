@@ -65,6 +65,7 @@ def cleanup(*, older_than_days: int = 7, dry_run: bool = False) -> None:
         if vol_remove(MetadataStore.TRAINING_RUNS, rid):
             deleted_runs += 1
         vol_remove(MetadataStore.FRAMEWORK_STATUS_TOKENS, rid)
+        vol_remove(MetadataStore.TRAINING_LATEST_ROLLOUTS, rid)
         deleted_tokens += 1
 
     rollout_summary = (
