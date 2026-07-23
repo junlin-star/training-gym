@@ -69,7 +69,6 @@ from modal_training_gym.common.step_timing import (
     SYNCHRONOUS_TRAINING_ROLES,
     advance_synchronous_timing_watermark,
     aggregate_completed_step_times,
-    aggregate_step_times as aggregate_step_times,
     archive_step_timings_for_retry,
     merge_step_times,
     restore_checkpoint_step_times,
@@ -1103,13 +1102,22 @@ def build_slime_app(
                 # Drain pending status writes before saving restored timing metadata.
                 if not flush_status_reporter(timeout_seconds=10.0):
                     raise RuntimeError(
-                        "Timed out waiting for pending framework status updates"
+                        "Timed out draining pending framework status updates"
                     )
                 latest_run_record = await TrainingRun.from_id(
                     training_run_id, is_async=True
                 )
-                latest_run_record.framework_status = run_record.framework_status
-                run_record = latest_run_record
+                latest_attempt = int(
+                    (latest_run_record.metadata or {}).get("attempt_count") or 1
+                )
+                if latest_attempt == training_attempt:
+                    latest_progress = (latest_run_record.metadata or {}).get(
+                        "framework_progress"
+                    )
+                    if isinstance(latest_progress, dict):
+                        metadata = dict(run_record.metadata or {})
+                        metadata["framework_progress"] = latest_progress
+                        run_record.metadata = metadata
             record_resume_checkpoint(run_record, resume_checkpoint)
             checkpoint_rollout_id = (
                 resume_checkpoint.get("resume_from_iteration")

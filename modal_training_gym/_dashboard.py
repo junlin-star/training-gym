@@ -55,6 +55,7 @@ from modal_training_gym.common.step_timing import (
     advance_synchronous_timing_watermark,
     aggregate_completed_step_times,
     merge_step_times,
+    record_step_time_event,
     synchronous_timing_watermark,
     training_role_finish_marker_key,
     training_timing_event_index_key,
@@ -160,6 +161,17 @@ def _record_training_timing_event(event: TrainingTimingEvent) -> None:
             event.training_role,
         )
         timing_event_store[marker_key] = event_key
+
+
+def _record_legacy_step_timing_event(event: TrainingTimingEvent) -> None:
+    record_step_time_event(
+        _step_times_dict(),
+        event.training_run_id,
+        event.progress_current,
+        event.phase,
+        event.step_event,
+        event.event_ts,
+    )
 
 
 def _framework_status_timing_event(
@@ -1011,6 +1023,9 @@ def fastapi_app():
         status_timing_event = _framework_status_timing_event(update, current_attempt)
         if update.training_attempt is None and status_timing_event is not None:
             await run_in_threadpool(_record_training_timing_event, status_timing_event)
+            await run_in_threadpool(
+                _record_legacy_step_timing_event, status_timing_event
+            )
         if update.step_event == "substep_finish" and update.progress_current:
             completed_step = update.progress_current
             rollout_id = (

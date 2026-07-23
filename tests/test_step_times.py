@@ -3,11 +3,11 @@ from modal_training_gym.common.run import TrainingRun
 from modal_training_gym.common.status import SlimeStatus
 from modal_training_gym.common.step_timing import (
     advance_synchronous_timing_watermark,
+    aggregate_step_times,
     aggregate_training_time_intervals,
     record_step_time_event,
     restore_checkpoint_step_times,
 )
-from modal_training_gym.frameworks.slime.launcher import aggregate_step_times
 from modal_training_gym.frameworks.slime import phase_reporting
 
 EVAL_BEFORE = SlimeStatus.EVAL_ROLLOUT_LOGGING.value
