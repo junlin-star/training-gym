@@ -11,6 +11,7 @@ from .commands import TrainingGymCommand
 def setup_command() -> None:
     """Deploy the training-gym dashboard to Modal."""
     from .setup import setup
+
     setup()
 
 
@@ -18,6 +19,7 @@ def setup_command() -> None:
 def open_command() -> None:
     """Open the deployed dashboard in your browser."""
     from .setup import open_dashboard
+
     open_dashboard()
 
 
@@ -25,6 +27,7 @@ def open_command() -> None:
 def set_proxy_auth_command() -> None:
     """Set/replace the Modal proxy-auth tokens (MODAL_KEY / MODAL_SECRET)"""
     from .setup import set_proxy_auth
+
     set_proxy_auth()
 
 
@@ -38,6 +41,7 @@ def set_proxy_auth_command() -> None:
 def set_password_command(password: str | None) -> None:
     """Set or clear the dashboard password (Basic Auth) and redeploy."""
     from .setup import set_password
+
     set_password(password=password)
 
 
@@ -58,4 +62,5 @@ def set_password_command(password: str | None) -> None:
 def cleanup_command(older_than_days: int, dry_run: bool) -> None:
     """Delete metadata for old failed or cancelled runs."""
     from .cleanup import cleanup
+
     cleanup(older_than_days=older_than_days, dry_run=dry_run)

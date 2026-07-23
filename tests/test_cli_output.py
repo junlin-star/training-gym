@@ -6,7 +6,6 @@ from unittest.mock import Mock
 import click
 import pytest
 from click.testing import CliRunner
-from rich.table import Column
 
 from modal_training_gym.cli import options, output
 

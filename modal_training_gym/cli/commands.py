@@ -76,9 +76,7 @@ def _option_label(param: click.Parameter, ctx: click.Context) -> Text:
     return text
 
 
-def _build_options(
-    cmd: click.Command, ctx: click.Context
-) -> RenderableType | None:
+def _build_options(cmd: click.Command, ctx: click.Context) -> RenderableType | None:
     rows: list[tuple[Text, str]] = []
     for param in cmd.get_params(ctx):
         record = param.get_help_record(ctx)
@@ -115,9 +113,7 @@ def group_commands_by_panel(
     return panels
 
 
-def _build_commands(
-    group: click.Group, available_width: int
-) -> RenderableType | None:
+def _build_commands(group: click.Group, available_width: int) -> RenderableType | None:
     panels = group_commands_by_panel(group)
     if not panels:
         return None
@@ -138,9 +134,7 @@ def _build_commands(
     return Group(*parts)
 
 
-def build_command_table(
-    name_width: int, table_width: int | None = None
-) -> Table:
+def build_command_table(name_width: int, table_width: int | None = None) -> Table:
     """Build a Modal-style name and description table."""
     kwargs: dict[str, Any] = {
         "box": None,
@@ -210,9 +204,7 @@ class TrainingGymCommand(click.Command):
         super().__init__(*args, **kwargs)
         self.panel = panel
 
-    def format_help(
-        self, ctx: click.Context, formatter: click.HelpFormatter
-    ) -> None:
+    def format_help(self, ctx: click.Context, formatter: click.HelpFormatter) -> None:
         if not use_rich_style():
             return super().format_help(ctx, formatter)
         console = _make_help_console()
@@ -263,15 +255,12 @@ class TrainingGymGroup(click.Group):
     ) -> None:
         for panel_name, items in group_commands_by_panel(self).items():
             rows = [
-                (name, command.get_short_help_str(limit=80))
-                for name, command in items
+                (name, command.get_short_help_str(limit=80)) for name, command in items
             ]
             with formatter.section(panel_name):
                 formatter.write_dl(rows)
 
-    def format_help(
-        self, ctx: click.Context, formatter: click.HelpFormatter
-    ) -> None:
+    def format_help(self, ctx: click.Context, formatter: click.HelpFormatter) -> None:
         if not use_rich_style():
             return super().format_help(ctx, formatter)
         console = _make_help_console()
@@ -299,9 +288,7 @@ def _render_click_exception(exc: click.ClickException, file: Any) -> None:
         console.print(ctx.get_usage())
         if ctx.command.get_help_option(ctx) is not None:
             option = ctx.help_option_names[0] if ctx.help_option_names else "--help"
-            console.print(
-                f"Try [bold]'{ctx.command_path} {option}'[/bold] for help."
-            )
+            console.print(f"Try [bold]'{ctx.command_path} {option}'[/bold] for help.")
 
     console.print(
         Panel(

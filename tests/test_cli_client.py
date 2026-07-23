@@ -156,4 +156,3 @@ def test_rejects_absolute_request_path():
     with DashboardClient(base_url="https://example.test") as client:
         with pytest.raises(DashboardError):
             client.get_json("https://other.test/api/items")
-
