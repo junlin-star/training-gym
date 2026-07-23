@@ -10,16 +10,7 @@ from modal_training_gym.cli.client import (
     DEFAULT_TIMEOUT_SECONDS,
     DashboardClient,
 )
-from modal_training_gym.cli.errors import (
-    AuthenticationError,
-    DashboardConfigurationError,
-    DashboardError,
-    DashboardNetworkError,
-    DashboardServerError,
-    DashboardTimeoutError,
-    MalformedResponseError,
-    ResourceNotFoundError,
-)
+from modal_training_gym.cli.errors import CLIError, ExitCode
 
 
 @pytest.fixture(autouse=True)
@@ -31,7 +22,24 @@ def configured_dashboard_url(monkeypatch):
     )
 
 
-def test_uses_configured_url_and_encodes_query(monkeypatch):
+@pytest.fixture
+def mock_transport(monkeypatch):
+    real_client = httpx.Client
+
+    def install(handler):
+        monkeypatch.setattr(
+            client_module.httpx,
+            "Client",
+            lambda **kwargs: real_client(
+                **kwargs,
+                transport=httpx.MockTransport(handler),
+            ),
+        )
+
+    return install
+
+
+def test_uses_configured_url_and_encodes_query(monkeypatch, mock_transport):
     monkeypatch.setattr(
         client_module, "get_dashboard_url", lambda: "https://example.test/root/"
     )
@@ -41,7 +49,8 @@ def test_uses_configured_url_and_encodes_query(monkeypatch):
         seen.append(request)
         return httpx.Response(200, json={"ok": True})
 
-    with DashboardClient(transport=httpx.MockTransport(respond)) as client:
+    mock_transport(respond)
+    with DashboardClient() as client:
         result = client.get_json(
             "/api/items",
             params={"model": "a b", "limit": 2, "unused": None},
@@ -52,7 +61,7 @@ def test_uses_configured_url_and_encodes_query(monkeypatch):
     assert seen[0].extensions["timeout"]["read"] == DEFAULT_TIMEOUT_SECONDS
 
 
-def test_sends_basic_auth_when_password_exists(monkeypatch):
+def test_sends_basic_auth_when_password_exists(monkeypatch, mock_transport):
     monkeypatch.setenv("TRAINING_GYM_DASHBOARD_PASSWORD", "secret")
     requests = []
 
@@ -60,14 +69,15 @@ def test_sends_basic_auth_when_password_exists(monkeypatch):
         requests.append(request)
         return httpx.Response(200, json={})
 
-    with DashboardClient(transport=httpx.MockTransport(respond)) as client:
+    mock_transport(respond)
+    with DashboardClient() as client:
         client.get_json("/api/items")
 
     expected = base64.b64encode(b"training-gym:secret").decode()
     assert requests[0].headers["authorization"] == f"Basic {expected}"
 
 
-def test_omits_auth_when_password_is_absent(monkeypatch):
+def test_omits_auth_when_password_is_absent(monkeypatch, mock_transport):
     monkeypatch.delenv("TRAINING_GYM_DASHBOARD_PASSWORD", raising=False)
     requests = []
 
@@ -75,63 +85,70 @@ def test_omits_auth_when_password_is_absent(monkeypatch):
         requests.append(request)
         return httpx.Response(200, json={})
 
-    with DashboardClient(transport=httpx.MockTransport(respond)) as client:
+    mock_transport(respond)
+    with DashboardClient() as client:
         client.get_json("/api/items")
 
     assert "authorization" not in requests[0].headers
 
 
 @pytest.mark.parametrize(
-    ("status_code", "error_type", "exit_code"),
+    ("status_code", "error", "exit_code"),
     [
-        (401, AuthenticationError, 4),
-        (403, AuthenticationError, 4),
-        (404, ResourceNotFoundError, 3),
-        (500, DashboardServerError, 5),
-        (503, DashboardServerError, 5),
-        (400, DashboardError, 5),
+        (401, "authentication_failed", ExitCode.AUTH),
+        (403, "authentication_failed", ExitCode.AUTH),
+        (404, "dashboard_resource_not_found", ExitCode.BACKEND),
+        (500, "dashboard_server_error", ExitCode.BACKEND),
+        (503, "dashboard_server_error", ExitCode.BACKEND),
+        (400, "dashboard_request_failed", ExitCode.BACKEND),
     ],
 )
-def test_maps_http_errors(status_code, error_type, exit_code):
-    transport = httpx.MockTransport(
-        lambda _request: httpx.Response(status_code, text="ignored")
-    )
-
-    with DashboardClient(transport=transport) as client:
-        with pytest.raises(error_type) as exc_info:
+def test_maps_http_errors(status_code, error, exit_code, mock_transport):
+    mock_transport(lambda _request: httpx.Response(status_code, text="ignored"))
+    with DashboardClient() as client:
+        with pytest.raises(CLIError) as exc_info:
             client.get_json("/api/items")
 
+    assert exc_info.value.error == error
     assert exc_info.value.exit_code == exit_code
 
 
-def test_maps_timeout_without_leaking_transport_details():
+def test_maps_timeout_without_leaking_transport_details(mock_transport):
     def timeout(request: httpx.Request) -> httpx.Response:
         raise httpx.ReadTimeout("secret transport detail", request=request)
 
-    with DashboardClient(transport=httpx.MockTransport(timeout)) as client:
-        with pytest.raises(DashboardTimeoutError) as exc_info:
+    mock_transport(timeout)
+    with DashboardClient() as client:
+        with pytest.raises(CLIError) as exc_info:
             client.get_json("/api/items")
 
+    assert exc_info.value.error == "dashboard_timeout"
+    assert exc_info.value.exit_code == ExitCode.BACKEND
     assert "secret transport detail" not in str(exc_info.value)
 
 
-def test_maps_connection_failure():
+def test_maps_connection_failure(mock_transport):
     def disconnect(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("host detail", request=request)
 
-    with DashboardClient(transport=httpx.MockTransport(disconnect)) as client:
-        with pytest.raises(DashboardNetworkError):
+    mock_transport(disconnect)
+    with DashboardClient() as client:
+        with pytest.raises(CLIError) as exc_info:
             client.get_json("/api/items")
 
+    assert exc_info.value.error == "dashboard_unreachable"
+    assert exc_info.value.exit_code == ExitCode.BACKEND
 
-def test_rejects_malformed_json():
-    transport = httpx.MockTransport(
-        lambda _request: httpx.Response(200, text="<html>not json</html>")
-    )
 
-    with DashboardClient(transport=transport) as client:
-        with pytest.raises(MalformedResponseError):
+def test_rejects_malformed_json(mock_transport):
+    mock_transport(lambda _request: httpx.Response(200, text="<html>not json</html>"))
+
+    with DashboardClient() as client:
+        with pytest.raises(CLIError) as exc_info:
             client.get_json("/api/items")
+
+    assert exc_info.value.error == "invalid_dashboard_response"
+    assert exc_info.value.exit_code == ExitCode.BACKEND
 
 
 @pytest.mark.parametrize(
@@ -141,11 +158,16 @@ def test_rejects_malformed_json():
 def test_rejects_missing_or_invalid_configuration(monkeypatch, url):
     monkeypatch.setattr(client_module, "get_dashboard_url", lambda: url)
 
-    with pytest.raises(DashboardConfigurationError):
+    with pytest.raises(CLIError) as exc_info:
         DashboardClient()
+
+    assert exc_info.value.exit_code == ExitCode.BACKEND
 
 
 def test_rejects_absolute_request_path():
     with DashboardClient() as client:
-        with pytest.raises(DashboardError):
+        with pytest.raises(CLIError) as exc_info:
             client.get_json("https://other.test/api/items")
+
+    assert exc_info.value.error == "invalid_dashboard_path"
+    assert exc_info.value.exit_code == ExitCode.ERROR

@@ -169,10 +169,6 @@ def _build_command_table(
     return table
 
 
-def _available_width(console: Console) -> int:
-    return min(_MAX_HELP_WIDTH, console.width) - _HELP_PADDING * 2
-
-
 def _emit(
     console: Console,
     sections: list[RenderableType | None],
@@ -192,7 +188,7 @@ def _emit(
     formatter.write(capture.get())
 
 
-class TrainingGymCommand(click.Command):
+class _TrainingGymCommand(click.Command):
     """Click command that renders ``--help`` with custom Rich output."""
 
     def __init__(
@@ -220,10 +216,10 @@ class TrainingGymCommand(click.Command):
         )
 
 
-class TrainingGymGroup(click.Group):
+class _TrainingGymGroup(click.Group):
     """Click group whose commands and nested groups share custom help."""
 
-    command_class = TrainingGymCommand
+    command_class = _TrainingGymCommand
     group_class = type
 
     def __init__(
@@ -270,7 +266,10 @@ class TrainingGymGroup(click.Group):
                 _build_usage(self, ctx),
                 _build_help_text(self),
                 _build_options(self, ctx),
-                _build_commands(self, _available_width(console)),
+                _build_commands(
+                    self,
+                    min(_MAX_HELP_WIDTH, console.width) - _HELP_PADDING * 2,
+                ),
                 _build_epilog(self),
             ],
             formatter,

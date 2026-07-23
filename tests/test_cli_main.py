@@ -1,16 +1,13 @@
 from __future__ import annotations
 
+import json
 from unittest.mock import Mock
 
 import pytest
 from click.testing import CliRunner
 
 from modal_training_gym import cli as cli_module
-from modal_training_gym.cli.errors import (
-    AuthenticationError,
-    DashboardError,
-    ResourceNotFoundError,
-)
+from modal_training_gym.cli.errors import CLIError, ExitCode
 
 
 @pytest.fixture
@@ -139,25 +136,55 @@ def test_click_usage_errors_use_exit_two_and_stderr(runner):
     assert "No such option '--unknown'" in result.stderr
 
 
-@pytest.mark.parametrize(
-    ("error", "exit_code"),
-    [
-        (ResourceNotFoundError("missing"), 3),
-        (AuthenticationError("denied"), 4),
-        (DashboardError("offline"), 5),
-    ],
-)
-def test_typed_errors_use_stable_exit_codes(runner, monkeypatch, error, exit_code):
+def test_expected_errors_use_declared_exit_code(runner, monkeypatch):
     def fail():
-        raise error
+        raise CLIError(
+            "offline",
+            error="dashboard_unreachable",
+            exit_code=ExitCode.BACKEND,
+            hint="training-gym open",
+        )
 
     monkeypatch.setattr("modal_training_gym.cli.setup.setup", fail)
 
     result = runner.invoke(cli_module.entrypoint_cli, ["setup"])
 
-    assert result.exit_code == exit_code
+    assert result.exit_code == ExitCode.BACKEND
     assert result.stdout == ""
-    assert str(error) in result.stderr
+    assert "offline" in result.stderr
+    assert "training-gym open" in result.stderr
+
+
+def test_main_renders_structured_json_errors(monkeypatch, capsys):
+    def fail(**_kwargs):
+        raise CLIError(
+            "Run run_8f2a was not found.",
+            error="run_not_found",
+            exit_code=ExitCode.NOT_FOUND,
+            hint="training-gym run list --since 7d",
+            run_id="run_8f2a",
+        )
+
+    monkeypatch.setattr(cli_module.entrypoint_cli, "main", fail)
+
+    assert cli_module.main(["run", "show", "run_8f2a", "--json"]) == 3
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert json.loads(captured.err) == {
+        "error": "run_not_found",
+        "run_id": "run_8f2a",
+        "message": "Run run_8f2a was not found.",
+        "hint": "training-gym run list --since 7d",
+    }
+
+
+def test_main_renders_usage_errors_as_json(capsys):
+    assert cli_module.main(["cleanup", "--unknown", "--json"]) == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    payload = json.loads(captured.err)
+    assert payload["error"] == "usage_error"
+    assert "No such option" in payload["message"]
 
 
 def test_main_maps_unexpected_errors(monkeypatch, capsys):

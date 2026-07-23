@@ -12,16 +12,7 @@ import httpx
 
 from modal_training_gym.common.config import get_dashboard_url
 
-from .errors import (
-    AuthenticationError,
-    DashboardConfigurationError,
-    DashboardError,
-    DashboardNetworkError,
-    DashboardServerError,
-    DashboardTimeoutError,
-    MalformedResponseError,
-    ResourceNotFoundError,
-)
+from .errors import CLIError, ExitCode
 
 
 DASHBOARD_PASSWORD_ENV = "TRAINING_GYM_DASHBOARD_PASSWORD"
@@ -36,19 +27,23 @@ class DashboardClient:
         self,
         *,
         password: str | None = None,
-        timeout: float = DEFAULT_TIMEOUT_SECONDS,
-        transport: httpx.BaseTransport | None = None,
     ) -> None:
         configured_url = (get_dashboard_url() or "").strip()
         if not configured_url:
-            raise DashboardConfigurationError(
-                "Dashboard URL is not configured; run `training-gym setup` first."
+            raise CLIError(
+                "Dashboard URL is not configured.",
+                error="dashboard_not_configured",
+                exit_code=ExitCode.BACKEND,
+                hint="training-gym setup",
             )
 
         parsed = urlsplit(configured_url)
         if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-            raise DashboardConfigurationError(
-                "Configured dashboard URL must use HTTP or HTTPS."
+            raise CLIError(
+                "Configured dashboard URL must use HTTP or HTTPS.",
+                error="dashboard_configuration_invalid",
+                exit_code=ExitCode.BACKEND,
+                hint="training-gym setup",
             )
 
         dashboard_password = (
@@ -62,8 +57,7 @@ class DashboardClient:
         self._client = httpx.Client(
             base_url=configured_url.rstrip("/") + "/",
             auth=auth,
-            timeout=timeout,
-            transport=transport,
+            timeout=DEFAULT_TIMEOUT_SECONDS,
             follow_redirects=True,
         )
 
@@ -76,7 +70,10 @@ class DashboardClient:
         """GET a dashboard-relative path and decode its JSON response."""
         parsed_path = urlsplit(path)
         if parsed_path.scheme or parsed_path.netloc:
-            raise DashboardError("Dashboard request path must be relative.")
+            raise CLIError(
+                "Dashboard request path must be relative.",
+                error="invalid_dashboard_path",
+            )
 
         query = (
             {key: value for key, value in params.items() if value is not None}
@@ -86,26 +83,59 @@ class DashboardClient:
         try:
             response = self._client.get(path.lstrip("/"), params=query)
         except httpx.TimeoutException as exc:
-            raise DashboardTimeoutError("Dashboard request timed out.") from exc
+            raise CLIError(
+                "Dashboard request timed out.",
+                error="dashboard_timeout",
+                exit_code=ExitCode.BACKEND,
+            ) from exc
         except httpx.RequestError as exc:
-            raise DashboardNetworkError("Could not connect to the dashboard.") from exc
+            raise CLIError(
+                "Could not connect to the dashboard.",
+                error="dashboard_unreachable",
+                exit_code=ExitCode.BACKEND,
+                hint="training-gym setup",
+            ) from exc
 
         self._raise_for_status(response.status_code)
         try:
             return response.json()
         except (ValueError, UnicodeDecodeError) as exc:
-            raise MalformedResponseError("Dashboard returned malformed JSON.") from exc
+            raise CLIError(
+                "Dashboard returned malformed JSON.",
+                error="invalid_dashboard_response",
+                exit_code=ExitCode.BACKEND,
+            ) from exc
 
     @staticmethod
     def _raise_for_status(status_code: int) -> None:
         if status_code in {401, 403}:
-            raise AuthenticationError("Dashboard authentication was rejected.")
+            raise CLIError(
+                "Dashboard authentication was rejected.",
+                error="authentication_failed",
+                exit_code=ExitCode.AUTH,
+                hint="training-gym set-password",
+            )
         if status_code == 404:
-            raise ResourceNotFoundError("Dashboard resource was not found.")
+            raise CLIError(
+                "The deployed dashboard does not support this resource.",
+                error="dashboard_resource_not_found",
+                exit_code=ExitCode.BACKEND,
+                hint="training-gym setup",
+            )
         if status_code >= 500:
-            raise DashboardServerError(f"Dashboard returned HTTP {status_code}.")
+            raise CLIError(
+                f"Dashboard returned HTTP {status_code}.",
+                error="dashboard_server_error",
+                exit_code=ExitCode.BACKEND,
+                status_code=status_code,
+            )
         if status_code >= 400:
-            raise DashboardError(f"Dashboard returned HTTP {status_code}.")
+            raise CLIError(
+                f"Dashboard returned HTTP {status_code}.",
+                error="dashboard_request_failed",
+                exit_code=ExitCode.BACKEND,
+                status_code=status_code,
+            )
 
     def close(self) -> None:
         self._client.close()

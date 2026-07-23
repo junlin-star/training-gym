@@ -40,11 +40,11 @@ def _console(*, stderr: bool = False) -> Console:
     )
 
 
-def print_json(value: Any) -> None:
-    """Write JSON to stdout (without Rich formatting)."""
+def print_json(value: Any, *, stderr: bool = False) -> None:
+    """Write JSON without Rich formatting."""
     print(
         json.dumps(value, ensure_ascii=False, indent=2),
-        file=sys.stdout,
+        file=sys.stderr if stderr else sys.stdout,
     )
 
 
