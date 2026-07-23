@@ -501,6 +501,9 @@ class SlimeRecipe(BaseTrainRecipe):
 
     @classmethod
     def get_base_recipe(cls, model_config: ModelConfig) -> "SlimeRecipe":
+        from modal_training_gym.train_recipes.slime_recipe.gemma4_26b_a4b import (
+            Gemma4_26B_A4B_Recipe,
+        )
         from modal_training_gym.train_recipes.slime_recipe.glm_4_7 import (
             GLM_4_7_Recipe,
         )
@@ -527,6 +530,8 @@ class SlimeRecipe(BaseTrainRecipe):
             Qwen3_VL_8b_Recipe,
         )
 
+        if model_config.model_name == "google/gemma-4-26B-A4B-it":
+            return Gemma4_26B_A4B_Recipe()
         if model_config.model_name == "Qwen/Qwen3-VL-8B-Instruct":
             return Qwen3_VL_8b_Recipe()
         if model_config.model_name == "Qwen/Qwen3-ASR-1.7B":
