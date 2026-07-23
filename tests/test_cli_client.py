@@ -77,6 +77,29 @@ def test_sends_basic_auth_when_password_exists(monkeypatch, mock_transport):
     assert requests[0].headers["authorization"] == f"Basic {expected}"
 
 
+def test_does_not_forward_basic_auth_to_redirected_host(
+    monkeypatch, mock_transport
+):
+    monkeypatch.setenv("TRAINING_GYM_DASHBOARD_PASSWORD", "secret")
+    requests = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.url.host == "example.test":
+            return httpx.Response(
+                302,
+                headers={"location": "https://other.test/api/items"},
+            )
+        return httpx.Response(200, json={})
+
+    mock_transport(respond)
+    with DashboardClient() as client:
+        client.get_json("/api/items")
+
+    assert requests[0].headers["authorization"].startswith("Basic ")
+    assert "authorization" not in requests[1].headers
+
+
 def test_omits_auth_when_password_is_absent(monkeypatch, mock_transport):
     monkeypatch.delenv("TRAINING_GYM_DASHBOARD_PASSWORD", raising=False)
     requests = []
