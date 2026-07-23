@@ -136,7 +136,7 @@ def test_training_interval_preserves_active_duration():
     assert intervals["1"]["custom_reward_function"]["duration_s"] == 4.0
 
 
-def test_substep_finish_uses_framework_status_only(monkeypatch):
+def test_substep_finish_records_timing_and_triggers_reconciliation(monkeypatch):
     timing_events = []
     completed_step_statuses = []
     monkeypatch.delenv("TRAINING_GYM_ASYNC_MODE", raising=False)
@@ -154,10 +154,14 @@ def test_substep_finish_uses_framework_status_only(monkeypatch):
         "weight_sync", rollout_id=0, step_event="substep_finish"
     )
 
-    assert [event["step_event"] for event in timing_events] == ["phase_start"]
+    assert [event["step_event"] for event in timing_events] == [
+        "phase_start",
+        "substep_finish",
+    ]
     assert [event["step_event"] for event in completed_step_statuses] == [
         "substep_finish"
     ]
+    assert completed_step_statuses[0]["completed_step"] == 1
 
 
 def build_step_times_dict(

@@ -527,7 +527,7 @@ def report_step_event(
         payload["parent_phase"] = parent_phase
     if display_name is not None:
         payload["display_name"] = display_name
-    if rollout_id is not None and (step_event != "substep_finish" or async_mode):
+    if rollout_id is not None:
         _enqueue_timing_event(payload)
     if expected_training_roles is not None:
         payload["expected_training_roles"] = expected_training_roles
@@ -538,7 +538,12 @@ def report_step_event(
             payload.pop("step_event", None)
             _enqueue(payload)
         else:
-            _enqueue_completed_step_status(payload)
+            _enqueue_completed_step_status(
+                {
+                    **payload,
+                    "completed_step": payload["progress_current"],
+                }
+            )
     else:
         _enqueue(payload)
 

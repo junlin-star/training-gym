@@ -55,7 +55,6 @@ from modal_training_gym.common.step_timing import (
     advance_synchronous_timing_watermark,
     aggregate_completed_step_times,
     merge_step_times,
-    record_step_time_event,
     synchronous_timing_watermark,
     training_role_finish_marker_key,
     training_timing_event_index_key,
@@ -161,44 +160,6 @@ def _record_training_timing_event(event: TrainingTimingEvent) -> None:
             event.training_role,
         )
         timing_event_store[marker_key] = event_key
-
-
-def _record_legacy_step_timing_event(event: TrainingTimingEvent) -> None:
-    record_step_time_event(
-        _step_times_dict(),
-        event.training_run_id,
-        event.progress_current,
-        event.phase,
-        event.step_event,
-        event.event_ts,
-    )
-
-
-def _framework_status_timing_event(
-    update: FrameworkStatusUpdate,
-    training_attempt: int,
-) -> TrainingTimingEvent | None:
-    progress_current = update.progress_current
-    if progress_current is None and update.rollout_id is not None:
-        progress_current = update.rollout_id + 1
-    if progress_current is None or progress_current <= 0:
-        return None
-    rollout_id = (
-        update.rollout_id if update.rollout_id is not None else progress_current - 1
-    )
-    return TrainingTimingEvent(
-        training_run_id=update.training_run_id,
-        training_attempt=training_attempt,
-        training_role="driver",
-        rollout_id=rollout_id,
-        progress_current=progress_current,
-        progress_total=update.progress_total,
-        progress_unit=update.progress_unit,
-        phase=update.phase,
-        step_event=update.step_event,
-        step_id=update.step_id if update.step_id is not None else -1,
-        event_ts=update.event_ts if update.event_ts is not None else time.time(),
-    )
 
 
 def _missing_finished_training_roles(
@@ -1020,30 +981,19 @@ def fastapi_app():
                     f"for {run.framework.value}"
                 ),
             )
-        status_timing_event = _framework_status_timing_event(update, current_attempt)
-        if update.training_attempt is None and status_timing_event is not None:
-            await run_in_threadpool(_record_training_timing_event, status_timing_event)
-            await run_in_threadpool(
-                _record_legacy_step_timing_event, status_timing_event
-            )
-        if update.step_event == "substep_finish" and update.progress_current:
-            completed_step = update.progress_current
+        if update.completed_step is not None:
+            completed_step = update.completed_step
+            if completed_step <= 0:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Completed step must be greater than zero",
+                )
             rollout_id = (
                 update.rollout_id
                 if update.rollout_id is not None
                 else completed_step - 1
             )
-            completion_event = status_timing_event
-            if completion_event is None:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Completed step is missing timing context",
-                )
             try:
-                if update.training_attempt is not None:
-                    await run_in_threadpool(
-                        _record_training_timing_event, completion_event
-                    )
                 missing_training_roles = await run_in_threadpool(
                     _missing_finished_training_roles,
                     update.training_run_id,

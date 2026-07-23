@@ -77,12 +77,17 @@
     return value.toFixed(3);
   }
 
-  // Step keys are 1-indexed and rollout ids are 0-indexed.
+  // New timings use 1-indexed step keys; persisted production runs may use
+  // the rollout id directly.
   function stepTimingForRollout(rolloutId) {
     const st = run?.step_times || null;
     const sub = run?.substep_times || null;
     if (!st && !sub) return null;
-    const key = String(Number(rolloutId) + 1);
+    const stepKey = String(Number(rolloutId) + 1);
+    const rolloutKey = String(Number(rolloutId));
+    const key = (st && st[stepKey]) || (sub && sub[stepKey])
+      ? stepKey
+      : rolloutKey;
     if (!(st && st[key]) && !(sub && sub[key])) return null;
     return {
       stepTimes: st && st[key] ? { [key]: st[key] } : null,

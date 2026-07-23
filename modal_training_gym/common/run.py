@@ -47,6 +47,8 @@ class FrameworkStatusUpdate(BaseModel):
     progress_unit: str | None = None
     rollout_id: int | None = None
     step_id: int | None = None
+    completed_step: int | None = None
+    # Retained on the wire while already-deployed dashboards still use it.
     step_event: str = ""
     event_ts: float | None = None
     expected_training_roles: list[str] | None = None
@@ -57,6 +59,7 @@ class FrameworkStatusUpdate(BaseModel):
         "progress_total",
         "rollout_id",
         "step_id",
+        "completed_step",
         mode="before",
     )
     @classmethod

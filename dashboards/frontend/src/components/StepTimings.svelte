@@ -96,7 +96,7 @@
                 key: `${name}-${role}-${interval?.training_rank ?? ""}-${interval?.step_id ?? ""}-${index}`,
                 name,
                 label: role && role !== "driver"
-                  ? `${role[0].toUpperCase()}${role.slice(1)} ${label}`
+                  ? `${label} (${role[0].toUpperCase()}${role.slice(1)})`
                   : label,
                 start: interval?.start ?? null,
                 duration: interval?.duration_s ?? null,
