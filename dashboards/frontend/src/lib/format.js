@@ -78,7 +78,7 @@ export function truncateId(id) {
 }
 
 export function getGroupTags(run) {
-  const tags = run?.metadata?.group_tags;
+  const tags = run?.group_tags || run?.metadata?.group_tags;
   const groupId = tags?.group_id || run?.group_id || run?.metadata?.group_id || "";
   if (!groupId && (!tags || typeof tags !== "object")) return null;
 

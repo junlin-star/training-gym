@@ -293,14 +293,14 @@
                       {modelName(run)}
                     </a>
                   </td>
-                  <td class="min-w-0 row-open-cell" title={run.config_summary?.dataset_name || "—"}>
+                  <td class="min-w-0 row-open-cell" title={run.dataset || "—"}>
                     <a href={trainingRunDetailPath(run.run_id)} class="cell-open-button" onclick={(event) => selectRun(run.run_id, event)}>
-                      {run.config_summary?.dataset_name || "—"}
+                      {run.dataset || "—"}
                     </a>
                   </td>
                   <td class="row-open-cell">
                     <a href={trainingRunDetailPath(run.run_id)} class="cell-open-button" onclick={(event) => selectRun(run.run_id, event)}>
-                      {run.framework || "—"}
+                      {run.recipe || "—"}
                     </a>
                   </td>
                   <td class="group-cell row-open-cell" title={groupTags?.group_id || run.group_id || ""}>

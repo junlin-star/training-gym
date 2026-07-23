@@ -27,32 +27,17 @@
   let groupTags = $derived(getGroupTags(run));
   let wandbLinks = $derived(run?.wandb_links || []);
   let attemptMetadata = $derived.by(() => {
-    const metadata = run?.metadata;
-    if (!metadata || typeof metadata !== "object") return null;
-    const attemptCount = Number(metadata.attempt_count) || 0;
-    const lastAttemptStartedAt = Number(metadata.last_attempt_started_at) || 0;
-    const lastAttemptStatus = String(metadata.last_attempt_status || "");
-    const resumeCheckpointPath = String(metadata.resume_checkpoint_path || "");
-    const resumeCheckpointName = String(metadata.resume_checkpoint_name || "");
-    const resumeFromIteration = Number(metadata.resume_from_iteration);
-    const resumedFromCheckpoint =
-      metadata.resumed_from_checkpoint === true || Boolean(resumeCheckpointPath);
-    if (
-      !attemptCount &&
-      !lastAttemptStartedAt &&
-      !lastAttemptStatus &&
-      !resumedFromCheckpoint
-    ) {
-      return null;
-    }
+    const state = run?.resume_state;
+    if (!state) return null;
     return {
-      attemptCount,
-      lastAttemptStartedAt,
-      lastAttemptStatus,
-      resumedFromCheckpoint,
-      resumeCheckpointPath,
-      resumeCheckpointName,
-      resumeFromIteration: Number.isFinite(resumeFromIteration) ? resumeFromIteration : null,
+      attemptCount: Number(state.attempt_count) || 0,
+      lastAttemptStartedAt: Number(state.last_attempt_started_at) || 0,
+      lastAttemptStatus: String(state.last_attempt_status || ""),
+      resumedFromCheckpoint: state.resumed_from_checkpoint === true,
+      resumeCheckpointPath: String(state.resume_checkpoint_path || ""),
+      resumeCheckpointName: String(state.resume_checkpoint_name || ""),
+      resumeFromIteration:
+        state.resume_from_iteration == null ? null : Number(state.resume_from_iteration),
     };
   });
 
@@ -131,11 +116,11 @@
       </div>
       <div class="kv">
         <span class="kv-key">Dataset</span>
-        <span class="kv-value">{run.config_summary?.dataset_name || "—"}</span>
+        <span class="kv-value">{run.dataset || "—"}</span>
       </div>
       <div class="kv">
         <span class="kv-key">Recipe</span>
-        <span class="kv-value">{run.framework || "—"}</span>
+        <span class="kv-value">{run.recipe || "—"}</span>
       </div>
       {#if modalAppUrl}
         <div class="kv">

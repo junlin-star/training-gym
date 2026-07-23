@@ -38,11 +38,13 @@ from starlette.requests import Request
 # must resolve from this module's globals.
 from modal_training_gym.common.advantage_distribution import AdvantageDistribution
 from modal_training_gym.common.run import FrameworkStatusUpdate, TrainingRun
+from modal_training_gym.common.run_summary import (
+    JsonDict,
+    RunSummary,
+    build_run_summaries,
+)
 from modal_training_gym.common.training_rollout import TrainingRolloutResult
 
-# A JSON object as stored in the metadata volume (summary rows, result
-# payloads). ``object`` values — not ``Any`` — so readers must narrow.
-JsonDict = dict[str, object]
 SummaryLoader = Callable[[], Awaitable[list[JsonDict]]]
 
 
@@ -630,7 +632,18 @@ def fastapi_app():
         return items
 
     async def load_runs() -> list[JsonDict]:
-        return await load_list_summary(MetadataStore.TRAINING_RUNS_SUMMARY)
+        run_records = await load_list_summary(MetadataStore.TRAINING_RUNS_SUMMARY)
+        try:
+            result_records = await load_list_summary(
+                MetadataStore.TRAIN_RESULTS_SUMMARY
+            )
+        except Exception:
+            # A result-store outage must not hide otherwise healthy run records.
+            result_records = []
+        return [
+            summary.model_dump(mode="json")
+            for summary in build_run_summaries(run_records, result_records)
+        ]
 
     async def load_train_results() -> list[JsonDict]:
         return await load_list_summary(MetadataStore.TRAIN_RESULTS_SUMMARY)
@@ -732,13 +745,15 @@ def fastapi_app():
 
     # ── Training runs ────────────────────────────────────────────────────
 
-    @web.get("/api/runs")
+    @web.get("/api/runs", response_model=list[RunSummary])
     async def runs():
         try:
             data = await get_cached_list("runs", load_runs)
         except Exception:
             data = []
-        return JSONResponse(data)
+        return [
+            RunSummary.model_validate(item) for item in data if isinstance(item, dict)
+        ]
 
     @web.post("/api/framework-status")
     async def framework_status(
