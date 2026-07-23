@@ -496,6 +496,7 @@ def report_step_event(
     ``status`` may be a plain string — the patched slime train.py passes phase
     names as literals so the injected code stays stdlib-only.
     """
+    async_mode = os.environ.get("TRAINING_GYM_ASYNC_MODE") == "1"
     payload = {
         **_run_context(args),
         "phase": status.value if isinstance(status, SlimeStatus) else str(status),
@@ -518,14 +519,14 @@ def report_step_event(
         payload["parent_phase"] = parent_phase
     if display_name is not None:
         payload["display_name"] = display_name
-    if rollout_id is not None:
+    if rollout_id is not None and (step_event != "substep_finish" or async_mode):
         _enqueue_timing_event(payload)
     if expected_training_roles is not None:
         payload["expected_training_roles"] = expected_training_roles
     if step_event in {"phase_start", "phase_finish", TRAINING_ROLE_FINISH_EVENT}:
         return
     if step_event == "substep_finish":
-        if os.environ.get("TRAINING_GYM_ASYNC_MODE") == "1":
+        if async_mode:
             payload.pop("step_event", None)
             _enqueue(payload)
         else:

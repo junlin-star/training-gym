@@ -133,6 +133,7 @@
         String(previousRun.status).toLowerCase() === "running";
       const fetchedIsRunning =
         !run.train_result && String(run.status).toLowerCase() === "running";
+      // Supported retries increment attempt_count, so this is a stale snapshot.
       const latestRun = !previousIsRunning && fetchedIsRunning ? previousRun : run;
 
       return {

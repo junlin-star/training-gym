@@ -8,6 +8,7 @@ from modal_training_gym.common.step_timing import (
     restore_checkpoint_step_times,
 )
 from modal_training_gym.frameworks.slime.launcher import aggregate_step_times
+from modal_training_gym.frameworks.slime import phase_reporting
 
 EVAL_BEFORE = SlimeStatus.EVAL_ROLLOUT_LOGGING.value
 EVAL_AFTER = f"{EVAL_BEFORE}_end"
@@ -122,6 +123,30 @@ def test_training_interval_preserves_active_duration():
     )
 
     assert intervals["1"]["custom_reward_function"]["duration_s"] == 4.0
+
+
+def test_substep_finish_uses_framework_status_only(monkeypatch):
+    timing_events = []
+    completed_step_statuses = []
+    monkeypatch.delenv("TRAINING_GYM_ASYNC_MODE", raising=False)
+    monkeypatch.setattr(phase_reporting, "_enqueue_timing_event", timing_events.append)
+    monkeypatch.setattr(
+        phase_reporting,
+        "_enqueue_completed_step_status",
+        completed_step_statuses.append,
+    )
+
+    phase_reporting.report_step_event(
+        "train_model", rollout_id=0, step_event="phase_start"
+    )
+    phase_reporting.report_step_event(
+        "weight_sync", rollout_id=0, step_event="substep_finish"
+    )
+
+    assert [event["step_event"] for event in timing_events] == ["phase_start"]
+    assert [event["step_event"] for event in completed_step_statuses] == [
+        "substep_finish"
+    ]
 
 
 def build_step_times_dict(
