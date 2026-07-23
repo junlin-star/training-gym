@@ -37,11 +37,11 @@ from starlette.requests import Request
 # Used as endpoint parameter annotations, so — like ``Request`` above — these
 # must resolve from this module's globals.
 from modal_training_gym.common.advantage_distribution import AdvantageDistribution
-from modal_training_gym.common.async_step_timing import (
+from modal_training_gym.common.async_timing_aggregation import (
     StepTimingSnapshot,
     TimingAttemptSnapshot,
 )
-from modal_training_gym.common.async_timing import (
+from modal_training_gym.common.async_timing_types import (
     AsyncStepTimingUpdate,
     AsyncTimingEvent,
 )
@@ -873,7 +873,7 @@ def fastapi_app():
 
         await _require_framework_status_token(training_run_id, authorization)
 
-        from modal_training_gym.common.async_step_timing import (
+        from modal_training_gym.common.async_timing_aggregation import (
             aggregate_async_step_times,
             apply_step_timing_snapshot,
             reconcile_completed_step_times,

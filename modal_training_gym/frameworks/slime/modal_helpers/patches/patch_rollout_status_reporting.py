@@ -56,7 +56,7 @@ ASYNC_PREAMBLE = (
     "try:\n"
     "    from modal_training_gym.frameworks.slime.phase_reporting import (\n"
     "        flush_async_timing_events as _tg_flush_timings,\n"
-    "        flush_async_timing_events_on_error as _tg_flush_timings_on_error,\n"
+    "        flush_async_timing_queue_before_reraise as _tg_flush_timings_on_error,\n"
     "        report_async_timing_event as _tg_report,\n"
     "    )\n"
     "except ImportError:\n"

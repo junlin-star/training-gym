@@ -24,14 +24,14 @@ from functools import wraps
 from typing import TYPE_CHECKING, Any, ParamSpec, TypeVar, cast
 
 from modal_training_gym.common.status import SlimeStatus
-from modal_training_gym.common.step_timing import TrainingSubstep
+from modal_training_gym.common.timing_types import TrainingSubstep
 
 if TYPE_CHECKING:
-    from modal_training_gym.common.async_timing import (
+    from modal_training_gym.common.async_timing_types import (
         AsyncTimingEvent,
         AsyncTimingEventType,
     )
-    from modal_training_gym.common.step_timing import TimingLane
+    from modal_training_gym.common.timing_types import TimingLane
 
 from .advantage_reporting import (
     _advantage_samples_payload as _advantage_samples_payload,
@@ -211,7 +211,7 @@ def _call_hook(path_key: str, args: Any, *hook_args: Any, **hook_kwargs: Any) ->
     return hook(*hook_args, **hook_kwargs)
 
 
-def flush_async_timing_events_on_error(
+def flush_async_timing_queue_before_reraise(
     function: Callable[_P, _R],
 ) -> Callable[_P, _R]:
     @wraps(function)
@@ -225,7 +225,7 @@ def flush_async_timing_events_on_error(
     return wrapped
 
 
-@flush_async_timing_events_on_error
+@flush_async_timing_queue_before_reraise
 def rollout_with_timing_context(
     args: object,
     rollout_id: int,
@@ -714,7 +714,7 @@ __all__ = [
     "before_log_prob_hook",
     "before_train_step_hook",
     "flush_async_timing_events",
-    "flush_async_timing_events_on_error",
+    "flush_async_timing_queue_before_reraise",
     "report_advantage_distribution",
     "report_async_timing_event",
     "report_phase",

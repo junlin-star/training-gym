@@ -15,11 +15,8 @@ from pydantic import BaseModel, PrivateAttr, computed_field, field_validator
 
 from modal_training_gym.common.framework import Framework
 from modal_training_gym.common.status import FrameworkStatus, resolve_framework_status
-from modal_training_gym.common.step_timing import (
-    StepTimes,
-    SubstepTimes,
-    record_step_time_event,
-)
+from modal_training_gym.common.sync_timing_recording import record_sync_timing_event
+from modal_training_gym.common.timing_types import StepTimes, SubstepTimes
 from modal_training_gym.utils.metadata import (
     MetadataStore,
     _step_times_dict,
@@ -231,7 +228,7 @@ class TrainingRun(BaseModel):
         self.metadata = metadata
 
         current_step = progress.get("current")
-        record_step_time_event(
+        record_sync_timing_event(
             cast(MutableMapping[str, float], _step_times_dict()),
             self.training_run_id,
             current_step,

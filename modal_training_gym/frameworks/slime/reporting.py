@@ -18,7 +18,7 @@ from urllib.error import URLError
 from urllib.request import Request, urlopen
 
 if TYPE_CHECKING:
-    from modal_training_gym.common.async_timing import (
+    from modal_training_gym.common.async_timing_types import (
         AsyncStepTimingNotification,
         AsyncTimingEvent,
     )

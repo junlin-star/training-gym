@@ -26,7 +26,7 @@ from slime.utils.types import RolloutBatch
 # PATCHED_TRAINING_GYM_TRAINING_SUBSTEP_TIMING
 from modal_training_gym.frameworks.slime.phase_reporting import (
     flush_async_timing_events as _tg_flush_timings,
-    flush_async_timing_events_on_error as _tg_flush_timings_on_error,
+    flush_async_timing_queue_before_reraise as _tg_flush_timings_on_error,
     record_async_phase_interval as _tg_record_interval,
 )
 

@@ -3,9 +3,9 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import TypedDict, cast
 
-from modal_training_gym.common.async_timing import AsyncTimingEvent
+from modal_training_gym.common.async_timing_types import AsyncTimingEvent
 from modal_training_gym.common.run import TrainingRun
-from modal_training_gym.common.step_timing import (
+from modal_training_gym.common.timing_types import (
     StepTimes,
     SubstepTimes,
     SubstepTiming,

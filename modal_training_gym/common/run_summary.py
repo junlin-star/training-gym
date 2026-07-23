@@ -10,7 +10,7 @@ from urllib.parse import quote
 from pydantic import BaseModel, Field, ValidationError
 
 from modal_training_gym.common.modal_urls import modal_app_dashboard_url
-from modal_training_gym.common.step_timing import StepTimes, SubstepTimes
+from modal_training_gym.common.timing_types import StepTimes, SubstepTimes
 
 
 JsonDict = dict[str, object]

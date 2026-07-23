@@ -1,6 +1,6 @@
 from modal_training_gym.common.status import SlimeStatus
 from modal_training_gym.common.step_timing import record_step_time_event
-from modal_training_gym.frameworks.slime.launcher import aggregate_step_times
+from modal_training_gym.common.sync_timing_aggregation import aggregate_sync_step_times
 
 EVAL_BEFORE = SlimeStatus.EVAL_ROLLOUT_LOGGING.value
 EVAL_AFTER = f"{EVAL_BEFORE}_end"
@@ -90,7 +90,7 @@ def build_step_times_dict(
 def aggregate_durations(
     schedule: list[tuple[float, str]],
 ) -> dict[str, float | None]:
-    _, substep_times = aggregate_step_times(
+    _, substep_times = aggregate_sync_step_times(
         build_step_times_dict(schedule),
         RUN_ID,
         STEP,
@@ -104,7 +104,7 @@ def aggregate_durations(
 
 
 def test_substep_times_aggregation():
-    step_times, substep_times = aggregate_step_times(
+    step_times, substep_times = aggregate_sync_step_times(
         build_step_times_dict(STEP_SCHEDULE),
         RUN_ID,
         STEP,
@@ -142,7 +142,7 @@ def test_replayed_step_replaces_stale_substep_times():
     ]
     build_step_times_dict(retry_schedule, offset=100.0, into=step_times_dict)
 
-    step_times, substep_times = aggregate_step_times(
+    step_times, substep_times = aggregate_sync_step_times(
         step_times_dict,
         RUN_ID,
         STEP,
@@ -168,7 +168,7 @@ def test_replayed_step_replaces_stale_substep_times():
 
 
 def test_fractional_events_preserve_integer_step_format():
-    step_times, substep_times = aggregate_step_times(
+    step_times, substep_times = aggregate_sync_step_times(
         {
             f"{RUN_ID}:1:start": 2.875,
             f"{RUN_ID}:1:finish": 18.999,
@@ -333,7 +333,7 @@ def test_substep_times_clamped_to_window():
         (18.0, "substep_finish"),
         (20.0, "step_complete"),
     ]
-    step_times, substep_times = aggregate_step_times(
+    step_times, substep_times = aggregate_sync_step_times(
         build_step_times_dict(schedule),
         RUN_ID,
         STEP,
@@ -361,7 +361,7 @@ def test_substep_times_multiple_steps():
     build_step_times_dict(STEP_SCHEDULE, step=1, into=step_times_dict)
     build_step_times_dict(STEP_SCHEDULE, step=2, offset=100.0, into=step_times_dict)
 
-    step_times, substep_times = aggregate_step_times(
+    step_times, substep_times = aggregate_sync_step_times(
         step_times_dict,
         RUN_ID,
         3,

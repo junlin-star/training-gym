@@ -58,7 +58,7 @@ def _patch_file(path: Path) -> None:
         f"# {MARKER}\n"
         "from modal_training_gym.frameworks.slime.phase_reporting import (\n"
         "    flush_async_timing_events as _tg_flush_timings,\n"
-        "    flush_async_timing_events_on_error as _tg_flush_timings_on_error,\n"
+        "    flush_async_timing_queue_before_reraise as _tg_flush_timings_on_error,\n"
         "    record_async_phase_interval as _tg_record_interval,\n"
         ")\n"
     )

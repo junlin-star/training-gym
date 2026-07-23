@@ -1,18 +1,18 @@
-from modal_training_gym.common.async_step_timing import (
+from modal_training_gym.common.async_timing_aggregation import (
     StepTimingSnapshot,
     aggregate_async_step_times,
     apply_step_timing_snapshot,
     reconcile_attempt_step_times,
     reconcile_completed_step_times,
 )
-from modal_training_gym.common.async_timing import (
+from modal_training_gym.common.async_timing_types import (
     AsyncTimingEvent,
     AsyncTimingEventType,
 )
 from modal_training_gym.common.framework import Framework
 from modal_training_gym.common.run import TrainingRun
 from modal_training_gym.common.status import SlimeStatus
-from modal_training_gym.common.step_timing import (
+from modal_training_gym.common.timing_types import (
     StepTimes,
     SubstepTimes,
     TimingLane,

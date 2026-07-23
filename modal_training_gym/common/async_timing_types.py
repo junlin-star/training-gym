@@ -2,7 +2,7 @@ from typing import Literal, TypeAlias, TypedDict
 
 from pydantic import BaseModel, Field
 
-from modal_training_gym.common.step_timing import TimingLane
+from modal_training_gym.common.timing_types import TimingLane
 
 
 AsyncTimingEventType: TypeAlias = Literal[

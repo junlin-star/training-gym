@@ -7,12 +7,12 @@ from types import ModuleType, SimpleNamespace
 
 import pytest
 
-from modal_training_gym.common.async_timing import (
+from modal_training_gym.common.async_timing_types import (
     AsyncTimingEvent,
     AsyncTimingEventType,
 )
 from modal_training_gym.common.status import SlimeStatus, resolve_framework_status
-from modal_training_gym.common.step_timing import TrainingSubstep
+from modal_training_gym.common.timing_types import TrainingSubstep
 from modal_training_gym.frameworks.slime import phase_reporting, reporting
 from modal_training_gym.utils import metadata
 
