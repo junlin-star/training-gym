@@ -123,6 +123,63 @@ def test_extract_trace_from_attr_metadata_and_dict():
     assert pr._extract_trace(SimpleNamespace(prompt="x")) is None
 
 
+def test_reward_function_timing_merges_parallel_and_batched_spans():
+    def trace(
+        trace_id: str,
+        span_id: str,
+        start: float,
+        end: float,
+        name: str = "reward_model",
+    ):
+        return {
+            "events": [
+                {
+                    "type": "span_start",
+                    "name": name,
+                    "trace_id": trace_id,
+                    "span_id": span_id,
+                    "ts": start,
+                },
+                {
+                    "type": "span_end",
+                    "name": name,
+                    "trace_id": trace_id,
+                    "span_id": span_id,
+                    "ts": end,
+                },
+            ]
+        }
+
+    samples = [
+        SimpleNamespace(trace=trace("a", "1", 10.0, 12.0)),
+        SimpleNamespace(trace=trace("b", "2", 10.0, 12.0)),
+        SimpleNamespace(trace=trace("c", "3", 11.5, 13.0)),
+        SimpleNamespace(trace=trace("d", "4", 14.0, 15.0, "group_reward_model")),
+        SimpleNamespace(
+            trace={
+                "events": [
+                    {
+                        "type": "span_start",
+                        "name": "generate",
+                        "trace_id": "ignored",
+                        "span_id": "5",
+                        "ts": 1.0,
+                    },
+                    {
+                        "type": "span_end",
+                        "name": "reward_model",
+                        "trace_id": "missing-start",
+                        "span_id": "6",
+                        "ts": 20.0,
+                    },
+                ]
+            }
+        ),
+    ]
+
+    assert pr._reward_function_timing(samples) == (10.0, 15.0, 4.0)
+
+
 # ── inference metadata ───────────────────────────────────────────────────────
 
 

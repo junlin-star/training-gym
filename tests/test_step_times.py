@@ -3,6 +3,7 @@ from modal_training_gym.common.run import TrainingRun
 from modal_training_gym.common.status import SlimeStatus
 from modal_training_gym.common.step_timing import (
     advance_synchronous_timing_watermark,
+    aggregate_training_time_intervals,
     record_step_time_event,
     restore_checkpoint_step_times,
 )
@@ -99,6 +100,28 @@ def test_checkpoint_restore_uses_zero_based_rollout_id():
     }
     assert run.substep_times == {}
     assert advance_synchronous_timing_watermark(run, 2) == 2
+
+
+def test_training_interval_preserves_active_duration():
+    events = [
+        {
+            "training_attempt": 1,
+            "progress_current": 1,
+            "phase": "custom_reward_function",
+            "step_event": boundary,
+            "step_id": 0,
+            "event_ts": timestamp,
+            "training_role": "driver",
+            "active_duration_s": 4.0,
+        }
+        for boundary, timestamp in (("phase_start", 10.0), ("phase_finish", 15.0))
+    ]
+
+    intervals = aggregate_training_time_intervals(
+        events, training_attempt=1, first_step=1, num_steps=1
+    )
+
+    assert intervals["1"]["custom_reward_function"]["duration_s"] == 4.0
 
 
 def build_step_times_dict(

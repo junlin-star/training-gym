@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, MutableMapping
 from enum import Enum
+from math import isfinite
 from typing import TYPE_CHECKING, Any, TypeAlias
 
 from modal_training_gym.common.status import SlimeStatus
@@ -345,6 +346,7 @@ def aggregate_training_time_intervals(
         )
         update[boundary.removeprefix("phase_")] = event_ts
         for key in (
+            "active_duration_s",
             "training_world_size",
             "timeline_lane",
             "parent_phase",
@@ -373,11 +375,25 @@ def aggregate_training_time_intervals(
                 continue
             if finish < start:
                 continue
+            active_duration = update.get("active_duration_s")
+            if (
+                not isinstance(active_duration, (int, float))
+                or not isfinite(active_duration)
+                or active_duration < 0
+            ):
+                active_duration = None
+            duration = (
+                float(active_duration)
+                if active_duration is not None
+                else float(finish - start)
+            )
             interval: TrainingPhaseInterval = {
                 "step_id": step_id,
                 "start": round(float(start), 3),
-                "duration_s": round(float(finish - start), 3),
+                "duration_s": round(duration, 3),
             }
+            if active_duration is not None:
+                interval["active_duration_s"] = round(duration, 3)
             if role:
                 interval["training_role"] = role
             if training_rank is not None:

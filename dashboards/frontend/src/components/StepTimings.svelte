@@ -11,6 +11,7 @@
   const SUBSTEP_LABELS = {
     evaluate_rollouts: "Eval (before)",
     generate_rollouts: "Generate rollouts",
+    custom_reward_function: "Custom reward function",
     offload_rollout: "Offload rollout",
     compute_log_probs: "Compute log probs",
     train_model: "Train model",
@@ -24,6 +25,7 @@
   const SUBSTEP_COLORS = {
     evaluate_rollouts: "#60a5fa",
     generate_rollouts: "#34d399",
+    custom_reward_function: "#2dd4bf",
     offload_rollout: "#a78bfa",
     compute_log_probs: "#fbbf24",
     train_model: "#fb923c",
@@ -85,24 +87,40 @@
         .flatMap(([name, value]) => {
           const intervals = Array.isArray(value?.intervals) ? value.intervals : [];
           const values = intervals.length ? intervals : [value];
-          return values.map((interval, index) => {
-            const role = interval?.training_role || "";
-            const label = labelFor(name);
-            return {
-              key: `${name}-${role}-${interval?.training_rank ?? ""}-${interval?.step_id ?? ""}-${index}`,
-              name,
-              label: role ? `${role[0].toUpperCase()}${role.slice(1)} ${label}` : label,
-              start: interval?.start ?? null,
-              duration: interval?.duration_s ?? null,
-            };
-          });
+          return values
+            .filter((interval) => !interval?.parent_phase)
+            .map((interval, index) => {
+              const role = interval?.training_role || "";
+              const label = interval?.display_name || labelFor(name);
+              return {
+                key: `${name}-${role}-${interval?.training_rank ?? ""}-${interval?.step_id ?? ""}-${index}`,
+                name,
+                label: role && role !== "driver"
+                  ? `${role[0].toUpperCase()}${role.slice(1)} ${label}`
+                  : label,
+                start: interval?.start ?? null,
+                duration: interval?.duration_s ?? null,
+              };
+            });
         })
         .sort((a, b) => (a.start ?? 0) - (b.start ?? 0));
+      const details = Object.entries(subs).flatMap(([name, value]) => {
+        const intervals = Array.isArray(value?.intervals) ? value.intervals : [];
+        const detail = intervals.find((interval) => interval?.parent_phase);
+        if (!detail) return [];
+        return [{
+          key: name,
+          name,
+          label: detail.display_name || labelFor(name),
+          duration: value?.duration_s ?? null,
+        }];
+      });
       return {
         key: k,
         n: Number.isFinite(Number(k)) ? Number(k) : k,
         duration: st?.duration_s ?? null,
         substeps,
+        details,
       };
     });
     out.sort((a, b) => (Number(a.key) || 0) - (Number(b.key) || 0));
@@ -237,6 +255,20 @@
   ></div>
 {/snippet}
 
+{#snippet timingDetails(step)}
+  {#if step.details.length}
+    <div class="timing-details">
+      {#each step.details as detail (detail.key)}
+        <div class="timing-detail">
+          <span class="swatch" style:background={colorFor(detail.name)}></span>
+          <span class="timing-detail-name">{detail.label}</span>
+          <span class="timing-detail-duration">{fmtSecs(detail.duration)}</span>
+        </div>
+      {/each}
+    </div>
+  {/if}
+{/snippet}
+
 {#if hasData}
   <div class="step-timings">
     {#if legend.length || layout === "timeline"}
@@ -308,6 +340,7 @@
               {:else}
                 <div class="bar tl-bar bar-empty"></div>
               {/if}
+              {@render timingDetails(step)}
             </div>
           {/each}
         </div>
@@ -329,6 +362,7 @@
           {:else}
             <div class="bar bar-empty"></div>
           {/if}
+          {@render timingDetails(step)}
         </div>
       {/each}
     {/if}
@@ -421,6 +455,32 @@
 
   .step-dur {
     color: var(--muted);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .timing-details {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 12px;
+  }
+
+  .timing-detail {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    min-width: 0;
+    color: var(--muted);
+    font-size: 11px;
+  }
+
+  .timing-detail-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .timing-detail-duration {
+    color: var(--text-bright);
     font-variant-numeric: tabular-nums;
   }
 

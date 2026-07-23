@@ -50,6 +50,7 @@ from .reporting import (
 from .sample_extraction import (
     _image_sample_limit,
     _metrics_to_dict,
+    _reward_function_timing,
     _resolve_hook,
     _response_parser,
     _sample_to_dict,
@@ -97,6 +98,7 @@ CUSTOM_BEFORE_LOG_PROB_HOOK_PATH_KEY = (
 CUSTOM_BEFORE_TRAIN_STEP_HOOK_PATH_KEY = (
     "training_gym_custom_megatron_before_train_step_hook_path"
 )
+CUSTOM_REWARD_FUNCTION_PHASE = "custom_reward_function"
 
 
 def _hook_path_from_args(args: Any, path_key: str) -> str | None:
@@ -111,6 +113,10 @@ def _hook_path_from_args(args: Any, path_key: str) -> str | None:
             if isinstance(value, str) and value.strip():
                 return value
     return None
+
+
+def _training_role_name(value: Any, default: str = "driver") -> str:
+    return str(getattr(value, "value", value) or default)
 
 
 def report_phase(
@@ -175,6 +181,42 @@ def report_rollout_samples(
     _enqueue_rollout(payload)
 
 
+def _report_custom_reward_function_timing(
+    rollout_id: int,
+    args: Any,
+    samples: Any,
+) -> bool:
+    if os.environ.get("TRAINING_GYM_ASYNC_MODE") == "1" or not _arg_value(
+        args, "custom_rm_path"
+    ):
+        return False
+    try:
+        timing = _reward_function_timing(samples)
+    except TypeError:
+        return False
+    if timing is None:
+        return False
+    start, finish, active_duration = timing
+    for boundary, timestamp in (
+        ("phase_start", start),
+        ("phase_finish", finish),
+    ):
+        report_step_event(
+            CUSTOM_REWARD_FUNCTION_PHASE,
+            args,
+            rollout_id,
+            boundary,
+            step_id=0,
+            event_ts=timestamp,
+            active_duration_s=active_duration,
+            training_role="driver",
+            timeline_lane="rollout",
+            parent_phase=SlimeStatus.ROLLOUT_LOGGING.value,
+            display_name="Custom reward function",
+        )
+    return True
+
+
 def _call_hook(path_key: str, args: Any, *hook_args: Any, **hook_kwargs: Any) -> Any:
     hook = _resolve_hook(_hook_path_from_args(args, path_key))
     if hook is None:
@@ -200,6 +242,8 @@ def log_rollout_data(
         metrics=rollout_extra_metrics,
         rollout_time=rollout_time,
     )
+    if _report_custom_reward_function_timing(rollout_id, args, samples):
+        flush_dashboard_reports(timeout_seconds=5.0)
     report_rollout_samples(
         rollout_id, args, samples, rollout_extra_metrics, rollout_time
     )
@@ -270,7 +314,9 @@ def before_train_step_hook(
         bool(getattr(args, "async_mode", False))
         or os.environ.get("TRAINING_GYM_ASYNC_MODE") == "1"
     )
-    training_role = str(getattr(args, "training_gym_role", None) or "actor")
+    training_role = _training_role_name(
+        getattr(args, "training_gym_role", None), default="actor"
+    )
     primary_rank = _is_primary_training_rank()
     if primary_rank:
         report_phase(
@@ -424,7 +470,7 @@ def report_training_role_finished(
         args,
         rollout_id,
         TRAINING_ROLE_FINISH_EVENT,
-        training_role=str(getattr(training_role, "value", training_role)),
+        training_role=_training_role_name(training_role, default="actor"),
     )
     flush_dashboard_reports(timeout_seconds=2.0)
 
@@ -438,6 +484,7 @@ def report_step_event(
     step_id: int | None = None,
     event_ts: float | None = None,
     event_monotonic: float | None = None,
+    active_duration_s: float | None = None,
     training_role: str = "driver",
     timeline_lane: str | None = None,
     parent_phase: str | None = None,
@@ -455,10 +502,12 @@ def report_step_event(
         **_step_progress(args, rollout_id),
         "rollout_id": rollout_id,
         "event_ts": event_ts if event_ts is not None else time.time(),
-        "training_role": training_role,
+        "training_role": _training_role_name(training_role),
     }
     if event_monotonic is not None:
         payload["event_monotonic"] = event_monotonic
+    if active_duration_s is not None:
+        payload["active_duration_s"] = active_duration_s
     if step_event:
         payload["step_event"] = step_event
     if step_id is not None:

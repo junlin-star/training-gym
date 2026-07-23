@@ -85,6 +85,7 @@ class TrainingTimingEvent(BaseModel):
     step_id: int = -1
     event_ts: float
     event_monotonic: float | None = None
+    active_duration_s: float | None = None
     training_rank: int | None = None
     training_world_size: int | None = None
     timeline_lane: str | None = None

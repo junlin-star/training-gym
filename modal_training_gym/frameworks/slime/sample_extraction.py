@@ -12,7 +12,9 @@ import base64
 import importlib
 import io
 import json
+import math
 import os
+from collections.abc import Iterable, Mapping
 from typing import Any
 
 from modal_training_gym.common.sample import Sample
@@ -47,6 +49,7 @@ TRAJECTORY_SAMPLE_LIMIT_ENV = "TRAINING_GYM_TRAJECTORY_SAMPLE_LIMIT"
 _TRAJECTORY_SAMPLE_LIMIT_DEFAULT = 16
 _TRAJECTORY_MSG_CHARS_MAX = 8000
 _TRAJECTORY_MAX_MESSAGES = 128
+_REWARD_FUNCTION_TRACE_NAMES = frozenset({"reward_model", "group_reward_model"})
 
 
 def _resolve_hook(path: str | None) -> Any:
@@ -259,6 +262,63 @@ def _extract_trace(sample: Any) -> Any:
         if isinstance(meta, dict):
             raw = meta.get("trace")
     return raw
+
+
+def _reward_function_timing(
+    samples: Iterable[Any],
+) -> tuple[float, float, float] | None:
+    """Return the envelope and active duration of Slime reward-function spans."""
+    spans: dict[tuple[str, str, str], dict[str, float]] = {}
+    for sample in samples:
+        trace = _extract_trace(sample)
+        if not isinstance(trace, Mapping):
+            continue
+        events = trace.get("events")
+        if not isinstance(events, list):
+            continue
+        for event in events:
+            if not isinstance(event, Mapping):
+                continue
+            event_type = event.get("type")
+            name = event.get("name")
+            trace_id = event.get("trace_id")
+            span_id = event.get("span_id")
+            if (
+                event_type not in {"span_start", "span_end"}
+                or name not in _REWARD_FUNCTION_TRACE_NAMES
+                or not isinstance(trace_id, str)
+                or not trace_id
+                or not isinstance(span_id, str)
+                or not span_id
+            ):
+                continue
+            try:
+                timestamp = float(event["ts"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if not math.isfinite(timestamp):
+                continue
+            boundary = "start" if event_type == "span_start" else "end"
+            spans.setdefault((trace_id, span_id, name), {})[boundary] = timestamp
+
+    intervals = {
+        (span["start"], span["end"])
+        for span in spans.values()
+        if "start" in span and "end" in span and span["end"] >= span["start"]
+    }
+    merged: list[tuple[float, float]] = []
+    for start, end in sorted(intervals):
+        if not merged or start > merged[-1][1]:
+            merged.append((start, end))
+            continue
+        merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+    if not merged:
+        return None
+    return (
+        merged[0][0],
+        merged[-1][1],
+        sum(end - start for start, end in merged),
+    )
 
 
 def _duck_get(obj: Any, key: str, default: Any = None) -> Any:
