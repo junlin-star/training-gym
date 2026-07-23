@@ -1,19 +1,4 @@
-"""Gemma-4-26B-A4B model spec as a concrete HFModelConfiguration subclass.
-
-Gemma 4 26B-A4B is a natively multimodal (text + image) Mixture-of-Experts model
-from Google: 25.2B total parameters with ~3.8B active per token (128 experts, 8
-routed + 1 shared). The text backbone is a 30-layer decoder with a 5-local /
-1-global sliding-attention pattern; a ~550M ViT vision tower is loaded by SGLang
-straight from the HF checkpoint for rollouts.
-
-The architecture below mirrors the *text_config* used by slime's upstream
-``scripts/models/gemma4-26B-A4B.sh``. Because that model script relies on a
-custom Megatron spec + model provider (``--spec ...`` and
-``--custom-model-provider-path ...``) that ``ModelArchitecture`` can't express,
-``Gemma4_26B_A4B_Recipe`` selects it via ``slime_model_script``; the arch below
-is therefore informational (and drives the num_experts ÷ EP validator) rather
-than the source of the training CLI flags.
-"""
+"""Gemma-4-26B-A4B model spec as a concrete HFModelConfiguration subclass."""
 
 from __future__ import annotations
 
