@@ -84,8 +84,8 @@ from modal_training_gym.common.checkpoint import Checkpoint
 from modal_training_gym.common.framework import Framework
 
 SLIME_ROOT = "/root/slime"
-# Pin by digest to prevent mutable-tag drift.  Tag: nightly-dev-20260703b
-SLIME_IMAGE = "slimerl/slime@sha256:269b44b17e3f7136447db4cdaa3bf36ef9e3169f1596af0d7180c45f2a301965"
+# Pin by digest to prevent mutable-tag drift.  Tag: nightly-dev-20260722a
+SLIME_IMAGE = "slimerl/slime@sha256:a97ec147e37bef050337a9b229036eda00b4aa9c4d02b31a0109dc850f8ca342"
 # v0.8.0+ makes per-task CPU/memory requests configurable via enforcement
 # policies ("limit"/"ignore"), letting sandboxes burst on Modal and bill by
 # actual CPU-/RAM-second usage instead of over-provisioning a static reservation.

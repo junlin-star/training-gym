@@ -177,16 +177,18 @@ def _patch_file(path: Path) -> None:
     offload_train_count = 0
     if needs_offload_train:
         offload_train_pattern = re.compile(
-            r"^(?P<indent>[ \t]*)offload_train\(actor_trains_this_step\)[ \t]*$",
+            r"^(?P<indent>[ \t]*)(?P<call>offload_train\("
+            r"actor_trains(?:_this_step)?\))[ \t]*$",
             re.M,
         )
 
         def _offload_train_replacement(match: re.Match[str]) -> str:
             indent = match.group("indent")
+            call = match.group("call")
             return (
                 f"{indent}# {OFFLOAD_TRAIN_MARKER}: train offload state\n"
                 f"{indent}_tg_report('offload_train', args, rollout_id)\n"
-                f"{indent}offload_train(actor_trains_this_step)"
+                f"{indent}{call}"
             )
 
         src, offload_train_count = offload_train_pattern.subn(
@@ -196,16 +198,21 @@ def _patch_file(path: Path) -> None:
     checkpoint_save_count = 0
     if needs_checkpoint_save:
         checkpoint_save_pattern = re.compile(
-            r"^(?P<indent>[ \t]*)save\(rollout_id\)[ \t]*$",
+            r"^(?P<indent>[ \t]*)(?P<guard>if "
+            r"(?:release_train or )?should_run_periodic_action\("
+            r"[ \t\r\n]*rollout_id,[ \t\r\n]*args\.save_interval,"
+            r"[ \t\r\n]*num_rollout_per_epoch,[ \t\r\n]*args\.num_rollout"
+            r"[ \t\r\n]*\):)",
             re.M,
         )
 
         def _checkpoint_save_replacement(match: re.Match[str]) -> str:
             indent = match.group("indent")
+            body_indent = f"{indent}    "
             return (
-                f"{indent}# {CHECKPOINT_SAVE_MARKER}: checkpoint save state\n"
-                f"{indent}_tg_report('checkpoint_save', args, rollout_id)\n"
-                f"{indent}save(rollout_id)"
+                f"{indent}{match.group('guard')}\n"
+                f"{body_indent}# {CHECKPOINT_SAVE_MARKER}: checkpoint save state\n"
+                f"{body_indent}_tg_report('checkpoint_save', args, rollout_id)"
             )
 
         src, checkpoint_save_count = checkpoint_save_pattern.subn(
@@ -366,43 +373,25 @@ def _patch_file(path: Path) -> None:
     step_finish_count = 0
     if needs_step_finish:
         step_finish_pattern = re.compile(
-            r"^(?P<indent>[ \t]*)if should_run_periodic_action\(rollout_id, args\.save_interval, num_rollout_per_epoch, args\.num_rollout\):[ \t]*(?P<newline>\r?\n?)$"
+            r"^(?P<indent>[ \t]*)(?P<guard>if "
+            r"(?:release_train or )?should_run_periodic_action\("
+            r"[ \t\r\n]*rollout_id,[ \t\r\n]*args\.save_interval,"
+            r"[ \t\r\n]*num_rollout_per_epoch,[ \t\r\n]*args\.num_rollout"
+            r"[ \t\r\n]*\):)",
+            re.M,
         )
-        lines = src.splitlines(keepends=True)
-        patched_lines = []
-        in_rollout_loop = False
-        loop_indent = ""
-        for line in lines:
-            loop_match = re.match(
-                r"^(?P<indent>[ \t]*)for[ \t]+rollout_id[ \t]+in[ \t]+.*:",
-                line,
+
+        def _step_finish_replacement(match: re.Match[str]) -> str:
+            indent = match.group("indent")
+            return (
+                f"{indent}# {STEP_FINISH_MARKER}: training step finish\n"
+                f"{indent}_tg_report('weight_sync', args, rollout_id, 'finish')\n"
+                f"{indent}{match.group('guard')}"
             )
-            if loop_match:
-                in_rollout_loop = True
-                loop_indent = loop_match.group("indent")
-                patched_lines.append(line)
-                continue
-            if not in_rollout_loop or not line.strip():
-                patched_lines.append(line)
-                continue
-            indent = line[: len(line) - len(line.lstrip(" \t"))]
-            if len(indent) <= len(loop_indent):
-                in_rollout_loop = False
-                patched_lines.append(line)
-                continue
-            if step_finish_count == 0:
-                step_finish_match = step_finish_pattern.match(line)
-                if step_finish_match:
-                    newline = step_finish_match.group("newline") or "\n"
-                    patched_lines.extend(
-                        [
-                            f"{indent}# {STEP_FINISH_MARKER}: training step finish{newline}",
-                            f"{indent}_tg_report('weight_sync', args, rollout_id, 'finish'){newline}",
-                        ]
-                    )
-                    step_finish_count += 1
-            patched_lines.append(line)
-        src = "".join(patched_lines)
+
+        src, step_finish_count = step_finish_pattern.subn(
+            _step_finish_replacement, src, count=1
+        )
 
     failed = []
     if needs_rollout and rollout_count != 1:
