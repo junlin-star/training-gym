@@ -17,11 +17,13 @@ StepTimes: TypeAlias = dict[str, dict[str, int | float | None]]
 
 TRAINING_TIMING_EVENT_BATCH_KIND = "timing_event_batch"
 TRAINING_TIMING_ATTEMPT_CLOSED_KIND = "timing_attempt_closed"
+AGGREGATED_TRAINING_STEP_TIMING_KIND = "aggregated_training_step_timing"
 TRAINING_ROLE_FINISH_EVENT = "training_role_finish"
 SUBSTEP_FINISH_EVENT = "substep_finish"
 SYNCHRONOUS_TRAINING_ROLES = ("driver", "rollout", "actor", "critic")
 SYNCHRONOUS_TIMING_ATTEMPT_KEY = "synchronous_step_timings_persisted_attempt"
 SYNCHRONOUS_TIMING_WATERMARK_KEY = "synchronous_step_timings_persisted_through"
+TRAINING_STEP_TIMING_ATTEMPTS_KEY = "training_step_timing_attempts"
 
 
 class Substep(str, Enum):
@@ -87,6 +89,133 @@ def training_timing_attempt_closed_key(
         training_run_id,
         TRAINING_TIMING_ATTEMPT_CLOSED_KIND,
         training_attempt,
+    )
+
+
+def aggregated_training_step_timing_key(
+    training_run_id: str,
+    training_attempt: int,
+    step: int,
+) -> tuple[str, str, int, int]:
+    return (
+        training_run_id,
+        AGGREGATED_TRAINING_STEP_TIMING_KIND,
+        training_attempt,
+        step,
+    )
+
+
+def aggregated_training_step_timing_keys(
+    training_run_id: str,
+    training_attempt: int,
+    num_steps: int,
+    *,
+    first_step: int = 1,
+) -> list[tuple[str, str, int, int]]:
+    return [
+        aggregated_training_step_timing_key(
+            training_run_id,
+            training_attempt,
+            step,
+        )
+        for step in range(max(first_step, 1), num_steps + 1)
+    ]
+
+
+def build_aggregated_training_step_timing(
+    training_run_id: str,
+    training_attempt: int,
+    step: int,
+    step_time: Mapping[str, Any],
+    substep_times: Mapping[str, Any],
+    *,
+    source: str,
+) -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "training_run_id": training_run_id,
+        "training_attempt": training_attempt,
+        "step": step,
+        "rollout_id": step - 1,
+        "source": source,
+        "step_time": dict(step_time),
+        "substep_times": dict(substep_times),
+    }
+
+
+def timing_maps_from_aggregated_steps(
+    aggregated_steps: Iterable[Mapping[str, Any]],
+) -> tuple[StepTimes, SubstepTimes]:
+    step_times: StepTimes = {}
+    substep_times: SubstepTimes = {}
+    for aggregated_step in aggregated_steps:
+        try:
+            step = int(aggregated_step["step"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if step <= 0:
+            continue
+        step_key = str(step)
+        step_time = aggregated_step.get("step_time")
+        if isinstance(step_time, Mapping):
+            step_times[step_key] = dict(step_time)
+        phases = aggregated_step.get("substep_times")
+        if isinstance(phases, Mapping):
+            substep_times[step_key] = {
+                str(phase): dict(timing)
+                for phase, timing in phases.items()
+                if isinstance(timing, Mapping)
+            }
+    return step_times, substep_times
+
+
+def normalize_persisted_step_timing_keys(
+    step_times: Mapping[str, Any],
+    substep_times: Mapping[str, Any],
+) -> tuple[StepTimes, SubstepTimes]:
+    """Normalize legacy rollout-id keys to the current one-based step keys."""
+    uses_rollout_ids = "0" in step_times or "0" in substep_times
+    key_offset = 1 if uses_rollout_ids else 0
+
+    normalized_step_times: StepTimes = {}
+    for raw_step, timing in step_times.items():
+        try:
+            step = int(raw_step) + key_offset
+        except (TypeError, ValueError):
+            continue
+        if step > 0 and isinstance(timing, Mapping):
+            normalized_step_times[str(step)] = dict(timing)
+
+    normalized_substep_times: SubstepTimes = {}
+    for raw_step, phases in substep_times.items():
+        try:
+            step = int(raw_step) + key_offset
+        except (TypeError, ValueError):
+            continue
+        if step <= 0 or not isinstance(phases, Mapping):
+            continue
+        normalized_substep_times[str(step)] = {
+            str(phase): dict(timing)
+            for phase, timing in phases.items()
+            if isinstance(timing, Mapping)
+        }
+    return normalized_step_times, normalized_substep_times
+
+
+def contiguous_timing_step_watermark(
+    step_times: Mapping[str, Any],
+    substep_times: Mapping[str, Any],
+    *,
+    max_step: int,
+) -> int:
+    persisted_steps = step_times.keys() | substep_times.keys()
+    return next(
+        (
+            step - 1
+            for step in range(1, max_step + 1)
+            if str(step) not in persisted_steps
+        ),
+        max_step,
     )
 
 
@@ -551,56 +680,3 @@ def advance_synchronous_timing_watermark(
     metadata[SYNCHRONOUS_TIMING_WATERMARK_KEY] = persisted_through_step
     run.metadata = metadata
     return persisted_through_step
-
-
-def archive_step_timings_for_retry(run: TrainingRun, training_attempt: int) -> None:
-    """Archive the previous attempt and clear its displayed timings."""
-    if training_attempt <= 1 or not (run.step_times or run.substep_times):
-        return
-    metadata = dict(run.metadata or {})
-    stored_attempts = metadata.get("training_step_timing_attempts")
-    attempts = dict(stored_attempts) if isinstance(stored_attempts, Mapping) else {}
-    attempts[str(training_attempt - 1)] = {
-        "step_times": dict(run.step_times or {}),
-        "substep_times": dict(run.substep_times or {}),
-    }
-    metadata["training_step_timing_attempts"] = attempts
-    run.step_times = {}
-    run.substep_times = {}
-    run.metadata = metadata
-
-
-def restore_checkpoint_step_times(
-    run: TrainingRun,
-    training_attempt: int,
-    checkpoint_rollout_id: int | None,
-) -> None:
-    """Restore steps completed through a zero-based Slime checkpoint rollout."""
-    if training_attempt <= 1 or checkpoint_rollout_id is None:
-        return
-    attempts = (run.metadata or {}).get("training_step_timing_attempts")
-    if not isinstance(attempts, Mapping):
-        return
-
-    checkpoint_step = checkpoint_rollout_id + 1
-
-    def restore(field: str) -> dict[str, Any]:
-        restored: dict[str, Any] = {}
-        for attempt in range(training_attempt - 1, 0, -1):
-            archived_attempt = attempts.get(str(attempt))
-            if not isinstance(archived_attempt, Mapping):
-                continue
-            archived_timings = archived_attempt.get(field)
-            if not isinstance(archived_timings, Mapping):
-                continue
-            for step, timing in archived_timings.items():
-                try:
-                    step_number = int(step)
-                except (TypeError, ValueError):
-                    continue
-                if 0 < step_number <= checkpoint_step:
-                    restored.setdefault(str(step_number), timing)
-        return restored
-
-    run.step_times = restore("step_times")
-    run.substep_times = restore("substep_times")

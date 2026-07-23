@@ -9,6 +9,7 @@ from typing import Any
 
 from modal_training_gym.common.run import TrainingRun, TrainingRunStatus
 from modal_training_gym.common.step_timing import (
+    aggregated_training_step_timing_keys,
     legacy_step_time_keys,
     training_timing_attempt_closed_key,
     training_timing_event_batch_keys,
@@ -50,6 +51,13 @@ def _training_timing_cleanup_keys(run: TrainingRun) -> list[str | tuple[Any, ...
         if num_steps > 0:
             keys.extend(
                 training_timing_event_batch_keys(
+                    run.training_run_id,
+                    training_attempt,
+                    num_steps,
+                )
+            )
+            keys.extend(
+                aggregated_training_step_timing_keys(
                     run.training_run_id,
                     training_attempt,
                     num_steps,

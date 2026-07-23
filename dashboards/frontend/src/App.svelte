@@ -11,6 +11,7 @@
   import { fetchRuns, fetchEvals, fetchDeployments, fetchEvalDetail } from "./lib/api.js";
   import logoSvg from "./lib/logo.svg";
   import { fmtDuration, truncateId } from "./lib/format.js";
+  import { mergeStepTimes, mergeSubstepTimes } from "./lib/stepTimings.js";
 
   const DOCS_URL = "https://gym.modal.dev";
 
@@ -148,54 +149,6 @@
         ),
       };
     });
-  }
-
-  function mergeStepTimes(previousSteps, fetchedSteps, preferPrevious = false) {
-    if (!previousSteps && !fetchedSteps) return null;
-    const merged = { ...(previousSteps || {}) };
-    for (const [step, timing] of Object.entries(fetchedSteps || {})) {
-      const mergedTiming = { ...(merged[step] || {}) };
-      for (const [key, value] of Object.entries(timing || {})) {
-        if (
-          !(key in mergedTiming) ||
-          mergedTiming[key] == null ||
-          (!preferPrevious && value != null)
-        ) {
-          mergedTiming[key] = value;
-        }
-      }
-      merged[step] = mergedTiming;
-    }
-    return merged;
-  }
-
-  function mergeSubstepTimes(
-    previousSubsteps,
-    fetchedSubsteps,
-    preferPrevious = false,
-  ) {
-    if (!previousSubsteps && !fetchedSubsteps) return null;
-    const merged = { ...(previousSubsteps || {}) };
-    for (const [step, timings] of Object.entries(fetchedSubsteps || {})) {
-      const mergedStep = { ...(merged[step] || {}) };
-      for (const [phase, timing] of Object.entries(timings || {})) {
-        const previousTiming = mergedStep[phase];
-        const previousIntervals = previousTiming?.intervals?.length || 0;
-        const fetchedIntervals = timing?.intervals?.length || 0;
-        const previousHasDuration = previousTiming?.duration_s != null;
-        const fetchedHasDuration = timing?.duration_s != null;
-        if (
-          previousIntervals < fetchedIntervals ||
-          (previousIntervals === fetchedIntervals &&
-            (!previousHasDuration ||
-              (!preferPrevious && fetchedHasDuration)))
-        ) {
-          mergedStep[phase] = timing;
-        }
-      }
-      merged[step] = mergedStep;
-    }
-    return merged;
   }
 
   const NO_GROUP = "(no group)";

@@ -17,7 +17,7 @@ import secrets as _secrets
 import tempfile
 import textwrap
 import time
-from typing import Any, Callable
+from typing import Any, Awaitable, Callable
 
 import cloudpickle
 from modal import Image, Volume
@@ -237,7 +237,7 @@ async def init_training_run_record(
     wandb_cfg: "WandbConfig | None",
     wandb_entity: str,
     framework_status_token: str,
-    on_attempt_started: Callable[[Any, int], None] | None = None,
+    on_attempt_started: Callable[[Any, int], Awaitable[None]] | None = None,
 ) -> tuple[Any, str, str]:
     """Create or resume the ``TrainingRun`` record for this attempt and persist
     the framework-status token. Returns
@@ -269,7 +269,7 @@ async def init_training_run_record(
         run_record, started_at=int(time.time())
     )
     if on_attempt_started is not None:
-        on_attempt_started(run_record, attempt_count)
+        await on_attempt_started(run_record, attempt_count)
     wandb_run_id = ""
     if wandb_cfg is not None:
         wandb_run_id = wandb_run_id_for_attempt(training_run_id, attempt_count)

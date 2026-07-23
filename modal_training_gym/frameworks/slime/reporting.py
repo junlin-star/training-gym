@@ -29,7 +29,7 @@ _TRAINING_TIMING_EVENT_BUFFERS: dict[
     tuple[str, int, str, int], list[dict[str, Any]]
 ] = {}
 _TRAINING_TIMING_EVENT_BUFFER_LOCK = threading.Lock()
-_TRAINING_TIMING_DELIVERY_DISABLED = False
+_TRAINING_TIMING_ENDPOINT_UNSUPPORTED = False
 _PHASE_PATH = "/api/framework-status"
 _TRAINING_TIMING_EVENT_PATH = "/api/timing-events"
 _ROLLOUT_PATH = "/api/training-rollouts"
@@ -173,7 +173,7 @@ def _enqueue(payload: dict[str, Any]) -> None:
         pass
 
 
-def _training_timing_event_buffer_key(
+def _create_training_timing_event_buffer_key(
     payload: dict[str, Any],
 ) -> tuple[str, int, str, int] | None:
     try:
@@ -192,22 +192,22 @@ def _buffer_training_timing_event(payload: dict[str, Any]) -> None:
     """Buffer one synchronous timing boundary until its role finishes the step."""
     if os.environ.get("TRAINING_GYM_ASYNC_MODE") == "1":
         return
-    buffer_key = _training_timing_event_buffer_key(payload)
+    buffer_key = _create_training_timing_event_buffer_key(payload)
     if buffer_key is None:
         return
     with _TRAINING_TIMING_EVENT_BUFFER_LOCK:
-        if _TRAINING_TIMING_DELIVERY_DISABLED:
+        if _TRAINING_TIMING_ENDPOINT_UNSUPPORTED:
             return
         _TRAINING_TIMING_EVENT_BUFFERS.setdefault(buffer_key, []).append(dict(payload))
 
 
 def _enqueue_training_timing_event_batch(payload: dict[str, Any]) -> None:
     """Queue the completed role's buffered timing boundaries as one batch."""
-    buffer_key = _training_timing_event_buffer_key(payload)
+    buffer_key = _create_training_timing_event_buffer_key(payload)
     if buffer_key is None:
         return
     with _TRAINING_TIMING_EVENT_BUFFER_LOCK:
-        if _TRAINING_TIMING_DELIVERY_DISABLED:
+        if _TRAINING_TIMING_ENDPOINT_UNSUPPORTED:
             _TRAINING_TIMING_EVENT_BUFFERS.pop(buffer_key, None)
             return
         events = _TRAINING_TIMING_EVENT_BUFFERS.pop(buffer_key, None)
@@ -319,13 +319,13 @@ def _worker() -> None:
         failure_message = payload.pop("_failure_message", "")
         is_training_timing_batch = bool(payload.pop("_is_training_timing_batch", False))
         try:
-            if is_training_timing_batch and _training_timing_delivery_disabled():
+            if is_training_timing_batch and _training_timing_endpoint_is_unsupported():
                 continue
             succeeded = _post_with_retries(
                 payload,
                 attempts=delivery_attempts,
                 retry_delay_seconds=retry_delay,
-                disable_timing_on_unsupported=is_training_timing_batch,
+                detect_unsupported_timing_endpoint=is_training_timing_batch,
             )
             if failure_message and not succeeded:
                 print(f"{failure_message} after {delivery_attempts} attempts")
@@ -338,29 +338,36 @@ def _post_with_retries(
     *,
     attempts: int,
     retry_delay_seconds: float,
-    disable_timing_on_unsupported: bool = False,
+    detect_unsupported_timing_endpoint: bool = False,
 ) -> bool:
+    not_found_responses = 0
     for attempt in range(1, attempts + 1):
         succeeded, status_code = _post(dict(item))
         if succeeded:
             return True
-        if disable_timing_on_unsupported and status_code in {404, 405}:
-            _disable_training_timing_delivery()
-            return True
+        if detect_unsupported_timing_endpoint:
+            if status_code in {401, 405}:
+                _mark_training_timing_endpoint_unsupported()
+                return True
+            if status_code == 404:
+                not_found_responses += 1
         if attempt < attempts:
             time.sleep(retry_delay_seconds * attempt)
+    if detect_unsupported_timing_endpoint and not_found_responses == attempts:
+        _mark_training_timing_endpoint_unsupported()
+        return True
     return False
 
 
-def _training_timing_delivery_disabled() -> bool:
+def _training_timing_endpoint_is_unsupported() -> bool:
     with _TRAINING_TIMING_EVENT_BUFFER_LOCK:
-        return _TRAINING_TIMING_DELIVERY_DISABLED
+        return _TRAINING_TIMING_ENDPOINT_UNSUPPORTED
 
 
-def _disable_training_timing_delivery() -> None:
-    global _TRAINING_TIMING_DELIVERY_DISABLED
+def _mark_training_timing_endpoint_unsupported() -> None:
+    global _TRAINING_TIMING_ENDPOINT_UNSUPPORTED
     with _TRAINING_TIMING_EVENT_BUFFER_LOCK:
-        _TRAINING_TIMING_DELIVERY_DISABLED = True
+        _TRAINING_TIMING_ENDPOINT_UNSUPPORTED = True
         _TRAINING_TIMING_EVENT_BUFFERS.clear()
 
 

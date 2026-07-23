@@ -15,7 +15,7 @@ import re
 import secrets as _secrets
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Awaitable, Callable, Iterable, TypedDict
+from typing import TYPE_CHECKING, Awaitable, Callable, Iterable, Sequence, TypedDict
 from datetime import datetime, timezone
 
 import modal
@@ -50,13 +50,19 @@ from modal_training_gym.common.run_summary import (
 )
 from modal_training_gym.common.step_timing import (
     SYNCHRONOUS_TRAINING_ROLES,
+    TRAINING_STEP_TIMING_ATTEMPTS_KEY,
     StepTimes,
     SubstepTimes,
     advance_synchronous_timing_watermark,
     aggregate_completed_step_times,
-    merge_step_times,
+    aggregated_training_step_timing_key,
+    aggregated_training_step_timing_keys,
+    build_aggregated_training_step_timing,
+    contiguous_timing_step_watermark,
+    normalize_persisted_step_timing_keys,
     record_step_time_event,
     synchronous_timing_watermark,
+    timing_maps_from_aggregated_steps,
     training_timing_attempt_closed_key,
     training_timing_event_batch_key,
 )
@@ -64,6 +70,13 @@ from modal_training_gym.common.training_rollout import TrainingRolloutResult
 from modal_training_gym.utils.metadata import _step_times_dict
 
 SummaryLoader = Callable[[], Awaitable[list[JsonDict]]]
+_TIMING_STORE_BATCH_SIZE = 128
+_AGGREGATED_TIMING_SOURCE_PRIORITY = {
+    "checkpoint_restore": 0,
+    "canonical": 1,
+    "retry_archive": 2,
+    "live": 3,
+}
 
 
 # A single historical log line from ``AppFetchLogs``
@@ -155,6 +168,243 @@ def _record_training_timing_event_batch(batch: TrainingTimingEventBatch) -> bool
         timing_event_store.pop(batch_key, None)
         return False
     return True
+
+
+def _training_timing_attempt_is_closed(
+    training_run_id: str,
+    training_attempt: int,
+) -> bool:
+    return bool(
+        _step_times_dict().get(
+            training_timing_attempt_closed_key(
+                training_run_id,
+                training_attempt,
+            )
+        )
+    )
+
+
+async def _read_timing_store_values(
+    timing_event_store,
+    keys: Sequence[object],
+) -> list[object]:
+    async_get = getattr(timing_event_store.get, "aio", None)
+    if async_get is None:
+        return [timing_event_store.get(key) for key in keys]
+
+    values = []
+    for offset in range(0, len(keys), _TIMING_STORE_BATCH_SIZE):
+        values.extend(
+            await asyncio.gather(
+                *(
+                    async_get(key)
+                    for key in keys[offset : offset + _TIMING_STORE_BATCH_SIZE]
+                )
+            )
+        )
+    return values
+
+
+async def _write_timing_store_values(
+    timing_event_store,
+    items: list[tuple[object, object]],
+) -> None:
+    async_put = getattr(getattr(timing_event_store, "put", None), "aio", None)
+    if async_put is None:
+        for key, value in items:
+            timing_event_store[key] = value
+        return
+
+    for offset in range(0, len(items), _TIMING_STORE_BATCH_SIZE):
+        await asyncio.gather(
+            *(
+                async_put(key, value)
+                for key, value in items[offset : offset + _TIMING_STORE_BATCH_SIZE]
+            )
+        )
+
+
+async def _remove_timing_store_keys(
+    timing_event_store,
+    keys: Sequence[object],
+) -> None:
+    async_pop = getattr(timing_event_store.pop, "aio", None)
+    if async_pop is None:
+        for key in keys:
+            timing_event_store.pop(key, None)
+        return
+
+    for offset in range(0, len(keys), _TIMING_STORE_BATCH_SIZE):
+        await asyncio.gather(
+            *(
+                async_pop(key, None)
+                for key in keys[offset : offset + _TIMING_STORE_BATCH_SIZE]
+            )
+        )
+
+
+async def _record_aggregated_training_step_timings(
+    training_run_id: str,
+    training_attempt: int,
+    step_times: StepTimes,
+    substep_times: SubstepTimes,
+    *,
+    source: str,
+    allow_closed_attempt: bool = False,
+) -> bool:
+    timing_event_store = _step_times_dict()
+    closed_key = training_timing_attempt_closed_key(
+        training_run_id,
+        training_attempt,
+    )
+    if (
+        not allow_closed_attempt
+        and (await _read_timing_store_values(timing_event_store, [closed_key]))[0]
+    ):
+        return False
+
+    timing_steps = {
+        int(step)
+        for step in step_times.keys() | substep_times.keys()
+        if str(step).isdigit() and int(step) > 0
+    }
+    steps = sorted(timing_steps)
+    keys = [
+        aggregated_training_step_timing_key(
+            training_run_id,
+            training_attempt,
+            step,
+        )
+        for step in steps
+    ]
+    existing_steps = await _read_timing_store_values(timing_event_store, keys)
+    writes = []
+    for step, key, existing in zip(steps, keys, existing_steps):
+        step_key = str(step)
+        if isinstance(existing, dict):
+            existing_priority = _AGGREGATED_TIMING_SOURCE_PRIORITY.get(
+                str(existing.get("source")),
+                0,
+            )
+            incoming_priority = _AGGREGATED_TIMING_SOURCE_PRIORITY.get(source, 0)
+            if existing_priority >= incoming_priority:
+                continue
+        writes.append(
+            (
+                key,
+                build_aggregated_training_step_timing(
+                    training_run_id,
+                    training_attempt,
+                    step,
+                    step_times.get(step_key, {}),
+                    substep_times.get(step_key, {}),
+                    source=source,
+                ),
+            )
+        )
+    await _write_timing_store_values(timing_event_store, writes)
+
+    if (
+        not allow_closed_attempt
+        and (await _read_timing_store_values(timing_event_store, [closed_key]))[0]
+    ):
+        await _remove_timing_store_keys(
+            timing_event_store,
+            [key for key, _ in writes],
+        )
+        return False
+    return True
+
+
+async def _externalize_archived_training_step_timings(
+    run: TrainingRun,
+    current_attempt: int,
+) -> None:
+    metadata = dict(run.metadata or {})
+    stored_attempts = metadata.get(TRAINING_STEP_TIMING_ATTEMPTS_KEY)
+    if not isinstance(stored_attempts, dict):
+        return
+
+    attempts = dict(stored_attempts)
+    changed = False
+    for raw_attempt, archived_attempt in stored_attempts.items():
+        if not isinstance(archived_attempt, dict):
+            continue
+        try:
+            training_attempt = int(raw_attempt)
+        except (TypeError, ValueError):
+            continue
+        if training_attempt <= 0 or training_attempt >= current_attempt:
+            continue
+
+        archived_step_times = archived_attempt.get("step_times")
+        archived_substep_times = archived_attempt.get("substep_times")
+        if not isinstance(archived_step_times, dict) and not isinstance(
+            archived_substep_times, dict
+        ):
+            continue
+        step_times, substep_times = normalize_persisted_step_timing_keys(
+            archived_step_times if isinstance(archived_step_times, dict) else {},
+            archived_substep_times if isinstance(archived_substep_times, dict) else {},
+        )
+        if not step_times and not substep_times:
+            continue
+
+        await _record_aggregated_training_step_timings(
+            run.training_run_id,
+            training_attempt,
+            step_times,
+            substep_times,
+            source="retry_archive",
+            allow_closed_attempt=True,
+        )
+        max_step = max(
+            (int(step) for step in step_times.keys() | substep_times.keys()),
+            default=0,
+        )
+        attempts[str(training_attempt)] = {
+            "persisted_through_step": contiguous_timing_step_watermark(
+                step_times,
+                substep_times,
+                max_step=max_step,
+            )
+        }
+        changed = True
+
+    if changed:
+        metadata[TRAINING_STEP_TIMING_ATTEMPTS_KEY] = attempts
+        run.metadata = metadata
+
+
+async def _read_aggregated_training_step_timings(
+    training_run_id: str,
+    training_attempt: int,
+    first_step: int,
+    last_step: int,
+) -> tuple[StepTimes, SubstepTimes]:
+    if last_step < first_step:
+        return {}, {}
+    timing_event_store = _step_times_dict()
+    keys = aggregated_training_step_timing_keys(
+        training_run_id,
+        training_attempt,
+        last_step,
+        first_step=first_step,
+    )
+    stored_steps = await _read_timing_store_values(timing_event_store, keys)
+
+    aggregated_steps = []
+    for step, value in zip(range(max(first_step, 1), last_step + 1), stored_steps):
+        if not isinstance(value, dict):
+            break
+        if (
+            value.get("training_run_id") != training_run_id
+            or value.get("training_attempt") != training_attempt
+            or value.get("step") != step
+        ):
+            break
+        aggregated_steps.append(value)
+    return timing_maps_from_aggregated_steps(aggregated_steps)
 
 
 def _aggregate_completed_synchronous_step_timings(
@@ -816,6 +1066,41 @@ def fastapi_app():
 
     async def load_runs() -> list[JsonDict]:
         run_records = await load_list_summary(MetadataStore.TRAINING_RUNS_SUMMARY)
+        running_records = []
+        for run in run_records:
+            status = run.get("status")
+            if isinstance(status, dict):
+                status = status.get("value")
+            if str(status).lower() == TrainingRunStatus.RUNNING.value:
+                running_records.append(run)
+
+        async def load_current_run(run: JsonDict) -> JsonDict:
+            training_run_id = str(run.get("training_run_id") or run.get("run_id") or "")
+            if not training_run_id:
+                return run
+            try:
+                current_run = await TrainingRun.from_id(
+                    training_run_id,
+                    is_async=True,
+                )
+            except Exception:
+                return run
+            return {**run, **current_run.model_dump(mode="json")}
+
+        current_running_records = await asyncio.gather(
+            *(load_current_run(run) for run in running_records)
+        )
+        current_running_by_id = {
+            str(run.get("training_run_id") or run.get("run_id") or ""): run
+            for run in current_running_records
+        }
+        run_records = [
+            current_running_by_id.get(
+                str(run.get("training_run_id") or run.get("run_id") or ""),
+                run,
+            )
+            for run in run_records
+        ]
         try:
             latest_rollout_records = await run_in_threadpool(
                 vol_list, MetadataStore.TRAINING_LATEST_ROLLOUTS
@@ -984,7 +1269,11 @@ def fastapi_app():
 
     # ── Training runs ────────────────────────────────────────────────────
 
-    @web.get("/api/runs", response_model=list[RunSummary])
+    @web.get(
+        "/api/runs",
+        response_model=list[RunSummary],
+        response_model_exclude={"__all__": {"step_times", "substep_times"}},
+    )
     async def runs():
         try:
             data = await get_cached_list("runs", load_runs)
@@ -993,6 +1282,153 @@ def fastapi_app():
         return [
             RunSummary.model_validate(item) for item in data if isinstance(item, dict)
         ]
+
+    @web.get("/api/runs/{training_run_id}/step-timings")
+    async def training_step_timings(
+        training_run_id: str,
+        training_attempt: int,
+        after_step: int = 0,
+    ):
+        if training_attempt <= 0 or after_step < 0:
+            raise HTTPException(
+                status_code=400,
+                detail="Training attempt must be positive and after_step non-negative",
+            )
+        run = await _get_run_or_404(training_run_id)
+        current_attempt = int((run.metadata or {}).get("attempt_count") or 1)
+        if training_attempt < current_attempt:
+            return {
+                "training_attempt": current_attempt,
+                "persisted_through_step": 0,
+                "step_times": {},
+                "substep_times": {},
+            }
+        if training_attempt > current_attempt:
+            raise HTTPException(
+                status_code=503,
+                detail="Training attempt is not visible yet",
+            )
+
+        canonical_step_times = dict(run.step_times or {})
+        canonical_substep_times = dict(run.substep_times or {})
+        uses_legacy_step_keys = (
+            "0" in canonical_step_times or "0" in canonical_substep_times
+        )
+        if uses_legacy_step_keys:
+            return {
+                "training_attempt": current_attempt,
+                "persisted_through_step": (
+                    max(
+                        (
+                            int(step) + 1
+                            for step in (
+                                canonical_step_times.keys()
+                                | canonical_substep_times.keys()
+                            )
+                            if str(step).isdigit()
+                        ),
+                        default=0,
+                    )
+                ),
+                "step_times": canonical_step_times if after_step == 0 else {},
+                "substep_times": canonical_substep_times if after_step == 0 else {},
+            }
+
+        canonical_last_step = max(
+            (
+                int(step)
+                for step in (
+                    canonical_step_times.keys() | canonical_substep_times.keys()
+                )
+                if str(step).isdigit()
+            ),
+            default=0,
+        )
+        persisted_through_step = max(
+            synchronous_timing_watermark(run, current_attempt),
+            canonical_last_step,
+        )
+        first_step = after_step + 1
+        checkpoint_baseline = 0
+        metadata = run.metadata or {}
+        if metadata.get("resumed_from_checkpoint"):
+            resume_from_iteration = metadata.get("resume_from_iteration")
+            if resume_from_iteration is not None:
+                try:
+                    checkpoint_baseline = int(resume_from_iteration) + 1
+                except (TypeError, ValueError):
+                    pass
+
+        sidecar_step_times: StepTimes = {}
+        sidecar_substep_times: SubstepTimes = {}
+        checkpoint_through_step = min(
+            checkpoint_baseline,
+            persisted_through_step,
+        )
+        if first_step <= checkpoint_through_step:
+            (
+                checkpoint_step_times,
+                checkpoint_substep_times,
+            ) = await _read_aggregated_training_step_timings(
+                training_run_id,
+                current_attempt,
+                first_step,
+                checkpoint_through_step,
+            )
+            sidecar_step_times.update(checkpoint_step_times)
+            sidecar_substep_times.update(checkpoint_substep_times)
+
+        live_first_step = max(first_step, checkpoint_baseline + 1)
+        if live_first_step <= persisted_through_step:
+            (
+                live_step_times,
+                live_substep_times,
+            ) = await _read_aggregated_training_step_timings(
+                training_run_id,
+                current_attempt,
+                live_first_step,
+                persisted_through_step,
+            )
+            sidecar_step_times.update(live_step_times)
+            sidecar_substep_times.update(live_substep_times)
+
+        step_times = {
+            step: timing
+            for step, timing in canonical_step_times.items()
+            if str(step).isdigit() and int(step) >= first_step
+        }
+        substep_times = {
+            step: timing
+            for step, timing in canonical_substep_times.items()
+            if str(step).isdigit() and int(step) >= first_step
+        }
+        step_times.update(sidecar_step_times)
+        substep_times.update(sidecar_substep_times)
+
+        # Slime resumes after the saved rollout, so restored checkpoint steps are
+        # a fixed baseline. If their historical timing data is unavailable, skip
+        # that gap rather than hiding every newly completed step behind it.
+        available_through_step = max(after_step, checkpoint_through_step)
+        while str(available_through_step + 1) in step_times:
+            available_through_step += 1
+        available_through_step = min(
+            persisted_through_step,
+            available_through_step,
+        )
+        return {
+            "training_attempt": current_attempt,
+            "persisted_through_step": available_through_step,
+            "step_times": {
+                step: timing
+                for step, timing in step_times.items()
+                if int(step) <= available_through_step
+            },
+            "substep_times": {
+                step: timing
+                for step, timing in substep_times.items()
+                if int(step) <= available_through_step
+            },
+        }
 
     @web.post("/api/framework-status")
     async def framework_status(
@@ -1014,6 +1450,8 @@ def fastapi_app():
                     status_code=503,
                     detail="Training attempt is not visible yet",
                 )
+        if run.status != TrainingRunStatus.RUNNING:
+            return JSONResponse({"status": "ignored", "reason": "terminal_attempt"})
 
         status = await run_in_threadpool(run.apply_framework_status, update)
         if status is None:
@@ -1058,6 +1496,33 @@ def fastapi_app():
                             {"status": "ignored", "reason": "stale_attempt"}
                         )
                     raise RuntimeError("Training attempt is not visible yet")
+                if latest_run.status != TrainingRunStatus.RUNNING:
+                    return JSONResponse(
+                        {"status": "ignored", "reason": "terminal_attempt"}
+                    )
+                await _externalize_archived_training_step_timings(
+                    latest_run,
+                    current_attempt,
+                )
+                if latest_run.step_times or latest_run.substep_times:
+                    (
+                        canonical_step_times,
+                        canonical_substep_times,
+                    ) = normalize_persisted_step_timing_keys(
+                        latest_run.step_times or {},
+                        latest_run.substep_times or {},
+                    )
+                    migrated = await _record_aggregated_training_step_timings(
+                        latest_run.training_run_id,
+                        current_attempt,
+                        canonical_step_times,
+                        canonical_substep_times,
+                        source="canonical",
+                    )
+                    if not migrated:
+                        raise RuntimeError("Training timing attempt is already closed")
+                    latest_run.step_times = {}
+                    latest_run.substep_times = {}
                 latest_watermark = synchronous_timing_watermark(
                     latest_run, current_attempt
                 )
@@ -1076,9 +1541,20 @@ def fastapi_app():
                         current_attempt,
                     )
 
-                merge_step_times(latest_run, step_times, substep_times)
+                if step_times:
+                    recorded = await _record_aggregated_training_step_timings(
+                        latest_run.training_run_id,
+                        current_attempt,
+                        step_times,
+                        substep_times,
+                        source="live",
+                    )
+                    if not recorded:
+                        raise RuntimeError("Training timing attempt is already closed")
                 persisted_through_step = advance_synchronous_timing_watermark(
-                    latest_run, current_attempt
+                    latest_run,
+                    current_attempt,
+                    completed_through_step=completed_step,
                 )
                 if persisted_through_step < completed_step:
                     raise RuntimeError(
@@ -1101,7 +1577,13 @@ def fastapi_app():
                     status_code=503,
                     detail="Failed to persist completed step timing",
                 ) from exc
-        await run.save(is_async=True)
+            if await run_in_threadpool(
+                _training_timing_attempt_is_closed,
+                update.training_run_id,
+                current_attempt,
+            ):
+                return JSONResponse({"status": "ignored", "reason": "closed_attempt"})
+        await run.save(update_summary=False, is_async=True)
         invalidate_cache("runs")
         return JSONResponse({"status": "ok", "framework_status": status.value})
 

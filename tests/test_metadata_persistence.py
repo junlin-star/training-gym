@@ -32,6 +32,25 @@ def test_training_run_save_survives_unmounted_volume(fake_volume, fw):
     assert json.loads(blob)["framework"] == fw.value
 
 
+def test_training_run_canonical_save_does_not_rewrite_summary(fake_volume):
+    run = run_mod.TrainingRun(
+        training_run_id="canonical-only",
+        framework=Framework.SLIME,
+        config={},
+    )
+    run.save()
+    summary_path = f"{MetadataStore.TRAINING_RUNS_SUMMARY.value}/summary.json"
+    summary_before = fake_volume.files[summary_path]
+
+    run.metadata = {"framework_progress": {"current": 2, "total": 4}}
+    asyncio.run(run.save(update_summary=False, is_async=True))
+
+    canonical_path = f"{MetadataStore.TRAINING_RUNS.value}/canonical-only.json"
+    canonical = json.loads(fake_volume.files[canonical_path])
+    assert canonical["metadata"]["framework_progress"] == {"current": 2, "total": 4}
+    assert fake_volume.files[summary_path] == summary_before
+
+
 @pytest.mark.parametrize("fw", list(Framework))
 def test_train_result_save_survives_unmounted_volume(fake_volume, fw):
     """TrainResult.save() completes when reload() raises, for every framework."""

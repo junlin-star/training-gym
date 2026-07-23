@@ -371,6 +371,33 @@ def test_missing_result_keeps_run_available():
     assert summary.train_result is None
 
 
+def test_run_summary_model_dump_retains_timing_maps():
+    summary = build_run_summary(
+        _run(
+            step_times={"1": {"duration_s": 2.0}},
+            substep_times={
+                "1": {
+                    "train_model": {
+                        "duration_s": 1.0,
+                        "intervals": [],
+                    }
+                }
+            },
+        )
+    )
+
+    payload = summary.model_dump(mode="json")
+    assert payload["step_times"] == {"1": {"duration_s": 2.0}}
+    assert payload["substep_times"] == {
+        "1": {
+            "train_model": {
+                "duration_s": 1.0,
+                "intervals": [],
+            }
+        }
+    }
+
+
 def test_build_summaries_dedupes_by_id_and_prefers_newest_record():
     older = _run(created_at=90, updated_at=90)
     newer = _run(created_at=200, updated_at=210, framework_status="training")

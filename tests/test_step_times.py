@@ -1,12 +1,11 @@
-from modal_training_gym.common.framework import Framework
-from modal_training_gym.common.run import TrainingRun
 from modal_training_gym.common.status import SlimeStatus
 from modal_training_gym.common.step_timing import (
-    advance_synchronous_timing_watermark,
     aggregate_step_times,
     aggregate_training_time_intervals,
+    aggregated_training_step_timing_key,
+    build_aggregated_training_step_timing,
+    normalize_persisted_step_timing_keys,
     record_step_time_event,
-    restore_checkpoint_step_times,
 )
 from modal_training_gym.frameworks.slime import phase_reporting
 
@@ -79,39 +78,74 @@ EXPECTED_DURATIONS = {
 }
 
 
-def test_checkpoint_restore_uses_zero_based_rollout_id():
-    archived_step_times = {
-        str(step): {"start": step, "end": step + 1, "duration_s": 1}
-        for step in range(1, 4)
+def test_aggregated_step_timing_shard_is_deterministic_and_step_scoped():
+    step_time = {
+        "start": 10,
+        "end": 12,
+        "duration_s": 2,
+        "full_step_duration_s": 2.5,
     }
-    run = TrainingRun(
-        training_run_id=RUN_ID,
-        framework=Framework.SLIME,
-        config={},
-        metadata={
-            "training_step_timing_attempts": {"1": {"step_times": archived_step_times}}
+    substep_times = {
+        "train_model": {
+            "start": 10.5,
+            "duration_s": 1.0,
+            "intervals": [
+                {
+                    "step_id": 0,
+                    "start": 10.5,
+                    "duration_s": 1.0,
+                    "training_role": "actor",
+                }
+            ],
+        }
+    }
+
+    key = aggregated_training_step_timing_key(RUN_ID, 2, 7)
+    shard = build_aggregated_training_step_timing(
+        RUN_ID,
+        2,
+        7,
+        step_time,
+        substep_times,
+        source="live",
+    )
+
+    assert key == (RUN_ID, "aggregated_training_step_timing", 2, 7)
+    assert shard == {
+        "schema_version": 1,
+        "training_run_id": RUN_ID,
+        "training_attempt": 2,
+        "step": 7,
+        "rollout_id": 6,
+        "source": "live",
+        "step_time": step_time,
+        "substep_times": substep_times,
+    }
+    assert shard == build_aggregated_training_step_timing(
+        RUN_ID,
+        2,
+        7,
+        dict(step_time),
+        dict(substep_times),
+        source="live",
+    )
+    assert "step_times" not in shard
+
+
+def test_legacy_rollout_timing_keys_are_normalized_to_steps():
+    step_times, substep_times = normalize_persisted_step_timing_keys(
+        {
+            "0": {"duration_s": 1.0},
+            "1": {"duration_s": 2.0},
         },
+        {"0": {"rollout": {"duration_s": 1.0}}},
     )
 
-    restore_checkpoint_step_times(run, 2, checkpoint_rollout_id=1)
-
-    assert run.step_times == {
-        "1": archived_step_times["1"],
-        "2": archived_step_times["2"],
+    assert step_times == {
+        "1": {"duration_s": 1.0},
+        "2": {"duration_s": 2.0},
     }
-    assert run.substep_times == {}
-    assert advance_synchronous_timing_watermark(run, 2) == 2
-
-    run.step_times = {}
-    assert (
-        advance_synchronous_timing_watermark(
-            run,
-            3,
-            completed_through_step=2,
-        )
-        == 2
-    )
-    assert run.step_times == {}
+    assert substep_times == {"1": {"rollout": {"duration_s": 1.0}}}
 
 
 def test_training_interval_preserves_active_duration():

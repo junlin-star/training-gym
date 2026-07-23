@@ -1,5 +1,5 @@
 <script>
-  import { tick } from "svelte";
+  import { tick, untrack } from "svelte";
   import { ArrowLeft, ChevronLeft, ChevronRight, Download, ExternalLink, Minimize2, X } from "lucide-svelte";
   import Tabs from "../components/Tabs.svelte";
   import RunSummary from "../components/RunSummary.svelte";
@@ -17,11 +17,13 @@
   import ResizableTable from "../components/ResizableTable.svelte";
   import {
     fetchRunRollouts,
+    fetchRunStepTimings,
     fetchRollout,
     fetchRunAdvantages,
     fetchRunAdvantageStep,
     fetchRunLogs,
   } from "../lib/api.js";
+  import { mergeStepTimes, mergeSubstepTimes } from "../lib/stepTimings.js";
 
   // Number of historical log lines requested per page.
   const HIST_PAGE = 500;
@@ -45,9 +47,34 @@
     embedded = false,
   } = $props();
 
-  let run = $derived.by(() =>
+  let sourceRun = $derived.by(() =>
     (allRuns || []).find((r) => r.run_id === runId) || null
   );
+  let sourceAttempt = $derived(
+    Math.max(1, Number(sourceRun?.metadata?.attempt_count) || 1),
+  );
+  let hasSourceRun = $derived(sourceRun != null);
+
+  let timingRunId = $state(null);
+  let timingAttempt = $state(null);
+  let timingPersistedThroughStep = $state(0);
+  let timingStepDeltas = $state({});
+  let timingSubstepDeltas = $state({});
+
+  let run = $derived.by(() => {
+    if (!sourceRun) return null;
+    if (timingRunId !== runId || timingAttempt !== sourceAttempt) {
+      return sourceRun;
+    }
+    return {
+      ...sourceRun,
+      step_times: mergeStepTimes(sourceRun.step_times, timingStepDeltas),
+      substep_times: mergeSubstepTimes(
+        sourceRun.substep_times,
+        timingSubstepDeltas,
+      ),
+    };
+  });
 
   // Status as a primitive so effects depending on it don't re-run every time
   // the auto-refresh hands us a new `run` object with the same status (which
@@ -71,6 +98,84 @@
   // Active tab: "summary" | "rollouts" | "logs". Each tab loads only its own
   // data — rollout summaries for summary/rollouts, the log stream for logs.
   let activeTab = $state("summary");
+
+  // A retry is a new timing namespace. The derived run merges these deltas with
+  // canonical timing maps retained for old and terminal runs.
+  $effect(() => {
+    const id = runId;
+    const attempt = sourceAttempt;
+
+    timingRunId = id;
+    timingAttempt = attempt;
+    timingPersistedThroughStep = 0;
+    timingStepDeltas = {};
+    timingSubstepDeltas = {};
+  });
+
+  // Fetch only steps beyond the local watermark. Terminal runs get three
+  // bounded attempts so a transient failure does not hide their final step.
+  $effect(() => {
+    const id = runId;
+    const attempt = sourceAttempt;
+    const status = runStatus;
+    if (!id || !hasSourceRun) return;
+
+    const controller = new AbortController();
+    let requestInFlight = false;
+    let endpointAvailable = true;
+    let requestsRemaining = status === "running" ? Infinity : 3;
+
+    const loadStepTimingDelta = async () => {
+      if (requestInFlight || !endpointAvailable || requestsRemaining <= 0) {
+        return;
+      }
+      requestInFlight = true;
+      requestsRemaining -= 1;
+      const afterStep = untrack(() => timingPersistedThroughStep);
+      try {
+        const delta = await fetchRunStepTimings(id, {
+          trainingAttempt: attempt,
+          afterStep,
+          signal: controller.signal,
+        });
+        if (controller.signal.aborted) return;
+        if (!delta) {
+          endpointAvailable = false;
+          return;
+        }
+        if (delta.trainingAttempt !== attempt) return;
+
+        if (Object.keys(delta.stepTimes || {}).length) {
+          Object.assign(timingStepDeltas, delta.stepTimes);
+        }
+        if (Object.keys(delta.substepTimes || {}).length) {
+          Object.assign(timingSubstepDeltas, delta.substepTimes);
+        }
+        timingPersistedThroughStep = Math.max(
+          afterStep,
+          delta.persistedThroughStep,
+        );
+      } catch {
+        // Keep already-rendered timings on transient failures; the next poll
+        // resumes from the same watermark.
+      } finally {
+        requestInFlight = false;
+      }
+    };
+
+    void loadStepTimingDelta();
+    const interval = window.setInterval(() => {
+      if (!endpointAvailable || requestsRemaining <= 0) {
+        window.clearInterval(interval);
+        return;
+      }
+      void loadStepTimingDelta();
+    }, 5000);
+    return () => {
+      controller.abort();
+      window.clearInterval(interval);
+    };
+  });
 
   function formatMean(value) {
     if (typeof value !== "number" || !Number.isFinite(value)) return "—";

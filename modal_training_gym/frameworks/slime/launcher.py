@@ -67,15 +67,20 @@ from modal_training_gym.common.wandb import WandbConfig
 from modal_training_gym.common.status import SlimeStatus
 from modal_training_gym.common.step_timing import (
     SYNC_SUBSTEP_ORDER,
+    TRAINING_STEP_TIMING_ATTEMPTS_KEY,
     StepTimes,
     SubstepTimes,
     advance_synchronous_timing_watermark,
     aggregate_completed_step_times,
     aggregate_step_times,
-    archive_step_timings_for_retry,
+    aggregated_training_step_timing_key,
+    aggregated_training_step_timing_keys,
+    build_aggregated_training_step_timing,
+    contiguous_timing_step_watermark,
     legacy_step_time_keys,
     merge_step_times,
-    restore_checkpoint_step_times,
+    normalize_persisted_step_timing_keys,
+    timing_maps_from_aggregated_steps,
     training_timing_attempt_closed_key,
     training_timing_event_batch_keys,
 )
@@ -884,6 +889,76 @@ def build_slime_app(
         ]
         return timing_events
 
+    async def read_aggregated_training_step_timings(
+        run_id: str,
+        training_attempt: int,
+        num_steps: int,
+        *,
+        first_step: int = 1,
+    ) -> tuple[StepTimes, SubstepTimes]:
+        keys = aggregated_training_step_timing_keys(
+            run_id,
+            training_attempt,
+            num_steps,
+            first_step=first_step,
+        )
+        stored_steps = await read_timing_store_values(keys)
+        valid_steps = []
+        for expected_step, stored_step in zip(
+            range(max(first_step, 1), num_steps + 1),
+            stored_steps,
+        ):
+            if not (
+                isinstance(stored_step, Mapping)
+                and stored_step.get("training_run_id") == run_id
+                and stored_step.get("training_attempt") == training_attempt
+                and stored_step.get("step") == expected_step
+            ):
+                continue
+            valid_steps.append(stored_step)
+        return timing_maps_from_aggregated_steps(valid_steps)
+
+    async def write_aggregated_training_step_timings(
+        run_id: str,
+        training_attempt: int,
+        step_times: Mapping[str, Mapping[str, Any]],
+        substep_times: Mapping[str, Mapping[str, Any]],
+        *,
+        source: str,
+    ) -> None:
+        timing_event_store = ModalDict.from_name(
+            "training-gym-step-times", create_if_missing=True
+        )
+        steps = sorted(
+            {
+                int(step)
+                for step in step_times.keys() | substep_times.keys()
+                if str(step).isdigit() and int(step) > 0
+            }
+        )
+        for offset in range(0, len(steps), TIMING_EVENT_BATCH_SIZE):
+            step_batch = steps[offset : offset + TIMING_EVENT_BATCH_SIZE]
+            await asyncio.gather(
+                *(
+                    timing_event_store.put.aio(
+                        aggregated_training_step_timing_key(
+                            run_id,
+                            training_attempt,
+                            step,
+                        ),
+                        build_aggregated_training_step_timing(
+                            run_id,
+                            training_attempt,
+                            step,
+                            step_times.get(str(step), {}),
+                            substep_times.get(str(step), {}),
+                            source=source,
+                        ),
+                    )
+                    for step in step_batch
+                )
+            )
+
     async def read_legacy_step_times(
         run_id: str,
         num_steps: int,
@@ -934,10 +1009,9 @@ def build_slime_app(
                 *(timing_event_store.pop.aio(key, None) for key in batch)
             )
 
-    async def close_training_timing_attempt(
+    async def mark_training_timing_attempt_closed(
         run_id: str,
         training_attempt: int,
-        cleanup_keys: list[str | tuple[Any, ...]],
     ) -> None:
         timing_event_store = ModalDict.from_name(
             "training-gym-step-times", create_if_missing=True
@@ -946,7 +1020,203 @@ def build_slime_app(
             training_timing_attempt_closed_key(run_id, training_attempt),
             True,
         )
+
+    async def close_training_timing_attempt(
+        run_id: str,
+        training_attempt: int,
+        cleanup_keys: list[str | tuple[Any, ...]],
+    ) -> None:
+        await mark_training_timing_attempt_closed(run_id, training_attempt)
         await clear_step_times(cleanup_keys)
+
+    async def prepare_synchronous_timing_retry(
+        run_record: TrainingRun,
+        training_attempt: int,
+    ) -> None:
+        if training_attempt <= 1:
+            return
+
+        metadata = dict(run_record.metadata or {})
+        stored_attempts = metadata.get(TRAINING_STEP_TIMING_ATTEMPTS_KEY)
+        inline_attempts = (
+            dict(stored_attempts) if isinstance(stored_attempts, Mapping) else {}
+        )
+        compact_attempts = {
+            str(attempt): dict(archived_attempt)
+            for attempt, archived_attempt in inline_attempts.items()
+            if isinstance(archived_attempt, Mapping)
+        }
+
+        for previous_attempt in range(1, training_attempt):
+            try:
+                step_times, substep_times = await read_aggregated_training_step_timings(
+                    run_record.training_run_id,
+                    previous_attempt,
+                    slime.num_rollout,
+                )
+            except Exception as exc:
+                print(f"Failed to read attempt {previous_attempt} step timings: {exc}")
+                step_times, substep_times = {}, {}
+            archived_attempt = inline_attempts.get(str(previous_attempt))
+            if isinstance(archived_attempt, Mapping):
+                archived_step_times = archived_attempt.get("step_times")
+                archived_substep_times = archived_attempt.get("substep_times")
+                archived_step_times, archived_substep_times = (
+                    normalize_persisted_step_timing_keys(
+                        (
+                            archived_step_times
+                            if isinstance(archived_step_times, Mapping)
+                            else {}
+                        ),
+                        (
+                            archived_substep_times
+                            if isinstance(archived_substep_times, Mapping)
+                            else {}
+                        ),
+                    )
+                )
+                step_times.update(archived_step_times)
+                substep_times.update(archived_substep_times)
+            if previous_attempt == training_attempt - 1:
+                current_step_times, current_substep_times = (
+                    normalize_persisted_step_timing_keys(
+                        run_record.step_times or {},
+                        run_record.substep_times or {},
+                    )
+                )
+                step_times.update(current_step_times)
+                substep_times.update(current_substep_times)
+
+            try:
+                timing_events = await read_training_timing_events(
+                    run_record.training_run_id,
+                    slime.num_rollout,
+                    previous_attempt,
+                )
+                recovered_steps, recovered_substeps = aggregate_completed_step_times(
+                    timing_events,
+                    run_record.training_run_id,
+                    slime.num_rollout,
+                    training_attempt=previous_attempt,
+                )
+            except Exception as exc:
+                print(
+                    f"Failed to recover attempt {previous_attempt} step timings: {exc}"
+                )
+            else:
+                step_times.update(recovered_steps)
+                for step, phases in recovered_substeps.items():
+                    substep_times.setdefault(step, {}).update(phases)
+
+            if step_times or substep_times:
+                try:
+                    await write_aggregated_training_step_timings(
+                        run_record.training_run_id,
+                        previous_attempt,
+                        step_times,
+                        substep_times,
+                        source="retry_archive",
+                    )
+                except Exception as exc:
+                    print(
+                        f"Failed to archive attempt {previous_attempt} step "
+                        f"timings: {exc}"
+                    )
+                    compact_attempts[str(previous_attempt)] = {
+                        "step_times": step_times,
+                        "substep_times": substep_times,
+                    }
+                else:
+                    compact_attempts[str(previous_attempt)] = {
+                        "persisted_through_step": contiguous_timing_step_watermark(
+                            step_times,
+                            substep_times,
+                            max_step=slime.num_rollout,
+                        )
+                    }
+
+        run_record.step_times = {}
+        run_record.substep_times = {}
+        if compact_attempts:
+            metadata[TRAINING_STEP_TIMING_ATTEMPTS_KEY] = compact_attempts
+        else:
+            metadata.pop(TRAINING_STEP_TIMING_ATTEMPTS_KEY, None)
+        run_record.metadata = metadata
+
+    async def restore_checkpoint_timing_sidecars(
+        run_record: TrainingRun,
+        training_attempt: int,
+        checkpoint_step: int,
+    ) -> None:
+        if training_attempt <= 1 or checkpoint_step <= 0:
+            return
+
+        restored_steps: StepTimes = {}
+        restored_substeps: SubstepTimes = {}
+        for previous_attempt in range(training_attempt - 1, 0, -1):
+            step_times, substep_times = await read_aggregated_training_step_timings(
+                run_record.training_run_id,
+                previous_attempt,
+                checkpoint_step,
+            )
+            for step, timing in step_times.items():
+                restored_steps.setdefault(step, timing)
+            for step, phases in substep_times.items():
+                restored_substeps.setdefault(step, phases)
+
+        if restored_steps or restored_substeps:
+            await write_aggregated_training_step_timings(
+                run_record.training_run_id,
+                training_attempt,
+                restored_steps,
+                restored_substeps,
+                source="checkpoint_restore",
+            )
+
+    async def materialize_archived_timing_attempts(
+        run_record: TrainingRun,
+        training_attempt: int,
+    ) -> dict[str, dict[str, Any]]:
+        stored_attempts = (run_record.metadata or {}).get(
+            TRAINING_STEP_TIMING_ATTEMPTS_KEY
+        )
+        inline_attempts = (
+            dict(stored_attempts) if isinstance(stored_attempts, Mapping) else {}
+        )
+        materialized_attempts: dict[str, dict[str, Any]] = {}
+        for previous_attempt in range(1, training_attempt):
+            step_times, substep_times = await read_aggregated_training_step_timings(
+                run_record.training_run_id,
+                previous_attempt,
+                slime.num_rollout,
+            )
+            inline_attempt = inline_attempts.get(str(previous_attempt))
+            if isinstance(inline_attempt, Mapping):
+                inline_step_times = inline_attempt.get("step_times")
+                inline_substep_times = inline_attempt.get("substep_times")
+                inline_step_times, inline_substep_times = (
+                    normalize_persisted_step_timing_keys(
+                        (
+                            inline_step_times
+                            if isinstance(inline_step_times, Mapping)
+                            else {}
+                        ),
+                        (
+                            inline_substep_times
+                            if isinstance(inline_substep_times, Mapping)
+                            else {}
+                        ),
+                    )
+                )
+                step_times.update(inline_step_times)
+                for step, phases in inline_substep_times.items():
+                    substep_times.setdefault(step, {}).update(phases)
+            if step_times or substep_times:
+                materialized_attempts[str(previous_attempt)] = {
+                    "step_times": step_times,
+                    "substep_times": substep_times,
+                }
+        return materialized_attempts
 
     @app.function(
         image=train_image,
@@ -1051,7 +1321,7 @@ def build_slime_app(
             wandb_entity=wandb_entity,
             framework_status_token=framework_status_token,
             on_attempt_started=(
-                archive_step_timings_for_retry if not slime.async_mode else None
+                prepare_synchronous_timing_retry if not slime.async_mode else None
             ),
         )
         training_attempt = int((run_record.metadata or {}).get("attempt_count") or 1)
@@ -1197,16 +1467,21 @@ def build_slime_app(
                 else None
             )
             if not slime.async_mode:
-                restore_checkpoint_step_times(
-                    run_record,
-                    training_attempt,
-                    checkpoint_rollout_id,
-                )
                 checkpoint_step = (
                     checkpoint_rollout_id + 1
                     if checkpoint_rollout_id is not None
                     else 0
                 )
+                try:
+                    await restore_checkpoint_timing_sidecars(
+                        run_record,
+                        training_attempt,
+                        checkpoint_step,
+                    )
+                except Exception as exc:
+                    print(f"Failed to restore checkpoint step timings: {exc}")
+                run_record.step_times = {}
+                run_record.substep_times = {}
                 advance_synchronous_timing_watermark(
                     run_record,
                     training_attempt,
@@ -1336,6 +1611,7 @@ def build_slime_app(
             terminal_substep_times = {}
             timing_event_cleanup_keys: list[str | tuple[Any, ...]] = []
             timing_store_reads_succeeded = True
+            timing_attempt_closed = False
             if not slime.async_mode:
                 timing_event_cleanup_keys = [
                     *training_timing_event_batch_keys(
@@ -1348,19 +1624,42 @@ def build_slime_app(
                         slime.num_rollout,
                     ),
                 ]
+                for attempt in range(1, training_attempt + 1):
+                    timing_event_cleanup_keys.extend(
+                        aggregated_training_step_timing_keys(
+                            training_run_id,
+                            attempt,
+                            slime.num_rollout,
+                        )
+                    )
+                try:
+                    (
+                        terminal_step_times,
+                        terminal_substep_times,
+                    ) = await read_aggregated_training_step_timings(
+                        training_run_id,
+                        training_attempt,
+                        slime.num_rollout,
+                    )
+                except Exception as exc:
+                    timing_store_reads_succeeded = False
+                    print(f"Failed to read aggregated step timings: {exc}")
                 try:
                     timing_events = await read_training_timing_events(
                         training_run_id, slime.num_rollout, training_attempt
                     )
                     (
-                        terminal_step_times,
-                        terminal_substep_times,
+                        reconciled_step_times,
+                        reconciled_substep_times,
                     ) = aggregate_completed_step_times(
                         timing_events,
                         training_run_id,
                         slime.num_rollout,
                         training_attempt=training_attempt,
                     )
+                    terminal_step_times.update(reconciled_step_times)
+                    for step, timings in reconciled_substep_times.items():
+                        terminal_substep_times.setdefault(step, {}).update(timings)
                 except Exception as exc:
                     timing_store_reads_succeeded = False
                     print(f"Failed to read training timing events: {exc}")
@@ -1382,9 +1681,37 @@ def build_slime_app(
                     timing_store_reads_succeeded = False
                     print(f"Failed to read legacy step times: {exc}")
 
+                if timing_store_reads_succeeded:
+                    try:
+                        await mark_training_timing_attempt_closed(
+                            training_run_id,
+                            training_attempt,
+                        )
+                    except Exception as exc:
+                        timing_store_reads_succeeded = False
+                        print(f"Failed to close training timing attempt: {exc}")
+                    else:
+                        timing_attempt_closed = True
+
             latest_run_record = await build_terminal_run_record(
                 run_record, training_run_id
             )
+            if not slime.async_mode:
+                try:
+                    archived_attempts = await materialize_archived_timing_attempts(
+                        latest_run_record,
+                        training_attempt,
+                    )
+                except Exception as exc:
+                    timing_store_reads_succeeded = False
+                    print(f"Failed to materialize archived step timings: {exc}")
+                else:
+                    metadata = dict(latest_run_record.metadata or {})
+                    if archived_attempts:
+                        metadata[TRAINING_STEP_TIMING_ATTEMPTS_KEY] = archived_attempts
+                    else:
+                        metadata.pop(TRAINING_STEP_TIMING_ATTEMPTS_KEY, None)
+                    latest_run_record.metadata = metadata
             merge_step_times(
                 latest_run_record,
                 terminal_step_times,
@@ -1399,13 +1726,13 @@ def build_slime_app(
             except Exception as exc:
                 print(f"Failed to save run record: {exc}")
             else:
-                if not slime.async_mode and timing_store_reads_succeeded:
+                if (
+                    not slime.async_mode
+                    and timing_store_reads_succeeded
+                    and timing_attempt_closed
+                ):
                     try:
-                        await close_training_timing_attempt(
-                            training_run_id,
-                            training_attempt,
-                            timing_event_cleanup_keys,
-                        )
+                        await clear_step_times(timing_event_cleanup_keys)
                     except Exception as exc:
                         print(f"Failed to clear step times: {exc}")
                 elif not slime.async_mode:

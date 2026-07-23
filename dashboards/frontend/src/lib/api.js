@@ -133,6 +133,40 @@ export async function fetchRunRollouts(trainingRunId, { signal } = {}) {
     .sort((a, b) => a.rollout_id - b.rollout_id);
 }
 
+export async function fetchRunStepTimings(
+  trainingRunId,
+  { trainingAttempt, afterStep = 0, signal } = {},
+) {
+  const params = new URLSearchParams({
+    training_attempt: String(trainingAttempt),
+    after_step: String(afterStep),
+  });
+  const res = await fetch(
+    `${SERVER}/runs/${encodeURIComponent(trainingRunId)}/step-timings?${params}`,
+    { signal },
+  );
+  if (res.status === 404) return null;
+  if (!res.ok) {
+    throw new Error(await getErrorFromResponse(res));
+  }
+  if (!res.headers.get("content-type")?.includes("application/json")) {
+    return null;
+  }
+  const data = await res.json();
+  return {
+    trainingAttempt: Number(data.training_attempt),
+    persistedThroughStep: Number(data.persisted_through_step) || 0,
+    stepTimes:
+      data.step_times && typeof data.step_times === "object"
+        ? data.step_times
+        : null,
+    substepTimes:
+      data.substep_times && typeof data.substep_times === "object"
+        ? data.substep_times
+        : null,
+  };
+}
+
 export async function fetchRollout(trainingRunId, rolloutId) {
   const res = await fetch(
     `${SERVER}/runs/${encodeURIComponent(trainingRunId)}/rollouts/${encodeURIComponent(rolloutId)}`,

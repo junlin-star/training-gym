@@ -30,6 +30,7 @@ from modal_training_gym.common.step_timing import (
 from modal_training_gym.utils.metadata import (
     MetadataStore,
     vol_get,
+    vol_put,
     vol_put_with_summary,
 )
 
@@ -334,12 +335,26 @@ class TrainingRun(BaseModel):
     def _touch(self) -> None:
         self.updated_at = int(time.time())
 
-    def save(self, *, is_async: bool = False) -> None | Awaitable[None]:
+    def save(
+        self,
+        *,
+        update_summary: bool = True,
+        is_async: bool = False,
+    ) -> None | Awaitable[None]:
+        """Persist the canonical run and optionally update its list summary."""
         self._touch()
+        payload = self.model_dump(mode="json")
+        if not update_summary:
+            return vol_put(
+                MetadataStore.TRAINING_RUNS,
+                self.training_run_id,
+                payload,
+                is_async=is_async,
+            )
         return vol_put_with_summary(
             MetadataStore.TRAINING_RUNS,
             self.training_run_id,
-            self.model_dump(mode="json"),
+            payload,
             summary_store=MetadataStore.TRAINING_RUNS_SUMMARY,
             item_id_key="training_run_id",
             sort_key=self._summary_sort_key,
