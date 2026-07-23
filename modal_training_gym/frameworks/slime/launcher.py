@@ -66,9 +66,13 @@ from modal_training_gym.common.launcher_helpers import (
 from modal_training_gym.common.wandb import WandbConfig
 from modal_training_gym.common.status import SlimeStatus
 from modal_training_gym.common.step_timing import (
+    SYNC_SUBSTEP_ORDER,
     SYNCHRONOUS_TRAINING_ROLES,
+    StepTimes,
+    SubstepTimes,
     advance_synchronous_timing_watermark,
     aggregate_completed_step_times,
+    aggregate_step_times,
     archive_step_timings_for_retry,
     merge_step_times,
     restore_checkpoint_step_times,
@@ -890,7 +894,69 @@ def build_slime_app(
             cleanup_keys,
         )
 
-    async def clear_step_times(keys: list[tuple[Any, ...]]) -> None:
+    async def read_legacy_step_times(
+        run_id: str,
+        num_steps: int,
+    ) -> tuple[StepTimes, SubstepTimes, list[str]]:
+        timing_event_store = ModalDict.from_name(
+            "training-gym-step-times", create_if_missing=True
+        )
+        suffixes = (
+            "start",
+            "finish",
+            "substep_start",
+            "substep_finish",
+            *(f"substep:{phase}" for phase in SYNC_SUBSTEP_ORDER),
+        )
+        keys = [
+            f"{run_id}:{step}:{suffix}"
+            for step in range(1, num_steps + 1)
+            for suffix in suffixes
+        ]
+        values: list[Any] = []
+        for offset in range(0, len(keys), TIMING_EVENT_BATCH_SIZE):
+            batch = keys[offset : offset + TIMING_EVENT_BATCH_SIZE]
+            values.extend(
+                await asyncio.gather(
+                    *(timing_event_store.get.aio(key) for key in batch)
+                )
+            )
+        event_times = {
+            key: value for key, value in zip(keys, values) if value is not None
+        }
+        if not event_times:
+            return {}, {}, []
+
+        step_times, substep_times = aggregate_step_times(
+            event_times,
+            run_id,
+            num_steps,
+            substep_order=[
+                phase
+                for phase in SYNC_SUBSTEP_ORDER
+                if phase != SlimeStatus.TRAIN_MODEL.value
+            ],
+        )
+        completed_steps = {
+            str(step)
+            for step in range(1, num_steps + 1)
+            if event_times.get(f"{run_id}:{step}:substep_finish") is not None
+        }
+        return (
+            {
+                step: timing
+                for step, timing in step_times.items()
+                if step in completed_steps
+            },
+            {
+                step: timing
+                for step, timing in substep_times.items()
+                if step in completed_steps
+            },
+            list(event_times),
+        )
+
+    async def clear_step_times(keys: list[str | tuple[Any, ...]]) -> None:
         timing_event_store = ModalDict.from_name(
             "training-gym-step-times", create_if_missing=True
         )
@@ -1262,7 +1328,7 @@ def build_slime_app(
         finally:
             terminal_step_times = {}
             terminal_substep_times = {}
-            timing_event_cleanup_keys: list[tuple[Any, ...]] | None = None
+            timing_event_cleanup_keys: list[str | tuple[Any, ...]] | None = None
             if not slime.async_mode:
                 try:
                     (
@@ -1280,9 +1346,31 @@ def build_slime_app(
                         slime.num_rollout,
                         training_attempt=training_attempt,
                     )
-                    timing_event_cleanup_keys = cleanup_keys
+                    timing_event_cleanup_keys = [*cleanup_keys]
                 except Exception as exc:
                     print(f"Failed to read training timing events: {exc}")
+                try:
+                    (
+                        legacy_step_times,
+                        legacy_substep_times,
+                        legacy_cleanup_keys,
+                    ) = await read_legacy_step_times(
+                        training_run_id,
+                        slime.num_rollout,
+                    )
+                    for step, timing in legacy_step_times.items():
+                        terminal_step_times.setdefault(step, timing)
+                    for step, timings in legacy_substep_times.items():
+                        merged_timings = terminal_substep_times.setdefault(step, {})
+                        for phase, timing in timings.items():
+                            merged_timings.setdefault(phase, timing)
+                    if legacy_cleanup_keys:
+                        timing_event_cleanup_keys = [
+                            *(timing_event_cleanup_keys or []),
+                            *legacy_cleanup_keys,
+                        ]
+                except Exception as exc:
+                    print(f"Failed to read legacy step times: {exc}")
 
             latest_run_record = await build_terminal_run_record(
                 run_record, training_run_id

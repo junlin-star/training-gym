@@ -164,6 +164,27 @@ def test_substep_finish_records_timing_and_triggers_reconciliation(monkeypatch):
     assert completed_step_statuses[0]["completed_step"] == 1
 
 
+def test_train_model_status_keeps_legacy_optimizer_phase(monkeypatch):
+    timing_events = []
+    framework_statuses = []
+    monkeypatch.setattr(phase_reporting, "_enqueue_timing_event", timing_events.append)
+    monkeypatch.setattr(phase_reporting, "_enqueue", framework_statuses.append)
+
+    phase_reporting.report_phase(
+        phase_reporting.SlimeStatus.TRAIN_MODEL,
+        rollout_id=0,
+        progress_current=1,
+        progress_total=2,
+    )
+
+    assert [event["phase"] for event in timing_events] == ["train_model"]
+    assert [status["phase"] for status in framework_statuses] == [
+        "optimizer_step",
+        "train_model",
+    ]
+    assert framework_statuses[0]["legacy_optimizer_status"] is True
+
+
 def build_step_times_dict(
     schedule: list[tuple[float, str]],
     *,

@@ -133,6 +133,14 @@ def report_phase(
     }
     if record_timing and payload.get("rollout_id") is not None:
         _enqueue_timing_event(payload)
+    if status is SlimeStatus.TRAIN_MODEL:
+        _enqueue(
+            {
+                **payload,
+                "phase": SlimeStatus.OPTIMIZER_STEP.value,
+                "legacy_optimizer_status": True,
+            }
+        )
     _enqueue(payload)
 
 

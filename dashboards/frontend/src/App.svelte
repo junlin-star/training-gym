@@ -149,29 +149,44 @@
 
       return {
         ...latestRun,
-        step_times: mergeStepTimes(previousRun.step_times, run.step_times),
+        step_times: mergeStepTimes(
+          previousRun.step_times,
+          run.step_times,
+          statusRegressed,
+        ),
         substep_times: mergeSubstepTimes(
           previousRun.substep_times,
           run.substep_times,
+          statusRegressed,
         ),
       };
     });
   }
 
-  function mergeStepTimes(previousSteps, fetchedSteps) {
+  function mergeStepTimes(previousSteps, fetchedSteps, preferPrevious = false) {
     if (!previousSteps && !fetchedSteps) return null;
     const merged = { ...(previousSteps || {}) };
     for (const [step, timing] of Object.entries(fetchedSteps || {})) {
       const mergedTiming = { ...(merged[step] || {}) };
       for (const [key, value] of Object.entries(timing || {})) {
-        if (value != null || !(key in mergedTiming)) mergedTiming[key] = value;
+        if (
+          !(key in mergedTiming) ||
+          mergedTiming[key] == null ||
+          (!preferPrevious && value != null)
+        ) {
+          mergedTiming[key] = value;
+        }
       }
       merged[step] = mergedTiming;
     }
     return merged;
   }
 
-  function mergeSubstepTimes(previousSubsteps, fetchedSubsteps) {
+  function mergeSubstepTimes(
+    previousSubsteps,
+    fetchedSubsteps,
+    preferPrevious = false,
+  ) {
     if (!previousSubsteps && !fetchedSubsteps) return null;
     const merged = { ...(previousSubsteps || {}) };
     for (const [step, timings] of Object.entries(fetchedSubsteps || {})) {
@@ -185,7 +200,8 @@
         if (
           previousIntervals < fetchedIntervals ||
           (previousIntervals === fetchedIntervals &&
-            (!previousHasDuration || fetchedHasDuration))
+            (!previousHasDuration ||
+              (!preferPrevious && fetchedHasDuration)))
         ) {
           mergedStep[phase] = timing;
         }

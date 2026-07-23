@@ -83,11 +83,10 @@
     const st = run?.step_times || null;
     const sub = run?.substep_times || null;
     if (!st && !sub) return null;
-    const stepKey = String(Number(rolloutId) + 1);
-    const rolloutKey = String(Number(rolloutId));
-    const key = (st && st[stepKey]) || (sub && sub[stepKey])
-      ? stepKey
-      : rolloutKey;
+    const usesRolloutKeys =
+      Object.prototype.hasOwnProperty.call(st || {}, "0") ||
+      Object.prototype.hasOwnProperty.call(sub || {}, "0");
+    const key = String(Number(rolloutId) + (usesRolloutKeys ? 0 : 1));
     if (!(st && st[key]) && !(sub && sub[key])) return null;
     return {
       stepTimes: st && st[key] ? { [key]: st[key] } : null,

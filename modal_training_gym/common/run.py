@@ -48,6 +48,7 @@ class FrameworkStatusUpdate(BaseModel):
     rollout_id: int | None = None
     step_id: int | None = None
     completed_step: int | None = None
+    legacy_optimizer_status: bool = False
     # Retained on the wire while already-deployed dashboards still use it.
     step_event: str = ""
     event_ts: float | None = None

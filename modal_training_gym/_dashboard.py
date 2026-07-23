@@ -55,6 +55,7 @@ from modal_training_gym.common.step_timing import (
     advance_synchronous_timing_watermark,
     aggregate_completed_step_times,
     merge_step_times,
+    record_step_time_event,
     synchronous_timing_watermark,
     training_role_finish_marker_key,
     training_timing_event_index_key,
@@ -160,6 +161,23 @@ def _record_training_timing_event(event: TrainingTimingEvent) -> None:
             event.training_role,
         )
         timing_event_store[marker_key] = event_key
+
+
+def _record_legacy_framework_status_timing(
+    update: FrameworkStatusUpdate,
+    phase: str,
+) -> None:
+    current_step = update.progress_current
+    if current_step is None and update.rollout_id is not None:
+        current_step = update.rollout_id + 1
+    record_step_time_event(
+        _step_times_dict(),
+        update.training_run_id,
+        current_step,
+        phase,
+        update.step_event,
+        update.event_ts if update.event_ts is not None else time.time(),
+    )
 
 
 def _missing_finished_training_roles(
@@ -594,6 +612,7 @@ def fastapi_app():
     cache_entries: dict[str, tuple[float, list[JsonDict], float]] = {
         key: (0.0, [], 0.0) for key in cache_keys
     }
+    cache_generations: dict[str, int] = {key: 0 for key in cache_keys}
     cache_locks = {key: asyncio.Lock() for key in cache_keys}
     # Hold strong refs to background refresh tasks so they aren't GC'd mid-flight.
     refresh_tasks: set[asyncio.Task[list[JsonDict]]] = set()
@@ -643,21 +662,34 @@ def fastapi_app():
             expires_at, values, loaded_at = cache_entries[key]
             if now < expires_at:
                 return values
+            generation = cache_generations[key]
             try:
-                values = await loader()
-                cache_entries[key] = (now + cache_ttl_seconds, values, now)
+                loaded_values = await loader()
+                if cache_generations[key] == generation:
+                    cache_entries[key] = (
+                        now + cache_ttl_seconds,
+                        loaded_values,
+                        now,
+                    )
+                    return loaded_values
             except Exception:
                 # Keep serving the last known data and back off so a slow/failing
                 # loader (e.g. a heavy summary rebuild) can't be retried on every
                 # request — it must never block or break the endpoint.
-                cache_entries[key] = (now + cache_ttl_seconds, values, loaded_at)
-            return values
+                if cache_generations[key] == generation:
+                    cache_entries[key] = (
+                        now + cache_ttl_seconds,
+                        values,
+                        loaded_at,
+                    )
+            return cache_entries[key][1]
 
     def invalidate_cache(key: str) -> None:
         # Force the next read to revalidate, but keep the last values and the
         # "loaded once" marker so it refreshes in the background instead of
         # blocking on a cold rebuild.
         _expires_at, values, loaded_at = cache_entries[key]
+        cache_generations[key] += 1
         cache_entries[key] = (0.0, values, loaded_at)
 
     async def get_cached_list(key: str, loader: SummaryLoader) -> list[JsonDict]:
@@ -961,6 +993,10 @@ def fastapi_app():
         authorization: str | None = Header(default=None),
     ):
         await _require_framework_status_token(update.training_run_id, authorization)
+        if update.legacy_optimizer_status:
+            return JSONResponse(
+                {"status": "ignored", "reason": "legacy_optimizer_status"}
+            )
         run = await _get_run_or_404(update.training_run_id)
         current_attempt = int((run.metadata or {}).get("attempt_count") or 1)
         if update.training_attempt is not None:
@@ -980,6 +1016,12 @@ def fastapi_app():
                     f"Unsupported framework status {update.phase!r} "
                     f"for {run.framework.value}"
                 ),
+            )
+        if update.training_attempt is None:
+            await run_in_threadpool(
+                _record_legacy_framework_status_timing,
+                update,
+                status.value,
             )
         if update.completed_step is not None:
             completed_step = update.completed_step
