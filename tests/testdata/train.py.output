@@ -131,11 +131,11 @@ def train(args):
             _tg_report('evaluate_rollouts', args, rollout_id, 'eval_end')
             ray.get(rollout_manager.eval.remote(rollout_id))
         # PATCHED_TRAINING_GYM_SUBSTEP_FINISH: end-of-iteration substep boundary
-        _tg_expected_training_roles = []
+        _tg_expected_training_roles = ['rollout']
         if not args.debug_rollout_only:
             if args.use_critic:
                 _tg_expected_training_roles.append('critic')
-            if actor_trains_this_step:
+            if not args.use_critic or rollout_id >= args.num_critic_only_steps:
                 _tg_expected_training_roles.append('actor')
         _tg_report(
             'weight_sync', args, rollout_id, 'substep_finish',

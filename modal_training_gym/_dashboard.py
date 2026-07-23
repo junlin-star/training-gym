@@ -99,7 +99,7 @@ def _read_synchronous_step_timing_events(
     return training_timing_events
 
 
-def _completed_synchronous_step_timing_update(
+def _aggregate_completed_synchronous_step_timings(
     run: TrainingRun,
     completed_step: int,
     training_attempt: int,
@@ -107,12 +107,11 @@ def _completed_synchronous_step_timing_update(
     persisted_through_step = synchronous_timing_watermark(run, training_attempt)
     if completed_step <= persisted_through_step:
         return {}, {}, persisted_through_step
-    first_step_to_reconcile = max(persisted_through_step + 1, 1)
-    first_step_to_read = max(persisted_through_step, 1)
+    first_step = max(persisted_through_step + 1, 1)
     training_timing_events = _read_synchronous_step_timing_events(
         run.training_run_id,
         training_attempt,
-        first_step_to_read,
+        first_step,
         completed_step,
     )
     step_times, substep_times = aggregate_completed_step_times(
@@ -120,12 +119,12 @@ def _completed_synchronous_step_timing_update(
         run.training_run_id,
         completed_step,
         training_attempt=training_attempt,
-        first_step=first_step_to_read,
+        first_step=first_step,
     )
     missing_step = next(
         (
             step
-            for step in range(first_step_to_reconcile, completed_step + 1)
+            for step in range(first_step, completed_step + 1)
             if str(step) not in step_times
         ),
         None,
@@ -161,6 +160,33 @@ def _record_training_timing_event(event: TrainingTimingEvent) -> None:
             event.training_role,
         )
         timing_event_store[marker_key] = event_key
+
+
+def _framework_status_timing_event(
+    update: FrameworkStatusUpdate,
+    training_attempt: int,
+) -> TrainingTimingEvent | None:
+    progress_current = update.progress_current
+    if progress_current is None and update.rollout_id is not None:
+        progress_current = update.rollout_id + 1
+    if progress_current is None or progress_current <= 0:
+        return None
+    rollout_id = (
+        update.rollout_id if update.rollout_id is not None else progress_current - 1
+    )
+    return TrainingTimingEvent(
+        training_run_id=update.training_run_id,
+        training_attempt=training_attempt,
+        training_role="driver",
+        rollout_id=rollout_id,
+        progress_current=progress_current,
+        progress_total=update.progress_total,
+        progress_unit=update.progress_unit,
+        phase=update.phase,
+        step_event=update.step_event,
+        step_id=update.step_id if update.step_id is not None else -1,
+        event_ts=update.event_ts if update.event_ts is not None else time.time(),
+    )
 
 
 def _missing_finished_training_roles(
@@ -977,6 +1003,9 @@ def fastapi_app():
                     f"for {run.framework.value}"
                 ),
             )
+        status_timing_event = _framework_status_timing_event(update, current_attempt)
+        if update.training_attempt is None and status_timing_event is not None:
+            await run_in_threadpool(_record_training_timing_event, status_timing_event)
         if update.step_event == "substep_finish" and update.progress_current:
             completed_step = update.progress_current
             rollout_id = (
@@ -984,21 +1013,17 @@ def fastapi_app():
                 if update.rollout_id is not None
                 else completed_step - 1
             )
-            completion_event = TrainingTimingEvent(
-                training_run_id=update.training_run_id,
-                training_attempt=current_attempt,
-                training_role="driver",
-                rollout_id=rollout_id,
-                progress_current=completed_step,
-                phase=update.phase,
-                step_event=update.step_event,
-                step_id=update.step_id if update.step_id is not None else -1,
-                event_ts=update.event_ts
-                if update.event_ts is not None
-                else time.time(),
-            )
+            completion_event = status_timing_event
+            if completion_event is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Completed step is missing timing context",
+                )
             try:
-                await run_in_threadpool(_record_training_timing_event, completion_event)
+                if update.training_attempt is not None:
+                    await run_in_threadpool(
+                        _record_training_timing_event, completion_event
+                    )
                 missing_training_roles = await run_in_threadpool(
                     _missing_finished_training_roles,
                     update.training_run_id,
@@ -1016,7 +1041,7 @@ def fastapi_app():
                     substep_times,
                     reconciliation_watermark,
                 ) = await run_in_threadpool(
-                    _completed_synchronous_step_timing_update,
+                    _aggregate_completed_synchronous_step_timings,
                     run,
                     completed_step,
                     current_attempt,
@@ -1043,7 +1068,7 @@ def fastapi_app():
                         substep_times,
                         _,
                     ) = await run_in_threadpool(
-                        _completed_synchronous_step_timing_update,
+                        _aggregate_completed_synchronous_step_timings,
                         latest_run,
                         completed_step,
                         current_attempt,

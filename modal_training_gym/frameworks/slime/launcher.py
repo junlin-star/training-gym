@@ -42,6 +42,7 @@ from modal_training_gym.common.ray_cluster import (
     clustered_if,
 )
 from modal_training_gym.common.run import (
+    TrainingRun,
     TrainingRunStatus,
     has_torch_dist_checkpoint,
     mark_training_attempt_finished,
@@ -168,8 +169,6 @@ def _build_slime_base_image() -> "Image":
             f"echo {_PATCH_QWEN3_ASR_EXPORT_B64} | base64 -d | python3",
             f"echo {_PATCH_QWEN3_VL_EXPORT_B64} | base64 -d | python3",
             f"echo {_PATCH_QWEN3_VL_TORCH_DIST_B64} | base64 -d | python3",
-            f"echo {_PATCH_ROLLOUT_STATUS_B64} | base64 -d | python3",
-            f"echo {_PATCH_TRAINING_ROLE_B64} | base64 -d | python3",
             f"echo {_PATCH_ADVANTAGE_DIST_B64} | base64 -d | python3",
             f"echo {_PATCH_LOG_ELIDE_B64} | base64 -d | python3",
             f"echo {_PATCH_DIST_CKPT_QUANTIZED_B64} | base64 -d | python3",
@@ -537,6 +536,7 @@ def build_slime_app(
             f"echo {_PATCH_BRIDGE_PER_TOKEN_LOSS_B64} | base64 -d | python3",
         )
     train_image = train_image.run_commands(
+        f"echo {_PATCH_ROLLOUT_STATUS_B64} | base64 -d | python3",
         f"echo {_PATCH_TRAINING_ROLE_B64} | base64 -d | python3",
         f"echo {_PATCH_TRAINING_TIMING_COMPLETION_B64} | base64 -d | python3",
     )
@@ -1003,7 +1003,9 @@ def build_slime_app(
             wandb_cfg=slime.wandb,
             wandb_entity=wandb_entity,
             framework_status_token=framework_status_token,
-            on_attempt_started=archive_step_timings_for_retry,
+            on_attempt_started=(
+                archive_step_timings_for_retry if not slime.async_mode else None
+            ),
         )
         training_attempt = int((run_record.metadata or {}).get("attempt_count") or 1)
 
@@ -1016,6 +1018,7 @@ def build_slime_app(
             # before the container exits.
             from modal_training_gym.common.status_reporter import (
                 enqueue_framework_status,
+                flush as flush_status_reporter,
             )
 
             def _set_framework_status(status: SlimeStatus) -> None:
@@ -1096,19 +1099,39 @@ def build_slime_app(
             resume_checkpoint = torch_dist_resume_checkpoint(
                 save_root, is_complete=_is_complete_torch_dist_checkpoint
             )
+            if resume_checkpoint is not None and not slime.async_mode:
+                # Drain pending status writes before saving restored timing metadata.
+                if not flush_status_reporter(timeout_seconds=10.0):
+                    raise RuntimeError(
+                        "Timed out waiting for pending framework status updates"
+                    )
+                latest_run_record = await TrainingRun.from_id(
+                    training_run_id, is_async=True
+                )
+                latest_run_record.framework_status = run_record.framework_status
+                run_record = latest_run_record
             record_resume_checkpoint(run_record, resume_checkpoint)
             checkpoint_rollout_id = (
                 resume_checkpoint.get("resume_from_iteration")
                 if resume_checkpoint is not None
                 else None
             )
-            restore_checkpoint_step_times(
-                run_record,
-                training_attempt,
-                checkpoint_rollout_id,
-            )
             if not slime.async_mode:
-                advance_synchronous_timing_watermark(run_record, training_attempt)
+                restore_checkpoint_step_times(
+                    run_record,
+                    training_attempt,
+                    checkpoint_rollout_id,
+                )
+                checkpoint_step = (
+                    checkpoint_rollout_id + 1
+                    if checkpoint_rollout_id is not None
+                    else 0
+                )
+                advance_synchronous_timing_watermark(
+                    run_record,
+                    training_attempt,
+                    completed_through_step=checkpoint_step,
+                )
             await run_record.save(is_async=True)
 
             if resume_checkpoint is not None:

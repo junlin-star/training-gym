@@ -102,6 +102,17 @@ def test_checkpoint_restore_uses_zero_based_rollout_id():
     assert run.substep_times == {}
     assert advance_synchronous_timing_watermark(run, 2) == 2
 
+    run.step_times = {}
+    assert (
+        advance_synchronous_timing_watermark(
+            run,
+            3,
+            completed_through_step=2,
+        )
+        == 2
+    )
+    assert run.step_times == {}
+
 
 def test_training_interval_preserves_active_duration():
     events = [

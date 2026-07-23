@@ -34,7 +34,6 @@ from .reporting import (
     _enqueue_timing_event,
     _run_context,
     _step_progress,
-    flush_dashboard_reports,
 )
 from .reporting import (
     _advantage_url as _advantage_url,
@@ -185,17 +184,17 @@ def _report_custom_reward_function_timing(
     rollout_id: int,
     args: Any,
     samples: Any,
-) -> bool:
+) -> None:
     if os.environ.get("TRAINING_GYM_ASYNC_MODE") == "1" or not _arg_value(
         args, "custom_rm_path"
     ):
-        return False
+        return
     try:
         timing = _reward_function_timing(samples)
     except TypeError:
-        return False
+        return
     if timing is None:
-        return False
+        return
     start, finish, active_duration = timing
     for boundary, timestamp in (
         ("phase_start", start),
@@ -209,12 +208,11 @@ def _report_custom_reward_function_timing(
             step_id=0,
             event_ts=timestamp,
             active_duration_s=active_duration,
-            training_role="driver",
+            training_role="rollout",
             timeline_lane="rollout",
             parent_phase=SlimeStatus.ROLLOUT_LOGGING.value,
             display_name="Custom reward function",
         )
-    return True
 
 
 def _call_hook(path_key: str, args: Any, *hook_args: Any, **hook_kwargs: Any) -> Any:
@@ -242,8 +240,14 @@ def log_rollout_data(
         metrics=rollout_extra_metrics,
         rollout_time=rollout_time,
     )
-    if _report_custom_reward_function_timing(rollout_id, args, samples):
-        flush_dashboard_reports(timeout_seconds=5.0)
+    _report_custom_reward_function_timing(rollout_id, args, samples)
+    report_step_event(
+        SlimeStatus.TRAINING,
+        args,
+        rollout_id,
+        TRAINING_ROLE_FINISH_EVENT,
+        training_role="rollout",
+    )
     report_rollout_samples(
         rollout_id, args, samples, rollout_extra_metrics, rollout_time
     )
@@ -317,7 +321,7 @@ def before_train_step_hook(
     training_role = _training_role_name(
         getattr(args, "training_gym_role", None), default="actor"
     )
-    primary_rank = _is_primary_training_rank()
+    primary_rank = _is_primary_training_rank(args)
     if primary_rank:
         report_phase(
             SlimeStatus.OPTIMIZER_STEP if async_mode else SlimeStatus.TRAIN_MODEL,
@@ -351,7 +355,13 @@ _OPTIMIZER_STEP_TIMING_CONTEXT = "_training_gym_optimizer_step_timing_context"
 _OPTIMIZER_STEP_TIMING_INSTALLED = "_training_gym_optimizer_step_timing_installed"
 
 
-def _is_primary_training_rank() -> bool:
+def _is_primary_training_rank(args: Any) -> bool:
+    rank = getattr(args, "rank", None)
+    if rank is not None:
+        try:
+            return int(rank) == 0
+        except (TypeError, ValueError):
+            pass
     try:
         import torch.distributed as dist
     except ImportError:
@@ -460,10 +470,9 @@ def report_training_role_finished(
     rollout_id: int,
     training_role: str,
 ) -> None:
-    if (
-        os.environ.get("TRAINING_GYM_ASYNC_MODE") == "1"
-        or not _is_primary_training_rank()
-    ):
+    if os.environ.get("TRAINING_GYM_ASYNC_MODE") == "1":
+        return
+    if not _is_primary_training_rank(args):
         return
     report_step_event(
         SlimeStatus.TRAINING,
@@ -472,7 +481,6 @@ def report_training_role_finished(
         TRAINING_ROLE_FINISH_EVENT,
         training_role=_training_role_name(training_role, default="actor"),
     )
-    flush_dashboard_reports(timeout_seconds=2.0)
 
 
 def report_step_event(

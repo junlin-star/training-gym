@@ -22,15 +22,23 @@ from __future__ import annotations
 import json
 import os
 import threading
-from queue import Queue
+import time
+from dataclasses import dataclass, field
+from queue import Full, Queue
 from typing import Any
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
 
+@dataclass
+class _FlushBarrier:
+    event: threading.Event = field(default_factory=threading.Event)
+    delivery_succeeded: bool = False
+
+
 # Shared with slime's phase_reporting, whose rollout payloads can be 100KB+ —
 # size the queue for bursts of per-step rollout/advantage items.
-_QUEUE: Queue[dict[str, Any] | None] = Queue(maxsize=512)
+_QUEUE: Queue[dict[str, Any] | _FlushBarrier | None] = Queue(maxsize=512)
 _STARTED = False
 _LOCK = threading.Lock()
 _DEFAULT_TIMEOUT_SECONDS = 2.0
@@ -68,17 +76,25 @@ def _ensure_worker() -> None:
 
 
 def _worker() -> None:
+    delivery_succeeded = True
     while True:
         item = _QUEUE.get()
         if item is None:
+            _QUEUE.task_done()
             return
+        if isinstance(item, _FlushBarrier):
+            item.delivery_succeeded = delivery_succeeded
+            delivery_succeeded = True
+            item.event.set()
+            _QUEUE.task_done()
+            continue
         try:
-            _post(item)
+            delivery_succeeded = _post(item) and delivery_succeeded
         finally:
             _QUEUE.task_done()
 
 
-def _post(item: dict[str, Any]) -> None:
+def _post(item: dict[str, Any]) -> bool:
     url = item.pop("_url", "")
     timeout = float(
         item.pop("_timeout", _DEFAULT_TIMEOUT_SECONDS) or _DEFAULT_TIMEOUT_SECONDS
@@ -87,7 +103,7 @@ def _post(item: dict[str, Any]) -> None:
     # enqueue_item callers); don't re-resolve it here.
     token = str(item.pop("_token", "") or "").strip()
     if not url:
-        return
+        return False
     body = json.dumps(item, default=str).encode("utf-8")
     headers = {"Content-Type": "application/json"}
     if token:
@@ -101,8 +117,9 @@ def _post(item: dict[str, Any]) -> None:
     try:
         with urlopen(request, timeout=timeout) as response:
             response.read()
+        return True
     except (OSError, URLError):
-        return
+        return False
 
 
 def enqueue_item(item: dict[str, Any]) -> None:
@@ -156,15 +173,15 @@ def enqueue_framework_status(
         pass
 
 
-def flush(timeout_seconds: float = 5.0) -> None:
-    """Block until the queue drains (best-effort). Used at process exit so
-    terminal-state writes have a chance to land before the container dies."""
-    deadline = threading.Event()
-    timer = threading.Timer(timeout_seconds, deadline.set)
-    timer.daemon = True
-    timer.start()
+def flush(timeout_seconds: float = 5.0) -> bool:
+    """Wait for queued and in-flight status reports (best-effort)."""
+    if not _STARTED:
+        return True
+    barrier = _FlushBarrier()
+    deadline = time.monotonic() + timeout_seconds
     try:
-        while not _QUEUE.empty() and not deadline.is_set():
-            deadline.wait(0.05)
-    finally:
-        timer.cancel()
+        _QUEUE.put(barrier, timeout=timeout_seconds)
+    except Full:
+        return False
+    completed = barrier.event.wait(max(0.0, deadline - time.monotonic()))
+    return completed and barrier.delivery_succeeded

@@ -19,7 +19,7 @@ TRAINING_TIMING_EVENT_KIND = "timing_event"
 TRAINING_TIMING_EVENT_INDEX_KIND = "timing_event_keys"
 TRAINING_ROLE_FINISH_EVENT = "training_role_finish"
 TRAINING_ROLE_FINISH_MARKER_KIND = "training_role_finish_marker"
-SYNCHRONOUS_TRAINING_ROLES = ("driver", "actor", "critic")
+SYNCHRONOUS_TRAINING_ROLES = ("driver", "rollout", "actor", "critic")
 SYNCHRONOUS_TIMING_ATTEMPT_KEY = "synchronous_step_timings_persisted_attempt"
 SYNCHRONOUS_TIMING_WATERMARK_KEY = "synchronous_step_timings_persisted_through"
 
@@ -513,9 +513,16 @@ def synchronous_timing_watermark(run: TrainingRun, training_attempt: int) -> int
 
 
 def advance_synchronous_timing_watermark(
-    run: TrainingRun, training_attempt: int
+    run: TrainingRun,
+    training_attempt: int,
+    *,
+    completed_through_step: int = 0,
 ) -> int:
-    persisted_through_step = synchronous_timing_watermark(run, training_attempt)
+    """Advance through persisted rows and steps already covered by a checkpoint."""
+    persisted_through_step = max(
+        synchronous_timing_watermark(run, training_attempt),
+        completed_through_step,
+    )
     completed_steps = run.step_times or {}
     while str(persisted_through_step + 1) in completed_steps:
         persisted_through_step += 1
