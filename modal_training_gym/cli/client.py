@@ -35,13 +35,11 @@ class DashboardClient:
     def __init__(
         self,
         *,
-        base_url: str | None = None,
         password: str | None = None,
         timeout: float = DEFAULT_TIMEOUT_SECONDS,
         transport: httpx.BaseTransport | None = None,
     ) -> None:
-        configured_url = base_url if base_url is not None else get_dashboard_url()
-        configured_url = (configured_url or "").strip()
+        configured_url = (get_dashboard_url() or "").strip()
         if not configured_url:
             raise DashboardConfigurationError(
                 "Dashboard URL is not configured; run `training-gym setup` first."

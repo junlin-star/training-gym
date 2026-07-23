@@ -22,6 +22,15 @@ from modal_training_gym.cli.errors import (
 )
 
 
+@pytest.fixture(autouse=True)
+def configured_dashboard_url(monkeypatch):
+    monkeypatch.setattr(
+        client_module,
+        "get_dashboard_url",
+        lambda: "https://example.test",
+    )
+
+
 def test_uses_configured_url_and_encodes_query(monkeypatch):
     monkeypatch.setattr(
         client_module, "get_dashboard_url", lambda: "https://example.test/root/"
@@ -51,10 +60,7 @@ def test_sends_basic_auth_when_password_exists(monkeypatch):
         requests.append(request)
         return httpx.Response(200, json={})
 
-    with DashboardClient(
-        base_url="https://example.test",
-        transport=httpx.MockTransport(respond),
-    ) as client:
+    with DashboardClient(transport=httpx.MockTransport(respond)) as client:
         client.get_json("/api/items")
 
     expected = base64.b64encode(b"training-gym:secret").decode()
@@ -69,10 +75,7 @@ def test_omits_auth_when_password_is_absent(monkeypatch):
         requests.append(request)
         return httpx.Response(200, json={})
 
-    with DashboardClient(
-        base_url="https://example.test",
-        transport=httpx.MockTransport(respond),
-    ) as client:
+    with DashboardClient(transport=httpx.MockTransport(respond)) as client:
         client.get_json("/api/items")
 
     assert "authorization" not in requests[0].headers
@@ -94,9 +97,7 @@ def test_maps_http_errors(status_code, error_type, exit_code):
         lambda _request: httpx.Response(status_code, text="ignored")
     )
 
-    with DashboardClient(
-        base_url="https://example.test", transport=transport
-    ) as client:
+    with DashboardClient(transport=transport) as client:
         with pytest.raises(error_type) as exc_info:
             client.get_json("/api/items")
 
@@ -107,10 +108,7 @@ def test_maps_timeout_without_leaking_transport_details():
     def timeout(request: httpx.Request) -> httpx.Response:
         raise httpx.ReadTimeout("secret transport detail", request=request)
 
-    with DashboardClient(
-        base_url="https://example.test",
-        transport=httpx.MockTransport(timeout),
-    ) as client:
+    with DashboardClient(transport=httpx.MockTransport(timeout)) as client:
         with pytest.raises(DashboardTimeoutError) as exc_info:
             client.get_json("/api/items")
 
@@ -121,10 +119,7 @@ def test_maps_connection_failure():
     def disconnect(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("host detail", request=request)
 
-    with DashboardClient(
-        base_url="https://example.test",
-        transport=httpx.MockTransport(disconnect),
-    ) as client:
+    with DashboardClient(transport=httpx.MockTransport(disconnect)) as client:
         with pytest.raises(DashboardNetworkError):
             client.get_json("/api/items")
 
@@ -134,9 +129,7 @@ def test_rejects_malformed_json():
         lambda _request: httpx.Response(200, text="<html>not json</html>")
     )
 
-    with DashboardClient(
-        base_url="https://example.test", transport=transport
-    ) as client:
+    with DashboardClient(transport=transport) as client:
         with pytest.raises(MalformedResponseError):
             client.get_json("/api/items")
 
@@ -153,6 +146,6 @@ def test_rejects_missing_or_invalid_configuration(monkeypatch, url):
 
 
 def test_rejects_absolute_request_path():
-    with DashboardClient(base_url="https://example.test") as client:
+    with DashboardClient() as client:
         with pytest.raises(DashboardError):
             client.get_json("https://other.test/api/items")
