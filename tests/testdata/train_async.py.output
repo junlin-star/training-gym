@@ -5,11 +5,13 @@ if '/root' not in _tg_sys.path:
 try:
     from modal_training_gym.frameworks.slime.phase_reporting import (
         flush_async_timing_events as _tg_flush_timings,
-        report_step_event as _tg_report,
+        flush_async_timing_events_on_error as _tg_flush_timings_on_error,
+        report_async_timing_event as _tg_report,
     )
 except ImportError:
-    def _tg_report(status, args=None, rollout_id=None, step_event='', **kwargs): pass
+    def _tg_report(phase, args, rollout_id, event_type, **kwargs): pass
     def _tg_flush_timings(): pass
+    def _tg_flush_timings_on_error(function): return function
 
 import ray
 
@@ -20,6 +22,8 @@ from slime.utils.misc import should_run_periodic_action
 
 
 # The framework supports other asynchronous approaches such as fully async (which is shown in examples/full_async).
+# PATCHED_TRAINING_GYM_ASYNC_ERROR_FLUSH
+@_tg_flush_timings_on_error
 def train(args):
     assert not args.colocate, "Colocation is not supported for async training."
     configure_logger()
@@ -44,12 +48,12 @@ def train(args):
     # PATCHED_TRAINING_GYM_ASYNC_INITIAL_GENERATION
     _tg_report(
         'generate_rollouts', args, args.start_rollout_id, 'phase_start',
-        timeline_lane='rollout', display_name='Rollout + reward',
+        timeline_lane='rollout', display_name='Rollout generation',
     )
     rollout_data_next_future = rollout_manager.generate.remote(args.start_rollout_id)
     for rollout_id in range(args.start_rollout_id, args.num_rollout):
         # PATCHED_TRAINING_GYM_STEP_START
-        _tg_report('generate_rollouts', args, rollout_id, 'start')
+        _tg_report('iteration', args, rollout_id, 'rollout_start')
         # Sync the last generation
         if rollout_data_next_future is not None:
             rollout_data_curr_ref = ray.get(rollout_data_next_future)
@@ -61,7 +65,7 @@ def train(args):
             # PATCHED_TRAINING_GYM_ASYNC_NEXT_GENERATION
             _tg_report(
                 'generate_rollouts', args, rollout_id + 1, 'phase_start',
-                timeline_lane='rollout', display_name='Rollout + reward',
+                timeline_lane='rollout', display_name='Rollout generation',
             )
             rollout_data_next_future = rollout_manager.generate.remote(rollout_id + 1)
 
@@ -107,17 +111,17 @@ def train(args):
             _tg_report('checkpoint_save', args, rollout_id, 'phase_finish')
 
         if (rollout_id + 1) % args.update_weights_interval == 0:
-            # PATCHED_TRAINING_GYM_ASYNC_WEIGHT_SYNC
-            _tg_report(
-                'weight_sync', args, rollout_id, 'phase_start',
-                timeline_lane='coordination', display_name='Weight sync',
-            )
             # sync generate before update weights to prevent update weight in the middle of generation
             rollout_data_curr_ref = ray.get(x) if (x := rollout_data_next_future) is not None else None
             if x is not None:
                 # PATCHED_TRAINING_GYM_ASYNC_EARLY_GENERATION_FINISH
                 _tg_report('generate_rollouts', args, rollout_id + 1, 'phase_finish')
             rollout_data_next_future = None
+            # PATCHED_TRAINING_GYM_ASYNC_WEIGHT_SYNC
+            _tg_report(
+                'weight_sync', args, rollout_id, 'phase_start',
+                timeline_lane='coordination', display_name='Weight sync',
+            )
             actor_model.update_weights()
             # PATCHED_TRAINING_GYM_ASYNC_WEIGHT_SYNC_FINISH
             _tg_report('weight_sync', args, rollout_id, 'phase_finish')
@@ -131,7 +135,7 @@ def train(args):
             ray.get(rollout_manager.eval.remote(rollout_id))
             _tg_report('evaluate_rollouts_end', args, rollout_id, 'phase_finish')
         # PATCHED_TRAINING_GYM_STEP_FINISH
-        _tg_report('training', args, rollout_id, 'finish')
+        _tg_report('iteration', args, rollout_id, 'rollout_finish')
 
     # PATCHED_TRAINING_GYM_ASYNC_TIMING_FLUSH
     _tg_flush_timings()

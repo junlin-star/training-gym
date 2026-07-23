@@ -16,7 +16,7 @@ import secrets as _secrets
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Awaitable, Callable, Iterable, TypedDict
+from typing import TYPE_CHECKING, Awaitable, Callable, Iterable, TypedDict, cast
 
 import modal
 
@@ -37,7 +37,19 @@ from starlette.requests import Request
 # Used as endpoint parameter annotations, so — like ``Request`` above — these
 # must resolve from this module's globals.
 from modal_training_gym.common.advantage_distribution import AdvantageDistribution
-from modal_training_gym.common.run import FrameworkStatusUpdate, TrainingRun
+from modal_training_gym.common.async_step_timing import (
+    StepTimingSnapshot,
+    TimingAttemptSnapshot,
+)
+from modal_training_gym.common.async_timing import (
+    AsyncStepTimingUpdate,
+    AsyncTimingEvent,
+)
+from modal_training_gym.common.run import (
+    FrameworkStatusUpdate,
+    TrainingRun,
+    TrainingRunStatus,
+)
 from modal_training_gym.common.run_summary import (
     JsonDict,
     RunSummary,
@@ -666,39 +678,26 @@ def fastapi_app():
                     training_run_id,
                     "timing_snapshot",
                     training_attempt,
-                    completed_step,
+                    completed_rollout_id,
                 ) if str(training_run_id) in running_run_ids:
                     snapshot_key = str(training_run_id)
-                    try:
-                        position = (int(training_attempt), int(completed_step))
-                    except (TypeError, ValueError):
-                        print(f"Ignoring invalid timing snapshot key: {key!r}")
-                        continue
+                    position = (
+                        cast(int, training_attempt),
+                        cast(int, completed_rollout_id),
+                    )
                     latest = latest_snapshot_keys.get(snapshot_key)
                     if latest is None or position > latest[:2]:
                         latest_snapshot_keys[snapshot_key] = (*position, key)
 
-        snapshots = {}
+        snapshots: dict[str, StepTimingSnapshot] = {}
         snapshot_items = list(latest_snapshot_keys.items())
         stored_snapshots = await asyncio.gather(
             *(snapshot_store.get.aio(key) for _, (_, _, key) in snapshot_items),
-            return_exceptions=True,
         )
         for (snapshot_key, _), snapshot in zip(
             snapshot_items, stored_snapshots, strict=True
         ):
-            if isinstance(snapshot, BaseException):
-                print(f"Failed to load timing snapshot for {snapshot_key}: {snapshot}")
-                continue
-            if not isinstance(snapshot, dict):
-                print(f"Ignoring invalid timing snapshot for {snapshot_key}")
-                continue
-            if not isinstance(snapshot.get("step_times"), dict) or not isinstance(
-                snapshot.get("substep_times"), dict
-            ):
-                print(f"Ignoring invalid timing snapshot for {snapshot_key}")
-                continue
-            snapshots[snapshot_key] = snapshot
+            snapshots[snapshot_key] = cast(StepTimingSnapshot, snapshot)
         displayed_runs: list[JsonDict] = []
         for run in runs:
             if run.get("status") != "running":
@@ -714,14 +713,16 @@ def fastapi_app():
             displayed_run = dict(run)
             displayed_run["step_times"] = snapshot["step_times"]
             displayed_run["substep_times"] = snapshot["substep_times"]
-            timing_attempts = snapshot.get("timing_attempts")
-            if isinstance(timing_attempts, dict):
-                metadata["timing_attempts"] = timing_attempts
-            timing_attempt = snapshot.get("timing_attempt")
-            if isinstance(timing_attempt, int):
-                metadata["timing_attempt"] = timing_attempt
-            if isinstance(timing_attempts, dict) or isinstance(timing_attempt, int):
-                displayed_run["metadata"] = metadata
+            metadata["displayed_training_attempt"] = snapshot[
+                "displayed_training_attempt"
+            ]
+            if snapshot["archived_timing_attempts"]:
+                metadata["archived_timing_attempts"] = snapshot[
+                    "archived_timing_attempts"
+                ]
+            else:
+                metadata.pop("archived_timing_attempts", None)
+            displayed_run["metadata"] = metadata
             displayed_runs.append(displayed_run)
         return displayed_runs
 
@@ -863,17 +864,12 @@ def fastapi_app():
 
     @web.post("/api/async-step-times")
     async def async_step_times(
-        update: dict[str, Any],
+        update: AsyncStepTimingUpdate,
         authorization: str | None = Header(default=None),
     ):
-        try:
-            training_run_id = str(update["training_run_id"])
-            completed_step = int(update["progress_current"])
-            training_attempt = int(update.get("training_attempt", 0) or 0)
-        except (KeyError, TypeError, ValueError):
-            raise HTTPException(status_code=400, detail="Invalid step timing update")
-        if not training_run_id or completed_step < 1:
-            raise HTTPException(status_code=400, detail="Invalid step timing update")
+        training_run_id = update.training_run_id
+        training_attempt = update.training_attempt
+        completed_rollout_id = update.completed_rollout_id
 
         await _require_framework_status_token(training_run_id, authorization)
 
@@ -884,104 +880,165 @@ def fastapi_app():
         )
 
         run = await _get_run_or_404(training_run_id)
+        if run.status is not TrainingRunStatus.RUNNING:
+            return JSONResponse({"status": "ignored", "reason": "run_finished"})
+        current_attempt = int((run.metadata or {}).get("attempt_count") or 1)
+        if training_attempt != current_attempt:
+            return JSONResponse({"status": "ignored", "reason": "attempt_changed"})
         snapshot_store = _step_timing_snapshots_dict()
         previous_snapshot_key = None
         previous_snapshot_position = (-1, -1)
         older_snapshots = []
         async for key in snapshot_store.keys.aio():
             match key:
-                case (key_run_id, "timing_snapshot", key_attempt, key_step) if (
-                    key_run_id == training_run_id
-                ):
-                    position = (key_attempt, key_step)
-                    if position < (training_attempt, completed_step):
+                case (
+                    key_run_id,
+                    "timing_snapshot",
+                    key_attempt,
+                    key_rollout_id,
+                ) if key_run_id == training_run_id:
+                    position = (key_attempt, key_rollout_id)
+                    if position < (
+                        training_attempt,
+                        completed_rollout_id,
+                    ):
                         older_snapshots.append(key)
                     if (
                         previous_snapshot_position
                         < position
-                        <= (training_attempt, completed_step)
+                        <= (training_attempt, completed_rollout_id)
                     ):
                         previous_snapshot_key = key
                         previous_snapshot_position = position
 
+        previous_event_counts: dict[int, int] = {}
         if previous_snapshot_key is not None:
-            stored_snapshot = await snapshot_store.get.aio(previous_snapshot_key)
-            if (
-                isinstance(stored_snapshot, dict)
-                and isinstance(stored_snapshot.get("step_times"), dict)
-                and isinstance(stored_snapshot.get("substep_times"), dict)
-            ):
-                apply_step_timing_snapshot(
-                    run,
-                    stored_snapshot,
-                    snapshot_attempt=previous_snapshot_position[0],
-                    training_attempt=training_attempt,
-                )
-            else:
-                previous_snapshot_position = (-1, -1)
+            previous_snapshot = cast(
+                StepTimingSnapshot,
+                await snapshot_store.get.aio(previous_snapshot_key),
+            )
+            apply_step_timing_snapshot(
+                run,
+                previous_snapshot,
+                training_attempt=training_attempt,
+            )
+            if previous_snapshot["displayed_training_attempt"] == training_attempt:
+                previous_event_counts = previous_snapshot["timing_event_counts"]
 
-        first_step = (
-            previous_snapshot_position[1] + 1
-            if previous_snapshot_position[0] == training_attempt
-            else 1
-        )
         timing_store = _step_times_dict()
-        timing_keys = []
+        timing_keys_by_rollout: dict[int, list[object]] = {}
         async for key in timing_store.keys.aio():
             match key:
                 case (
                     key_run_id,
                     timing_kind,
                     key_attempt,
-                    _training_role,
+                    _role,
                     key_rollout_id,
                     *_rest,
                 ) if (
                     key_run_id == training_run_id
-                    and timing_kind in ("timing_event", "rank_timing")
+                    and timing_kind == "timing_event"
                     and key_attempt == training_attempt
-                    and first_step - 1 <= key_rollout_id < completed_step
+                    and 0 <= key_rollout_id <= completed_rollout_id
                 ):
-                    timing_keys.append(key)
+                    timing_keys_by_rollout.setdefault(key_rollout_id, []).append(key)
 
-        events: list[dict[str, object]] = []
-        for offset in range(0, len(timing_keys), 128):
-            batch = timing_keys[offset : offset + 128]
-            values = await asyncio.gather(*(timing_store.get.aio(key) for key in batch))
-            events.extend(value for value in values if isinstance(value, dict))
+        timing_event_counts = {
+            rollout_id: len(keys) for rollout_id, keys in timing_keys_by_rollout.items()
+        }
+        changed_rollout_ids = {
+            rollout_id
+            for rollout_id, event_count in timing_event_counts.items()
+            if previous_event_counts.get(rollout_id) != event_count
+        }
+        changed_rollout_ids.add(completed_rollout_id)
+        timing_keys = [
+            key
+            for rollout_id in changed_rollout_ids
+            for key in timing_keys_by_rollout.get(rollout_id, [])
+        ]
 
-        step_times, substep_times = aggregate_async_step_times(
-            events,
-            completed_step,
-            [],
-            attempt=training_attempt,
+        stored_events = await asyncio.gather(
+            *(timing_store.get.aio(key) for key in timing_keys)
         )
+        events = [
+            cast(AsyncTimingEvent, event)
+            for event in stored_events
+            if isinstance(event, dict)
+        ]
+
+        aggregated_step_times, aggregated_substep_times = aggregate_async_step_times(
+            events,
+            completed_rollout_id + 1,
+            training_attempt=training_attempt,
+        )
+        changed_step_keys = {str(rollout_id + 1) for rollout_id in changed_rollout_ids}
+        resume_from_iteration = (run.metadata or {}).get("resume_from_iteration")
         reconcile_completed_step_times(
             run,
-            step_times,
-            substep_times,
+            {
+                step: timing
+                for step, timing in aggregated_step_times.items()
+                if step in changed_step_keys
+            },
+            {
+                step: timing
+                for step, timing in aggregated_substep_times.items()
+                if step in changed_step_keys
+            },
             training_attempt=training_attempt,
-            resumed_from_checkpoint=(run.metadata or {}).get("resumed_from_checkpoint")
-            is True,
+            resume_from_iteration=(
+                resume_from_iteration
+                if isinstance(resume_from_iteration, int)
+                else None
+            ),
         )
-        snapshot: dict[str, object] = {
+        metadata = run.metadata or {}
+        stored_attempts = metadata.get("archived_timing_attempts")
+        archived_attempts = (
+            cast(dict[str, TimingAttemptSnapshot], stored_attempts)
+            if isinstance(stored_attempts, dict)
+            else {}
+        )
+        displayed_training_attempt = metadata.get("displayed_training_attempt")
+        snapshot: StepTimingSnapshot = {
+            "displayed_training_attempt": (
+                displayed_training_attempt
+                if isinstance(displayed_training_attempt, int)
+                else training_attempt
+            ),
+            "archived_timing_attempts": archived_attempts,
+            "timing_event_counts": timing_event_counts,
             "step_times": run.step_times or {},
             "substep_times": run.substep_times or {},
         }
-        timing_attempts = (run.metadata or {}).get("timing_attempts")
-        if timing_attempts is not None:
-            snapshot["timing_attempts"] = timing_attempts
-        timing_attempt = (run.metadata or {}).get("timing_attempt")
-        if timing_attempt is not None:
-            snapshot["timing_attempt"] = timing_attempt
-        await snapshot_store.put.aio(
-            (training_run_id, "timing_snapshot", training_attempt, completed_step),
-            snapshot,
+        snapshot_key = (
+            training_run_id,
+            "timing_snapshot",
+            training_attempt,
+            completed_rollout_id,
         )
-        for offset in range(0, len(older_snapshots), 128):
-            batch = older_snapshots[offset : offset + 128]
-            await asyncio.gather(*(snapshot_store.pop.aio(key, None) for key in batch))
-        return JSONResponse({"status": "ok", "completed_step": completed_step})
+        await snapshot_store.put.aio(snapshot_key, snapshot)
+        latest_run = await _get_run_or_404(training_run_id)
+        latest_attempt = int((latest_run.metadata or {}).get("attempt_count") or 1)
+        if (
+            latest_run.status is not TrainingRunStatus.RUNNING
+            or latest_attempt != training_attempt
+        ):
+            await snapshot_store.pop.aio(snapshot_key, None)
+            reason = (
+                "run_finished"
+                if latest_run.status is not TrainingRunStatus.RUNNING
+                else "attempt_changed"
+            )
+            return JSONResponse({"status": "ignored", "reason": reason})
+        await asyncio.gather(
+            *(snapshot_store.pop.aio(key, None) for key in older_snapshots)
+        )
+        return JSONResponse(
+            {"status": "ok", "completed_rollout_id": completed_rollout_id}
+        )
 
     # ── Training rollouts ────────────────────────────────────────────────
 

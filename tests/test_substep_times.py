@@ -49,6 +49,25 @@ def test_patch_matches_golden(slime_inputs, tmp_path, request):
         assert actual == expected, (
             f"golden mismatch for {name}; rerun with --rewrite to accept"
         )
+        if name == "train_async.py":
+            generation_finished = actual.index(
+                "_tg_report('generate_rollouts', args, rollout_id + 1, 'phase_finish')"
+            )
+            weight_sync_started = actual.index(
+                "'weight_sync', args, rollout_id, 'phase_start'"
+            )
+            weight_update = actual.index(
+                "actor_model.update_weights()", weight_sync_started
+            )
+            weight_sync_finished = actual.index(
+                "_tg_report('weight_sync', args, rollout_id, 'phase_finish')"
+            )
+            assert (
+                generation_finished
+                < weight_sync_started
+                < weight_update
+                < weight_sync_finished
+            )
 
         patcher._patch_file(work)
         assert work.read_text() == actual, f"patch is not idempotent for {name}"

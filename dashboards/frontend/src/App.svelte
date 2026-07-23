@@ -115,6 +115,108 @@
     return run.framework || "(untagged)";
   }
 
+  function mergeCompletedStepTimings(previousRuns, fetchedRuns) {
+    const previousRunsById = new Map(
+      previousRuns.map((run) => [run.training_run_id, run]),
+    );
+    return fetchedRuns.map((run) => {
+      const previousRun = previousRunsById.get(run.training_run_id);
+      if (!previousRun) return run;
+
+      const previousAttempt = Number(previousRun.metadata?.attempt_count) || 0;
+      const fetchedAttempt = Number(run.metadata?.attempt_count) || 0;
+      if (previousAttempt > fetchedAttempt) return previousRun;
+      if (previousAttempt !== fetchedAttempt) return run;
+
+      const previousTimingAttempt =
+        Number(previousRun.metadata?.displayed_training_attempt) || previousAttempt;
+      const fetchedTimingAttempt =
+        Number(run.metadata?.displayed_training_attempt) || fetchedAttempt;
+      if (previousTimingAttempt > fetchedTimingAttempt) return previousRun;
+      if (previousTimingAttempt !== fetchedTimingAttempt) return run;
+
+      const statusRegressed =
+        String(previousRun.status).toLowerCase() !== "running" &&
+        String(run.status).toLowerCase() === "running";
+      const latestRun = statusRegressed
+        ? {
+            ...run,
+            status: previousRun.status,
+            ended_at: previousRun.ended_at,
+            completed_at: previousRun.completed_at,
+            duration_seconds: previousRun.duration_seconds,
+            error_message: previousRun.error_message,
+            has_train_result:
+              previousRun.has_train_result || run.has_train_result,
+            train_result: previousRun.train_result ?? run.train_result,
+            resume_state: previousRun.resume_state,
+          }
+        : run;
+
+      return {
+        ...latestRun,
+        step_times: mergeStepTimes(
+          previousRun.step_times,
+          run.step_times,
+          statusRegressed,
+        ),
+        substep_times: mergeSubstepTimes(
+          previousRun.substep_times,
+          run.substep_times,
+          statusRegressed,
+        ),
+      };
+    });
+  }
+
+  function mergeStepTimes(previousSteps, fetchedSteps, preferPrevious = false) {
+    if (!previousSteps && !fetchedSteps) return null;
+    const merged = { ...(previousSteps || {}) };
+    for (const [step, timing] of Object.entries(fetchedSteps || {})) {
+      const mergedTiming = { ...(merged[step] || {}) };
+      for (const [key, value] of Object.entries(timing || {})) {
+        if (
+          !(key in mergedTiming) ||
+          mergedTiming[key] == null ||
+          (!preferPrevious && value != null)
+        ) {
+          mergedTiming[key] = value;
+        }
+      }
+      merged[step] = mergedTiming;
+    }
+    return merged;
+  }
+
+  function mergeSubstepTimes(
+    previousSubsteps,
+    fetchedSubsteps,
+    preferPrevious = false,
+  ) {
+    if (!previousSubsteps && !fetchedSubsteps) return null;
+    const merged = { ...(previousSubsteps || {}) };
+    for (const [step, timings] of Object.entries(fetchedSubsteps || {})) {
+      const mergedStep = { ...(merged[step] || {}) };
+      for (const [phase, timing] of Object.entries(timings || {})) {
+        const previousTiming = mergedStep[phase];
+        const previousIntervals = previousTiming?.intervals?.length || 0;
+        const fetchedIntervals = timing?.intervals?.length || 0;
+        const previousHasDuration = previousTiming?.duration_s != null;
+        const fetchedHasDuration = timing?.duration_s != null;
+        if (
+          previousIntervals < fetchedIntervals ||
+          (previousIntervals === fetchedIntervals &&
+            (!previousHasDuration ||
+              (!preferPrevious && fetchedHasDuration)))
+        ) {
+          mergedStep[phase] = timing;
+        }
+      }
+      merged[step] = mergedStep;
+    }
+    return merged;
+  }
+
   const NO_GROUP = "(no group)";
 
   function getGroup(run) {
@@ -250,7 +352,7 @@
     try {
       const runs = await fetchWithTimeout(fetchRuns, 30000, "runs");
       if (isStale()) return;
-      allRuns = runs;
+      allRuns = mergeCompletedStepTimings(allRuns, runs);
       // Auto-enable newly-seen recipes/statuses without resetting the user's
       // current filter selection on every refresh.
       const nextRecipes = new Set(activeRecipes);

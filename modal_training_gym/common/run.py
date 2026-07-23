@@ -7,21 +7,19 @@ from __future__ import annotations
 
 import os
 import time
-from collections.abc import Awaitable, Callable, Mapping, MutableMapping
+from collections.abc import Awaitable, Callable, MutableMapping
 from enum import Enum
-from typing import TYPE_CHECKING, Any, NotRequired, TypeAlias, TypedDict, cast
+from typing import TYPE_CHECKING, Any, cast
 
-from pydantic import (
-    BaseModel,
-    PrivateAttr,
-    computed_field,
-    field_validator,
-    model_validator,
-)
+from pydantic import BaseModel, PrivateAttr, computed_field, field_validator
 
 from modal_training_gym.common.framework import Framework
 from modal_training_gym.common.status import FrameworkStatus, resolve_framework_status
-from modal_training_gym.common.step_timing import record_sync_step_time
+from modal_training_gym.common.step_timing import (
+    StepTimes,
+    SubstepTimes,
+    record_step_time_event,
+)
 from modal_training_gym.utils.metadata import (
     MetadataStore,
     _step_times_dict,
@@ -34,35 +32,6 @@ if TYPE_CHECKING:
     from modal_training_gym.common.training_rollout import TrainingRolloutResult
 
 TRAINING_RUNS_STORE_NAME = MetadataStore.TRAINING_RUNS.value
-
-
-class StepTiming(TypedDict):
-    start: int | None
-    end: int | None
-    duration_s: int | None
-
-
-class SubstepTimingInterval(TypedDict):
-    start: float
-    duration_s: float
-    step_id: NotRequired[int]
-    training_role: NotRequired[str]
-    slowest_rank: NotRequired[int]
-    reported_rank_count: NotRequired[int]
-    training_world_size: NotRequired[int]
-    timeline_lane: NotRequired[str]
-    parent_phase: NotRequired[str]
-    display_name: NotRequired[str]
-
-
-class SingleSubstepTiming(TypedDict):
-    start: float
-    duration_s: float | None
-    intervals: NotRequired[list[SubstepTimingInterval]]
-
-
-StepTimes: TypeAlias = dict[str, StepTiming]
-SubstepTimes: TypeAlias = dict[str, dict[str, SingleSubstepTiming]]
 
 
 class FrameworkStatusUpdate(BaseModel):
@@ -140,36 +109,6 @@ class TrainingRun(BaseModel):
     # Runtime-only handles attached by ``TrainConfig.launch()``; never persisted.
     _function_call: Any = PrivateAttr(default=None)
     _status_display: Any = PrivateAttr(default=None)
-
-    @model_validator(mode="after")
-    def _hydrate_substep_timing_intervals(self) -> TrainingRun:
-        metadata = dict(self.metadata or {})
-        stored_intervals = metadata.pop("substep_timing_intervals", None)
-        if not isinstance(stored_intervals, Mapping):
-            return self
-
-        substep_times: SubstepTimes = {
-            step: {
-                phase: cast(SingleSubstepTiming, dict(timing))
-                for phase, timing in timings.items()
-            }
-            for step, timings in (self.substep_times or {}).items()
-        }
-        for step, phases in stored_intervals.items():
-            if not isinstance(step, str) or not isinstance(phases, Mapping):
-                continue
-            for phase, intervals in phases.items():
-                timing = substep_times.get(step, {}).get(phase)
-                if (
-                    isinstance(phase, str)
-                    and timing is not None
-                    and isinstance(intervals, list)
-                ):
-                    timing["intervals"] = intervals
-
-        self.substep_times = substep_times or self.substep_times
-        self.metadata = metadata or None
-        return self
 
     @computed_field
     @property
@@ -292,7 +231,7 @@ class TrainingRun(BaseModel):
         self.metadata = metadata
 
         current_step = progress.get("current")
-        record_sync_step_time(
+        record_step_time_event(
             cast(MutableMapping[str, float], _step_times_dict()),
             self.training_run_id,
             current_step,
@@ -316,30 +255,12 @@ class TrainingRun(BaseModel):
     def _touch(self) -> None:
         self.updated_at = int(time.time())
 
-    def _storage_payload(self) -> dict[str, Any]:
-        payload = self.model_dump(mode="json")
-        metadata = dict(payload.get("metadata") or {})
-        stored_intervals = metadata.get("substep_timing_intervals")
-        stored_intervals = (
-            dict(stored_intervals) if isinstance(stored_intervals, dict) else {}
-        )
-        for step, timings in (payload.get("substep_times") or {}).items():
-            for phase, timing in timings.items():
-                intervals = timing.pop("intervals", None)
-                if intervals:
-                    step_intervals = stored_intervals.setdefault(step, {})
-                    step_intervals[phase] = intervals
-        if stored_intervals:
-            metadata["substep_timing_intervals"] = stored_intervals
-            payload["metadata"] = metadata
-        return payload
-
     def save(self, *, is_async: bool = False) -> None | Awaitable[None]:
         self._touch()
         return vol_put_with_summary(
             MetadataStore.TRAINING_RUNS,
             self.training_run_id,
-            self._storage_payload(),
+            self.model_dump(mode="json"),
             summary_store=MetadataStore.TRAINING_RUNS_SUMMARY,
             item_id_key="training_run_id",
             sort_key=self._summary_sort_key,

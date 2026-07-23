@@ -14,6 +14,7 @@ def _patch_file(path: Path) -> None:
         return
 
     import_target = "from slime.utils.types import RolloutBatch\n"
+    train_target = "    def train(self, rollout_id: int, rollout_data_ref: Box, external_data=None):\n"
     wake_target = (
         "        if self.args.offload_train:\n"
         "            self.wake_up()\n\n"
@@ -41,6 +42,7 @@ def _patch_file(path: Path) -> None:
     )
     targets = {
         "reporter import": import_target,
+        "training entrypoint": train_target,
         "training-model wake": wake_target,
         "data preprocessing finish": preprocess_finish_target,
         "training-model offload": offload_target,
@@ -56,7 +58,8 @@ def _patch_file(path: Path) -> None:
         f"# {MARKER}\n"
         "from modal_training_gym.frameworks.slime.phase_reporting import (\n"
         "    flush_async_timing_events as _tg_flush_timings,\n"
-        "    record_step_interval as _tg_record_interval,\n"
+        "    flush_async_timing_events_on_error as _tg_flush_timings_on_error,\n"
+        "    record_async_phase_interval as _tg_record_interval,\n"
         ")\n"
     )
     wake = (
@@ -87,7 +90,8 @@ def _patch_file(path: Path) -> None:
         '                display_name="Offload training model",\n'
         "            ):\n"
         "                self.sleep()\n\n"
-        "        _tg_flush_timings()\n"
+        "        if rollout_id == self.args.num_rollout - 1:\n"
+        "            _tg_flush_timings()\n"
         "        return result\n"
     )
     value_inference = (
@@ -104,7 +108,7 @@ def _patch_file(path: Path) -> None:
     )
     reference_update = (
         "            with _tg_record_interval(\n"
-        '                "ref_model_update", self.args, rollout_id,\n'
+        '                "reference_model_update", self.args, rollout_id,\n'
         '                timeline_lane="training", parent_phase="training",\n'
         '                display_name="Update reference model",\n'
         "            ):\n"
@@ -115,6 +119,13 @@ def _patch_file(path: Path) -> None:
     )
 
     source = source.replace(import_target, import_target + reporter, 1)
+    source = source.replace(
+        train_target,
+        "    @_tg_flush_timings_on_error\n"
+        "    def train(self, rollout_id: int, rollout_data_ref: Box, external_data=None):\n"
+        "        self.args.training_gym_role = self.role\n",
+        1,
+    )
     source = source.replace(wake_target, wake, 1)
     source = source.replace(preprocess_finish_target, preprocess_finish, 1)
     source = source.replace(offload_target, offload, 1)

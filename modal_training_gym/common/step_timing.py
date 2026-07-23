@@ -2,8 +2,47 @@ from __future__ import annotations
 
 from collections.abc import MutableMapping
 from enum import Enum
+from typing import Literal, NotRequired, TypeAlias, TypedDict
 
 from modal_training_gym.common.status import SlimeStatus
+
+TimingLane: TypeAlias = Literal[
+    "rollout",
+    "reward",
+    "training",
+    "coordination",
+]
+
+
+class StepTiming(TypedDict):
+    start: int | None
+    end: int | None
+    duration_s: int | None
+
+
+class SubstepTimingInterval(TypedDict):
+    start: float
+    duration_s: float
+    step_id: NotRequired[int]
+    training_role: NotRequired[str]
+    training_rank: NotRequired[int]
+    slowest_rank: NotRequired[int]
+    training_world_size: NotRequired[int]
+    reported_rank_count: NotRequired[int]
+    active_duration_s: NotRequired[float]
+    timeline_lane: NotRequired[TimingLane]
+    parent_phase: NotRequired[str]
+    display_name: NotRequired[str]
+
+
+class SubstepTiming(TypedDict):
+    start: float
+    duration_s: float | None
+    intervals: NotRequired[list[SubstepTimingInterval]]
+
+
+StepTimes: TypeAlias = dict[str, StepTiming]
+SubstepTimes: TypeAlias = dict[str, dict[str, SubstepTiming]]
 
 
 class Substep(str, Enum):
@@ -19,19 +58,14 @@ class Substep(str, Enum):
 
 
 class TrainingSubstep(str, Enum):
-    DATA_PREPROCESS = "data_preprocess"
     POLICY_LOG_PROBS = SlimeStatus.COMPUTE_LOG_PROBS.value
     REFERENCE_LOG_PROBS = "reference_log_probs"
     TEACHER_LOG_PROBS = "teacher_log_probs"
-    VALUE_INFERENCE = "value_inference"
-    FORWARD_BACKWARD = "train_model"
+    FORWARD_BACKWARD = "forward_backward"
     OPTIMIZER_STEP = SlimeStatus.OPTIMIZER_STEP.value
-    REFERENCE_MODEL_UPDATE = "ref_model_update"
-    TRAINING_MODEL_WAKE = "training_model_wake"
-    TRAINING_MODEL_OFFLOAD = "training_model_offload"
 
 
-def record_sync_step_time(
+def record_step_time_event(
     step_times: MutableMapping[str, float],
     training_run_id: str,
     current_step: object,

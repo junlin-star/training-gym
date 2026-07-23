@@ -77,19 +77,20 @@
     return value.toFixed(3);
   }
 
-  // Step keys are 1-indexed while rollout ids are 0-indexed.
+  // New timings use 1-indexed step keys; persisted production runs may use
+  // the rollout id directly.
   function stepTimingForRollout(rolloutId) {
     const st = run?.step_times || null;
     const sub = run?.substep_times || null;
-    const timingIntervals = run?.metadata?.substep_timing_intervals || null;
     if (!st && !sub) return null;
-    const key = String(Number(rolloutId) + 1);
+    const usesRolloutKeys =
+      Object.prototype.hasOwnProperty.call(st || {}, "0") ||
+      Object.prototype.hasOwnProperty.call(sub || {}, "0");
+    const key = String(Number(rolloutId) + (usesRolloutKeys ? 0 : 1));
     if (!(st && st[key]) && !(sub && sub[key])) return null;
     return {
       stepTimes: st && st[key] ? { [key]: st[key] } : null,
       substepTimes: sub && sub[key] ? { [key]: sub[key] } : null,
-      substepTimingIntervals:
-        timingIntervals && timingIntervals[key] ? { [key]: timingIntervals[key] } : null,
     };
   }
 
@@ -1214,7 +1215,6 @@
               <StepTimings
                 stepTimes={run.step_times}
                 substepTimes={run.substep_times}
-                substepTimingIntervals={run?.metadata?.substep_timing_intervals}
                 layout="timeline"
                 asyncMode={run?.config?.recipe?.async_mode === true}
                 downloadName={`step_substep_times_${runId}.json`}
@@ -1382,32 +1382,31 @@
                 </td>
               </tr>
               {#if expandedRolloutId === r.rollout_id}
+                {@const stepTiming = stepTimingForRollout(r.rollout_id)}
                 <tr>
                   <td class="p-[12px_10px] bg-(--color-c-gray-08,#1c1c1c) cursor-default" colspan={rolloutColumns.length}>
+                    {#if stepTiming}
+                      <div class="rollout-chart">
+                        <div class="rollout-chart-title">
+                          {run?.config?.recipe?.async_mode === true
+                            ? "Rollout timing"
+                            : "Step timing"}
+                        </div>
+                        <StepTimings
+                          stepTimes={stepTiming.stepTimes}
+                          substepTimes={stepTiming.substepTimes}
+                          layout={run?.config?.recipe?.async_mode === true
+                            ? "timeline"
+                            : "rows"}
+                          asyncMode={run?.config?.recipe?.async_mode === true}
+                        />
+                      </div>
+                    {/if}
                     {#if expandedRolloutLoading}
                       <div class="detail-empty">Loading samples…</div>
                     {:else if !expandedRollout || !sampleDist}
                       <div class="detail-empty">No samples recorded.</div>
                     {:else}
-                      {@const stepTiming = stepTimingForRollout(r.rollout_id)}
-                      {#if stepTiming}
-                        <div class="rollout-chart">
-                          <div class="rollout-chart-title">
-                            {run?.config?.recipe?.async_mode === true
-                              ? "Rollout timing"
-                              : "Step timing"}
-                          </div>
-                          <StepTimings
-                            stepTimes={stepTiming.stepTimes}
-                            substepTimes={stepTiming.substepTimes}
-                            substepTimingIntervals={stepTiming.substepTimingIntervals}
-                            layout={run?.config?.recipe?.async_mode === true
-                              ? "timeline"
-                              : "rows"}
-                            asyncMode={run?.config?.recipe?.async_mode === true}
-                          />
-                        </div>
-                      {/if}
                       {#if expandedRollout.metrics && Object.keys(expandedRollout.metrics).length}
                         {@const m = expandedRollout.metrics}
                         {@const remoteErr = Number(m["agent/exit_status/remoteerror_sample_count"]) || 0}

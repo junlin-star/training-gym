@@ -336,6 +336,87 @@ def test_build_current_summary_joins_result_and_derives_public_fields():
     assert [link.label for link in summary.wandb_links] == ["W&B a2", "W&B"]
 
 
+def test_build_summary_preserves_detailed_substep_intervals():
+    summary = build_run_summary(
+        _run(
+            step_times={
+                "1": {"start": 100, "end": 110, "duration_s": 10},
+            },
+            substep_times={
+                "1": {
+                    "generate_rollouts": {
+                        "start": 100.0,
+                        "duration_s": 5.0,
+                    },
+                    "forward_backward": {
+                        "start": 105.0,
+                        "duration_s": 4.0,
+                        "intervals": [
+                            {
+                                "start": 105.0,
+                                "duration_s": 4.0,
+                                "step_id": 0,
+                                "training_role": "actor",
+                                "slowest_rank": 1,
+                                "reported_rank_count": 2,
+                                "training_world_size": 2,
+                                "timeline_lane": "training",
+                                "parent_phase": "training",
+                                "display_name": "Forward / backward",
+                            }
+                        ],
+                    },
+                    "train_model": {
+                        "start": 105.0,
+                        "duration_s": 4.0,
+                        "intervals": [
+                            {
+                                "start": 105.0,
+                                "duration_s": 4.0,
+                                "active_duration_s": 4.0,
+                                "step_id": 0,
+                                "training_role": "actor",
+                                "training_rank": 1,
+                                "training_world_size": 2,
+                                "timeline_lane": "training",
+                            }
+                        ],
+                    },
+                }
+            },
+        )
+    )
+
+    assert summary.model_dump()["substep_times"]["1"]["forward_backward"][
+        "intervals"
+    ] == [
+        {
+            "start": 105.0,
+            "duration_s": 4.0,
+            "step_id": 0,
+            "training_role": "actor",
+            "slowest_rank": 1,
+            "reported_rank_count": 2,
+            "training_world_size": 2,
+            "timeline_lane": "training",
+            "parent_phase": "training",
+            "display_name": "Forward / backward",
+        }
+    ]
+    assert summary.model_dump()["substep_times"]["1"]["train_model"]["intervals"] == [
+        {
+            "start": 105.0,
+            "duration_s": 4.0,
+            "step_id": 0,
+            "training_role": "actor",
+            "training_rank": 1,
+            "training_world_size": 2,
+            "active_duration_s": 4.0,
+            "timeline_lane": "training",
+        }
+    ]
+
+
 def test_build_historical_summary_accepts_aliases_wrappers_and_iso_timestamps():
     historical = {
         "run_id": "legacy-1",

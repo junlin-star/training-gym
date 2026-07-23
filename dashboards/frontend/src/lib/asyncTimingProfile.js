@@ -29,7 +29,7 @@ export function phaseBreakdown(timeline, parent) {
     const start = Math.max(parentStart, interval.start);
     const end = Math.min(parentEnd, interval.end);
     if (end <= start) continue;
-    const role = interval.sub.trainingRole || null;
+    const role = interval.sub.role || null;
     const key = `${interval.sub.name}:${role || ""}`;
     if (!groups.has(key)) {
       groups.set(key, { key, phase: interval.sub, role, intervals: [], start });

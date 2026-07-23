@@ -17,13 +17,21 @@ from __future__ import annotations
 
 import os
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Awaitable, Callable, Iterator
+from contextvars import ContextVar
 from contextlib import contextmanager
 from functools import wraps
-from typing import Any
+from typing import TYPE_CHECKING, Any, ParamSpec, TypeVar, cast
 
 from modal_training_gym.common.status import SlimeStatus
 from modal_training_gym.common.step_timing import TrainingSubstep
+
+if TYPE_CHECKING:
+    from modal_training_gym.common.async_timing import (
+        AsyncTimingEvent,
+        AsyncTimingEventType,
+    )
+    from modal_training_gym.common.step_timing import TimingLane
 
 from .advantage_reporting import (
     _advantage_samples_payload as _advantage_samples_payload,
@@ -100,6 +108,8 @@ CUSTOM_BEFORE_LOG_PROB_HOOK_PATH_KEY = (
 CUSTOM_BEFORE_TRAIN_STEP_HOOK_PATH_KEY = (
     "training_gym_custom_megatron_before_train_step_hook_path"
 )
+ROLLOUT_FUNCTION_PATH_KEY = "training_gym_rollout_function_path"
+CUSTOM_REWARD_FUNCTION_PATH_KEY = "training_gym_custom_reward_function_path"
 _LOG_PROB_PHASES = {
     "": (
         TrainingSubstep.POLICY_LOG_PROBS,
@@ -118,6 +128,12 @@ _LOG_PROB_PHASES = {
     ),
 }
 _LOG_PROB_STARTS: dict[str, tuple[float, float, float]] = {}
+_CURRENT_ROLLOUT_ID: ContextVar[int | None] = ContextVar(
+    "training_gym_rollout_id",
+    default=None,
+)
+_P = ParamSpec("_P")
+_R = TypeVar("_R")
 
 
 def _hook_path_from_args(args: Any, path_key: str) -> str | None:
@@ -195,6 +211,110 @@ def _call_hook(path_key: str, args: Any, *hook_args: Any, **hook_kwargs: Any) ->
     return hook(*hook_args, **hook_kwargs)
 
 
+def flush_async_timing_events_on_error(
+    function: Callable[_P, _R],
+) -> Callable[_P, _R]:
+    @wraps(function)
+    def wrapped(*args: _P.args, **kwargs: _P.kwargs) -> _R:
+        try:
+            return function(*args, **kwargs)
+        except BaseException:
+            flush_async_timing_events()
+            raise
+
+    return wrapped
+
+
+@flush_async_timing_events_on_error
+def rollout_with_timing_context(
+    args: object,
+    rollout_id: int,
+    data_source: object,
+    evaluation: bool = False,
+) -> object:
+    rollout_function = cast(
+        Callable[..., object],
+        _resolve_hook(_hook_path_from_args(args, ROLLOUT_FUNCTION_PATH_KEY)),
+    )
+    token = _CURRENT_ROLLOUT_ID.set(None if evaluation else rollout_id)
+    try:
+        result = rollout_function(
+            args,
+            rollout_id,
+            data_source,
+            evaluation=evaluation,
+        )
+    finally:
+        _CURRENT_ROLLOUT_ID.reset(token)
+
+    num_rollouts = getattr(args, "num_rollout", None)
+    if (
+        not evaluation
+        and isinstance(num_rollouts, int)
+        and rollout_id == num_rollouts - 1
+    ):
+        flush_async_timing_events()
+    return result
+
+
+async def custom_reward_with_timing(
+    args: object,
+    sample: object,
+    **kwargs: object,
+) -> object:
+    reward_function = cast(
+        Callable[..., Awaitable[object]],
+        _resolve_hook(_hook_path_from_args(args, CUSTOM_REWARD_FUNCTION_PATH_KEY)),
+    )
+    rollout_id = _CURRENT_ROLLOUT_ID.get()
+    if rollout_id is None:
+        return await reward_function(args, sample, **kwargs)
+
+    occurrence_id = getattr(sample, "index", None)
+    if not isinstance(occurrence_id, int) and isinstance(sample, (list, tuple)):
+        occurrence_id = next(
+            (
+                index
+                for item in sample
+                if isinstance(index := getattr(item, "index", None), int)
+            ),
+            None,
+        )
+    if not isinstance(occurrence_id, int):
+        return await reward_function(args, sample, **kwargs)
+    started = time.time()
+    started_monotonic = time.monotonic()
+    try:
+        return await reward_function(args, sample, **kwargs)
+    finally:
+        finished = time.time()
+        finished_monotonic = time.monotonic()
+        report_async_timing_event(
+            "custom_reward",
+            args,
+            rollout_id,
+            "phase_start",
+            occurrence_id=occurrence_id,
+            timestamp=started,
+            monotonic_timestamp=started_monotonic,
+            timeline_lane="reward",
+            parent_phase="generate_rollouts",
+            display_name="Custom reward function",
+        )
+        report_async_timing_event(
+            "custom_reward",
+            args,
+            rollout_id,
+            "phase_finish",
+            occurrence_id=occurrence_id,
+            timestamp=finished,
+            monotonic_timestamp=finished_monotonic,
+            timeline_lane="reward",
+            parent_phase="generate_rollouts",
+            display_name="Custom reward function",
+        )
+
+
 def log_rollout_data(
     rollout_id: int,
     args: Any,
@@ -261,6 +381,13 @@ def log_eval_rollout_data(
 
 
 def before_log_prob_hook(args: Any, model: Any, store_prefix: str) -> None:
+    _call_hook(
+        CUSTOM_BEFORE_LOG_PROB_HOOK_PATH_KEY,
+        args,
+        args,
+        model,
+        store_prefix,
+    )
     if (
         getattr(args, "training_gym_role", None) != "critic"
         and store_prefix in _LOG_PROB_PHASES
@@ -281,13 +408,6 @@ def before_log_prob_hook(args: Any, model: Any, store_prefix: str) -> None:
                 time.monotonic(),
                 elapsed,
             )
-    _call_hook(
-        CUSTOM_BEFORE_LOG_PROB_HOOK_PATH_KEY,
-        args,
-        args,
-        model,
-        store_prefix,
-    )
 
 
 _OPTIMIZER_TIMING_CONTEXT = "_training_gym_timing_context"
@@ -305,17 +425,17 @@ def _install_optimizer_timing(optimizer: object) -> None:
         if context is None:
             return None
         setattr(optimizer, _OPTIMIZER_TIMING_CONTEXT, None)
-        hook_args, rollout_id, step_id = context
+        hook_args, rollout_id, occurrence_id = context
         finished = time.time()
         finished_monotonic = time.monotonic()
-        report_step_event(
+        report_async_timing_event(
             TrainingSubstep.FORWARD_BACKWARD,
             hook_args,
             rollout_id,
             "phase_finish",
-            step_id=step_id,
-            event_ts=finished,
-            event_monotonic=finished_monotonic,
+            occurrence_id=occurrence_id,
+            timestamp=finished,
+            monotonic_timestamp=finished_monotonic,
             timeline_lane="training",
             parent_phase=SlimeStatus.TRAINING.value,
             display_name="Forward / backward",
@@ -327,36 +447,35 @@ def _install_optimizer_timing(optimizer: object) -> None:
         finished_forward_backward = finish_forward_backward()
         if finished_forward_backward is None:
             return original_step(*args, **kwargs)
-        context, optimizer_started, optimizer_started_monotonic = (
-            finished_forward_backward
-        )
-        hook_args, rollout_id, step_id = context
-        report_step_event(
-            TrainingSubstep.OPTIMIZER_STEP,
-            hook_args,
-            rollout_id,
-            "phase_start",
-            step_id=step_id,
-            event_ts=optimizer_started,
-            event_monotonic=optimizer_started_monotonic,
-            timeline_lane="training",
-            parent_phase=SlimeStatus.TRAINING.value,
-            display_name="Optimizer step",
-        )
-
+        context, _, _ = finished_forward_backward
+        hook_args, rollout_id, occurrence_id = context
+        optimizer_started = time.time()
+        optimizer_started_monotonic = time.monotonic()
         try:
             return original_step(*args, **kwargs)
         finally:
             optimizer_finished = time.time()
             optimizer_finished_monotonic = time.monotonic()
-            report_step_event(
+            report_async_timing_event(
+                TrainingSubstep.OPTIMIZER_STEP,
+                hook_args,
+                rollout_id,
+                "phase_start",
+                occurrence_id=occurrence_id,
+                timestamp=optimizer_started,
+                monotonic_timestamp=optimizer_started_monotonic,
+                timeline_lane="training",
+                parent_phase=SlimeStatus.TRAINING.value,
+                display_name="Optimizer step",
+            )
+            report_async_timing_event(
                 TrainingSubstep.OPTIMIZER_STEP,
                 hook_args,
                 rollout_id,
                 "phase_finish",
-                step_id=step_id,
-                event_ts=optimizer_finished,
-                event_monotonic=optimizer_finished_monotonic,
+                occurrence_id=occurrence_id,
+                timestamp=optimizer_finished,
+                monotonic_timestamp=optimizer_finished_monotonic,
                 timeline_lane="training",
                 parent_phase=SlimeStatus.TRAINING.value,
                 display_name="Optimizer step",
@@ -375,12 +494,12 @@ def _install_optimizer_timing(optimizer: object) -> None:
 
 
 def before_train_step_hook(
-    args: Any,
+    args: object,
     rollout_id: int,
     step_id: int,
-    model: Any,
-    optimizer: Any,
-    opt_param_scheduler: Any,
+    model: object,
+    optimizer: object,
+    opt_param_scheduler: object,
 ) -> None:
     global _LOG_PROB_STARTS
     async_mode = (
@@ -408,13 +527,6 @@ def before_train_step_hook(
     # This is separate from the mode branch so the custom hook runs first.
     if async_mode:
         _install_optimizer_timing(optimizer)
-        setattr(
-            optimizer,
-            _OPTIMIZER_TIMING_CONTEXT,
-            (args, rollout_id, step_id),
-        )
-        update_started = time.time()
-        update_started_monotonic = time.monotonic()
         if step_id == 0:
             log_prob_starts = _LOG_PROB_STARTS
             _LOG_PROB_STARTS = {}
@@ -437,38 +549,45 @@ def before_train_step_hook(
                         duration = float(total_elapsed) - previous_elapsed
                         if duration < 0:
                             continue
-                        report_step_event(
+                        report_async_timing_event(
                             phase,
                             args,
                             rollout_id,
                             "phase_start",
-                            step_id=step_id,
-                            event_ts=started,
-                            event_monotonic=started_monotonic,
+                            occurrence_id=step_id,
+                            timestamp=started,
+                            monotonic_timestamp=started_monotonic,
                             timeline_lane="training",
                             parent_phase=SlimeStatus.TRAINING.value,
                             display_name=display_name,
                         )
-                        report_step_event(
+                        report_async_timing_event(
                             phase,
                             args,
                             rollout_id,
                             "phase_finish",
-                            step_id=step_id,
-                            event_ts=started + float(duration),
-                            event_monotonic=started_monotonic + float(duration),
+                            occurrence_id=step_id,
+                            timestamp=started + float(duration),
+                            monotonic_timestamp=started_monotonic + float(duration),
                             timeline_lane="training",
                             parent_phase=SlimeStatus.TRAINING.value,
                             display_name=display_name,
                         )
-        report_step_event(
+        update_started = time.time()
+        update_started_monotonic = time.monotonic()
+        setattr(
+            optimizer,
+            _OPTIMIZER_TIMING_CONTEXT,
+            (args, rollout_id, step_id),
+        )
+        report_async_timing_event(
             TrainingSubstep.FORWARD_BACKWARD,
             args,
             rollout_id,
             "phase_start",
-            step_id=step_id,
-            event_ts=update_started,
-            event_monotonic=update_started_monotonic,
+            occurrence_id=step_id,
+            timestamp=update_started,
+            monotonic_timestamp=update_started_monotonic,
             timeline_lane="training",
             parent_phase=SlimeStatus.TRAINING.value,
             display_name="Forward / backward",
@@ -476,106 +595,111 @@ def before_train_step_hook(
 
 
 @contextmanager
-def record_step_interval(
-    status: SlimeStatus | TrainingSubstep | str,
-    args: Any,
+def record_async_phase_interval(
+    phase: SlimeStatus | TrainingSubstep | str,
+    args: object,
     rollout_id: int,
     *,
-    enabled: bool = True,
-    step_id: int | None = None,
-    timeline_lane: str | None = None,
+    occurrence_id: int | None = None,
+    timeline_lane: TimingLane | None = None,
     parent_phase: str | None = None,
     display_name: str | None = None,
 ) -> Iterator[None]:
-    if not enabled:
-        yield
-        return
-    report_step_event(
-        status,
-        args,
-        rollout_id,
-        "phase_start",
-        step_id=step_id,
-        timeline_lane=timeline_lane,
-        parent_phase=parent_phase,
-        display_name=display_name,
-    )
+    started = time.time()
+    started_monotonic = time.monotonic()
     try:
         yield
     finally:
-        report_step_event(
-            status,
+        finished = time.time()
+        finished_monotonic = time.monotonic()
+        report_async_timing_event(
+            phase,
+            args,
+            rollout_id,
+            "phase_start",
+            occurrence_id=occurrence_id,
+            timestamp=started,
+            monotonic_timestamp=started_monotonic,
+            timeline_lane=timeline_lane,
+            parent_phase=parent_phase,
+            display_name=display_name,
+        )
+        report_async_timing_event(
+            phase,
             args,
             rollout_id,
             "phase_finish",
-            step_id=step_id,
+            occurrence_id=occurrence_id,
+            timestamp=finished,
+            monotonic_timestamp=finished_monotonic,
             timeline_lane=timeline_lane,
             parent_phase=parent_phase,
             display_name=display_name,
         )
 
 
-def report_step_event(
-    status: SlimeStatus | TrainingSubstep | str,
-    args: Any = None,
-    rollout_id: int | None = None,
-    step_event: str = "",
-    step_id: int | None = None,
-    event_ts: float | None = None,
-    event_monotonic: float | None = None,
+def report_async_timing_event(
+    phase: SlimeStatus | TrainingSubstep | str,
+    args: object,
+    rollout_id: int,
+    event_type: AsyncTimingEventType,
+    occurrence_id: int | None = None,
+    timestamp: float | None = None,
+    monotonic_timestamp: float | None = None,
     *,
-    timeline_lane: str | None = None,
+    timeline_lane: TimingLane | None = None,
     parent_phase: str | None = None,
     display_name: str | None = None,
 ) -> None:
-    """Report one step/substep event tagged with the ``status`` phase.
+    phase = (
+        phase.value if isinstance(phase, (SlimeStatus, TrainingSubstep)) else str(phase)
+    )
+    role = getattr(args, "training_gym_role", None)
+    role = role if isinstance(role, str) else None
+    rank = getattr(args, "rank", None) if role is not None else None
+    world_size = getattr(args, "world_size", None) if role is not None else None
+    event: AsyncTimingEvent = {
+        "training_run_id": str(_run_context(args)["training_run_id"]),
+        "training_attempt": int(os.environ.get("TRAINING_GYM_TRAINING_ATTEMPT") or "1"),
+        "rollout_id": rollout_id,
+        "phase": phase,
+        "event_type": event_type,
+        "timestamp": time.time() if timestamp is None else timestamp,
+        "monotonic_timestamp": (
+            time.monotonic() if monotonic_timestamp is None else monotonic_timestamp
+        ),
+        "occurrence_id": occurrence_id,
+        "role": role,
+        "rank": rank if isinstance(rank, int) else None,
+        "world_size": world_size if isinstance(world_size, int) else None,
+        "timeline_lane": timeline_lane,
+        "parent_phase": parent_phase,
+        "display_name": display_name,
+    }
+    _enqueue_async_timing_event(event)
+
+
+def report_step_event(
+    status: SlimeStatus | str,
+    args: object | None = None,
+    rollout_id: int | None = None,
+    step_event: str = "",
+) -> None:
+    """Report one sync step/substep event tagged with the ``status`` phase.
 
     ``status`` may be a plain string — the patched slime train.py passes phase
-    names as literals so the injected code stays stdlib-only. The optional
-    descriptors let new phases render without dashboard-specific phase rules.
+    names as literals so the injected code stays stdlib-only.
     """
-    async_mode = (
-        bool(getattr(args, "async_mode", False))
-        or os.environ.get("TRAINING_GYM_ASYNC_MODE") == "1"
-    )
+
     payload = {
         **_run_context(args),
-        "phase": status.value
-        if isinstance(status, (SlimeStatus, TrainingSubstep))
-        else str(status),
+        "phase": status.value if isinstance(status, SlimeStatus) else str(status),
         **_step_progress(args, rollout_id),
         "rollout_id": rollout_id,
-        "event_ts": time.time() if event_ts is None else event_ts,
+        "event_ts": time.time(),
     }
-    if async_mode:
-        payload["event_monotonic"] = (
-            time.monotonic() if event_monotonic is None else event_monotonic
-        )
-    training_role = getattr(args, "training_gym_role", None)
-    if isinstance(training_role, str):
-        payload["training_role"] = training_role
-        training_rank = getattr(args, "rank", None)
-        if isinstance(training_rank, int):
-            payload["training_rank"] = training_rank
-        training_world_size = getattr(args, "world_size", None)
-        if isinstance(training_world_size, int):
-            payload["training_world_size"] = training_world_size
     if step_event:
         payload["step_event"] = step_event
-    if step_id is not None:
-        payload["step_id"] = step_id
-    if timeline_lane is not None:
-        payload["timeline_lane"] = timeline_lane
-    if parent_phase is not None:
-        payload["parent_phase"] = parent_phase
-    if display_name is not None:
-        payload["display_name"] = display_name
-    if async_mode:
-        training_attempt = os.environ.get("TRAINING_GYM_TRAINING_ATTEMPT")
-        if training_attempt:
-            payload["training_attempt"] = training_attempt
-        _enqueue_async_timing_event(payload)
-        return
     match step_event:
         case "start":
             _post_framework_status(payload, _STEP_EVENT_TIMEOUT_SECONDS)
@@ -590,11 +714,15 @@ __all__ = [
     "before_log_prob_hook",
     "before_train_step_hook",
     "flush_async_timing_events",
+    "flush_async_timing_events_on_error",
     "report_advantage_distribution",
+    "report_async_timing_event",
     "report_phase",
     "report_rollout_samples",
-    "record_step_interval",
+    "record_async_phase_interval",
     "report_step_event",
+    "custom_reward_with_timing",
+    "rollout_with_timing_context",
     "log_eval_rollout_data",
     "log_rollout_data",
 ]

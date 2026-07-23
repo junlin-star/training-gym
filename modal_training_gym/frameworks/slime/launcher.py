@@ -24,17 +24,19 @@ import time
 from collections.abc import Callable, Hashable, Mapping
 from enum import Enum
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, cast
 
 from modal import App, Dict as ModalDict, Image, Secret, Volume, Retries
 
 from modal_training_gym.common import hf_secrets, proxy_auth_secrets
 
 from modal_training_gym.common.async_step_timing import (
+    StepTimingSnapshot,
     aggregate_async_step_times,
     apply_step_timing_snapshot,
     reconcile_attempt_step_times,
 )
+from modal_training_gym.common.async_timing import AsyncTimingEvent
 from modal_training_gym.common.dataset import DatasetConfig, HarborDataset
 from modal_training_gym.common.framework import (
     mount_tools_dir,
@@ -47,14 +49,13 @@ from modal_training_gym.common.ray_cluster import (
     clustered_if,
 )
 from modal_training_gym.common.run import (
-    StepTimes,
-    SubstepTimes,
     TrainingRunStatus,
     has_torch_dist_checkpoint,
     mark_training_attempt_finished,
     record_resume_checkpoint,
     torch_dist_resume_checkpoint,
 )
+from modal_training_gym.common.step_timing import StepTimes, SubstepTimes
 from modal_training_gym.common.launcher_helpers import (
     build_app_tags,
     build_terminal_run_record,
@@ -71,7 +72,7 @@ from modal_training_gym.common.launcher_helpers import (
 )
 from modal_training_gym.common.wandb import WandbConfig
 from modal_training_gym.common.status import SlimeStatus
-from modal_training_gym.common.step_timing import Substep, TrainingSubstep
+from modal_training_gym.common.step_timing import Substep
 from modal_training_gym.utils.metadata import STEP_TIMING_SNAPSHOTS_DICT_NAME
 
 from modal_training_gym.train_recipes.slime_recipe.recipe import (
@@ -107,23 +108,6 @@ _SYNC_OPTIONAL_SUBSTEPS = {
     Substep.OFFLOAD_TRAIN.value,
     Substep.EVAL_AFTER.value,
 }
-_ASYNC_SUBSTEP_ORDER = [
-    Substep.GENERATE_ROLLOUTS.value,
-    SlimeStatus.TRAINING.value,
-    TrainingSubstep.DATA_PREPROCESS.value,
-    TrainingSubstep.POLICY_LOG_PROBS.value,
-    TrainingSubstep.REFERENCE_LOG_PROBS.value,
-    TrainingSubstep.TEACHER_LOG_PROBS.value,
-    TrainingSubstep.VALUE_INFERENCE.value,
-    TrainingSubstep.FORWARD_BACKWARD.value,
-    TrainingSubstep.OPTIMIZER_STEP.value,
-    TrainingSubstep.REFERENCE_MODEL_UPDATE.value,
-    TrainingSubstep.TRAINING_MODEL_WAKE.value,
-    TrainingSubstep.TRAINING_MODEL_OFFLOAD.value,
-    Substep.CHECKPOINT_SAVE.value,
-    Substep.WEIGHT_SYNC.value,
-    Substep.EVAL_AFTER.value,
-]
 _SLIME_PATCHES = Path(__file__).parent / "modal_helpers" / "patches"
 _PATCH_VALIDATION_B64 = encode_patch("patch_validation", _SLIME_PATCHES)
 _PATCH_MEGATRON_BRIDGE_B64 = encode_patch("patch_megatron_bridge", _SLIME_PATCHES)
@@ -160,7 +144,6 @@ _PATCH_QWEN3_VL_TORCH_DIST_B64 = encode_patch(
 _PATCH_ROLLOUT_STATUS_B64 = encode_patch(
     "patch_rollout_status_reporting", _SLIME_PATCHES
 )
-_PATCH_TRAINING_ROLE_B64 = encode_patch("patch_training_role", _SLIME_PATCHES)
 _PATCH_TRAINING_SUBSTEP_TIMING_B64 = encode_patch(
     "patch_training_substep_timing", _SLIME_PATCHES
 )
@@ -309,12 +292,12 @@ def _preflight_wandb(wandb_cfg: WandbConfig) -> str:
     return preflight_wandb(wandb_cfg)
 
 
-def aggregate_sync_step_times(
+def aggregate_step_times(
     step_times_dict: Mapping[str, float | None],
     run_id: str,
     num_steps: int,
-    substep_order: list[str],
-    optional_substeps: set[str],
+    SUBSTEP_ORDER: list[str],
+    OPTIONAL_SUBSTEPS: set[str],
 ) -> tuple[StepTimes, SubstepTimes]:
     """Organize step and substep timings from the Modal dict at the end of a run.
 
@@ -375,7 +358,7 @@ def aggregate_sync_step_times(
         eval_before = Substep.EVAL_BEFORE.value
         present: set[str] = set()
         recorded: list[tuple[float, int, str]] = []
-        for order_idx, substep in enumerate(substep_order):
+        for order_idx, substep in enumerate(SUBSTEP_ORDER):
             substep_start = step_times_dict.get(
                 f"{run_id}:{current_step_num}:substep:{substep}"
             )
@@ -400,11 +383,11 @@ def aggregate_sync_step_times(
             if idx + 1 < len(recorded):
                 next_start, next_idx = recorded[idx + 1][0], recorded[idx + 1][1]
             else:
-                next_start, next_idx = full_step_end_time, len(substep_order)
+                next_start, next_idx = full_step_end_time, len(SUBSTEP_ORDER)
 
-            gap = substep_order[order_idx + 1 : next_idx]
+            gap = SUBSTEP_ORDER[order_idx + 1 : next_idx]
             dropped_mandatory = any(
-                s not in optional_substeps and s not in present for s in gap
+                s not in OPTIONAL_SUBSTEPS and s not in present for s in gap
             )
             if next_start is None or dropped_mandatory:
                 substep_duration = None
@@ -654,12 +637,41 @@ def build_slime_app(
             )
         object.__setattr__(slime, "extra_config", cfg)
 
+    if slime.async_mode:
+        cfg = dict(slime.extra_config or {})
+        rollout_wrapper = (
+            "modal_training_gym.frameworks.slime.phase_reporting."
+            "rollout_with_timing_context"
+        )
+        rollout_function_path = slime.rollout_function
+        if rollout_function_path == rollout_wrapper:
+            rollout_function_path = cfg.get("training_gym_rollout_function_path")
+        cfg["training_gym_rollout_function_path"] = (
+            rollout_function_path
+            if isinstance(rollout_function_path, str)
+            else "slime.rollout.sglang_rollout.generate_rollout"
+        )
+        object.__setattr__(
+            slime,
+            "rollout_function",
+            rollout_wrapper,
+        )
+
+        reward_wrapper = (
+            "modal_training_gym.frameworks.slime.phase_reporting."
+            "custom_reward_with_timing"
+        )
+        custom_reward_path = cfg.get("custom_rm_path")
+        if isinstance(custom_reward_path, str) and custom_reward_path != reward_wrapper:
+            cfg["training_gym_custom_reward_function_path"] = custom_reward_path
+            cfg["custom_rm_path"] = reward_wrapper
+        object.__setattr__(slime, "extra_config", cfg)
+
     # Build train_image AFTER _ship_callable so shipped modules are included.
     train_image = image
     if slime.async_mode:
         train_image = train_image.uv_pip_install("modal==1.5.2").run_commands(
             f"echo {_PATCH_ROLLOUT_STATUS_B64} | base64 -d | python3",
-            f"echo {_PATCH_TRAINING_ROLE_B64} | base64 -d | python3",
             f"echo {_PATCH_TRAINING_SUBSTEP_TIMING_B64} | base64 -d | python3",
         )
     if _has_hybrid_spec:
@@ -970,8 +982,6 @@ def build_slime_app(
         unsupported = ", ".join(sorted(train_function_kwargs))
         raise TypeError(f"Unsupported slime.train_function_kwargs keys: {unsupported}")
 
-    substep_order = _ASYNC_SUBSTEP_ORDER if slime.async_mode else _SYNC_SUBSTEP_ORDER
-
     STEP_TIME_DICT_BATCH_SIZE = 128
 
     SYNC_STEP_TIME_KEY_SUFFIXES = (
@@ -992,37 +1002,48 @@ def build_slime_app(
         step_times_dict = ModalDict.from_name(
             "training-gym-step-times", create_if_missing=True
         )
-        keys: list[Hashable] = []
+        keys_to_read: list[Hashable] = []
+        keys_to_clear: list[Hashable] = []
         if slime.async_mode:
             async for key in step_times_dict.keys.aio():
                 match key:
                     case (key_run_id, timing_kind, key_attempt, *_) if (
-                        key_run_id == run_id
-                        and timing_kind in ("timing_event", "rank_timing")
-                        and key_attempt == training_attempt
+                        key_run_id == run_id and timing_kind == "timing_event"
                     ):
-                        keys.append(key)
+                        keys_to_clear.append(key)
+                        if key_attempt == training_attempt:
+                            keys_to_read.append(key)
         else:
-            keys = [
+            keys_to_read = [
                 f"{run_id}:{step}:{suffix}"
                 for step in range(1, num_steps + 1)
                 for suffix in SYNC_STEP_TIME_KEY_SUFFIXES
             ]
+            keys_to_clear = keys_to_read
         stored_values: dict[Hashable, object] = {}
-        for offset in range(0, len(keys), STEP_TIME_DICT_BATCH_SIZE):
-            batch = keys[offset : offset + STEP_TIME_DICT_BATCH_SIZE]
-            values = await asyncio.gather(*(step_times_dict.get.aio(k) for k in batch))
-            stored_values.update(zip(batch, values))
+        if slime.async_mode:
+            values = await asyncio.gather(
+                *(step_times_dict.get.aio(key) for key in keys_to_read)
+            )
+            stored_values.update(zip(keys_to_read, values, strict=True))
+        else:
+            for offset in range(0, len(keys_to_read), STEP_TIME_DICT_BATCH_SIZE):
+                keys = keys_to_read[offset : offset + STEP_TIME_DICT_BATCH_SIZE]
+                values = await asyncio.gather(
+                    *(step_times_dict.get.aio(key) for key in keys)
+                )
+                stored_values.update(zip(keys, values, strict=True))
 
         if slime.async_mode:
             timing_events = [
-                value for value in stored_values.values() if isinstance(value, Mapping)
+                cast(AsyncTimingEvent, value)
+                for value in stored_values.values()
+                if isinstance(value, dict)
             ]
             step_times, substep_times = aggregate_async_step_times(
                 timing_events,
                 num_steps,
-                substep_order,
-                attempt=training_attempt,
+                training_attempt=training_attempt,
             )
         else:
             recorded_times = {
@@ -1030,19 +1051,19 @@ def build_slime_app(
                 for key, value in stored_values.items()
                 if isinstance(key, str) and isinstance(value, (int, float))
             }
-            step_times, substep_times = aggregate_sync_step_times(
+            step_times, substep_times = aggregate_step_times(
                 recorded_times,
                 run_id,
                 num_steps,
-                substep_order,
+                _SYNC_SUBSTEP_ORDER,
                 _SYNC_OPTIONAL_SUBSTEPS,
             )
-        return step_times, substep_times, keys
+        return step_times, substep_times, keys_to_clear
 
     async def load_latest_step_timing_snapshot(
         run_id: str,
         training_attempt: int,
-    ) -> tuple[int, Mapping[str, Any]] | None:
+    ) -> StepTimingSnapshot | None:
         snapshot_store = ModalDict.from_name(
             STEP_TIMING_SNAPSHOTS_DICT_NAME, create_if_missing=True
         )
@@ -1050,19 +1071,24 @@ def build_slime_app(
         latest_key = None
         async for key in snapshot_store.keys.aio():
             match key:
-                case (key_run_id, "timing_snapshot", key_attempt, key_step) if (
+                case (
+                    key_run_id,
+                    "timing_snapshot",
+                    key_attempt,
+                    key_rollout_id,
+                ) if (
                     key_run_id == run_id
                     and key_attempt <= training_attempt
-                    and latest_position < (key_attempt, key_step)
+                    and latest_position < (key_attempt, key_rollout_id)
                 ):
-                    latest_position = (key_attempt, key_step)
+                    latest_position = (key_attempt, key_rollout_id)
                     latest_key = key
         if latest_key is None:
             return None
         snapshot = await snapshot_store.get.aio(latest_key)
-        if not isinstance(snapshot, Mapping):
+        if not isinstance(snapshot, dict):
             return None
-        return latest_position[0], snapshot
+        return cast(StepTimingSnapshot, snapshot)
 
     async def clear_step_times(
         run_id: str,
@@ -1073,9 +1099,14 @@ def build_slime_app(
         step_times_dict = ModalDict.from_name(
             "training-gym-step-times", create_if_missing=True
         )
-        for offset in range(0, len(keys), STEP_TIME_DICT_BATCH_SIZE):
-            batch = keys[offset : offset + STEP_TIME_DICT_BATCH_SIZE]
-            await asyncio.gather(*(step_times_dict.pop.aio(k, None) for k in batch))
+        if slime.async_mode:
+            await asyncio.gather(*(step_times_dict.pop.aio(key, None) for key in keys))
+        else:
+            for offset in range(0, len(keys), STEP_TIME_DICT_BATCH_SIZE):
+                batch = keys[offset : offset + STEP_TIME_DICT_BATCH_SIZE]
+                await asyncio.gather(
+                    *(step_times_dict.pop.aio(key, None) for key in batch)
+                )
 
         if not clear_snapshots:
             return
@@ -1088,9 +1119,9 @@ def build_slime_app(
             match key:
                 case (key_run_id, "timing_snapshot", *_) if key_run_id == run_id:
                     snapshot_keys.append(key)
-        for offset in range(0, len(snapshot_keys), STEP_TIME_DICT_BATCH_SIZE):
-            batch = snapshot_keys[offset : offset + STEP_TIME_DICT_BATCH_SIZE]
-            await asyncio.gather(*(snapshot_store.pop.aio(k, None) for k in batch))
+        await asyncio.gather(
+            *(snapshot_store.pop.aio(key, None) for key in snapshot_keys)
+        )
 
     @app.function(
         image=train_image,
@@ -1416,41 +1447,43 @@ def build_slime_app(
                         training_attempt,
                     )
                     if stored_snapshot is not None:
-                        snapshot_attempt, snapshot = stored_snapshot
                         apply_step_timing_snapshot(
                             latest_run_record,
-                            snapshot,
-                            snapshot_attempt=snapshot_attempt,
+                            stored_snapshot,
                             training_attempt=training_attempt,
                         )
                     snapshot_read_succeeded = True
                 except Exception as exc:
                     print(f"Failed to read live step timing snapshot: {exc}")
 
-            step_time_keys_read: list[Hashable] | None = None
+            step_time_keys_to_clear: list[Hashable] | None = None
             try:
                 (
                     step_times,
                     substep_times,
-                    timing_keys,
+                    timing_keys_to_clear,
                 ) = await write_step_times(
                     training_run_id, slime.num_rollout, training_attempt
                 )
                 if slime.async_mode:
+                    resume_from_iteration = (latest_run_record.metadata or {}).get(
+                        "resume_from_iteration"
+                    )
                     reconcile_attempt_step_times(
                         latest_run_record,
                         step_times,
                         substep_times,
                         training_attempt=training_attempt,
-                        resumed_from_checkpoint=(latest_run_record.metadata or {}).get(
-                            "resumed_from_checkpoint"
-                        )
-                        is True,
+                        resume_from_iteration=(
+                            resume_from_iteration
+                            if isinstance(resume_from_iteration, int)
+                            else None
+                        ),
                     )
                 else:
                     latest_run_record.step_times = step_times
                     latest_run_record.substep_times = substep_times
-                step_time_keys_read = timing_keys
+                step_time_keys_to_clear = timing_keys_to_clear
             except Exception as exc:
                 print(f"Failed to read step times: {exc}")
 
@@ -1459,11 +1492,11 @@ def build_slime_app(
             except Exception as exc:
                 print(f"Failed to save run record: {exc}")
             else:
-                if step_time_keys_read is not None:
+                if step_time_keys_to_clear is not None:
                     try:
                         await clear_step_times(
                             training_run_id,
-                            step_time_keys_read,
+                            step_time_keys_to_clear,
                             clear_snapshots=slime.async_mode
                             and snapshot_read_succeeded,
                         )

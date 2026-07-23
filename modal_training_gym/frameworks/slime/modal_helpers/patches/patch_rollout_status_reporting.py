@@ -32,6 +32,7 @@ ASYNC_CHECKPOINT_MARKER = "PATCHED_TRAINING_GYM_ASYNC_CHECKPOINT"
 ASYNC_WEIGHT_SYNC_MARKER = "PATCHED_TRAINING_GYM_ASYNC_WEIGHT_SYNC"
 ASYNC_EVAL_MARKER = "PATCHED_TRAINING_GYM_ASYNC_EVAL"
 ASYNC_TIMING_FLUSH_MARKER = "PATCHED_TRAINING_GYM_ASYNC_TIMING_FLUSH"
+ASYNC_ERROR_FLUSH_MARKER = "PATCHED_TRAINING_GYM_ASYNC_ERROR_FLUSH"
 
 PREAMBLE = (
     f"# {PREAMBLE_MARKER}: bootstrap phase reporter (runs once per process)\n"
@@ -43,7 +44,7 @@ PREAMBLE = (
     "        report_step_event as _tg_report,\n"
     "    )\n"
     "except ImportError:\n"
-    "    def _tg_report(status, args=None, rollout_id=None, step_event='', **kwargs): pass\n"
+    "    def _tg_report(status, args=None, rollout_id=None, step_event=''): pass\n"
     "\n"
 )
 
@@ -55,11 +56,13 @@ ASYNC_PREAMBLE = (
     "try:\n"
     "    from modal_training_gym.frameworks.slime.phase_reporting import (\n"
     "        flush_async_timing_events as _tg_flush_timings,\n"
-    "        report_step_event as _tg_report,\n"
+    "        flush_async_timing_events_on_error as _tg_flush_timings_on_error,\n"
+    "        report_async_timing_event as _tg_report,\n"
     "    )\n"
     "except ImportError:\n"
-    "    def _tg_report(status, args=None, rollout_id=None, step_event='', **kwargs): pass\n"
+    "    def _tg_report(phase, args, rollout_id, event_type, **kwargs): pass\n"
     "    def _tg_flush_timings(): pass\n"
+    "    def _tg_flush_timings_on_error(function): return function\n"
     "\n"
 )
 
@@ -81,12 +84,21 @@ def _patch_async_file(path: Path) -> None:
         src = src.replace(old, new, 1)
 
     replace_once(
+        ASYNC_ERROR_FLUSH_MARKER,
+        "def train(args):\n",
+        f"# {ASYNC_ERROR_FLUSH_MARKER}\n"
+        "@_tg_flush_timings_on_error\n"
+        "def train(args):\n",
+        "timing flush on training error",
+    )
+
+    replace_once(
         ASYNC_INITIAL_GENERATION_MARKER,
         "    rollout_data_next_future = rollout_manager.generate.remote(args.start_rollout_id)\n",
         f"    # {ASYNC_INITIAL_GENERATION_MARKER}\n"
         "    _tg_report(\n"
         "        'generate_rollouts', args, args.start_rollout_id, 'phase_start',\n"
-        "        timeline_lane='rollout', display_name='Rollout + reward',\n"
+        "        timeline_lane='rollout', display_name='Rollout generation',\n"
         "    )\n"
         "    rollout_data_next_future = rollout_manager.generate.remote(args.start_rollout_id)\n",
         "initial generation",
@@ -96,7 +108,7 @@ def _patch_async_file(path: Path) -> None:
         "    for rollout_id in range(args.start_rollout_id, args.num_rollout):\n",
         "    for rollout_id in range(args.start_rollout_id, args.num_rollout):\n"
         f"        # {STEP_START_MARKER}\n"
-        "        _tg_report('generate_rollouts', args, rollout_id, 'start')\n",
+        "        _tg_report('iteration', args, rollout_id, 'rollout_start')\n",
         "step start",
     )
     replace_once(
@@ -117,7 +129,7 @@ def _patch_async_file(path: Path) -> None:
         f"            # {ASYNC_NEXT_GENERATION_MARKER}\n"
         "            _tg_report(\n"
         "                'generate_rollouts', args, rollout_id + 1, 'phase_start',\n"
-        "                timeline_lane='rollout', display_name='Rollout + reward',\n"
+        "                timeline_lane='rollout', display_name='Rollout generation',\n"
         "            )\n"
         "            rollout_data_next_future = rollout_manager.generate.remote(rollout_id + 1)\n",
         "next generation",
@@ -174,19 +186,6 @@ def _patch_async_file(path: Path) -> None:
         "checkpoint finish",
     )
     replace_once(
-        ASYNC_WEIGHT_SYNC_MARKER,
-        "        if (rollout_id + 1) % args.update_weights_interval == 0:\n"
-        "            # sync generate before update weights to prevent update weight in the middle of generation\n",
-        "        if (rollout_id + 1) % args.update_weights_interval == 0:\n"
-        f"            # {ASYNC_WEIGHT_SYNC_MARKER}\n"
-        "            _tg_report(\n"
-        "                'weight_sync', args, rollout_id, 'phase_start',\n"
-        "                timeline_lane='coordination', display_name='Weight sync',\n"
-        "            )\n"
-        "            # sync generate before update weights to prevent update weight in the middle of generation\n",
-        "weight sync start",
-    )
-    replace_once(
         ASYNC_EARLY_GENERATION_FINISH_MARKER,
         "            rollout_data_curr_ref = ray.get(x) if (x := rollout_data_next_future) is not None else None\n"
         "            rollout_data_next_future = None\n",
@@ -196,6 +195,19 @@ def _patch_async_file(path: Path) -> None:
         "                _tg_report('generate_rollouts', args, rollout_id + 1, 'phase_finish')\n"
         "            rollout_data_next_future = None\n",
         "generation finish before weight sync",
+    )
+    replace_once(
+        ASYNC_WEIGHT_SYNC_MARKER,
+        "            rollout_data_next_future = None\n"
+        "            actor_model.update_weights()\n",
+        "            rollout_data_next_future = None\n"
+        f"            # {ASYNC_WEIGHT_SYNC_MARKER}\n"
+        "            _tg_report(\n"
+        "                'weight_sync', args, rollout_id, 'phase_start',\n"
+        "                timeline_lane='coordination', display_name='Weight sync',\n"
+        "            )\n"
+        "            actor_model.update_weights()\n",
+        "weight sync start",
     )
     replace_once(
         f"{ASYNC_WEIGHT_SYNC_MARKER}_FINISH",
@@ -227,7 +239,7 @@ def _patch_async_file(path: Path) -> None:
         "    ray.get(rollout_manager.dispose.remote())\n",
         "            _tg_report('evaluate_rollouts_end', args, rollout_id, 'phase_finish')\n"
         f"        # {STEP_FINISH_MARKER}\n"
-        "        _tg_report('training', args, rollout_id, 'finish')\n\n"
+        "        _tg_report('iteration', args, rollout_id, 'rollout_finish')\n\n"
         "    ray.get(rollout_manager.dispose.remote())\n",
         "step finish",
     )
@@ -302,7 +314,7 @@ def _patch_file(path: Path) -> None:
         src = src.replace(
             "except ImportError:\n",
             "except ImportError:\n"
-            "    def _tg_report(status, args=None, rollout_id=None, step_event='', **kwargs): pass\n",
+            "    def _tg_report(status, args=None, rollout_id=None, step_event=''): pass\n",
             1,
         )
 
