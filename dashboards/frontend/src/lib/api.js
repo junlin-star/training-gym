@@ -129,6 +129,7 @@ export async function fetchRunRollouts(trainingRunId, { signal } = {}) {
         ? Number(item.rollout_time)
         : null,
       error_summary: item.error_summary || null,
+      tag_stats: item.tag_stats || {},
     }))
     .sort((a, b) => a.rollout_id - b.rollout_id);
 }

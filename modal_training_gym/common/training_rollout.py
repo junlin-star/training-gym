@@ -28,6 +28,47 @@ from modal_training_gym.utils.metadata import (
 # existing imports; new code should use Sample.
 TrainingRolloutSample = Sample
 
+# Metadata keys that are internal bookkeeping rather than reward-function
+# tags — numeric, but not something a user wants charted as a custom metric.
+_NON_TAG_METADATA_KEYS = frozenset(
+    {
+        "inference",
+        "_metadata_type",
+        "audio",
+        "image",
+        "response_length",
+        "prompt_length",
+        "rollout_id",
+        "rollout_idx",
+    }
+)
+
+
+def _tag_stats_for_samples(samples: list[Sample]) -> dict[str, dict[str, Any]]:
+    """Per-tag numeric stats (count/mean/min/max) across a rollout's samples.
+
+    Scans each sample's free-form ``metadata`` for numeric values under
+    custom reward-function tag keys, so the dashboard can chart them over
+    rollouts without a fixed schema. Pure function, no IO.
+    """
+    values_by_tag: dict[str, list[float]] = {}
+    for sample in samples:
+        for key, value in sample.metadata.items():
+            if key in _NON_TAG_METADATA_KEYS:
+                continue
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                values_by_tag.setdefault(key, []).append(float(value))
+
+    return {
+        tag: {
+            "count": len(values),
+            "mean": sum(values) / len(values),
+            "min": min(values),
+            "max": max(values),
+        }
+        for tag, values in values_by_tag.items()
+    }
+
 
 class TrainingRolloutResult(BaseModel):
     """All samples from one rollout of one training run."""
@@ -100,6 +141,16 @@ class TrainingRolloutResult(BaseModel):
             out["verdict"] = "partial_infra_failure"
         return out
 
+    @property
+    def tag_stats(self) -> dict[str, dict[str, Any]]:
+        """Per-tag numeric stats across this rollout's samples, or {} if none.
+
+        Populated from custom reward-function tags on ``Sample.metadata``
+        (anything numeric that isn't internal bookkeeping) — lets the
+        dashboard chart arbitrary reward-shaping signals over rollouts.
+        """
+        return _tag_stats_for_samples(self.samples)
+
     def to_summary(self) -> dict[str, Any]:
         summary: dict[str, Any] = {
             "training_run_id": self.training_run_id,
@@ -113,6 +164,9 @@ class TrainingRolloutResult(BaseModel):
         err = self.error_summary
         if err:
             summary["error_summary"] = err
+        tags = self.tag_stats
+        if tags:
+            summary["tag_stats"] = tags
         return summary
 
     def _touch_created_at(self) -> None:
