@@ -244,7 +244,8 @@
               {#each runs as run, runIndex (`${run.run_id || "run"}-${run.created_at || 0}-${runIndex}`)}
                 {@const runName = run.run_id || "—"}
                 {@const status = getStatus(run)}
-                {@const stageLabel = frameworkStatusLabel(run)}
+                {@const listFields = run.list_fields || {}}
+                {@const stageLabel = listFields.stage || frameworkStatusLabel(run)}
                 {@const progress = frameworkProgress(run)}
                 {@const groupTags = getGroupTags(run)}
                 <tr class="run-row" class:row-selected={drawerRunId === run.run_id}>
@@ -293,20 +294,20 @@
                       {modelName(run)}
                     </a>
                   </td>
-                  <td class="min-w-0 row-open-cell" title={run.dataset || "—"}>
+                  <td class="min-w-0 row-open-cell" title={listFields.dataset || run.dataset || "—"}>
                     <a href={trainingRunDetailPath(run.run_id)} class="cell-open-button" onclick={(event) => selectRun(run.run_id, event)}>
-                      {run.dataset || "—"}
+                      {listFields.dataset || run.dataset || "—"}
                     </a>
                   </td>
                   <td class="row-open-cell">
                     <a href={trainingRunDetailPath(run.run_id)} class="cell-open-button" onclick={(event) => selectRun(run.run_id, event)}>
-                      {run.recipe || "—"}
+                      {listFields.recipe || run.recipe || "—"}
                     </a>
                   </td>
-                  <td class="group-cell row-open-cell" title={groupTags?.group_id || run.group_id || ""}>
+                  <td class="group-cell row-open-cell" title={listFields.group || groupTags?.group_id || run.group_id || ""}>
                     <a href={trainingRunDetailPath(run.run_id)} class="cell-open-button" onclick={(event) => selectRun(run.run_id, event)}>
-                      {#if groupTags?.group_id}
-                        <span class="inline-block max-w-full whitespace-normal [overflow-wrap:anywhere] align-bottom p-[2px_8px] rounded-[999px] text-[0.72rem] [font-variant-numeric:tabular-nums] text-(--muted) [border:1px_solid_var(--border,#2f2f2f)] bg-[color-mix(in_srgb,var(--panel-alt)_70%,transparent)]">{groupTags.group_id}</span>
+                      {#if listFields.group || groupTags?.group_id}
+                        <span class="inline-block max-w-full whitespace-normal [overflow-wrap:anywhere] align-bottom p-[2px_8px] rounded-[999px] text-[0.72rem] [font-variant-numeric:tabular-nums] text-(--muted) [border:1px_solid_var(--border,#2f2f2f)] bg-[color-mix(in_srgb,var(--panel-alt)_70%,transparent)]">{listFields.group || groupTags.group_id}</span>
                       {:else}
                         <span class="group-empty">—</span>
                       {/if}
@@ -333,12 +334,12 @@
                   </td>
                   <td class="whitespace-nowrap row-open-cell">
                     <a href={trainingRunDetailPath(run.run_id)} class="cell-open-button" onclick={(event) => selectRun(run.run_id, event)}>
-                      <TimeAgo timestamp={run.started_at || run.created_at} showJustNow falsyRepresentation="—" />
+                      <TimeAgo timestamp={listFields.created_at ?? run.created_at} showJustNow falsyRepresentation="—" />
                     </a>
                   </td>
                   <td class="whitespace-nowrap row-open-cell">
                     <a href={trainingRunDetailPath(run.run_id)} class="cell-open-button" onclick={(event) => selectRun(run.run_id, event)}>
-                      <TimeAgo timestamp={run.updated_at} showJustNow falsyRepresentation="—" />
+                      <TimeAgo timestamp={listFields.last_updated_at ?? run.updated_at} showJustNow falsyRepresentation="—" />
                     </a>
                   </td>
                   <td class="min-w-0 overflow-visible">

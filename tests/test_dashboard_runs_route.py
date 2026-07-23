@@ -59,6 +59,17 @@ def test_runs_route_returns_typed_joined_summaries(fake_volume, monkeypatch, tmp
     assert summary["dataset"] == "openai/gsm8k"
     assert summary["recipe"] == "slime"
     assert summary["group_id"] == "route-group"
+    assert summary["list_fields"] == {
+        "run_id": "run-route-1",
+        "status": "completed",
+        "stage": "",
+        "model": "Qwen/Qwen3-4B",
+        "dataset": "openai/gsm8k",
+        "recipe": "slime",
+        "group": "route-group",
+        "created_at": 100,
+        "last_updated_at": summary["updated_at"],
+    }
     assert summary["has_train_result"] is True
     assert summary["train_result"]["checkpoint_dir"] == ("/checkpoints/run-route-1")
 
@@ -82,6 +93,36 @@ def test_runs_route_keeps_runs_when_train_result_store_fails(
     assert response.status_code == 200
     assert len(response.json()) == 1
     assert response.json()[0]["has_train_result"] is False
+
+
+def test_runs_route_filters_and_sorts_by_last_update(
+    fake_volume, monkeypatch, tmp_path
+):
+    _save_records()
+    TrainingRun(
+        training_run_id="run-route-2",
+        framework=Framework.MILES,
+        status="failed",
+        config={
+            "model": {"model_name": "other/model"},
+            "dataset": {"hf_repo": "other/data"},
+        },
+        created_at=50,
+        started_at=50,
+        updated_at=2_000_000_000,
+        metadata={"group_id": "other-group"},
+    ).save()
+
+    with _client(monkeypatch, tmp_path) as client:
+        filtered = client.get("/api/runs?status=failed&since=175&limit=1")
+        all_runs = client.get("/api/runs")
+
+    assert filtered.status_code == 200
+    assert [run["run_id"] for run in filtered.json()] == ["run-route-2"]
+    assert [run["run_id"] for run in all_runs.json()] == [
+        "run-route-2",
+        "run-route-1",
+    ]
 
 
 def test_runs_route_isolates_invalid_run_records(fake_volume, monkeypatch, tmp_path):

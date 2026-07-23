@@ -112,17 +112,17 @@
   });
 
   function getRecipe(run) {
-    return run.framework || "(untagged)";
+    return run.list_fields?.recipe || run.framework || "(untagged)";
   }
 
   const NO_GROUP = "(no group)";
 
   function getGroup(run) {
-    return safeText(run.group_id) || NO_GROUP;
+    return safeText(run.list_fields?.group) || safeText(run.group_id) || NO_GROUP;
   }
 
   function getStatus(run) {
-    const rawStatus = safeText(run.status).toLowerCase();
+    const rawStatus = safeText(run.list_fields?.status || run.status).toLowerCase();
     if (run.train_result || rawStatus === "completed") return "Completed";
     if (rawStatus === "cancelled") return "Cancelled";
     if (rawStatus === "stopped") return "Stopped";
@@ -146,7 +146,7 @@
   }
 
   function modelName(run) {
-    return run.model || "—";
+    return run.list_fields?.model || run.model || "—";
   }
 
   function safeText(value) {
