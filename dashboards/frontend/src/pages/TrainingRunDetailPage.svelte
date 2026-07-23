@@ -962,8 +962,6 @@
     ).sort(),
   );
 
-  $inspect(rolloutSummaries, customTagNames).with(console.trace);
-
   function tagChartData(tag) {
     return rolloutSummaries
       .filter((r) => r.tag_stats?.[tag])
