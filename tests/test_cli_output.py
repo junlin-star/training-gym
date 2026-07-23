@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from unittest.mock import Mock
 
 import click
@@ -8,6 +9,16 @@ from click.testing import CliRunner
 from rich.table import Column
 
 from modal_training_gym.cli import options, output
+
+
+def test_console_adapts_to_terminal_width(monkeypatch):
+    monkeypatch.setattr(
+        output.shutil,
+        "get_terminal_size",
+        lambda fallback: os.terminal_size((180, 24)),
+    )
+
+    assert output._console().width == 180
 
 
 def test_print_json_is_deterministic_plain_stdout(capsys):

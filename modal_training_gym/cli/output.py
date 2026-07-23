@@ -16,7 +16,7 @@ from rich.text import Text
 
 
 RICH_OUTPUT_ENV = "TRAINING_GYM_RICH_CLI"
-MAX_OUTPUT_WIDTH = 120
+FALLBACK_OUTPUT_WIDTH = 120
 
 
 def use_rich_output() -> bool:
@@ -28,10 +28,7 @@ def use_rich_output() -> bool:
 
 
 def _console(*, stderr: bool = False) -> Console:
-    width = min(
-        MAX_OUTPUT_WIDTH,
-        shutil.get_terminal_size(fallback=(MAX_OUTPUT_WIDTH, 24)).columns,
-    )
+    width = shutil.get_terminal_size(fallback=(FALLBACK_OUTPUT_WIDTH, 24)).columns
     rich_enabled = use_rich_output()
     return Console(
         stderr=stderr,
@@ -44,9 +41,9 @@ def _console(*, stderr: bool = False) -> Console:
 
 
 def print_json(value: Any) -> None:
-    """Write deterministic JSON to stdout without Rich formatting."""
+    """Write JSON to stdout (without Rich formatting)."""
     print(
-        json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True),
+        json.dumps(value, ensure_ascii=False, indent=2),
         file=sys.stdout,
     )
 
@@ -61,9 +58,6 @@ def print_table(
     table = Table(
         *columns,
         title=title or None,
-        box=None,
-        header_style="bold bright_green",
-        pad_edge=False,
     )
     for row in rows:
         cells = [
@@ -75,7 +69,7 @@ def print_table(
 
 
 def print_error(message: str) -> None:
-    """Write a Modal-style error to stderr when Rich output is enabled."""
+    """Write an error to stderr when Rich output is enabled."""
     console = _console(stderr=True)
     if use_rich_output():
         console.print(

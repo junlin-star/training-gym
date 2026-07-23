@@ -29,6 +29,7 @@ def yes_option(function: CommandFunction) -> CommandFunction:
     return click.option(
         "-y",
         "--yes",
+        "--force",
         is_flag=True,
         default=False,
         help="Run without pausing for confirmation.",
