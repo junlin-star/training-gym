@@ -13,14 +13,14 @@ from .builtin import (
     set_proxy_auth_command,
     setup_command,
 )
-from .commands import TrainingGymGroup
+from .commands import _TrainingGymGroup
 from .errors import ExitCode
 from .output import print_error
 from .run import run_group
 
 
 @click.group(
-    cls=TrainingGymGroup,
+    cls=_TrainingGymGroup,
     context_settings={"help_option_names": ["-h", "--help"]},
 )
 def entrypoint_cli() -> None:

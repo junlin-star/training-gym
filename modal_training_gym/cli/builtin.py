@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import click
 
-from .commands import TrainingGymCommand
+from .commands import _TrainingGymCommand
 
 
-@click.command("setup", cls=TrainingGymCommand)
+@click.command("setup", cls=_TrainingGymCommand)
 def setup_command() -> None:
     """Deploy the training-gym dashboard to Modal."""
     from .setup import setup
@@ -15,7 +15,7 @@ def setup_command() -> None:
     setup()
 
 
-@click.command("open", cls=TrainingGymCommand)
+@click.command("open", cls=_TrainingGymCommand)
 def open_command() -> None:
     """Open the deployed dashboard in your browser."""
     from .setup import open_dashboard
@@ -23,7 +23,7 @@ def open_command() -> None:
     open_dashboard()
 
 
-@click.command("set-proxy-auth", cls=TrainingGymCommand)
+@click.command("set-proxy-auth", cls=_TrainingGymCommand)
 def set_proxy_auth_command() -> None:
     """Set/replace the Modal proxy-auth tokens (MODAL_KEY / MODAL_SECRET)"""
     from .setup import set_proxy_auth
@@ -31,7 +31,7 @@ def set_proxy_auth_command() -> None:
     set_proxy_auth()
 
 
-@click.command("set-password", cls=TrainingGymCommand)
+@click.command("set-password", cls=_TrainingGymCommand)
 @click.option(
     "--password",
     default=None,
@@ -45,7 +45,7 @@ def set_password_command(password: str | None) -> None:
     set_password(password=password)
 
 
-@click.command("cleanup", cls=TrainingGymCommand)
+@click.command("cleanup", cls=_TrainingGymCommand)
 @click.option(
     "--older-than-days",
     type=int,

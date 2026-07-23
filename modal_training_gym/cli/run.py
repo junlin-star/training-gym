@@ -18,7 +18,7 @@ from modal_training_gym.common.run_summary import RunSummary
 from modal_training_gym.common.time_utils import parse_time
 
 from .client import DashboardClient
-from .commands import TrainingGymGroup
+from .commands import _TrainingGymGroup
 from .errors import MalformedResponseError
 from .options import json_option
 from .output import print_json, print_table
@@ -110,7 +110,7 @@ def list_runs(
     )
 
 
-@click.group("run", cls=TrainingGymGroup)
+@click.group("run", cls=_TrainingGymGroup)
 def run_group() -> None:
     """Inspect and manage training runs."""
 

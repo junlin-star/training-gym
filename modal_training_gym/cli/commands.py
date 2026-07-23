@@ -192,7 +192,7 @@ def _emit(
     formatter.write(capture.get())
 
 
-class TrainingGymCommand(click.Command):
+class _TrainingGymCommand(click.Command):
     """Click command that renders ``--help`` with custom Rich output."""
 
     def __init__(
@@ -220,10 +220,10 @@ class TrainingGymCommand(click.Command):
         )
 
 
-class TrainingGymGroup(click.Group):
+class _TrainingGymGroup(click.Group):
     """Click group whose commands and nested groups share custom help."""
 
-    command_class = TrainingGymCommand
+    command_class = _TrainingGymCommand
     group_class = type
 
     def __init__(
