@@ -890,7 +890,7 @@ def build_slime_app(
             cleanup_keys,
         )
 
-    async def clear_training_timing_events(keys: list[tuple[Any, ...]]) -> None:
+    async def clear_step_times(keys: list[tuple[Any, ...]]) -> None:
         timing_event_store = ModalDict.from_name(
             "training-gym-step-times", create_if_missing=True
         )
@@ -1303,9 +1303,9 @@ def build_slime_app(
             else:
                 if timing_event_cleanup_keys is not None:
                     try:
-                        await clear_training_timing_events(timing_event_cleanup_keys)
+                        await clear_step_times(timing_event_cleanup_keys)
                     except Exception as exc:
-                        print(f"Failed to clear training timing events: {exc}")
+                        print(f"Failed to clear step times: {exc}")
 
     for tag, fn in app.registered_functions.items():
         setattr(app, tag, fn)

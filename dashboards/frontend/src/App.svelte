@@ -128,13 +128,24 @@
       if (previousAttempt > fetchedAttempt) return previousRun;
       if (previousAttempt !== fetchedAttempt) return run;
 
-      const previousIsRunning =
-        !previousRun.train_result &&
-        String(previousRun.status).toLowerCase() === "running";
-      const fetchedIsRunning =
-        !run.train_result && String(run.status).toLowerCase() === "running";
       // Supported retries increment attempt_count, so this is a stale snapshot.
-      const latestRun = !previousIsRunning && fetchedIsRunning ? previousRun : run;
+      const statusRegressed =
+        String(previousRun.status).toLowerCase() !== "running" &&
+        String(run.status).toLowerCase() === "running";
+      const latestRun = statusRegressed
+        ? {
+            ...run,
+            status: previousRun.status,
+            ended_at: previousRun.ended_at,
+            completed_at: previousRun.completed_at,
+            duration_seconds: previousRun.duration_seconds,
+            error_message: previousRun.error_message,
+            has_train_result:
+              previousRun.has_train_result || run.has_train_result,
+            train_result: previousRun.train_result ?? run.train_result,
+            resume_state: previousRun.resume_state,
+          }
+        : run;
 
       return {
         ...latestRun,
