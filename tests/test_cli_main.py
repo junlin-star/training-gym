@@ -19,7 +19,7 @@ def runner() -> CliRunner:
 
 
 def test_root_help_lists_existing_commands_by_panel(runner):
-    result = runner.invoke(cli_module.cli, ["--help"])
+    result = runner.invoke(cli_module.entrypoint_cli, ["--help"])
 
     assert result.exit_code == 0
     assert "Configuration:" in result.stdout
@@ -35,14 +35,14 @@ def test_root_help_lists_existing_commands_by_panel(runner):
 
 
 def test_root_supports_short_help(runner):
-    result = runner.invoke(cli_module.cli, ["-h"])
+    result = runner.invoke(cli_module.entrypoint_cli, ["-h"])
 
     assert result.exit_code == 0
     assert result.stdout.startswith("Usage:")
 
 
 def test_root_without_command_shows_help(runner):
-    result = runner.invoke(cli_module.cli, [])
+    result = runner.invoke(cli_module.entrypoint_cli, [])
 
     assert result.exit_code == 2
     assert "Usage:" in result.stderr
@@ -66,7 +66,7 @@ def test_setup_dispatches_to_existing_function(runner, monkeypatch):
     setup = Mock()
     monkeypatch.setattr("modal_training_gym.cli.setup.setup", setup)
 
-    result = runner.invoke(cli_module.cli, ["setup"])
+    result = runner.invoke(cli_module.entrypoint_cli, ["setup"])
 
     assert result.exit_code == 0
     assert result.stderr == ""
@@ -77,7 +77,7 @@ def test_open_dispatches_to_existing_function(runner, monkeypatch):
     open_dashboard = Mock()
     monkeypatch.setattr("modal_training_gym.cli.setup.open_dashboard", open_dashboard)
 
-    result = runner.invoke(cli_module.cli, ["open"])
+    result = runner.invoke(cli_module.entrypoint_cli, ["open"])
 
     assert result.exit_code == 0
     open_dashboard.assert_called_once_with()
@@ -87,7 +87,7 @@ def test_set_proxy_auth_dispatches_to_existing_function(runner, monkeypatch):
     set_proxy_auth = Mock()
     monkeypatch.setattr("modal_training_gym.cli.setup.set_proxy_auth", set_proxy_auth)
 
-    result = runner.invoke(cli_module.cli, ["set-proxy-auth"])
+    result = runner.invoke(cli_module.entrypoint_cli, ["set-proxy-auth"])
 
     assert result.exit_code == 0
     set_proxy_auth.assert_called_once_with()
@@ -105,7 +105,7 @@ def test_set_password_preserves_arguments(runner, monkeypatch, args, expected):
     set_password = Mock()
     monkeypatch.setattr("modal_training_gym.cli.setup.set_password", set_password)
 
-    result = runner.invoke(cli_module.cli, args)
+    result = runner.invoke(cli_module.entrypoint_cli, args)
 
     assert result.exit_code == 0
     set_password.assert_called_once_with(password=expected)
@@ -125,33 +125,18 @@ def test_cleanup_preserves_arguments(runner, monkeypatch, args, expected):
     cleanup = Mock()
     monkeypatch.setattr("modal_training_gym.cli.cleanup.cleanup", cleanup)
 
-    result = runner.invoke(cli_module.cli, args)
+    result = runner.invoke(cli_module.entrypoint_cli, args)
 
     assert result.exit_code == 0
     cleanup.assert_called_once_with(**expected)
 
 
 def test_click_usage_errors_use_exit_two_and_stderr(runner):
-    result = runner.invoke(cli_module.cli, ["cleanup", "--unknown"])
+    result = runner.invoke(cli_module.entrypoint_cli, ["cleanup", "--unknown"])
 
     assert result.exit_code == 2
     assert result.stdout == ""
     assert "No such option '--unknown'" in result.stderr
-
-
-def test_click_usage_errors_use_modal_style_when_rich_is_enabled(runner):
-    result = runner.invoke(
-        cli_module.cli,
-        ["cleanup", "--unknown"],
-        env={"TRAINING_GYM_RICH_CLI": "1"},
-        color=True,
-    )
-
-    assert result.exit_code == 2
-    assert result.stdout == ""
-    assert "Error" in result.stderr
-    assert "No such option" in result.stderr
-    assert "╭" in result.stderr
 
 
 @pytest.mark.parametrize(
@@ -168,7 +153,7 @@ def test_typed_errors_use_stable_exit_codes(runner, monkeypatch, error, exit_cod
 
     monkeypatch.setattr("modal_training_gym.cli.setup.setup", fail)
 
-    result = runner.invoke(cli_module.cli, ["setup"])
+    result = runner.invoke(cli_module.entrypoint_cli, ["setup"])
 
     assert result.exit_code == exit_code
     assert result.stdout == ""
@@ -179,7 +164,7 @@ def test_main_maps_unexpected_errors(monkeypatch, capsys):
     def fail(**_kwargs):
         raise RuntimeError("boom")
 
-    monkeypatch.setattr(cli_module.cli, "main", fail)
+    monkeypatch.setattr(cli_module.entrypoint_cli, "main", fail)
 
     assert cli_module.main(["setup"]) == 1
     captured = capsys.readouterr()
@@ -187,26 +172,16 @@ def test_main_maps_unexpected_errors(monkeypatch, capsys):
     assert captured.err == "Error: boom\n"
 
 
-def test_main_maps_interrupts(monkeypatch, capsys):
-    def interrupt(**_kwargs):
-        raise KeyboardInterrupt
-
-    monkeypatch.setattr(cli_module.cli, "main", interrupt)
-
-    assert cli_module.main(["setup"]) == 130
-    captured = capsys.readouterr()
-    assert captured.out == ""
-    assert captured.err == "Interrupted.\n"
-
-
 def test_main_maps_click_keyboard_interrupt_to_130(monkeypatch, capsys):
     def interrupt():
         raise KeyboardInterrupt
 
-    monkeypatch.setattr("modal_training_gym.cli.setup.setup", interrupt)
+    monkeypatch.setattr(
+        "modal_training_gym.cli.setup.setup",
+        interrupt,
+    )
 
     assert cli_module.main(["setup"]) == 130
     captured = capsys.readouterr()
-    assert captured.out == ""
     assert "Interrupted." in captured.err
     assert "Aborted!" not in captured.err

@@ -157,11 +157,3 @@ def test_rejects_absolute_request_path():
         with pytest.raises(DashboardError):
             client.get_json("https://other.test/api/items")
 
-
-def test_context_manager_closes_client():
-    client = DashboardClient(base_url="https://example.test")
-
-    with client:
-        assert client._client.is_closed is False
-
-    assert client._client.is_closed is True

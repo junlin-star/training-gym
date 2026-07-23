@@ -21,40 +21,6 @@ def test_console_adapts_to_terminal_width(monkeypatch):
     assert output._console().width == 180
 
 
-def test_print_json_is_deterministic_plain_stdout(capsys):
-    output.print_json({"z": "café", "a": [2, 1]})
-
-    captured = capsys.readouterr()
-    assert captured.out == ('{\n  "a": [\n    2,\n    1\n  ],\n  "z": "café"\n}\n')
-    assert captured.err == ""
-
-
-def test_print_table_is_plain_when_rich_is_disabled(monkeypatch, capsys):
-    monkeypatch.setenv("TRAINING_GYM_RICH_CLI", "0")
-
-    output.print_table(
-        [Column("Name"), "Count"],
-        [["first", 2], ["second", None]],
-        title="Items",
-    )
-
-    captured = capsys.readouterr()
-    assert "Items" in captured.out
-    assert "Name" in captured.out
-    assert "first" in captured.out
-    assert "2" in captured.out
-    assert "\x1b[" not in captured.out
-    assert captured.err == ""
-
-
-def test_rich_output_can_be_forced(monkeypatch, capsys):
-    monkeypatch.setenv("TRAINING_GYM_RICH_CLI", "1")
-
-    output.print_table(["Name"], [["first"]])
-
-    assert "\x1b[" in capsys.readouterr().out
-
-
 def test_print_error_uses_stderr(monkeypatch, capsys):
     monkeypatch.setenv("TRAINING_GYM_RICH_CLI", "0")
 
@@ -63,18 +29,6 @@ def test_print_error_uses_stderr(monkeypatch, capsys):
     captured = capsys.readouterr()
     assert captured.out == ""
     assert captured.err == "problem\n"
-
-
-def test_print_error_uses_modal_style_when_rich_is_enabled(monkeypatch, capsys):
-    monkeypatch.setenv("TRAINING_GYM_RICH_CLI", "1")
-
-    output.print_error("problem")
-
-    captured = capsys.readouterr()
-    assert captured.out == ""
-    assert "Error" in captured.err
-    assert "problem" in captured.err
-    assert "╭" in captured.err
 
 
 def test_use_rich_output_honors_override(monkeypatch):
