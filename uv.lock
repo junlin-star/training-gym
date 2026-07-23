@@ -1455,7 +1455,7 @@ dev = [
     { name = "mini-swe-agent", specifier = "==2.3.0" },
     { name = "pre-commit", specifier = ">=4.5.1" },
     { name = "pytest", specifier = ">=9.0.3" },
-    { name = "ruff", specifier = ">=0.15.17" },
+    { name = "ruff", specifier = ">=0.15.17,<0.16" },
     { name = "uv", specifier = ">=0.11.0" },
 ]
 docs = [

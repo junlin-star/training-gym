@@ -29,7 +29,7 @@ training-gym = "modal_training_gym.cli:main"
 dev = [
     "pre-commit>=4.5.1",
     "pytest>=9.0.3",
-    "ruff>=0.15.17",
+    "ruff>=0.15.17,<0.16",
     "ipykernel>=6.29.0",
     "uv>=0.11.0",
     "mini-swe-agent==2.3.0",
