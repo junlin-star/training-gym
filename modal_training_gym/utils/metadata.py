@@ -9,7 +9,17 @@ from enum import Enum
 from functools import partial
 from typing import Any
 
-from modal.exception import InvalidError, NotFoundError
+try:
+    from modal.exception import InvalidError, NotFoundError
+except ModuleNotFoundError:
+    # The `modal` client isn't installed in the slime training image, which only
+    # copies in the `modal_training_gym` source. Keeping this import safe lets the
+    # package's import chain load there (e.g. the phase-reporting rollout hook)
+    # without the client; volume helpers that actually need `modal` import it lazily.
+    class InvalidError(Exception): ...
+
+    class NotFoundError(Exception): ...
+
 
 METADATA_VOLUME_NAME = "training-gym-metadata"
 STEP_TIMES_DICT_NAME = "training-gym-step-times"
