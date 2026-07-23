@@ -19,7 +19,7 @@ from modal_training_gym.common.time_utils import parse_time
 
 from .client import DashboardClient
 from .commands import _TrainingGymGroup
-from .errors import MalformedResponseError
+from .errors import CLIError, ExitCode
 from .options import json_option
 from .output import print_json, print_table
 
@@ -90,12 +90,18 @@ def list_runs(
         payload = client.get_json("/api/runs", params=params)
 
     if not isinstance(payload, list):
-        raise MalformedResponseError("Dashboard returned an invalid run list.")
+        raise CLIError(
+            "Dashboard returned an invalid run list.",
+            error="invalid_dashboard_response",
+            exit_code=ExitCode.BACKEND,
+        )
     try:
         summaries = [RunSummary.model_validate(item) for item in payload]
     except ValidationError as exc:
-        raise MalformedResponseError(
-            "Dashboard returned an invalid run summary."
+        raise CLIError(
+            "Dashboard returned an invalid run summary.",
+            error="invalid_dashboard_response",
+            exit_code=ExitCode.BACKEND,
         ) from exc
     items = [build_run_list_item(summary) for summary in summaries]
 
