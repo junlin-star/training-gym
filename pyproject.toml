@@ -42,7 +42,10 @@ docs = [
 ]
 
 [tool.ruff]
-extend-exclude = ["tutorials/**"]
+# "*.md": ruff 0.16 started formatting Markdown (fenced code blocks), which
+# 0.15 did not — exclude it so the formatter only touches the files it always
+# has, independent of the installed ruff version.
+extend-exclude = ["tutorials/**", "*.md"]
 
 # Pin the rule selection explicitly so linting is deterministic across ruff
 # releases. ruff 0.16 expanded the *default* rule set for projects without an
