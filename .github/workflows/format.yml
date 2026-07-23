@@ -13,15 +13,19 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           ref: ${{ github.head_ref || github.ref_name }}
           repository: ${{ github.event.pull_request.head.repo.full_name }}
 
-      - uses: astral-sh/ruff-action@v3
+      - uses: actions/setup-python@v6
         with:
-          args: "check"
+          python-version-file: ".python-version"
 
-      - uses: astral-sh/ruff-action@v3
-        with:
-          args: "format --check"
+      - uses: astral-sh/setup-uv@v8.1.0
+
+      - name: Ruff check
+        run: uv run --group dev ruff check modal_training_gym/
+
+      - name: Ruff format
+        run: uv run --group dev ruff format --check modal_training_gym/
