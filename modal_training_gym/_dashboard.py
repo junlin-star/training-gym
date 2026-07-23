@@ -804,13 +804,18 @@ def fastapi_app():
 
     async def load_runs() -> list[JsonDict]:
         run_records = await load_list_summary(MetadataStore.TRAINING_RUNS_SUMMARY)
-        latest_rollouts = {
-            str(rollout["training_run_id"]): rollout
-            for rollout in await run_in_threadpool(
+        try:
+            latest_rollout_records = await run_in_threadpool(
                 vol_list, MetadataStore.TRAINING_LATEST_ROLLOUTS
             )
-            if rollout.get("training_run_id")
-        }
+        except Exception:
+            latest_rollouts = {}
+        else:
+            latest_rollouts = {
+                str(rollout["training_run_id"]): rollout
+                for rollout in latest_rollout_records
+                if isinstance(rollout, dict) and rollout.get("training_run_id")
+            }
 
         enriched_run_records = []
         for run in run_records:

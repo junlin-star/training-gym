@@ -34,6 +34,22 @@ def _save_records() -> None:
         started_at=100,
         updated_at=150,
         metadata={"group_id": "route-group"},
+        substep_times={
+            "1": {
+                "train_model": {
+                    "start": 120.0,
+                    "duration_s": 2.0,
+                    "intervals": [
+                        {
+                            "step_id": 0,
+                            "start": 120.0,
+                            "duration_s": 2.0,
+                            "training_role": "actor",
+                        }
+                    ],
+                }
+            }
+        },
     ).save()
     TrainResult(
         app_name="route-app",
@@ -61,6 +77,9 @@ def test_runs_route_returns_typed_joined_summaries(fake_volume, monkeypatch, tmp
     assert summary["group_id"] == "route-group"
     assert summary["has_train_result"] is True
     assert summary["train_result"]["checkpoint_dir"] == ("/checkpoints/run-route-1")
+    assert summary["substep_times"]["1"]["train_model"]["intervals"][0][
+        "training_role"
+    ] == "actor"
 
 
 def test_runs_route_keeps_runs_when_train_result_store_fails(
