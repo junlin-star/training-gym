@@ -1070,14 +1070,15 @@ def build_slime_app(
                 save_root, is_complete=_is_complete_torch_dist_checkpoint
             )
             record_resume_checkpoint(run_record, resume_checkpoint)
+            checkpoint_rollout_id = (
+                resume_checkpoint.get("resume_from_iteration")
+                if resume_checkpoint is not None
+                else None
+            )
             restore_checkpoint_step_times(
                 run_record,
                 training_attempt,
-                (
-                    resume_checkpoint.get("resume_from_iteration")
-                    if resume_checkpoint is not None
-                    else None
-                ),
+                checkpoint_rollout_id,
             )
             if not slime.async_mode:
                 advance_synchronous_timing_watermark(run_record, training_attempt)

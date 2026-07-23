@@ -145,7 +145,6 @@ def _record_training_timing_event(event: TrainingTimingEvent) -> None:
         event.training_attempt,
         event.training_role,
         event.rollout_id,
-        event.training_rank,
     )
     stored_event_keys = timing_event_store.get(event_index_key)
     indexed_event_keys = (
@@ -160,7 +159,6 @@ def _record_training_timing_event(event: TrainingTimingEvent) -> None:
             event.training_attempt,
             event.rollout_id,
             event.training_role,
-            event.training_rank,
         )
         timing_event_store[marker_key] = event_key
 

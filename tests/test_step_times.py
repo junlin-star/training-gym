@@ -1,5 +1,11 @@
+from modal_training_gym.common.framework import Framework
+from modal_training_gym.common.run import TrainingRun
 from modal_training_gym.common.status import SlimeStatus
-from modal_training_gym.common.step_timing import record_step_time_event
+from modal_training_gym.common.step_timing import (
+    advance_synchronous_timing_watermark,
+    record_step_time_event,
+    restore_checkpoint_step_times,
+)
 from modal_training_gym.frameworks.slime.launcher import aggregate_step_times
 
 EVAL_BEFORE = SlimeStatus.EVAL_ROLLOUT_LOGGING.value
@@ -69,6 +75,30 @@ EXPECTED_DURATIONS = {
     WEIGHT_SYNC: 1.0,
     EVAL_AFTER: 2.0,
 }
+
+
+def test_checkpoint_restore_uses_zero_based_rollout_id():
+    archived_step_times = {
+        str(step): {"start": step, "end": step + 1, "duration_s": 1}
+        for step in range(1, 4)
+    }
+    run = TrainingRun(
+        training_run_id=RUN_ID,
+        framework=Framework.SLIME,
+        config={},
+        metadata={
+            "training_step_timing_attempts": {"1": {"step_times": archived_step_times}}
+        },
+    )
+
+    restore_checkpoint_step_times(run, 2, checkpoint_rollout_id=1)
+
+    assert run.step_times == {
+        "1": archived_step_times["1"],
+        "2": archived_step_times["2"],
+    }
+    assert run.substep_times == {}
+    assert advance_synchronous_timing_watermark(run, 2) == 2
 
 
 def build_step_times_dict(

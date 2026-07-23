@@ -66,15 +66,15 @@ def training_timing_event_index_key(
     training_attempt: int,
     training_role: str,
     rollout_id: int,
-    training_rank: int | None = None,
-) -> tuple[str, str, int, str, int, int | None]:
+) -> tuple[str, str, int, str, int, None]:
+    """Return a rank-agnostic index, preserving the existing key shape."""
     return (
         training_run_id,
         TRAINING_TIMING_EVENT_INDEX_KIND,
         training_attempt,
         training_role,
         rollout_id,
-        training_rank,
+        None,
     )
 
 
@@ -83,15 +83,15 @@ def training_role_finish_marker_key(
     training_attempt: int,
     rollout_id: int,
     training_role: str,
-    training_rank: int | None = None,
-) -> tuple[str, str, int, int, str, int | None]:
+) -> tuple[str, str, int, int, str, None]:
+    """Return a rank-agnostic marker, preserving the existing key shape."""
     return (
         training_run_id,
         TRAINING_ROLE_FINISH_MARKER_KIND,
         training_attempt,
         rollout_id,
         training_role,
-        training_rank,
+        None,
     )
 
 
@@ -531,16 +531,16 @@ def archive_step_timings_for_retry(run: TrainingRun, training_attempt: int) -> N
 def restore_checkpoint_step_times(
     run: TrainingRun,
     training_attempt: int,
-    resume_iteration: int | None,
+    checkpoint_rollout_id: int | None,
 ) -> None:
-    """Restore the completed prefix represented by a resumed checkpoint."""
-    if training_attempt <= 1 or resume_iteration is None:
+    """Restore steps completed through a zero-based Slime checkpoint rollout."""
+    if training_attempt <= 1 or checkpoint_rollout_id is None:
         return
     attempts = (run.metadata or {}).get("training_step_timing_attempts")
     if not isinstance(attempts, Mapping):
         return
 
-    checkpoint_step = resume_iteration + 1
+    checkpoint_step = checkpoint_rollout_id + 1
 
     def restore(field: str) -> dict[str, Any]:
         restored: dict[str, Any] = {}
