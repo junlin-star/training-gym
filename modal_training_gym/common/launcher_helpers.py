@@ -69,16 +69,16 @@ def ship_callable(
 ) -> "Image":
     """Make a user-provided callable importable inside the remote container.
 
-    Package-internal callables need nothing (they ship with the package). A
-    callable defined in its own module is added as a local file and the slime/
-    miles arg is pointed at ``module.symbol``. Anything defined inline (e.g. in a
-    notebook or the caller script) is cloudpickled into a tiny loader module.
-    Returns the (possibly extended) image.
+    Package-internal callables need no shipping but still get ``set_path``.
+    A callable defined in its own module is added as a local file pointed at
+    ``module.symbol``. Inline callables are cloudpickled into a tiny loader
+    module. Returns the (possibly extended) image.
     """
     if fn is None:
         return image
     fn_mod = getattr(fn, "__module__", None) or ""
     if fn_mod.startswith("modal_training_gym"):
+        set_path(f"{fn_mod}.{getattr(fn, '__name__', fallback_name)}")
         return image
     try:
         fn_file = os.path.abspath(inspect.getfile(fn))
@@ -91,9 +91,6 @@ def ship_callable(
             remote_path=f"/root/{fn_module_name}.py",
             copy=True,
         )
-        # Point the slime arg at the shipped module's symbol. Without this the
-        # file is shipped but the path stays unset, so a custom_rm_function
-        # defined outside the entrypoint silently falls back to rule-based RM.
         set_path(f"{fn_module_name}.{getattr(fn, '__name__', fallback_name)}")
         return image
     fn_name = getattr(fn, "__name__", fallback_name)

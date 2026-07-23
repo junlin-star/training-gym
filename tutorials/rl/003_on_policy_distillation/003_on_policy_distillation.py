@@ -217,6 +217,7 @@ def _main_impl() -> None:
         recipe=SglangRecipe(gpu="H100"),
         app_name="opd-teacher-qwen3-8b",
         served_model_name="qwen3-8b-teacher",
+        unauthenticated=True,
     ).serve()
     print(f"Teacher URL: {teacher_deployment.url}")
 
@@ -233,7 +234,10 @@ def _main_impl() -> None:
     # See [this LoRA adapter for making Qwen3-4B successful at structured output](https://huggingface.co/uchkw/qwen3-4b-structured-output-lora).
 
     base_model = Qwen3_4B()
-    base_deployment = DeploymentConfig(model=base_model).serve()
+    base_deployment = DeploymentConfig(
+        model=base_model,
+        unauthenticated=True,
+    ).serve()
     print(f"Student URL: {base_deployment.url}")
 
     eval_config = EvalConfig(dataset=eval_dataset, eval_fn=math_eval_fn)
@@ -316,6 +320,7 @@ def _main_impl() -> None:
         checkpoint=checkpoint,
         app_name="qwen3-4b-opd-trained-serve",
         served_model_name="qwen3-4b-opd",
+        unauthenticated=True,
     ).serve()
     print(f"Trained student URL: {trained_deployment.url}")
 

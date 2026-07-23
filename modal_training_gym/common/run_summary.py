@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 import math
-from typing import Any
+from typing import Any, cast
 from urllib.parse import quote
 
 from pydantic import BaseModel, Field, ValidationError
@@ -12,7 +12,9 @@ from pydantic import BaseModel, Field, ValidationError
 from modal_training_gym.common.modal_urls import modal_app_dashboard_url
 
 
-JsonDict = dict[str, Any]
+JsonDict = dict[str, object]
+StepTimes = dict[str, dict[str, int | None]]
+SubstepTimes = dict[str, dict[str, dict[str, float | None]]]
 
 
 class FrameworkProgress(BaseModel):
@@ -125,8 +127,8 @@ class RunSummary(BaseModel):
     config: JsonDict = Field(default_factory=dict)
     metadata: JsonDict | None = None
     error_message: str = ""
-    step_times: dict[str, dict[str, int | None]] | None = None
-    substep_times: dict[str, dict[str, dict[str, float | None]]] | None = None
+    step_times: StepTimes | None = None
+    substep_times: SubstepTimes | None = None
 
 
 def _unwrap(value: object) -> object:
@@ -147,8 +149,10 @@ def _mapping(value: object) -> JsonDict:
 
 def _number(value: object, default: float = 0.0) -> float:
     value = _unwrap(value)
+    if value in (None, "") or not isinstance(value, (str, int, float)):
+        return default
     try:
-        parsed = float(value) if value not in (None, "") else default
+        parsed = float(value)
     except (TypeError, ValueError):
         return default
     return parsed if math.isfinite(parsed) else default
@@ -157,6 +161,8 @@ def _number(value: object, default: float = 0.0) -> float:
 def _optional_int(value: object) -> int | None:
     value = _unwrap(value)
     if value in (None, ""):
+        return None
+    if not isinstance(value, (str, int, float)):
         return None
     try:
         parsed = float(value)
@@ -491,10 +497,10 @@ def build_run_summary(
         config=config,
         metadata=metadata or None,
         error_message=_text(run.get("error_message")),
-        step_times=run.get("step_times")
+        step_times=cast(StepTimes, run.get("step_times"))
         if isinstance(run.get("step_times"), dict)
         else None,
-        substep_times=run.get("substep_times")
+        substep_times=cast(SubstepTimes, run.get("substep_times"))
         if isinstance(run.get("substep_times"), dict)
         else None,
     )

@@ -3,12 +3,14 @@
   import Drawer from "../components/Drawer.svelte";
   import FilterBar from "../components/FilterBar.svelte";
   import FrameworkStageProgress from "../components/FrameworkStageProgress.svelte";
+  import GroupSection from "../components/GroupSection.svelte";
   import MinimalTableSkeleton from "../components/MinimalTableSkeleton.svelte";
   import ResizableTable from "../components/ResizableTable.svelte";
   import RunSummary from "../components/RunSummary.svelte";
   import StatusPill from "../components/StatusPill.svelte";
   import TimeAgo from "../components/TimeAgo.svelte";
   import { formatTagValue, getGroupTags, smoothedStageLabel } from "../lib/format.js";
+  import { toggleInSet } from "../lib/set.js";
 
   let {
     allRuns,
@@ -27,6 +29,8 @@
     groupCounts,
     activeGroups,
     filteredRuns,
+    runGroups,
+    groupBy = $bindable(),
     loading,
     error,
     modelName,
@@ -150,9 +154,22 @@
       onCloseDrawer();
     }
   });
+
+  // Inverted vs. evals' expanded set so groups default to expanded, including
+  // ones that appear later via auto-refresh.
+  let collapsedGroupKeys = $state(new Set());
+
+  function toggleGroupSection(key) {
+    collapsedGroupKeys = toggleInSet(collapsedGroupKeys, key);
+  }
+
+  $effect(() => {
+    void groupBy;
+    collapsedGroupKeys = new Set();
+  });
 </script>
 
-<section class="summary-sticky grid grid-cols-5 gap-[14px] mb-[24px] max-[900px]:grid-cols-2 max-[640px]:grid-cols-1">
+<section class="summary-sticky grid grid-cols-5 gap-[14px] p-[0_24px] mb-[24px] max-[900px]:grid-cols-2 max-[640px]:grid-cols-1">
   <article class="summary-card">
     <span class="summary-label">Total runs</span>
     <strong>{allRuns.length}</strong>
@@ -175,7 +192,7 @@
   </article>
 </section>
 
-<section class="[border:0] [background:transparent] flex flex-col gap-[24px] p-0">
+<section class="[border:0] [background:transparent] flex flex-col gap-[24px] p-[0_24px_16px] max-[900px]:pb-[24px]">
   <div class="m-0">
     <FilterBar
       {recipes}
@@ -191,6 +208,7 @@
       {activeGroups}
       allGroupsActive={activeGroups.size === groups.length}
       bind:search
+      bind:groupBy
       onToggleRecipe={onToggleRecipe}
       onSelectAllRecipes={onSelectAllRecipes}
       onClearRecipes={onClearRecipes}
@@ -219,159 +237,185 @@
     {:else if !filteredRuns.length}
       <div class="page-empty">No runs match the current filters.</div>
     {:else}
-      <div class="table-wrap freeze-header">
-        <ResizableTable class="training-runs-table" {columns} stickyFirstColumn>
-          <tbody>
-            {#each filteredRuns as run, runIndex (`${run.run_id || "run"}-${run.created_at || 0}-${runIndex}`)}
-              {@const runName = run.run_id || "—"}
-              {@const status = getStatus(run)}
-              {@const stageLabel = frameworkStatusLabel(run)}
-              {@const progress = frameworkProgress(run)}
-              {@const groupTags = getGroupTags(run)}
-              <tr class="run-row" class:row-selected={drawerRunId === run.run_id}>
-                <td class="min-w-0 row-open-cell">
-                  <a
-                    href={trainingRunDetailPath(run.run_id)}
-                    class="cell-open-button"
-                    title={runName}
-                    aria-label={`Open training run ${runName}`}
-                    onclick={(event) => selectRun(run.run_id, event)}
-                  >
-                    <div class="block text-(--text-bright) [font-family:var(--font-mono)] [font-weight:400] text-[14px] leading-[20px] overflow-hidden text-ellipsis whitespace-nowrap">{runName}</div>
-                  </a>
-                </td>
-                <td class="row-open-cell">
-                  <a href={trainingRunDetailPath(run.run_id)} class="cell-open-button" onclick={(event) => selectRun(run.run_id, event)}>
-                    <span class="flex flex-col items-start gap-[4px] min-w-0 max-w-full">
-                      <StatusPill status={status} />
-                      {#if resumeBadge(run)}
-                        <span class="[border:1px_solid_color-mix(in_srgb,var(--yellow,#fbbf24)_42%,transparent)] rounded-[999px] bg-[color-mix(in_srgb,var(--yellow,#fbbf24)_10%,transparent)] text-(--yellow,#fbbf24) text-[11px] leading-[14px] p-[1px_6px] whitespace-nowrap">{resumeBadge(run)}</span>
-                      {/if}
-                    </span>
-                  </a>
-                </td>
-                <td class="min-w-0 row-open-cell">
-                  <a
-                    href={trainingRunDetailPath(run.run_id)}
-                    class="cell-open-button whitespace-normal! leading-[16px]!"
-                    onclick={(event) => selectRun(run.run_id, event)}
-                  >
-                    {#if showFrameworkStatus(run) && stageLabel}
-                      <FrameworkStageProgress
-                        progress={progress}
-                        progressLabel={progressLabel(progress)}
-                        stageLabel={stageLabel}
-                        compact
-                        active={status.toLowerCase() === "pending"}
-                      />
-                    {:else}
-                      <span class="text-(--muted)">—</span>
-                    {/if}
-                  </a>
-                </td>
-                <td class="min-w-0 row-open-cell" title={modelName(run)}>
-                  <a href={trainingRunDetailPath(run.run_id)} class="cell-open-button" onclick={(event) => selectRun(run.run_id, event)}>
-                    {modelName(run)}
-                  </a>
-                </td>
-                <td class="min-w-0 row-open-cell" title={run.dataset || "—"}>
-                  <a href={trainingRunDetailPath(run.run_id)} class="cell-open-button" onclick={(event) => selectRun(run.run_id, event)}>
-                    {run.dataset || "—"}
-                  </a>
-                </td>
-                <td class="row-open-cell">
-                  <a href={trainingRunDetailPath(run.run_id)} class="cell-open-button" onclick={(event) => selectRun(run.run_id, event)}>
-                    {run.recipe || "—"}
-                  </a>
-                </td>
-                <td class="group-cell row-open-cell" title={groupTags?.group_id || run.group_id || ""}>
-                  <a href={trainingRunDetailPath(run.run_id)} class="cell-open-button" onclick={(event) => selectRun(run.run_id, event)}>
-                    {#if groupTags?.group_id}
-                      <span class="inline-block max-w-full whitespace-normal [overflow-wrap:anywhere] align-bottom p-[2px_8px] rounded-[999px] text-[0.72rem] [font-variant-numeric:tabular-nums] text-(--muted) [border:1px_solid_var(--border,#2f2f2f)] bg-[color-mix(in_srgb,var(--panel-alt)_70%,transparent)]">{groupTags.group_id}</span>
-                    {:else}
-                      <span class="group-empty">—</span>
-                    {/if}
-                  </a>
-                </td>
-                <td class="h-auto align-top row-open-cell">
-                  <a
-                    href={trainingRunDetailPath(run.run_id)}
-                    class="cell-open-button overflow-visible! text-clip! whitespace-normal!"
-                    onclick={(event) => selectRun(run.run_id, event)}
-                  >
-                    {#if groupTags?.tags.length}
-                      <span class="flex flex-wrap gap-[4px] min-w-0 max-w-full">
-                        {#each groupTags.tags as tag (tag.key)}
-                          <span class="inline-flex items-baseline max-w-full min-w-0 overflow-hidden p-[2px_7px] [border:1px_solid_var(--border,#2f2f2f)] rounded-[999px] bg-[color-mix(in_srgb,var(--panel-alt)_70%,transparent)] text-(--text) [font-family:var(--font-mono)] text-[11px] leading-[14px]" title={`${tag.key}=${formatTagValue(tag.value)}`}>
-                            <span class="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-(--muted)">{tag.key}</span><span>=</span><span class="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap">{formatTagValue(tag.value)}</span>
-                          </span>
-                        {/each}
-                      </span>
-                    {:else}
-                      <span class="group-empty">—</span>
-                    {/if}
-                  </a>
-                </td>
-                <td class="whitespace-nowrap row-open-cell">
-                  <a href={trainingRunDetailPath(run.run_id)} class="cell-open-button" onclick={(event) => selectRun(run.run_id, event)}>
-                    <TimeAgo timestamp={run.started_at || run.created_at} showJustNow falsyRepresentation="—" />
-                  </a>
-                </td>
-                <td class="whitespace-nowrap row-open-cell">
-                  <a href={trainingRunDetailPath(run.run_id)} class="cell-open-button" onclick={(event) => selectRun(run.run_id, event)}>
-                    <TimeAgo timestamp={run.updated_at} showJustNow falsyRepresentation="—" />
-                  </a>
-                </td>
-                <td class="min-w-0 overflow-visible">
-                  <div class="flex items-center flex-wrap gap-[6px]">
-                    <button
-                      class="inline-flex items-center gap-[6px] whitespace-nowrap [border:1px_solid_var(--color-c-gray-10,#2f2f2f)] rounded-[6px] p-[4px_8px] [font:inherit] text-[12px] font-medium leading-[16px] text-(--muted) bg-transparent cursor-pointer ghost-hover"
-                      title="Open expanded view"
-                      aria-label={`Open expanded view for training run ${run.run_id}`}
-                      onclick={(event) => {
-                        event.stopPropagation();
-                        selectRun(run.run_id, event);
-                      }}
+      {#snippet runsTable(runs, frozenOffset)}
+        <div class="table-wrap freeze-header" style={frozenOffset ? `--frozen-table-offset: ${frozenOffset};` : ""}>
+          <ResizableTable class="training-runs-table" {columns} stickyFirstColumn>
+            <tbody>
+              {#each runs as run, runIndex (`${run.run_id || "run"}-${run.created_at || 0}-${runIndex}`)}
+                {@const runName = run.run_id || "—"}
+                {@const status = getStatus(run)}
+                {@const stageLabel = frameworkStatusLabel(run)}
+                {@const progress = frameworkProgress(run)}
+                {@const groupTags = getGroupTags(run)}
+                <tr class="run-row" class:row-selected={drawerRunId === run.run_id}>
+                  <td class="min-w-0 row-open-cell">
+                    <a
+                      href={trainingRunDetailPath(run.run_id)}
+                      class="cell-open-button"
+                      title={runName}
+                      aria-label={`Open training run ${runName}`}
+                      onclick={(event) => selectRun(run.run_id, event)}
                     >
-                      <Maximize2 size={12} strokeWidth={2.1} />
-                      <span class="expand-button-label">Expand</span>
-                    </button>
-                    {#if run.modal_app_url}
-                      <a
-                        class="training-open-modal-link"
-                        href={run.modal_app_url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        onclick={(event) => event.stopPropagation()}
-                      >
-                        <span class="open-modal-link-label">Open in Modal</span>
-                        <ExternalLink class="training-open-modal-link-icon" size={12} strokeWidth={2.1} />
-                      </a>
-                    {:else}
-                      <span class="training-open-modal-link open-modal-link-disabled">
-                        <span class="open-modal-link-label">Open in Modal</span>
-                        <ExternalLink class="training-open-modal-link-icon" size={12} strokeWidth={2.1} />
+                      <div class="block text-(--text-bright) [font-family:var(--font-mono)] [font-weight:400] text-[14px] leading-[20px] overflow-hidden text-ellipsis whitespace-nowrap">{runName}</div>
+                    </a>
+                  </td>
+                  <td class="row-open-cell">
+                    <a href={trainingRunDetailPath(run.run_id)} class="cell-open-button" onclick={(event) => selectRun(run.run_id, event)}>
+                      <span class="flex flex-col items-start gap-[4px] min-w-0 max-w-full">
+                        <StatusPill status={status} />
+                        {#if resumeBadge(run)}
+                          <span class="[border:1px_solid_color-mix(in_srgb,var(--yellow,#fbbf24)_42%,transparent)] rounded-[999px] bg-[color-mix(in_srgb,var(--yellow,#fbbf24)_10%,transparent)] text-(--yellow,#fbbf24) text-[11px] leading-[14px] p-[1px_6px] whitespace-nowrap">{resumeBadge(run)}</span>
+                        {/if}
                       </span>
-                    {/if}
-                    {#each run.wandb_links || [] as link (link.url)}
-                      <a
-                        class="training-open-modal-link training-open-wandb-link"
-                        href={link.url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        onclick={(event) => event.stopPropagation()}
+                    </a>
+                  </td>
+                  <td class="min-w-0 row-open-cell">
+                    <a
+                      href={trainingRunDetailPath(run.run_id)}
+                      class="cell-open-button whitespace-normal! leading-[16px]!"
+                      onclick={(event) => selectRun(run.run_id, event)}
+                    >
+                      {#if showFrameworkStatus(run) && stageLabel}
+                        <FrameworkStageProgress
+                          progress={progress}
+                          progressLabel={progressLabel(progress)}
+                          stageLabel={stageLabel}
+                          compact
+                          active={status.toLowerCase() === "pending"}
+                        />
+                      {:else}
+                        <span class="text-(--muted)">—</span>
+                      {/if}
+                    </a>
+                  </td>
+                  <td class="min-w-0 row-open-cell" title={modelName(run)}>
+                    <a href={trainingRunDetailPath(run.run_id)} class="cell-open-button" onclick={(event) => selectRun(run.run_id, event)}>
+                      {modelName(run)}
+                    </a>
+                  </td>
+                  <td class="min-w-0 row-open-cell" title={run.dataset || "—"}>
+                    <a href={trainingRunDetailPath(run.run_id)} class="cell-open-button" onclick={(event) => selectRun(run.run_id, event)}>
+                      {run.dataset || "—"}
+                    </a>
+                  </td>
+                  <td class="row-open-cell">
+                    <a href={trainingRunDetailPath(run.run_id)} class="cell-open-button" onclick={(event) => selectRun(run.run_id, event)}>
+                      {run.recipe || "—"}
+                    </a>
+                  </td>
+                  <td class="group-cell row-open-cell" title={groupTags?.group_id || run.group_id || ""}>
+                    <a href={trainingRunDetailPath(run.run_id)} class="cell-open-button" onclick={(event) => selectRun(run.run_id, event)}>
+                      {#if groupTags?.group_id}
+                        <span class="inline-block max-w-full whitespace-normal [overflow-wrap:anywhere] align-bottom p-[2px_8px] rounded-[999px] text-[0.72rem] [font-variant-numeric:tabular-nums] text-(--muted) [border:1px_solid_var(--border,#2f2f2f)] bg-[color-mix(in_srgb,var(--panel-alt)_70%,transparent)]">{groupTags.group_id}</span>
+                      {:else}
+                        <span class="group-empty">—</span>
+                      {/if}
+                    </a>
+                  </td>
+                  <td class="h-auto align-top row-open-cell">
+                    <a
+                      href={trainingRunDetailPath(run.run_id)}
+                      class="cell-open-button overflow-visible! text-clip! whitespace-normal!"
+                      onclick={(event) => selectRun(run.run_id, event)}
+                    >
+                      {#if groupTags?.tags.length}
+                        <span class="flex flex-wrap gap-[4px] min-w-0 max-w-full">
+                          {#each groupTags.tags as tag (tag.key)}
+                            <span class="inline-flex items-baseline max-w-full min-w-0 overflow-hidden p-[2px_7px] [border:1px_solid_var(--border,#2f2f2f)] rounded-[999px] bg-[color-mix(in_srgb,var(--panel-alt)_70%,transparent)] text-(--text) [font-family:var(--font-mono)] text-[11px] leading-[14px]" title={`${tag.key}=${formatTagValue(tag.value)}`}>
+                              <span class="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-(--muted)">{tag.key}</span><span>=</span><span class="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap">{formatTagValue(tag.value)}</span>
+                            </span>
+                          {/each}
+                        </span>
+                      {:else}
+                        <span class="group-empty">—</span>
+                      {/if}
+                    </a>
+                  </td>
+                  <td class="whitespace-nowrap row-open-cell">
+                    <a href={trainingRunDetailPath(run.run_id)} class="cell-open-button" onclick={(event) => selectRun(run.run_id, event)}>
+                      <TimeAgo timestamp={run.started_at || run.created_at} showJustNow falsyRepresentation="—" />
+                    </a>
+                  </td>
+                  <td class="whitespace-nowrap row-open-cell">
+                    <a href={trainingRunDetailPath(run.run_id)} class="cell-open-button" onclick={(event) => selectRun(run.run_id, event)}>
+                      <TimeAgo timestamp={run.updated_at} showJustNow falsyRepresentation="—" />
+                    </a>
+                  </td>
+                  <td class="min-w-0 overflow-visible">
+                    <div class="flex items-center flex-wrap gap-[6px]">
+                      <button
+                        class="inline-flex items-center gap-[6px] whitespace-nowrap [border:1px_solid_var(--color-c-gray-10,#2f2f2f)] rounded-[6px] p-[4px_8px] [font:inherit] text-[12px] font-medium leading-[16px] text-(--muted) bg-transparent cursor-pointer ghost-hover"
+                        title="Open expanded view"
+                        aria-label={`Open expanded view for training run ${run.run_id}`}
+                        onclick={(event) => {
+                          event.stopPropagation();
+                          selectRun(run.run_id, event);
+                        }}
                       >
-                        <span class="open-modal-link-label">{link.label}</span>
-                        <ExternalLink class="training-open-modal-link-icon" size={12} strokeWidth={2.1} />
-                      </a>
-                    {/each}
-                  </div>
-                </td>
-              </tr>
-            {/each}
-          </tbody>
-        </ResizableTable>
-      </div>
+                        <Maximize2 size={12} strokeWidth={2.1} />
+                        <span class="expand-button-label">Expand</span>
+                      </button>
+                      {#if run.modal_app_url}
+                        <a
+                          class="training-open-modal-link"
+                          href={run.modal_app_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          onclick={(event) => event.stopPropagation()}
+                        >
+                          <span class="open-modal-link-label">Open in Modal</span>
+                          <ExternalLink class="training-open-modal-link-icon" size={12} strokeWidth={2.1} />
+                        </a>
+                      {:else}
+                        <span class="training-open-modal-link open-modal-link-disabled">
+                          <span class="open-modal-link-label">Open in Modal</span>
+                          <ExternalLink class="training-open-modal-link-icon" size={12} strokeWidth={2.1} />
+                        </span>
+                      {/if}
+                      {#each run.wandb_links || [] as link (link.url)}
+                        <a
+                          class="training-open-modal-link training-open-wandb-link"
+                          href={link.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          onclick={(event) => event.stopPropagation()}
+                        >
+                          <span class="open-modal-link-label">{link.label}</span>
+                          <ExternalLink class="training-open-modal-link-icon" size={12} strokeWidth={2.1} />
+                        </a>
+                      {/each}
+                    </div>
+                  </td>
+                </tr>
+              {/each}
+            </tbody>
+          </ResizableTable>
+        </div>
+      {/snippet}
+
+      {#if groupBy === "none"}
+        {@render runsTable(filteredRuns)}
+      {:else}
+        <div class="flex flex-col gap-[24px] p-0">
+          {#each runGroups as group (group.key)}
+            <GroupSection
+              title={group.key}
+              subtitle={`${group.runs.length} run${group.runs.length === 1 ? "" : "s"}`}
+              expanded={!collapsedGroupKeys.has(group.key)}
+              onToggle={() => toggleGroupSection(group.key)}
+            >
+              {#snippet meta()}
+                {#if group.latestCreatedAt}
+                  <span class="group-meta-pill [font-variant-numeric:tabular-nums]">
+                    <TimeAgo timestamp={group.latestCreatedAt} showJustNow falsyRepresentation="—" />
+                  </span>
+                {/if}
+              {/snippet}
+              {@render runsTable(group.runs, "360px")}
+            </GroupSection>
+          {/each}
+        </div>
+      {/if}
     {/if}
   </div>
 </section>

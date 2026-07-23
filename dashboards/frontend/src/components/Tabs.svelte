@@ -5,7 +5,7 @@
   let { tabs = [], active = $bindable() } = $props();
 </script>
 
-<div class="flex [border-bottom:1px_solid_var(--color-c-gray-10,#2f2f2f)]" role="tablist">
+<div class="flex shrink-0 p-[0_24px] [border-bottom:1px_solid_var(--color-c-gray-10,#2f2f2f)] gap-8" role="tablist">
   {#each tabs as tab (tab.value)}
     <button
       class="tab"

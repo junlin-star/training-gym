@@ -16,6 +16,7 @@
     activeGroups,
     allGroupsActive,
     search = $bindable(),
+    groupBy = $bindable(),
     onToggleRecipe,
     onSelectAllRecipes,
     onClearRecipes,
@@ -32,6 +33,17 @@
   function toggleMenu(menu) {
     openMenu = openMenu === menu ? null : menu;
   }
+
+  const groupByOptions = [
+    { value: "none", label: "None" },
+    { value: "group", label: "Group" },
+    { value: "dataset", label: "Dataset" },
+    { value: "model", label: "Model" },
+  ];
+
+  let groupByLabel = $derived(
+    groupByOptions.find((option) => option.value === groupBy)?.label ?? "None",
+  );
 </script>
 
 <svelte:window onclick={() => (openMenu = null)} />
@@ -183,6 +195,47 @@
             </span>
             <span class="item-label">{group}</span>
             <span class="item-count">{groupCounts[group] || 0}</span>
+          </button>
+        {/each}
+      </div>
+    {/if}
+  </div>
+
+  <div class="filterbar-menu-wrap ml-auto">
+    <button
+      class="group-by-button ghost-hover"
+      class:filterbar-open={openMenu === "groupBy"}
+      aria-haspopup="listbox"
+      aria-expanded={openMenu === "groupBy"}
+      onclick={(event) => {
+        event.stopPropagation();
+        toggleMenu("groupBy");
+      }}
+    >
+      <span>Group by:</span>
+      <span class="group-by-value">{groupByLabel}</span>
+      <span class="chevron" class:rotated={openMenu === "groupBy"}>
+        <ChevronDown size={12} />
+      </span>
+    </button>
+    {#if openMenu === "groupBy"}
+      <div class="menu menu-right group-by-menu" role="listbox">
+        {#each groupByOptions as option (option.value)}
+          <button
+            class="menu-item"
+            role="option"
+            aria-selected={groupBy === option.value}
+            onclick={() => {
+              groupBy = option.value;
+              openMenu = null;
+            }}
+          >
+            <span class="w-[14px] h-[14px] flex justify-center items-center">
+              {#if groupBy === option.value}
+                <Check size={11} />
+              {/if}
+            </span>
+            <span class="item-label">{option.label}</span>
           </button>
         {/each}
       </div>

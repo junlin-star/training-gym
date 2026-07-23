@@ -137,6 +137,8 @@ _PATCH_LOG_ELIDE_B64 = encode_patch("patch_log_elide", _SLIME_PATCHES)
 _PATCH_DIST_CKPT_QUANTIZED_B64 = encode_patch(
     "patch_dist_ckpt_quantized", _SLIME_PATCHES
 )
+# OPD / multi-turn: zero-std metrics must skip non-numeric rewards (dict/None).
+_PATCH_ZERO_STD_METRICS_B64 = encode_patch("patch_zero_std_metrics", _SLIME_PATCHES)
 
 
 def _build_slime_base_image() -> "Image":
@@ -156,6 +158,7 @@ def _build_slime_base_image() -> "Image":
             f"echo {_PATCH_ADVANTAGE_DIST_B64} | base64 -d | python3",
             f"echo {_PATCH_LOG_ELIDE_B64} | base64 -d | python3",
             f"echo {_PATCH_DIST_CKPT_QUANTIZED_B64} | base64 -d | python3",
+            f"echo {_PATCH_ZERO_STD_METRICS_B64} | base64 -d | python3",
         )
     )
 
@@ -553,6 +556,11 @@ def build_slime_app(
         set_path=_set_custom_generate_path,
     )
     _ship_callable(
+        slime.custom_reward_post_process_function,
+        fallback_name="custom_reward_post_process",
+        set_path=_set_extra_config_path("custom_reward_post_process_path"),
+    )
+    _ship_callable(
         slime.rollout_function if callable(slime.rollout_function) else None,
         fallback_name="rollout_function",
         set_path=lambda path: object.__setattr__(slime, "rollout_function", path),
@@ -592,6 +600,8 @@ def build_slime_app(
         object.__setattr__(slime, "custom_rm_function", None)
     if slime.custom_generate_function is not None and _get_custom_generate_path():
         object.__setattr__(slime, "custom_generate_function", None)
+    if slime.custom_reward_post_process_function is not None:
+        object.__setattr__(slime, "custom_reward_post_process_function", None)
 
     # ── SGLang request params auto-wiring ─────────────────────────────────
     if slime.sglang_request_params:
@@ -1131,8 +1141,7 @@ def build_slime_app(
                     await data_volume.commit.aio()
                 dataset.validate_prepared(prompt_data)
                 for ep in (eval_paths or {}).values():
-                    if os.path.exists(ep):
-                        dataset.validate_prepared(ep)
+                    dataset.validate_prepared(ep)
 
             await _set_framework_status_async(SlimeStatus.CONVERT_MODEL)
             prepare_slime_config(slime, model, tempfile.mkdtemp())

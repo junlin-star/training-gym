@@ -25,6 +25,7 @@
   let activeRecipes = $state(new Set());
   let activeStatuses = $state(new Set());
   let activeGroups = $state(new Set());
+  let trainingGroupBy = $state("none");
   // Recipe/status/group values we've seen across loads. New ones are
   // auto-enabled in the filters once; the user's selections are never reset by
   // a refresh.
@@ -432,6 +433,26 @@
       })
       .sort((a, b) => (b.created_at || 0) - (a.created_at || 0)),
   );
+
+  const trainingGroupKeyFns = {
+    group: getGroup,
+    dataset: (run) => safeText(run.dataset) || "(no dataset)",
+    model: modelName,
+  };
+
+  const trainingGroupKey = (run, groupBy) => trainingGroupKeyFns[groupBy]?.(run) ?? "";
+
+  // Buckets inherit filteredRuns' recency sort: groups come out ordered by
+  // newest member and runs stay sorted within each group.
+  let trainingRunGroups = $derived.by(() => {
+    if (trainingGroupBy === "none") return [];
+    const buckets = Map.groupBy(filteredRuns, (run) => trainingGroupKey(run, trainingGroupBy));
+    return [...buckets].map(([key, runs]) => ({
+      key,
+      runs,
+      latestCreatedAt: runs[0]?.created_at || null,
+    }));
+  });
 
   let completedTotal = $derived(allRuns.filter((run) => run.train_result).length);
   let cancelledTotal = $derived(allRuns.filter((run) => getStatus(run) === "Cancelled").length);
@@ -845,7 +866,7 @@
   <div class="grid grid-cols-[232px_minmax(0,1fr)] min-h-0 bg-(--bg) max-[900px]:grid-cols-[1fr]">
     <Sidebar {navItems} {activePage} onNavigate={setActivePage} />
 
-    <main class="p-[16px_24px] max-[900px]:p-[24px]">
+    <main class="min-w-0">
       <DashboardHeader
         title={pageMeta[activePage].title}
         {statusText}
@@ -882,6 +903,8 @@
         {groupCounts}
         {activeGroups}
         {filteredRuns}
+        runGroups={trainingRunGroups}
+        bind:groupBy={trainingGroupBy}
         {loading}
         {error}
         {modelName}
