@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 import shutil
 import sys
 from collections.abc import Sequence
@@ -15,21 +14,12 @@ from rich.table import Column, Table
 from rich.text import Text
 
 
-RICH_OUTPUT_ENV = "TRAINING_GYM_RICH_CLI"
 FALLBACK_OUTPUT_WIDTH = 120
-
-
-def use_rich_output() -> bool:
-    """Return whether interactive color and styling should be enabled."""
-    override = os.environ.get(RICH_OUTPUT_ENV)
-    if override in {"0", "1"}:
-        return override == "1"
-    return sys.stdout.isatty()
 
 
 def _console(*, stderr: bool = False) -> Console:
     width = shutil.get_terminal_size(fallback=(FALLBACK_OUTPUT_WIDTH, 24)).columns
-    rich_enabled = use_rich_output()
+    rich_enabled = sys.stdout.isatty()
     return Console(
         stderr=stderr,
         highlight=False,
@@ -54,7 +44,6 @@ def print_table(
     *,
     title: str = "",
 ) -> None:
-    """Render a compact human-readable table to stdout."""
     table = Table(
         *columns,
         title=title or None,
@@ -71,7 +60,7 @@ def print_table(
 def print_error(message: str) -> None:
     """Write an error to stderr when Rich output is enabled."""
     console = _console(stderr=True)
-    if use_rich_output():
+    if sys.stdout.isatty():
         console.print(
             Panel(
                 Text(message),
