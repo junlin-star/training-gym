@@ -21,7 +21,10 @@ from functools import wraps
 from typing import Any, Callable
 
 from modal_training_gym.common.status import SlimeStatus
-from modal_training_gym.common.step_timing import TRAINING_ROLE_FINISH_EVENT
+from modal_training_gym.common.step_timing import (
+    SUBSTEP_FINISH_EVENT,
+    TRAINING_ROLE_FINISH_EVENT,
+)
 
 from .advantage_reporting import (
     _advantage_samples_payload as _advantage_samples_payload,
@@ -31,7 +34,8 @@ from .reporting import (
     _enqueue,
     _enqueue_completed_step_status,
     _enqueue_rollout,
-    _enqueue_timing_event,
+    _enqueue_training_timing_event_batch,
+    _buffer_training_timing_event,
     _run_context,
     _step_progress,
 )
@@ -121,8 +125,6 @@ def _training_role_name(value: Any, default: str = "driver") -> str:
 def report_phase(
     status: SlimeStatus,
     args: Any = None,
-    *,
-    record_timing: bool = True,
     **extra: Any,
 ) -> None:
     payload = {
@@ -131,8 +133,6 @@ def report_phase(
         "event_ts": time.time(),
         **extra,
     }
-    if record_timing and payload.get("rollout_id") is not None:
-        _enqueue_timing_event(payload)
     if status is SlimeStatus.TRAIN_MODEL:
         _enqueue(
             {
@@ -241,7 +241,6 @@ def log_rollout_data(
     report_phase(
         SlimeStatus.ROLLOUT_LOGGING,
         args,
-        record_timing=False,
         **progress,
         rollout_id=rollout_id,
         sample_count=len(samples) if hasattr(samples, "__len__") else None,
@@ -282,7 +281,6 @@ def log_eval_rollout_data(
     report_phase(
         SlimeStatus.EVAL_ROLLOUT_LOGGING,
         args,
-        record_timing=False,
         **_step_progress(args, rollout_id),
         rollout_id=rollout_id,
         sample_count=len(data) if hasattr(data, "__len__") else None,
@@ -361,6 +359,7 @@ def before_train_step_hook(
 
 _OPTIMIZER_STEP_TIMING_CONTEXT = "_training_gym_optimizer_step_timing_context"
 _OPTIMIZER_STEP_TIMING_INSTALLED = "_training_gym_optimizer_step_timing_installed"
+_TRAINING_TIMING_OPTIMIZER = "_training_gym_timing_optimizer"
 
 
 def _is_primary_training_rank(args: Any) -> bool:
@@ -377,6 +376,35 @@ def _is_primary_training_rank(args: Any) -> bool:
     return not dist.is_available() or not dist.is_initialized() or dist.get_rank() == 0
 
 
+def _finish_train_model_timing(
+    optimizer: object,
+    *,
+    expected_rollout_id: int | None = None,
+    expected_training_role: str | None = None,
+) -> tuple[Any, int, int, str, float] | None:
+    context = getattr(optimizer, _OPTIMIZER_STEP_TIMING_CONTEXT, None)
+    if context is None:
+        return None
+    hook_args, rollout_id, step_id, training_role = context
+    if expected_rollout_id is not None and rollout_id != expected_rollout_id:
+        return None
+    if expected_training_role is not None and training_role != expected_training_role:
+        return None
+
+    setattr(optimizer, _OPTIMIZER_STEP_TIMING_CONTEXT, None)
+    finished_at = time.time()
+    report_step_event(
+        SlimeStatus.TRAIN_MODEL,
+        hook_args,
+        rollout_id,
+        "phase_finish",
+        step_id=step_id,
+        event_ts=finished_at,
+        training_role=training_role,
+    )
+    return hook_args, rollout_id, step_id, training_role, finished_at
+
+
 def before_optimizer_hook(
     args: Any,
     rollout_id: int,
@@ -389,33 +417,9 @@ def before_optimizer_hook(
         original_step: Callable[..., object] = getattr(optimizer, "step")
         original_zero_grad: Callable[..., object] = getattr(optimizer, "zero_grad")
 
-        def finish_train_model() -> tuple[Any, int, int, str, float] | None:
-            context = getattr(optimizer, _OPTIMIZER_STEP_TIMING_CONTEXT, None)
-            if context is None:
-                return None
-            setattr(optimizer, _OPTIMIZER_STEP_TIMING_CONTEXT, None)
-            hook_args, current_rollout_id, current_step_id, current_role = context
-            finished_at = time.time()
-            report_step_event(
-                SlimeStatus.TRAIN_MODEL,
-                hook_args,
-                current_rollout_id,
-                "phase_finish",
-                step_id=current_step_id,
-                event_ts=finished_at,
-                training_role=current_role,
-            )
-            return (
-                hook_args,
-                current_rollout_id,
-                current_step_id,
-                current_role,
-                finished_at,
-            )
-
         @wraps(original_step)
         def timed_step(*step_args: object, **step_kwargs: object) -> object:
-            context = finish_train_model()
+            context = _finish_train_model_timing(optimizer)
             if context is None:
                 return original_step(*step_args, **step_kwargs)
             (
@@ -451,12 +455,28 @@ def before_optimizer_hook(
         def timed_zero_grad(
             *zero_grad_args: object, **zero_grad_kwargs: object
         ) -> object:
-            finish_train_model()
+            _finish_train_model_timing(optimizer)
             return original_zero_grad(*zero_grad_args, **zero_grad_kwargs)
 
         setattr(optimizer, "step", timed_step)
         setattr(optimizer, "zero_grad", timed_zero_grad)
         setattr(optimizer, _OPTIMIZER_STEP_TIMING_INSTALLED, True)
+
+    previous_optimizer = getattr(args, _TRAINING_TIMING_OPTIMIZER, None)
+    if previous_optimizer is not None and previous_optimizer is not optimizer:
+        _finish_train_model_timing(previous_optimizer)
+    setattr(args, _TRAINING_TIMING_OPTIMIZER, optimizer)
+
+    existing_context = getattr(optimizer, _OPTIMIZER_STEP_TIMING_CONTEXT, None)
+    if existing_context is not None:
+        _, current_rollout_id, current_step_id, current_role = existing_context
+        if (
+            current_rollout_id == rollout_id
+            and current_step_id == step_id
+            and current_role == training_role
+        ):
+            return
+        _finish_train_model_timing(optimizer)
 
     setattr(
         optimizer,
@@ -482,12 +502,22 @@ def report_training_role_finished(
         return
     if not _is_primary_training_rank(args):
         return
+    normalized_role = _training_role_name(training_role, default="actor")
+    optimizer = getattr(args, _TRAINING_TIMING_OPTIMIZER, None)
+    if optimizer is not None:
+        context = getattr(optimizer, _OPTIMIZER_STEP_TIMING_CONTEXT, None)
+        if context is None or _finish_train_model_timing(
+            optimizer,
+            expected_rollout_id=rollout_id,
+            expected_training_role=normalized_role,
+        ):
+            setattr(args, _TRAINING_TIMING_OPTIMIZER, None)
     report_step_event(
         SlimeStatus.TRAINING,
         args,
         rollout_id,
         TRAINING_ROLE_FINISH_EVENT,
-        training_role=_training_role_name(training_role, default="actor"),
+        training_role=normalized_role,
     )
 
 
@@ -535,13 +565,15 @@ def report_step_event(
         payload["parent_phase"] = parent_phase
     if display_name is not None:
         payload["display_name"] = display_name
-    if rollout_id is not None:
-        _enqueue_timing_event(payload)
     if expected_training_roles is not None:
         payload["expected_training_roles"] = expected_training_roles
+    if rollout_id is not None:
+        _buffer_training_timing_event(payload)
+        if step_event in {TRAINING_ROLE_FINISH_EVENT, SUBSTEP_FINISH_EVENT}:
+            _enqueue_training_timing_event_batch(payload)
     if step_event in {"phase_start", "phase_finish", TRAINING_ROLE_FINISH_EVENT}:
         return
-    if step_event == "substep_finish":
+    if step_event == SUBSTEP_FINISH_EVENT:
         if async_mode:
             payload.pop("step_event", None)
             _enqueue(payload)

@@ -13,12 +13,12 @@ if TYPE_CHECKING:
 TrainingPhaseInterval: TypeAlias = dict[str, int | float | str]
 SubstepTiming: TypeAlias = dict[str, float | None | list[TrainingPhaseInterval]]
 SubstepTimes: TypeAlias = dict[str, dict[str, SubstepTiming]]
-StepTimes: TypeAlias = dict[str, dict[str, int | None]]
+StepTimes: TypeAlias = dict[str, dict[str, int | float | None]]
 
-TRAINING_TIMING_EVENT_KIND = "timing_event"
-TRAINING_TIMING_EVENT_INDEX_KIND = "timing_event_keys"
+TRAINING_TIMING_EVENT_BATCH_KIND = "timing_event_batch"
+TRAINING_TIMING_ATTEMPT_CLOSED_KIND = "timing_attempt_closed"
 TRAINING_ROLE_FINISH_EVENT = "training_role_finish"
-TRAINING_ROLE_FINISH_MARKER_KIND = "training_role_finish_marker"
+SUBSTEP_FINISH_EVENT = "substep_finish"
 SYNCHRONOUS_TRAINING_ROLES = ("driver", "rollout", "actor", "critic")
 SYNCHRONOUS_TIMING_ATTEMPT_KEY = "synchronous_step_timings_persisted_attempt"
 SYNCHRONOUS_TIMING_WATERMARK_KEY = "synchronous_step_timings_persisted_through"
@@ -47,53 +47,65 @@ SYNC_OPTIONAL_SUBSTEPS = {
 }
 
 
-def training_timing_event_key(event: Mapping[str, Any]) -> tuple[Any, ...]:
-    return (
-        event["training_run_id"],
-        TRAINING_TIMING_EVENT_KIND,
-        event["training_attempt"],
-        event["training_role"],
-        event["rollout_id"],
-        event.get("training_rank"),
-        event["phase"],
-        event["step_event"],
-        event["step_id"],
-        event["event_ts"],
-    )
-
-
-def training_timing_event_index_key(
+def training_timing_event_batch_key(
     training_run_id: str,
     training_attempt: int,
     training_role: str,
     rollout_id: int,
-) -> tuple[str, str, int, str, int, None]:
-    """Return a rank-agnostic index, preserving the existing key shape."""
+) -> tuple[str, str, int, str, int]:
     return (
         training_run_id,
-        TRAINING_TIMING_EVENT_INDEX_KIND,
+        TRAINING_TIMING_EVENT_BATCH_KIND,
         training_attempt,
         training_role,
         rollout_id,
-        None,
     )
 
 
-def training_role_finish_marker_key(
+def training_timing_event_batch_keys(
     training_run_id: str,
     training_attempt: int,
-    rollout_id: int,
-    training_role: str,
-) -> tuple[str, str, int, int, str, None]:
-    """Return a rank-agnostic marker, preserving the existing key shape."""
+    num_steps: int,
+) -> list[tuple[str, str, int, str, int]]:
+    return [
+        training_timing_event_batch_key(
+            training_run_id,
+            training_attempt,
+            role,
+            step - 1,
+        )
+        for step in range(1, num_steps + 1)
+        for role in SYNCHRONOUS_TRAINING_ROLES
+    ]
+
+
+def training_timing_attempt_closed_key(
+    training_run_id: str,
+    training_attempt: int,
+) -> tuple[str, str, int]:
     return (
         training_run_id,
-        TRAINING_ROLE_FINISH_MARKER_KIND,
+        TRAINING_TIMING_ATTEMPT_CLOSED_KIND,
         training_attempt,
-        rollout_id,
-        training_role,
-        None,
     )
+
+
+def legacy_step_time_keys(
+    training_run_id: str,
+    num_steps: int,
+) -> list[str]:
+    suffixes = (
+        "start",
+        "finish",
+        "substep_start",
+        SUBSTEP_FINISH_EVENT,
+        *(f"substep:{phase}" for phase in SYNC_SUBSTEP_ORDER),
+    )
+    return [
+        f"{training_run_id}:{step}:{suffix}"
+        for step in range(1, num_steps + 1)
+        for suffix in suffixes
+    ]
 
 
 def record_step_time_event(
@@ -134,7 +146,7 @@ def record_step_time_event(
 
     if step_event == "substep_start":
         step_times[step_window_start_key] = event_time
-    elif step_event == "substep_finish":
+    elif step_event == SUBSTEP_FINISH_EVENT:
         record_first_in_step_window(f"{training_run_id}:{current_step}:substep_finish")
     elif step_event in ("eval_begin", "eval_end"):
         substep = (
@@ -235,12 +247,6 @@ def aggregate_step_times(
         if start_time is not None and end_time is not None:
             duration = end_time - start_time
 
-        step_times[step_key] = {
-            "start": start_time,
-            "end": end_time,
-            "duration_s": duration,
-        }
-
         step_window_start = step_times_dict.get(
             f"{run_id}:{current_step_num}:substep_start"
         )
@@ -258,6 +264,19 @@ def aggregate_step_times(
                 full_step_end_time = step_end_time
         else:
             full_step_end_time = step_end_time
+
+        full_step_duration = None
+        if full_step_start_time is not None and full_step_end_time is not None:
+            full_step_duration = round(
+                max(full_step_end_time - full_step_start_time, 0.0), 3
+            )
+
+        step_times[step_key] = {
+            "start": start_time,
+            "end": end_time,
+            "duration_s": duration,
+            "full_step_duration_s": full_step_duration,
+        }
 
         substep_times[step_key] = {}
         eval_before = Substep.EVAL_BEFORE.value

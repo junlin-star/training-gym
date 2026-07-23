@@ -138,9 +138,19 @@ def test_training_interval_preserves_active_duration():
 
 def test_substep_finish_records_timing_and_triggers_reconciliation(monkeypatch):
     timing_events = []
+    timing_batches = []
     completed_step_statuses = []
     monkeypatch.delenv("TRAINING_GYM_ASYNC_MODE", raising=False)
-    monkeypatch.setattr(phase_reporting, "_enqueue_timing_event", timing_events.append)
+    monkeypatch.setattr(
+        phase_reporting,
+        "_buffer_training_timing_event",
+        timing_events.append,
+    )
+    monkeypatch.setattr(
+        phase_reporting,
+        "_enqueue_training_timing_event_batch",
+        timing_batches.append,
+    )
     monkeypatch.setattr(
         phase_reporting,
         "_enqueue_completed_step_status",
@@ -151,23 +161,62 @@ def test_substep_finish_records_timing_and_triggers_reconciliation(monkeypatch):
         "train_model", rollout_id=0, step_event="phase_start"
     )
     phase_reporting.report_step_event(
-        "weight_sync", rollout_id=0, step_event="substep_finish"
+        "weight_sync",
+        rollout_id=0,
+        step_event="substep_finish",
+        expected_training_roles=["rollout", "actor"],
     )
 
     assert [event["step_event"] for event in timing_events] == [
         "phase_start",
         "substep_finish",
     ]
+    assert [event["step_event"] for event in timing_batches] == ["substep_finish"]
+    assert timing_batches[0]["expected_training_roles"] == ["rollout", "actor"]
     assert [event["step_event"] for event in completed_step_statuses] == [
         "substep_finish"
     ]
     assert completed_step_statuses[0]["completed_step"] == 1
 
 
+def test_training_role_finish_closes_pending_train_model_timing(monkeypatch):
+    class Args:
+        rank = 0
+
+    class Optimizer:
+        def step(self):
+            return None
+
+        def zero_grad(self):
+            return None
+
+    events = []
+    args = Args()
+    optimizer = Optimizer()
+
+    def capture_event(status, _args, _rollout_id, step_event, **_kwargs):
+        events.append((status, step_event))
+
+    monkeypatch.setattr(phase_reporting, "report_step_event", capture_event)
+
+    phase_reporting.before_optimizer_hook(
+        args,
+        rollout_id=0,
+        step_id=0,
+        optimizer=optimizer,
+        training_role="actor",
+    )
+    phase_reporting.report_training_role_finished(args, 0, "actor")
+
+    assert events == [
+        (SlimeStatus.TRAIN_MODEL, "phase_start"),
+        (SlimeStatus.TRAIN_MODEL, "phase_finish"),
+        (SlimeStatus.TRAINING, "training_role_finish"),
+    ]
+
+
 def test_train_model_status_keeps_legacy_optimizer_phase(monkeypatch):
-    timing_events = []
     framework_statuses = []
-    monkeypatch.setattr(phase_reporting, "_enqueue_timing_event", timing_events.append)
     monkeypatch.setattr(phase_reporting, "_enqueue", framework_statuses.append)
 
     phase_reporting.report_phase(
@@ -177,7 +226,6 @@ def test_train_model_status_keeps_legacy_optimizer_phase(monkeypatch):
         progress_total=2,
     )
 
-    assert [event["phase"] for event in timing_events] == ["train_model"]
     assert [status["phase"] for status in framework_statuses] == [
         "optimizer_step",
         "train_model",
@@ -226,7 +274,12 @@ def test_substep_times_aggregation():
         OPTIONAL_SUBSTEPS,
     )
 
-    assert step_times[str(STEP)] == {"start": 2.0, "end": 18.0, "duration_s": 16.0}
+    assert step_times[str(STEP)] == {
+        "start": 2.0,
+        "end": 18.0,
+        "duration_s": 16.0,
+        "full_step_duration_s": 18.0,
+    }
 
     durations = {
         substep: entry["duration_s"]
@@ -268,6 +321,7 @@ def test_replayed_step_replaces_stale_substep_times():
         "start": 102,
         "end": 118,
         "duration_s": 16,
+        "full_step_duration_s": 18.0,
     }
     assert substep_times[str(STEP)] == {
         EVAL_BEFORE: {"start": 100.5, "duration_s": 1.5},
@@ -295,8 +349,17 @@ def test_fractional_events_preserve_integer_step_format():
         OPTIONAL_SUBSTEPS,
     )
 
-    assert step_times["1"] == {"start": 2, "end": 18, "duration_s": 16}
-    assert all(type(value) is int for value in step_times["1"].values())
+    assert step_times["1"] == {
+        "start": 2,
+        "end": 18,
+        "duration_s": 16,
+        "full_step_duration_s": 16.124,
+    }
+    assert all(
+        type(value) is int
+        for key, value in step_times["1"].items()
+        if key != "full_step_duration_s"
+    )
     assert substep_times["1"][ROLLOUT_LOGGING] == {
         "start": 2.875,
         "duration_s": 1.25,
@@ -455,7 +518,12 @@ def test_substep_times_clamped_to_window():
         OPTIONAL_SUBSTEPS,
     )
 
-    assert step_times[str(STEP)] == {"start": 1.0, "end": 20.0, "duration_s": 19.0}
+    assert step_times[str(STEP)] == {
+        "start": 1.0,
+        "end": 20.0,
+        "duration_s": 19.0,
+        "full_step_duration_s": 16.0,
+    }
 
     entries = substep_times[str(STEP)]
     assert entries[EVAL_BEFORE]["start"] == 0.5
@@ -483,9 +551,24 @@ def test_substep_times_multiple_steps():
         OPTIONAL_SUBSTEPS,
     )
 
-    assert step_times["1"] == {"start": 2.0, "end": 18.0, "duration_s": 16.0}
-    assert step_times["2"] == {"start": 102.0, "end": 118.0, "duration_s": 16.0}
-    assert step_times["3"] == {"start": None, "end": None, "duration_s": None}
+    assert step_times["1"] == {
+        "start": 2.0,
+        "end": 18.0,
+        "duration_s": 16.0,
+        "full_step_duration_s": 18.0,
+    }
+    assert step_times["2"] == {
+        "start": 102.0,
+        "end": 118.0,
+        "duration_s": 16.0,
+        "full_step_duration_s": 18.0,
+    }
+    assert step_times["3"] == {
+        "start": None,
+        "end": None,
+        "duration_s": None,
+        "full_step_duration_s": None,
+    }
 
     for step in ("1", "2"):
         durations = {

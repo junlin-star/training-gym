@@ -117,7 +117,7 @@
   let expandedRollout = $state(null);
   let expandedRolloutLoading = $state(false);
   const rolloutColumns = [
-    { key: "step", label: "Step", width: 160, minWidth: 96 },
+    { key: "rollout", label: "Rollout", width: 160, minWidth: 96 },
     { key: "mean", label: "Mean reward", width: 180, minWidth: 130 },
     { key: "samples", label: "Samples", width: 120, minWidth: 96 },
     { key: "when", label: "When", width: 160, minWidth: 110 },

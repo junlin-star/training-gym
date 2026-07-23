@@ -9,13 +9,24 @@ import os
 import time
 from collections.abc import Awaitable, Callable
 from enum import Enum
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Self
 
-from pydantic import BaseModel, PrivateAttr, computed_field, field_validator
+from pydantic import (
+    BaseModel,
+    PrivateAttr,
+    computed_field,
+    field_validator,
+    model_validator,
+)
 
 from modal_training_gym.common.framework import Framework
 from modal_training_gym.common.status import FrameworkStatus, resolve_framework_status
-from modal_training_gym.common.step_timing import SubstepTimes
+from modal_training_gym.common.step_timing import (
+    SUBSTEP_FINISH_EVENT,
+    SYNCHRONOUS_TRAINING_ROLES,
+    TRAINING_ROLE_FINISH_EVENT,
+    SubstepTimes,
+)
 from modal_training_gym.utils.metadata import (
     MetadataStore,
     vol_get,
@@ -97,6 +108,56 @@ class TrainingTimingEvent(BaseModel):
     display_name: str | None = None
 
 
+class TrainingTimingEventBatch(BaseModel):
+    """One completed role's timing boundaries for a rollout."""
+
+    training_run_id: str
+    training_attempt: int
+    training_role: str
+    rollout_id: int
+    expected_training_roles: list[str] | None = None
+    events: list[TrainingTimingEvent]
+
+    @model_validator(mode="after")
+    def _validate_event_context(self) -> Self:
+        if not self.events:
+            raise ValueError("Timing event batch must contain at least one event")
+        if self.training_role not in SYNCHRONOUS_TRAINING_ROLES:
+            raise ValueError(f"Unknown training role {self.training_role!r}")
+        if self.training_role == "driver":
+            expected_roles = self.expected_training_roles
+            if not expected_roles:
+                raise ValueError("Driver timing batch must declare expected roles")
+            unknown_roles = set(expected_roles) - set(SYNCHRONOUS_TRAINING_ROLES)
+            if unknown_roles:
+                raise ValueError(
+                    f"Driver timing batch has unknown roles {sorted(unknown_roles)!r}"
+                )
+        expected_context = (
+            self.training_run_id,
+            self.training_attempt,
+            self.training_role,
+            self.rollout_id,
+        )
+        for event in self.events:
+            event_context = (
+                event.training_run_id,
+                event.training_attempt,
+                event.training_role,
+                event.rollout_id,
+            )
+            if event_context != expected_context:
+                raise ValueError("Timing event does not match its batch context")
+        completion_event = (
+            SUBSTEP_FINISH_EVENT
+            if self.training_role == "driver"
+            else TRAINING_ROLE_FINISH_EVENT
+        )
+        if not any(event.step_event == completion_event for event in self.events):
+            raise ValueError(f"Timing event batch is missing {completion_event!r}")
+        return self
+
+
 class TrainingRunStatus(Enum):
     RUNNING = "running"
     STOPPED = "stopped"
@@ -121,7 +182,7 @@ class TrainingRun(BaseModel):
     completed_at: int | None = None
     updated_at: int = 0
     duration_seconds: int | None = None
-    step_times: dict[str, dict[str, int | None]] | None = None
+    step_times: dict[str, dict[str, int | float | None]] | None = None
     substep_times: SubstepTimes | None = None
     # Terminal failure message (Ray driver error / exception) for a failed run,
     # so the cause is queryable from the record and shown on the dashboard even

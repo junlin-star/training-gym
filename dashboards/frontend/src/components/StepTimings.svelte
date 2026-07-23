@@ -52,6 +52,11 @@
     return SUBSTEP_COLORS[name] || "var(--color-c-gray-40, #5e5e5e)";
   }
 
+  function labelWithRole(label, role) {
+    if (!role || role === "driver") return label;
+    return `${label} (${role[0].toUpperCase()}${role.slice(1)})`;
+  }
+
   // Durations are float seconds; keep up to 3 decimals (trailing zeros trimmed).
   function fmtSecs(s) {
     if (s == null) return "—";
@@ -95,30 +100,37 @@
               return {
                 key: `${name}-${role}-${interval?.training_rank ?? ""}-${interval?.step_id ?? ""}-${index}`,
                 name,
-                label: role && role !== "driver"
-                  ? `${label} (${role[0].toUpperCase()}${role.slice(1)})`
-                  : label,
+                label: labelWithRole(label, role),
                 start: interval?.start ?? null,
                 duration: interval?.duration_s ?? null,
               };
             });
         })
         .sort((a, b) => (a.start ?? 0) - (b.start ?? 0));
-      const details = Object.entries(subs).flatMap(([name, value]) => {
-        const intervals = Array.isArray(value?.intervals) ? value.intervals : [];
-        const detail = intervals.find((interval) => interval?.parent_phase);
-        if (!detail) return [];
-        return [{
-          key: name,
-          name,
-          label: detail.display_name || labelFor(name),
-          duration: value?.duration_s ?? null,
-        }];
-      });
+      const details = Object.entries(subs)
+        .flatMap(([name, value]) => {
+          const intervals = Array.isArray(value?.intervals) ? value.intervals : [];
+          return intervals
+            .filter((interval) => interval?.parent_phase)
+            .map((interval, index) => {
+              const role = interval?.training_role || "";
+              return {
+                key: `${name}-${role}-${interval?.training_rank ?? ""}-${interval?.step_id ?? ""}-${index}`,
+                name,
+                label: labelWithRole(
+                  interval?.display_name || labelFor(name),
+                  role,
+                ),
+                start: interval?.start ?? null,
+                duration: interval?.duration_s ?? null,
+              };
+            });
+        })
+        .sort((a, b) => (a.start ?? 0) - (b.start ?? 0));
       return {
         key: k,
         n: Number.isFinite(Number(k)) ? Number(k) : k,
-        duration: st?.duration_s ?? null,
+        duration: st?.full_step_duration_s ?? st?.duration_s ?? null,
         substeps,
         details,
       };
@@ -143,9 +155,9 @@
   let viewport = $state(null);
 
   function stepWeight(step) {
+    if (step.duration != null && step.duration > 0) return step.duration;
     const subTotal = step.substeps.reduce((acc, s) => acc + (s.duration ?? 0), 0);
     if (subTotal > 0) return subTotal;
-    if (step.duration != null && step.duration > 0) return step.duration;
     return 1;
   }
 

@@ -39,8 +39,9 @@ from starlette.requests import Request
 from modal_training_gym.common.advantage_distribution import AdvantageDistribution
 from modal_training_gym.common.run import (
     FrameworkStatusUpdate,
-    TrainingTimingEvent,
     TrainingRun,
+    TrainingRunStatus,
+    TrainingTimingEventBatch,
 )
 from modal_training_gym.common.run_summary import (
     JsonDict,
@@ -48,7 +49,6 @@ from modal_training_gym.common.run_summary import (
     build_run_summaries,
 )
 from modal_training_gym.common.step_timing import (
-    TRAINING_ROLE_FINISH_EVENT,
     SYNCHRONOUS_TRAINING_ROLES,
     StepTimes,
     SubstepTimes,
@@ -57,9 +57,8 @@ from modal_training_gym.common.step_timing import (
     merge_step_times,
     record_step_time_event,
     synchronous_timing_watermark,
-    training_role_finish_marker_key,
-    training_timing_event_index_key,
-    training_timing_event_key,
+    training_timing_attempt_closed_key,
+    training_timing_event_batch_key,
 )
 from modal_training_gym.common.training_rollout import TrainingRolloutResult
 from modal_training_gym.utils.metadata import _step_times_dict
@@ -86,18 +85,76 @@ def _read_synchronous_step_timing_events(
     training_timing_events = []
     for step in range(first_step, last_step + 1):
         rollout_id = step - 1
-        for role in SYNCHRONOUS_TRAINING_ROLES:
-            index_key = training_timing_event_index_key(
+        driver_batch = timing_event_store.get(
+            training_timing_event_batch_key(
                 training_run_id,
                 training_attempt,
-                role,
+                "driver",
                 rollout_id,
             )
-            for key in timing_event_store.get(index_key, []):
-                event = timing_event_store.get(key)
-                if isinstance(event, dict):
-                    training_timing_events.append(event)
+        )
+        expected_roles = (
+            driver_batch.get("expected_training_roles")
+            if isinstance(driver_batch, dict)
+            else None
+        )
+        if not isinstance(expected_roles, list) or not expected_roles:
+            raise RuntimeError(
+                f"Expected timing roles for step {step} are not available"
+            )
+
+        for role in dict.fromkeys(("driver", *expected_roles)):
+            if role not in SYNCHRONOUS_TRAINING_ROLES:
+                raise RuntimeError(
+                    f"Unknown timing role {role!r} declared for step {step}"
+                )
+            batch = (
+                driver_batch
+                if role == "driver"
+                else timing_event_store.get(
+                    training_timing_event_batch_key(
+                        training_run_id,
+                        training_attempt,
+                        role,
+                        rollout_id,
+                    )
+                )
+            )
+            if not isinstance(batch, dict):
+                raise RuntimeError(
+                    f"Timing events from {role} for step {step} are not available"
+                )
+            events = batch.get("events")
+            if not isinstance(events, list):
+                raise RuntimeError(
+                    f"Timing events from {role} for step {step} are invalid"
+                )
+            training_timing_events.extend(
+                event for event in events if isinstance(event, dict)
+            )
     return training_timing_events
+
+
+def _record_training_timing_event_batch(batch: TrainingTimingEventBatch) -> bool:
+    timing_event_store = _step_times_dict()
+    closed_key = training_timing_attempt_closed_key(
+        batch.training_run_id,
+        batch.training_attempt,
+    )
+    if timing_event_store.get(closed_key):
+        return False
+
+    batch_key = training_timing_event_batch_key(
+        batch.training_run_id,
+        batch.training_attempt,
+        batch.training_role,
+        batch.rollout_id,
+    )
+    timing_event_store[batch_key] = batch.model_dump()
+    if timing_event_store.get(closed_key):
+        timing_event_store.pop(batch_key, None)
+        return False
+    return True
 
 
 def _aggregate_completed_synchronous_step_timings(
@@ -135,34 +192,6 @@ def _aggregate_completed_synchronous_step_timings(
     return step_times, substep_times, persisted_through_step
 
 
-def _record_training_timing_event(event: TrainingTimingEvent) -> None:
-    timing_event_store = _step_times_dict()
-    event_data = event.model_dump()
-    event_key = training_timing_event_key(event_data)
-    timing_event_store[event_key] = event_data
-    event_index_key = training_timing_event_index_key(
-        event.training_run_id,
-        event.training_attempt,
-        event.training_role,
-        event.rollout_id,
-    )
-    stored_event_keys = timing_event_store.get(event_index_key)
-    indexed_event_keys = (
-        list(stored_event_keys) if isinstance(stored_event_keys, list) else []
-    )
-    if event_key not in indexed_event_keys:
-        indexed_event_keys.append(event_key)
-        timing_event_store[event_index_key] = indexed_event_keys
-    if event.step_event == TRAINING_ROLE_FINISH_EVENT:
-        marker_key = training_role_finish_marker_key(
-            event.training_run_id,
-            event.training_attempt,
-            event.rollout_id,
-            event.training_role,
-        )
-        timing_event_store[marker_key] = event_key
-
-
 def _record_legacy_framework_status_timing(
     update: FrameworkStatusUpdate,
     phase: str,
@@ -178,28 +207,6 @@ def _record_legacy_framework_status_timing(
         update.step_event,
         update.event_ts if update.event_ts is not None else time.time(),
     )
-
-
-def _missing_finished_training_roles(
-    training_run_id: str,
-    training_attempt: int,
-    rollout_id: int,
-    expected_training_roles: Iterable[str],
-) -> list[str]:
-    timing_event_store = _step_times_dict()
-    return [
-        role
-        for role in expected_training_roles
-        if timing_event_store.get(
-            training_role_finish_marker_key(
-                training_run_id,
-                training_attempt,
-                rollout_id,
-                role,
-            )
-        )
-        is None
-    ]
 
 
 def _rollout_summary_sort_key(rollout: object) -> tuple[int, int]:
@@ -1030,24 +1037,7 @@ def fastapi_app():
                     status_code=400,
                     detail="Completed step must be greater than zero",
                 )
-            rollout_id = (
-                update.rollout_id
-                if update.rollout_id is not None
-                else completed_step - 1
-            )
             try:
-                missing_training_roles = await run_in_threadpool(
-                    _missing_finished_training_roles,
-                    update.training_run_id,
-                    current_attempt,
-                    rollout_id,
-                    update.expected_training_roles or (),
-                )
-                if missing_training_roles:
-                    raise RuntimeError(
-                        "Waiting for timing events from "
-                        + ", ".join(missing_training_roles)
-                    )
                 (
                     step_times,
                     substep_times,
@@ -1116,12 +1106,29 @@ def fastapi_app():
         return JSONResponse({"status": "ok", "framework_status": status.value})
 
     @web.post("/api/timing-events")
-    async def record_training_timing_event(
-        event: TrainingTimingEvent,
+    async def record_training_timing_events(
+        batch: TrainingTimingEventBatch,
         authorization: str | None = Header(default=None),
     ):
-        await _require_framework_status_token(event.training_run_id, authorization)
-        await run_in_threadpool(_record_training_timing_event, event)
+        await _require_framework_status_token(batch.training_run_id, authorization)
+        run = await _get_run_or_404(batch.training_run_id)
+        current_attempt = int((run.metadata or {}).get("attempt_count") or 1)
+        if batch.training_attempt < current_attempt:
+            return JSONResponse({"status": "ignored", "reason": "stale_attempt"})
+        if batch.training_attempt > current_attempt:
+            raise HTTPException(
+                status_code=503,
+                detail="Training attempt is not visible yet",
+            )
+        if run.status != TrainingRunStatus.RUNNING:
+            return JSONResponse({"status": "ignored", "reason": "terminal_attempt"})
+
+        recorded = await run_in_threadpool(
+            _record_training_timing_event_batch,
+            batch,
+        )
+        if not recorded:
+            return JSONResponse({"status": "ignored", "reason": "closed_attempt"})
         return JSONResponse({"status": "ok"})
 
     # ── Training rollouts ────────────────────────────────────────────────

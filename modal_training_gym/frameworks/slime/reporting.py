@@ -15,7 +15,7 @@ import threading
 import time
 from queue import Full, Queue
 from typing import Any
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 PHASE_REPORT_URL_ENV = "SLIME_PHASE_REPORT_URL"
@@ -25,16 +25,21 @@ PHASE_REPORT_TOKEN_ENV = "SLIME_PHASE_REPORT_TOKEN"
 _REPORT_QUEUE: "Queue[dict[str, Any] | threading.Event]" = Queue(maxsize=512)
 _REPORTER_STARTED = False
 _REPORTER_LOCK = threading.Lock()
+_TRAINING_TIMING_EVENT_BUFFERS: dict[
+    tuple[str, int, str, int], list[dict[str, Any]]
+] = {}
+_TRAINING_TIMING_EVENT_BUFFER_LOCK = threading.Lock()
+_TRAINING_TIMING_DELIVERY_DISABLED = False
 _PHASE_PATH = "/api/framework-status"
 _TRAINING_TIMING_EVENT_PATH = "/api/timing-events"
 _ROLLOUT_PATH = "/api/training-rollouts"
 _ADVANTAGE_PATH = "/api/advantage-distributions"
 _PHASE_TIMEOUT_SECONDS = 1.0
-_TIMING_EVENT_TIMEOUT_SECONDS = 2.0
+_TIMING_BATCH_TIMEOUT_SECONDS = 2.0
 _COMPLETED_STEP_TIMEOUT_SECONDS = 5.0
 _ROLLOUT_TIMEOUT_SECONDS = 10.0
-_TRAINING_TIMING_EVENT_DELIVERY_ATTEMPTS = 3
-_TRAINING_TIMING_EVENT_RETRY_DELAY_SECONDS = 0.1
+_TRAINING_TIMING_BATCH_DELIVERY_ATTEMPTS = 10
+_TRAINING_TIMING_BATCH_RETRY_DELAY_SECONDS = 0.1
 _COMPLETED_STEP_DELIVERY_ATTEMPTS = 10
 _COMPLETED_STEP_RETRY_DELAY_SECONDS = 0.1
 _REPORT_FLUSH_TIMEOUT_SECONDS = 30.0
@@ -168,26 +173,69 @@ def _enqueue(payload: dict[str, Any]) -> None:
         pass
 
 
-def _enqueue_timing_event(payload: dict[str, Any]) -> None:
+def _training_timing_event_buffer_key(
+    payload: dict[str, Any],
+) -> tuple[str, int, str, int] | None:
+    try:
+        training_run_id = str(payload["training_run_id"])
+        training_attempt = int(payload["training_attempt"])
+        training_role = str(payload.get("training_role") or "driver")
+        rollout_id = int(payload["rollout_id"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if not training_run_id or training_attempt <= 0 or rollout_id < 0:
+        return None
+    return training_run_id, training_attempt, training_role, rollout_id
+
+
+def _buffer_training_timing_event(payload: dict[str, Any]) -> None:
+    """Buffer one synchronous timing boundary until its role finishes the step."""
     if os.environ.get("TRAINING_GYM_ASYNC_MODE") == "1":
         return
-    if payload.get("training_attempt") is None:
+    buffer_key = _training_timing_event_buffer_key(payload)
+    if buffer_key is None:
+        return
+    with _TRAINING_TIMING_EVENT_BUFFER_LOCK:
+        if _TRAINING_TIMING_DELIVERY_DISABLED:
+            return
+        _TRAINING_TIMING_EVENT_BUFFERS.setdefault(buffer_key, []).append(dict(payload))
+
+
+def _enqueue_training_timing_event_batch(payload: dict[str, Any]) -> None:
+    """Queue the completed role's buffered timing boundaries as one batch."""
+    buffer_key = _training_timing_event_buffer_key(payload)
+    if buffer_key is None:
+        return
+    with _TRAINING_TIMING_EVENT_BUFFER_LOCK:
+        if _TRAINING_TIMING_DELIVERY_DISABLED:
+            _TRAINING_TIMING_EVENT_BUFFERS.pop(buffer_key, None)
+            return
+        events = _TRAINING_TIMING_EVENT_BUFFERS.pop(buffer_key, None)
+    if not events:
         return
     url = _training_timing_event_url()
     if not url:
         return
+    training_run_id, training_attempt, training_role, rollout_id = buffer_key
+    batch: dict[str, Any] = {
+        "_url": url,
+        "_timeout": _TIMING_BATCH_TIMEOUT_SECONDS,
+        "_delivery_attempts": _TRAINING_TIMING_BATCH_DELIVERY_ATTEMPTS,
+        "_delivery_retry_delay": _TRAINING_TIMING_BATCH_RETRY_DELAY_SECONDS,
+        "_is_training_timing_batch": True,
+        "_failure_message": "Failed to deliver training timing event batch",
+        "training_run_id": training_run_id,
+        "training_attempt": training_attempt,
+        "training_role": training_role,
+        "rollout_id": rollout_id,
+        "events": events,
+    }
+    expected_training_roles = payload.get("expected_training_roles")
+    if isinstance(expected_training_roles, list):
+        batch["expected_training_roles"] = expected_training_roles
     try:
         _ensure_worker()
-        _REPORT_QUEUE.put_nowait(
-            {
-                "_url": url,
-                "_timeout": _TIMING_EVENT_TIMEOUT_SECONDS,
-                "_delivery_attempts": _TRAINING_TIMING_EVENT_DELIVERY_ATTEMPTS,
-                "_delivery_retry_delay": _TRAINING_TIMING_EVENT_RETRY_DELAY_SECONDS,
-                "_failure_message": "Failed to deliver training timing event",
-                **payload,
-            }
-        )
+        _REPORT_QUEUE.put_nowait(batch)
     except Full:
         print("Reporting queue is full; training timing data will be incomplete")
     except Exception as exc:
@@ -269,11 +317,15 @@ def _worker() -> None:
         delivery_attempts = int(payload.pop("_delivery_attempts", 1))
         retry_delay = float(payload.pop("_delivery_retry_delay", 0.0))
         failure_message = payload.pop("_failure_message", "")
+        is_training_timing_batch = bool(payload.pop("_is_training_timing_batch", False))
         try:
+            if is_training_timing_batch and _training_timing_delivery_disabled():
+                continue
             succeeded = _post_with_retries(
                 payload,
                 attempts=delivery_attempts,
                 retry_delay_seconds=retry_delay,
+                disable_timing_on_unsupported=is_training_timing_batch,
             )
             if failure_message and not succeeded:
                 print(f"{failure_message} after {delivery_attempts} attempts")
@@ -282,23 +334,43 @@ def _worker() -> None:
 
 
 def _post_with_retries(
-    item: dict[str, Any], *, attempts: int, retry_delay_seconds: float
+    item: dict[str, Any],
+    *,
+    attempts: int,
+    retry_delay_seconds: float,
+    disable_timing_on_unsupported: bool = False,
 ) -> bool:
     for attempt in range(1, attempts + 1):
-        if _post(dict(item)):
+        succeeded, status_code = _post(dict(item))
+        if succeeded:
+            return True
+        if disable_timing_on_unsupported and status_code in {404, 405}:
+            _disable_training_timing_delivery()
             return True
         if attempt < attempts:
             time.sleep(retry_delay_seconds * attempt)
     return False
 
 
-def _post(item: dict[str, Any]) -> bool:
+def _training_timing_delivery_disabled() -> bool:
+    with _TRAINING_TIMING_EVENT_BUFFER_LOCK:
+        return _TRAINING_TIMING_DELIVERY_DISABLED
+
+
+def _disable_training_timing_delivery() -> None:
+    global _TRAINING_TIMING_DELIVERY_DISABLED
+    with _TRAINING_TIMING_EVENT_BUFFER_LOCK:
+        _TRAINING_TIMING_DELIVERY_DISABLED = True
+        _TRAINING_TIMING_EVENT_BUFFERS.clear()
+
+
+def _post(item: dict[str, Any]) -> tuple[bool, int | None]:
     url = item.pop("_url", "")
     timeout = float(
         item.pop("_timeout", _PHASE_TIMEOUT_SECONDS) or _PHASE_TIMEOUT_SECONDS
     )
     if not url:
-        return False
+        return False, None
 
     body = json.dumps(item, default=str).encode("utf-8")
     headers = {"Content-Type": "application/json"}
@@ -314,6 +386,8 @@ def _post(item: dict[str, Any]) -> bool:
     try:
         with urlopen(request, timeout=timeout) as response:
             response.read()
-        return True
+        return True, None
+    except HTTPError as exc:
+        return False, exc.code
     except (OSError, URLError):
-        return False
+        return False, None

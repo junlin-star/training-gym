@@ -2,17 +2,81 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
+from collections.abc import Mapping
+from typing import Any
 
 from modal_training_gym.common.run import TrainingRun, TrainingRunStatus
+from modal_training_gym.common.step_timing import (
+    legacy_step_time_keys,
+    training_timing_attempt_closed_key,
+    training_timing_event_batch_keys,
+)
 from modal_training_gym.utils.metadata import (
     MetadataStore,
+    _step_times_dict,
     vol_get_summary_items,
     vol_put_summary_items,
     vol_remove,
 )
 
 TERMINAL_STATUSES = frozenset({TrainingRunStatus.FAILED, TrainingRunStatus.CANCELLED})
+TIMING_CLEANUP_BATCH_SIZE = 128
+
+
+def _training_timing_cleanup_keys(run: TrainingRun) -> list[str | tuple[Any, ...]]:
+    config = run.config if isinstance(run.config, Mapping) else {}
+    recipe = config.get("recipe")
+    try:
+        num_steps = (
+            int(recipe.get("num_rollout") or 0) if isinstance(recipe, Mapping) else 0
+        )
+    except (TypeError, ValueError):
+        num_steps = 0
+    try:
+        training_attempts = int((run.metadata or {}).get("attempt_count") or 1)
+    except (TypeError, ValueError):
+        training_attempts = 1
+
+    keys: list[str | tuple[Any, ...]] = []
+    for training_attempt in range(1, max(training_attempts, 1) + 1):
+        keys.append(
+            training_timing_attempt_closed_key(
+                run.training_run_id,
+                training_attempt,
+            )
+        )
+        if num_steps > 0:
+            keys.extend(
+                training_timing_event_batch_keys(
+                    run.training_run_id,
+                    training_attempt,
+                    num_steps,
+                )
+            )
+    if num_steps > 0:
+        keys.extend(legacy_step_time_keys(run.training_run_id, num_steps))
+    return keys
+
+
+async def _clear_step_times(keys: list[str | tuple[Any, ...]]) -> int:
+    timing_event_store = _step_times_dict()
+    deleted = 0
+    for offset in range(0, len(keys), TIMING_CLEANUP_BATCH_SIZE):
+        batch = keys[offset : offset + TIMING_CLEANUP_BATCH_SIZE]
+        values = await asyncio.gather(
+            *(timing_event_store.pop.aio(key, None) for key in batch)
+        )
+        deleted += sum(value is not None for value in values)
+    return deleted
+
+
+async def _clear_run_step_times(runs: list[TrainingRun]) -> int:
+    deleted = 0
+    for run in runs:
+        deleted += await _clear_step_times(_training_timing_cleanup_keys(run))
+    return deleted
 
 
 def cleanup(*, older_than_days: int = 7, dry_run: bool = False) -> None:
@@ -60,6 +124,12 @@ def cleanup(*, older_than_days: int = 7, dry_run: bool = False) -> None:
     deleted_rollouts = 0
     deleted_tokens = 0
 
+    try:
+        deleted_timing_entries = asyncio.run(_clear_run_step_times(targets))
+    except Exception as exc:
+        print(f"Failed to clear step times; no run metadata was removed: {exc}")
+        return
+
     for r in targets:
         rid = r.training_run_id
         if vol_remove(MetadataStore.TRAINING_RUNS, rid):
@@ -94,5 +164,6 @@ def cleanup(*, older_than_days: int = 7, dry_run: bool = False) -> None:
 
     print(
         f"\nDone: {deleted_runs} run(s), {deleted_rollouts} rollout(s), "
-        f"{deleted_tokens} token(s) removed."
+        f"{deleted_tokens} token(s), and {deleted_timing_entries} timing "
+        "entries removed."
     )
