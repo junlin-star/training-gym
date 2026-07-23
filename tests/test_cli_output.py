@@ -20,21 +20,12 @@ def test_console_adapts_to_terminal_width(monkeypatch):
     assert output._console().width == 180
 
 
-def test_print_error_uses_stderr(monkeypatch, capsys):
-    monkeypatch.setenv("TRAINING_GYM_RICH_CLI", "0")
-
+def test_print_error_uses_stderr(capsys):
     output.print_error("problem")
 
     captured = capsys.readouterr()
     assert captured.out == ""
     assert captured.err == "problem\n"
-
-
-def test_use_rich_output_honors_override(monkeypatch):
-    monkeypatch.setenv("TRAINING_GYM_RICH_CLI", "1")
-    assert output.use_rich_output() is True
-    monkeypatch.setenv("TRAINING_GYM_RICH_CLI", "0")
-    assert output.use_rich_output() is False
 
 
 def test_json_option_uses_non_shadowing_parameter_name():
