@@ -9,18 +9,6 @@ from enum import Enum
 from functools import partial
 from typing import Any
 
-try:
-    from modal.exception import InvalidError, NotFoundError
-except ModuleNotFoundError:
-    # The `modal` client isn't installed in the slime training image, which only
-    # copies in the `modal_training_gym` source. Keeping this import safe lets the
-    # package's import chain load there (e.g. the phase-reporting rollout hook)
-    # without the client; volume helpers that actually need `modal` import it lazily.
-    class InvalidError(Exception): ...
-
-    class NotFoundError(Exception): ...
-
-
 METADATA_VOLUME_NAME = "training-gym-metadata"
 STEP_TIMES_DICT_NAME = "training-gym-step-times"
 
@@ -167,6 +155,8 @@ def _store_path(store: MetadataStore | str) -> str:
 
 def vol_remove(store: MetadataStore | str, key: str) -> bool:
     """Delete a single item from a store. Returns True if removed."""
+    from modal.exception import InvalidError, NotFoundError
+
     vol = _metadata_volume()
     path = f"{_store_path(store)}/{key}.json"
     try:
@@ -238,6 +228,8 @@ def vol_get(
 def vol_list(
     store: MetadataStore | str, *, is_async: bool = False
 ) -> list[dict[str, Any]] | Awaitable[list[dict[str, Any]]]:
+    from modal.exception import NotFoundError
+
     vol = _metadata_volume()
     if is_async:
 
@@ -284,6 +276,8 @@ def vol_list_prefix(store: MetadataStore | str, prefix: str) -> list[dict[str, A
     matching files. Used to gather the per-DP-rank shards of one
     ``(run, rollout)`` without reading the whole store.
     """
+    from modal.exception import NotFoundError
+
     vol = _metadata_volume()
     _safe_reload(vol)
     results: list[dict[str, Any]] = []
@@ -307,6 +301,8 @@ def vol_count_items(store: MetadataStore | str) -> int:
     (summary item count < canonical file count) before paying for a full
     rebuild via ``vol_list``.
     """
+    from modal.exception import NotFoundError
+
     vol = _metadata_volume()
     _safe_reload(vol)
     try:
