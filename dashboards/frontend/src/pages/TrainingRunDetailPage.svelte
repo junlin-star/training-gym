@@ -952,6 +952,36 @@
     })),
   );
 
+  // Custom reward-function tags: any numeric sample.metadata key a reward fn
+  // sets (e.g. sample.metadata["step_K"] = k) gets aggregated per rollout on
+  // the backend (TrainingRolloutResult.tag_stats) and charted here the same
+  // way as the reward line above — one chart per discovered tag name.
+  let customTagNames = $derived(
+    Array.from(
+      new Set(rolloutSummaries.flatMap((r) => Object.keys(r.tag_stats || {}))),
+    ).sort(),
+  );
+
+  $inspect(rolloutSummaries, customTagNames).with(console.trace);
+
+  function tagChartData(tag) {
+    return rolloutSummaries
+      .filter((r) => r.tag_stats?.[tag])
+      .map((r) => ({
+        x: Number(r.rollout_id) || 0,
+        y: Number(r.tag_stats[tag].mean) || 0,
+        rollout_id: Number(r.rollout_id) || 0,
+      }));
+  }
+
+  function tagChartStats(tag) {
+    const values = rolloutSummaries
+      .filter((r) => r.tag_stats?.[tag])
+      .map((r) => Number(r.tag_stats[tag].mean) || 0);
+    if (!values.length) return null;
+    return { min: Math.min(...values), max: Math.max(...values), latest: values[values.length - 1] };
+  }
+
   // Score-distribution comparison: the first rollout (step 0) vs the most
   // recent one, to see how sample scores shifted over training.
   let firstRolloutId = $derived(
@@ -1278,6 +1308,29 @@
                 </div>
               </div>
             {/if}
+
+            {#if customTagNames.length}
+              <div class="chart-grid">
+                {#each customTagNames as tag (tag)}
+                  <div class="rollout-chart">
+                    <LineChart
+                      title={`${tag} (mean)`}
+                      data={tagChartData(tag)}
+                      formatX={(row) => `rollout ${row.rollout_id}`}
+                      formatY={(value) => formatMean(value)}
+                      ariaLabel={`${tag} chart`}
+                    />
+                    {#if tagChartStats(tag)}
+                      <div class="flex gap-[16px] mt-[6px] text-[11px] text-(--muted) [font-variant-numeric:tabular-nums]">
+                        <span>min {formatMean(tagChartStats(tag).min)}</span>
+                        <span>latest {formatMean(tagChartStats(tag).latest)}</span>
+                        <span>max {formatMean(tagChartStats(tag).max)}</span>
+                      </div>
+                    {/if}
+                  </div>
+                {/each}
+              </div>
+            {/if}
           {/if}
         </div>
         <aside class="summary-tab-side">
@@ -1517,6 +1570,35 @@
                             <div class="rollout-sample-label">failure reason</div>
                             <pre class="rollout-sample-text">{activeSample.sample.metadata.eval_detail}</pre>
                           {/if}
+                          <!-- Catch-all: any other tag a custom reward/rollout function set on
+                               sample.metadata (e.g. sample.metadata["guessing"] = {...}) that
+                               isn't one of the known keys rendered explicitly above. -->
+                          {#each Object.entries(activeSample.sample.metadata ?? {}).filter(
+                            ([key]) =>
+                              ![
+                                "inference",
+                                "_metadata_type",
+                                "audio",
+                                "image",
+                                "trajectory_messages",
+                                "eval_report",
+                                "reference",
+                                "metrics",
+                                "exit_status",
+                                "eval_detail",
+                                "response_length",
+                                "prompt_length",
+                                "rollout_id",
+                                "rollout_idx",
+                              ].includes(key),
+                          ) as [name, value] (name)}
+                            <div class="rollout-sample-label">{name}</div>
+                            {#if value !== null && typeof value === "object"}
+                              <pre class="rollout-sample-text">{JSON.stringify(value, null, 2)}</pre>
+                            {:else}
+                              <span class="rollout-sample-metric">{String(value)}</span>
+                            {/if}
+                          {/each}
                           {#if activeSample.sample.trace?.length}
                             <div class="rollout-sample-label">trajectory timeline</div>
                             <SampleTimeline trace={activeSample.sample.trace} />

@@ -49,6 +49,28 @@ _TRAJECTORY_MSG_CHARS_MAX = 8000
 _TRAJECTORY_MAX_MESSAGES = 128
 
 
+# Keys handled separately below (compacted/size-limited their own way) —
+# never copy them through the generic passthrough too, or they'd end up
+# duplicated under the same name with two different shapes.
+_RESERVED_METADATA_KEYS = frozenset({"trajectory_messages", "eval_report"})
+# Per-tag cap on the generic metadata passthrough so a stray large value a
+# reward function stashes on the sample can't bloat the rollout payload.
+_MAX_TAG_VALUE_BYTES = 2048
+
+
+def _is_small_json_value(value: Any, max_bytes: int = _MAX_TAG_VALUE_BYTES) -> bool:
+    """Best-effort check that ``value`` is JSON-serializable and small.
+
+    Reward/rollout functions can stash arbitrary tags on ``sample.metadata``;
+    this keeps the passthrough safe (skip non-serializable values) and
+    bounded (skip oversized ones) without requiring callers to sanitize.
+    """
+    try:
+        return len(json.dumps(value)) <= max_bytes
+    except (TypeError, ValueError):
+        return False
+
+
 def _resolve_hook(path: str | None) -> Any:
     if not path:
         return None
@@ -497,21 +519,18 @@ def _sample_to_dict(
     if inference := _extract_inference_metadata(sample):
         metadata["inference"] = inference
 
-    # Pull display-relevant fields from the sample's own metadata dict so the
-    # dashboard can render exit status, eval checks, etc. without needing the
-    # (potentially huge) full trajectory_messages blob.
+    # Pull the sample's own metadata dict through to the dashboard so it can
+    # render exit status, eval checks, custom reward-function tags, etc.
+    # Reserved keys are handled separately below (their own compaction), and
+    # oversized/non-serializable values are dropped rather than bloating the
+    # rollout payload.
     sample_meta = get("metadata") if attrs is not None else get("metadata", None)
     if isinstance(sample_meta, dict):
-        for key in (
-            "exit_status",
-            "eval_detail",
-            "training_response_source",
-            "training_assistant_turns",
-            _SHAPED_REWARD_KEY,
-            "task_passed",
-        ):
-            if key in sample_meta and sample_meta[key] is not None:
-                metadata[key] = sample_meta[key]
+        for key, value in sample_meta.items():
+            if key in _RESERVED_METADATA_KEYS or value is None:
+                continue
+            if _is_small_json_value(value):
+                metadata[key] = value
         # Multi-turn trajectory (capped to the first N samples): lets the
         # dashboard's ConversationView render the full agent conversation.
         # Without it, multi-turn rollouts collapse to a single flat block.
