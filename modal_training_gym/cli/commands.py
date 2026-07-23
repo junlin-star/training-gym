@@ -15,8 +15,6 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from .output import use_rich_output
-
 
 _HEADING_STYLE = "bold bright_green"
 _COMMAND_NAME_STYLE = ""
@@ -31,7 +29,7 @@ _HELP_PADDING = 1
 
 def use_rich_style() -> bool:
     """Whether help and errors should be rendered in Rich style."""
-    return use_rich_output()
+    return sys.stdout.isatty()
 
 
 def _make_help_console() -> Console:
@@ -169,10 +167,6 @@ def _build_command_table(
     return table
 
 
-def _available_width(console: Console) -> int:
-    return min(_MAX_HELP_WIDTH, console.width) - _HELP_PADDING * 2
-
-
 def _emit(
     console: Console,
     sections: list[RenderableType | None],
@@ -270,7 +264,10 @@ class _TrainingGymGroup(click.Group):
                 _build_usage(self, ctx),
                 _build_help_text(self),
                 _build_options(self, ctx),
-                _build_commands(self, _available_width(console)),
+                _build_commands(
+                    self,
+                    min(_MAX_HELP_WIDTH, console.width) - _HELP_PADDING * 2,
+                ),
                 _build_epilog(self),
             ],
             formatter,

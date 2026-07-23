@@ -13,7 +13,6 @@ CommandFunction = TypeVar("CommandFunction", bound=Callable[..., Any])
 
 
 def json_option(function: CommandFunction) -> CommandFunction:
-    """Add the standard machine-readable JSON output flag."""
     return click.option(
         "-j",
         "--json",
@@ -25,7 +24,6 @@ def json_option(function: CommandFunction) -> CommandFunction:
 
 
 def yes_option(function: CommandFunction) -> CommandFunction:
-    """Add the standard non-interactive confirmation flag."""
     return click.option(
         "-y",
         "--yes",
