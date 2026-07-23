@@ -77,9 +77,7 @@ def test_sends_basic_auth_when_password_exists(monkeypatch, mock_transport):
     assert requests[0].headers["authorization"] == f"Basic {expected}"
 
 
-def test_does_not_forward_basic_auth_to_redirected_host(
-    monkeypatch, mock_transport
-):
+def test_does_not_forward_basic_auth_to_redirected_host(monkeypatch, mock_transport):
     monkeypatch.setenv("TRAINING_GYM_DASHBOARD_PASSWORD", "secret")
     requests = []
 
