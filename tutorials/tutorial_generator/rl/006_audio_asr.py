@@ -343,6 +343,7 @@ def _eval():
     deployment = DeploymentConfig(
         model=Qwen3_ASR_1_7B(),
         checkpoint=checkpoint,
+        unauthenticated=True,
     ).serve()
     print(f"Serving trained model at {deployment.url}")
 

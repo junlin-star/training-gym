@@ -33,6 +33,7 @@ def build_sglang_serve_app(
     checkpoints_volume: "Volume | str | None" = None,
     checkpoints_mount_path: str | None = None,
     deployment_id: str | None = None,
+    unauthenticated: bool = True,
 ) -> "App":
     import modal
     from modal import App, Image, Volume
@@ -117,6 +118,7 @@ def build_sglang_serve_app(
         exit_grace_period=25,
         routing_region="us-east",
         target_concurrency=8,
+        unauthenticated=unauthenticated,
     )
     class SGLangEndpoint:
         @modal.enter()

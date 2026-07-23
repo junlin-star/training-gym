@@ -162,12 +162,15 @@ def _main_impl() -> None:
     #
     # Let's start by initializing a `DeploymentConfig`.
     #
-    # Calling `DeploymentConfig.serve()` builds and deploys a vLLM app, then
-    # returns a `ModelDeployment` that contains a the concrete endpoint URL.
+    # Calling `DeploymentConfig.serve()` builds and deploys an SGLang app, then
+    # returns a `ModelDeployment` with the endpoint URL. Pass
+    # `unauthenticated=True` so the endpoint is reachable without Modal
+    # proxy-auth tokens.
 
     base_model = Qwen3_4B()
     base_model_deployment = DeploymentConfig(
         model=base_model,
+        unauthenticated=True,
     ).serve()
     print(f"Base model deployed to {base_model_deployment.url}")
 
@@ -235,6 +238,7 @@ def _main_impl() -> None:
         checkpoint=checkpoint,
         app_name="qwen3-4b-haiku-serve",
         served_model_name="qwen3-4b-haiku",
+        unauthenticated=True,
     ).serve()
     print(f"Trained model deployed to {trained_model_deployment.url}")
 
@@ -297,6 +301,7 @@ def _main_impl() -> None:
         checkpoint=new_checkpoint,
         app_name="qwen3-4b-haiku-serve-new",
         served_model_name="qwen3-4b-haiku",
+        unauthenticated=True,
     ).serve()
     print(f"Newly trained model deployed to {new_model_deployment.url}")
 

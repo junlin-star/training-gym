@@ -300,7 +300,10 @@ def _main_impl() -> None:
     eval_dataset = ScreenSpotDataset(n_rows=200, row_offset=800)
 
     base_model = Qwen3_VL_8B()
-    base_deployment = DeploymentConfig(model=base_model).serve()
+    base_deployment = DeploymentConfig(
+        model=base_model,
+        unauthenticated=True,
+    ).serve()
     print(f"Base model URL: {base_deployment.url}")
 
     eval_config = EvalConfig(dataset=eval_dataset, eval_fn=grounding_eval_fn)
@@ -364,6 +367,7 @@ def _main_impl() -> None:
         checkpoint=checkpoint,
         app_name="qwen3-vl-8b-grounding-serve",
         served_model_name="qwen3-vl-8b-grounding",
+        unauthenticated=True,
     ).serve()
     print(f"Trained model URL: {trained_deployment.url}")
 

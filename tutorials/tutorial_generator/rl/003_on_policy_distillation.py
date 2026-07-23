@@ -131,6 +131,7 @@ def _deploy_teacher():
         recipe=SglangRecipe(gpu="H100"),
         app_name="opd-teacher-qwen3-8b",
         served_model_name="qwen3-8b-teacher",
+        unauthenticated=True,
     ).serve()
     print(f"Teacher URL: {teacher_deployment.url}")
 
@@ -272,7 +273,10 @@ def _eval_base_intro():
 @code
 def _eval_base():
     base_model = Qwen3_4B()
-    base_deployment = DeploymentConfig(model=base_model).serve()
+    base_deployment = DeploymentConfig(
+        model=base_model,
+        unauthenticated=True,
+    ).serve()
     print(f"Student URL: {base_deployment.url}")
 
     eval_config = EvalConfig(dataset=eval_dataset, eval_fn=math_eval_fn)
@@ -445,6 +449,7 @@ def _eval_trained():
         checkpoint=checkpoint,
         app_name="qwen3-4b-opd-trained-serve",
         served_model_name="qwen3-4b-opd",
+        unauthenticated=True,
     ).serve()
     print(f"Trained student URL: {trained_deployment.url}")
 
