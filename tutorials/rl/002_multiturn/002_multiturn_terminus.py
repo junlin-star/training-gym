@@ -764,11 +764,12 @@ def train(
             max_tokens_per_gpu=32768,
             global_batch_size=512,
             lr=5e-7,
-            over_sampling_batch_size=64,
-            dynamic_sampling_filter_path=(
-                "slime.rollout.filter_hub.dynamic_sampling_filters."
-                "check_reward_nonzero_std"
-            ),
+            # Increases rollout time by ~3x (15m->55m)
+            # over_sampling_batch_size=64, 
+            # dynamic_sampling_filter_path=(
+                #"slime.rollout.filter_hub.dynamic_sampling_filters."
+                #"check_reward_nonzero_std"
+            #),
             use_kl_loss=False,
             save_interval=5,
             no_save_optim=False,
@@ -803,7 +804,7 @@ def _add_benchmark_arg(p: argparse.ArgumentParser) -> None:
     p.add_argument(
         "--benchmark",
         choices=tuple(BENCHMARKS),
-        default="terminalbench",
+        default="swebench",
         help=(
             "Harbor benchmark to train and evaluate on. 'swebench' selects "
             "SWE-bench Verified (default: %(default)s)"
