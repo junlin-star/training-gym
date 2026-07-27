@@ -5,13 +5,16 @@ description = "Reusable building blocks for Modal multi-node training examples"
 requires-python = ">=3.12"
 dependencies = [
     "modal==1.5.2",
+    "click>=8.2,<9",
     "cloudpickle",
     "datasets",
+    "httpx",
     "msgspec",
     "openai",
     "pydantic",
     "fastapi",
     "randomname",
+    "rich",
     "transformers>=5.12.1",
 ]
 
