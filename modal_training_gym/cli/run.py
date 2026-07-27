@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
+from datetime import UTC, datetime
 from typing import Any
 
 import click
@@ -21,6 +22,12 @@ from .output import print_json, print_table
 
 
 DEFAULT_RUN_LIMIT = 50
+CLI_FIELD_NAMES = {
+    "display_status": "status",
+    "display_stage": "stage",
+    "group_id": "group",
+    "updated_at": "last_updated_at",
+}
 
 
 def parse_since(value: str, *, now: float | None = None) -> int:
@@ -38,7 +45,7 @@ def _run_filter_options(function: Callable[..., Any]) -> Callable[..., Any]:
     for name, metadata in reversed(run_list_field_metadata().items()):
         if not metadata.get("filterable"):
             continue
-        option_name = name.removeprefix("display_")
+        option_name = CLI_FIELD_NAMES.get(name, name)
         function = click.option(
             f"--{option_name.replace('_', '-')}",
             name,
@@ -52,7 +59,11 @@ def _run_filter_options(function: Callable[..., Any]) -> Callable[..., Any]:
 def _format_timestamp(value: object) -> str:
     if not isinstance(value, (int, float)) or not value:
         return "—"
-    return time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(value))
+    return (
+        datetime.fromtimestamp(value, tz=UTC)
+        .isoformat(timespec="seconds")
+        .replace("+00:00", "Z")
+    )
 
 
 def _table_rows(
@@ -107,7 +118,7 @@ def list_runs(
         print_json(
             [
                 {
-                    name.removeprefix("display_"): (
+                    CLI_FIELD_NAMES.get(name, name): (
                         _format_timestamp(getattr(summary, name))
                         if metadata.get("timestamp")
                         else getattr(summary, name)
@@ -133,14 +144,14 @@ def run_group() -> None:
     "list",
     help=(
         "List training runs with their top-level metadata.\n\n"
-        "Supports filtering on status, model, dataset, recipe, group ID, "
+        "Supports filtering on status, model, dataset, recipe, group, "
         "or by recency, all with a limit. Sorted by most recently updated."
     ),
     epilog=(
         "Examples:\n"
         "  training-gym run list --status failed --since 24h\n"
         "  training-gym run list --status completed "
-        "--group-id nightly-tau-bench -j"
+        "--group nightly-tau-bench -j"
     ),
 )
 @_run_filter_options
