@@ -10,6 +10,7 @@
 
 import asyncio
 import inspect
+import os
 import subprocess
 import time
 from collections.abc import Callable
@@ -112,6 +113,22 @@ def start_ray_worker(
     if extra_start_args:
         cmd.extend(extra_start_args)
     subprocess.Popen(cmd)
+
+
+def _with_container_pythonpath(runtime_env: dict) -> dict:
+    container_pythonpath = os.environ.get("PYTHONPATH", "")
+    if not container_pythonpath:
+        return runtime_env
+
+    env_vars = dict(runtime_env.get("env_vars") or {})
+    entries = [
+        entry for entry in env_vars.get("PYTHONPATH", "").split(os.pathsep) if entry
+    ]
+    for entry in container_pythonpath.split(os.pathsep):
+        if entry and entry not in entries:
+            entries.append(entry)
+    env_vars["PYTHONPATH"] = os.pathsep.join(entries)
+    return {**runtime_env, "env_vars": env_vars}
 
 
 @dataclass
@@ -296,7 +313,7 @@ class ModalRayCluster:
         assert self._client is not None
         job_id = self._client.submit_job(
             entrypoint=entrypoint,
-            runtime_env=runtime_env or {},
+            runtime_env=_with_container_pythonpath(runtime_env or {}),
         )
         print(f"Submitted Ray job: {job_id}")
 
