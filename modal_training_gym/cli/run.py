@@ -106,7 +106,10 @@ def list_runs(
     if json_output:
         print_json(
             [
-                summary.model_dump(include=set(fields), mode="json")
+                {
+                    name.removeprefix("display_"): getattr(summary, name)
+                    for name in fields
+                }
                 for summary in summaries
             ]
         )

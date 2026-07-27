@@ -105,8 +105,8 @@ def test_run_list_forwards_filters_and_prints_configured_fields_as_json():
     assert json.loads(result.stdout) == [
         {
             "run_id": "run-1",
-            "display_status": "failed",
-            "display_stage": "Training",
+            "status": "failed",
+            "stage": "Training",
             "model": "org/model",
             "dataset": "org/data",
             "recipe": "slime",
