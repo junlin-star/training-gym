@@ -111,8 +111,8 @@ def test_run_list_forwards_filters_and_prints_configured_fields_as_json():
             "dataset": "org/data",
             "recipe": "slime",
             "group_id": "nightly",
-            "created_at": 100,
-            "updated_at": 200,
+            "created_at": "1970-01-01 00:01:40",
+            "updated_at": "1970-01-01 00:03:20",
         }
     ]
 

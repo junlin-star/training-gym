@@ -107,8 +107,12 @@ def list_runs(
         print_json(
             [
                 {
-                    name.removeprefix("display_"): getattr(summary, name)
-                    for name in fields
+                    name.removeprefix("display_"): (
+                        _format_timestamp(getattr(summary, name))
+                        if metadata.get("timestamp")
+                        else getattr(summary, name)
+                    )
+                    for name, metadata in fields.items()
                 }
                 for summary in summaries
             ]
