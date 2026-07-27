@@ -48,3 +48,32 @@ def test_sample_to_dict_maps_shaped_reward_onto_gym_sample():
     assert sample.metadata["shaped_reward"] == 0.71
     assert sample.metadata["task_passed"] is False
     assert sample.metadata["response_length"] == 12
+
+
+def test_sample_to_dict_forwards_arbitrary_reward_function_tags():
+    """A tag set by a custom reward/rollout fn (not on any allowlist) survives."""
+    raw = {
+        "prompt": "p",
+        "response": "r",
+        "reward": 0.5,
+        "metadata": {"guessing": {"target": "cat", "success": True, "turns_taken": 3}},
+    }
+    sample = Sample.model_validate(_sample_to_dict(raw))
+    assert sample.metadata["guessing"] == {
+        "target": "cat",
+        "success": True,
+        "turns_taken": 3,
+    }
+
+
+def test_sample_to_dict_drops_oversized_tag_value():
+    """An accidentally-huge tag value is dropped rather than bloating the payload."""
+    raw = {
+        "prompt": "p",
+        "response": "r",
+        "reward": 0.5,
+        "metadata": {"small_tag": 1, "huge_tag": "x" * 4096},
+    }
+    sample = Sample.model_validate(_sample_to_dict(raw))
+    assert sample.metadata["small_tag"] == 1
+    assert "huge_tag" not in sample.metadata
