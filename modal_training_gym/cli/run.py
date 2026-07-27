@@ -66,6 +66,21 @@ def _format_timestamp(value: object) -> str:
     )
 
 
+def _format_table_timestamp(value: object, *, now: float | None = None) -> str:
+    if not isinstance(value, (int, float)) or not value:
+        return "—"
+    age = (time.time() if now is None else now) - value
+    if 0 <= age < 60:
+        return "now"
+    if 0 <= age < 3_600:
+        return f"{int(age // 60)}m ago"
+    if 0 <= age < 86_400:
+        return f"{int(age // 3_600)}h ago"
+    if 0 <= age < 2_592_000:
+        return f"{int(age // 86_400)}d ago"
+    return datetime.fromtimestamp(value, tz=UTC).strftime("%Y-%m-%d")
+
+
 def _table_rows(
     summaries: list[RunSummary],
     fields: dict[str, dict[str, object]],
@@ -74,7 +89,7 @@ def _table_rows(
     for summary in summaries:
         rows.append(
             [
-                _format_timestamp(getattr(summary, name))
+                _format_table_timestamp(getattr(summary, name))
                 if metadata.get("timestamp")
                 else getattr(summary, name) or "—"
                 for name, metadata in fields.items()
