@@ -277,13 +277,30 @@ def _render_field_table(
 def _page_preamble(cls: type, entry: dict) -> list[str]:
     """Shared page opening: frontmatter, import block, summary, inheritance."""
     docstring = inspect.getdoc(cls) or ""
-    # Render everything before the first ## group header — the intro prose,
-    # not just the first paragraph. Group sections are rendered as tables.
+    # Render all intro prose before the first section header.  Section
+    # headers are either Markdown `## ...` headings or reST-style
+    # underlined headings (e.g. `Attributes\n-----------`) that would
+    # otherwise be duplicated by the generated ## Fields / ## Methods
+    # tables on behavior pages.
     intro_lines: list[str] = []
-    for line in docstring.splitlines():
+    lines = docstring.splitlines()
+    i = 0
+    while i < len(lines):
+        line = lines[i]
         if line.startswith("## "):
             break
+        if i + 1 < len(lines):
+            next_line = lines[i + 1].strip()
+            title = line.strip()
+            if (
+                title
+                and next_line
+                and re.match(r"^[-=~]+$", next_line)
+                and len(next_line) >= len(title)
+            ):
+                break
         intro_lines.append(line)
+        i += 1
     first_para = "\n".join(intro_lines).strip()
     module_path = entry["module"]
 
@@ -400,11 +417,7 @@ def generate_config_data_page(
                 for attr_name in list(attrs.keys()):
                     if attr_name in group_field_names:
                         continue
-                    if (
-                        re.match(rf"^{attr_name}\s*:", stripped)
-                        or re.match(rf"^#.*{attr_name}", stripped)
-                        or attr_name in stripped
-                    ):
+                    if re.match(rf"^{attr_name}\s*:", stripped):
                         group_attrs[attr_name] = attrs[attr_name]
                         group_field_names.add(attr_name)
 

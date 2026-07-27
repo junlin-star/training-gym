@@ -561,6 +561,12 @@ def _bucket_for(input_path: pathlib.Path) -> str:
             f"tutorial_generator/<bucket>/<name>.py."
         )
     bucket = parts[0]
+    if bucket in _DOCS_ONLY_BUCKETS:
+        raise ValueError(
+            f"Tutorial source {input_path} lives under docs-only bucket {bucket!r}; "
+            f"docs-only buckets are rendered by scripts/generate_tutorial_pages.py, "
+            f"not by generate_tutorial.py. Expected runnable buckets: {_BUCKETS}."
+        )
     if bucket not in _BUCKETS:
         raise ValueError(
             f"Tutorial source {input_path} lives under unknown bucket {bucket!r}. "
@@ -571,11 +577,13 @@ def _bucket_for(input_path: pathlib.Path) -> str:
 
 def generate_one(
     input_path: pathlib.Path, output_root: pathlib.Path
-) -> tuple[pathlib.Path, pathlib.Path]:
+) -> tuple[pathlib.Path, pathlib.Path] | None:
     source = input_path.read_text()
     name = input_path.stem
-    bucket = _bucket_for(input_path)
     metadata = _extract_metadata(source) or {}
+    if metadata.get("docs_only"):
+        return None
+    bucket = _bucket_for(input_path)
     cells = _extract_cells(
         source,
         required_modal_secrets=_required_modal_secrets(metadata),
@@ -770,7 +778,14 @@ def main() -> None:
         return
 
     for inp in inputs:
-        py, ipynb = generate_one(inp.resolve(), OUTPUT_ROOT)
+        result = generate_one(inp.resolve(), OUTPUT_ROOT)
+        if result is None:
+            print(
+                f"{inp.relative_to(REPO_ROOT) if inp.is_absolute() else inp} "
+                f"→ skipped (docs-only tutorial, no runnable output)"
+            )
+            continue
+        py, ipynb = result
         print(
             f"{inp.relative_to(REPO_ROOT) if inp.is_absolute() else inp} "
             f"→ {py.relative_to(REPO_ROOT)} + {ipynb.relative_to(REPO_ROOT)}"
