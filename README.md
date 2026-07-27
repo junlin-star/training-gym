@@ -49,7 +49,7 @@ training-gym setup
 
 Modal prints a URL where you can watch jobs in progress.
 
-![Gym Observability Dashboard](./assets/observability_dashboard.png)
+![Gym Observability Dashboard](./assets/observability_dashboard_1.png)
 
 
 ## Tutorials
