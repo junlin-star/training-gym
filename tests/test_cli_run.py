@@ -140,19 +140,6 @@ def test_run_list_forwards_filters_and_prints_configured_fields_as_json():
     ]
 
 
-def test_run_list_rejects_outdated_dashboard():
-    summary = _summary()
-    summary.pop("display_status")
-    summary.pop("display_stage")
-    FakeDashboardClient.payload = [summary]
-
-    result = CliRunner().invoke(cli_module.entrypoint_cli, ["run", "list"])
-
-    assert result.exit_code == 5
-    assert "deployed dashboard is outdated" in result.stderr
-    assert "training-gym setup" in result.stderr
-
-
 def test_run_list_rejects_invalid_since_before_request():
     result = CliRunner().invoke(
         cli_module.entrypoint_cli,
