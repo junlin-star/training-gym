@@ -116,7 +116,7 @@
       return "Inactive";
     }
     if (endpointCreationTimedOut) return "Inactive";
-    if (row.run && getStatus(row.run) === "Failed") return "Inactive";
+    if (row.run && getStatus(row.run) === "failed") return "Inactive";
     return "Pending";
   }
 

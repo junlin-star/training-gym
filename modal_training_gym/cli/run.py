@@ -10,9 +10,8 @@ import click
 from pydantic import ValidationError
 
 from modal_training_gym.common.run_list import (
-    RunListItem,
-    build_run_list_item,
     run_list_field_metadata,
+    select_run_list_fields,
 )
 from modal_training_gym.common.run_summary import RunSummary
 from modal_training_gym.common.time_utils import parse_time
@@ -38,7 +37,7 @@ def parse_since(value: str, *, now: float | None = None) -> int:
 
 
 def _run_filter_options(function: Callable[..., Any]) -> Callable[..., Any]:
-    """Generate Click filters from fields marked filterable in RunListItem."""
+    """Generate Click filters from list fields marked filterable on RunSummary."""
     for name, metadata in reversed(run_list_field_metadata().items()):
         if not metadata.get("filterable"):
             continue
@@ -58,15 +57,16 @@ def _format_timestamp(value: object) -> str:
     return time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(value))
 
 
-def _table_rows(items: list[RunListItem]) -> list[list[object]]:
+def _table_rows(summaries: list[RunSummary]) -> list[list[object]]:
     fields = run_list_field_metadata()
     rows: list[list[object]] = []
-    for item in items:
+    for summary in summaries:
+        values = select_run_list_fields(summary)
         rows.append(
             [
-                _format_timestamp(getattr(item, name))
+                _format_timestamp(values[name])
                 if metadata.get("timestamp")
-                else getattr(item, name) or "—"
+                else values[name] or "—"
                 for name, metadata in fields.items()
             ]
         )
@@ -103,16 +103,14 @@ def list_runs(
             error="invalid_dashboard_response",
             exit_code=ExitCode.BACKEND,
         ) from exc
-    items = [build_run_list_item(summary) for summary in summaries]
-
     if json_output:
-        print_json([item.model_dump(mode="json") for item in items])
+        print_json([select_run_list_fields(summary) for summary in summaries])
         return
 
     fields = run_list_field_metadata()
     print_table(
         [str(metadata["label"]) for metadata in fields.values()],
-        _table_rows(items),
+        _table_rows(summaries),
     )
 
 
@@ -125,14 +123,14 @@ def run_group() -> None:
     "list",
     help=(
         "List training runs with their top-level metadata.\n\n"
-        "Supports filtering on status, model, dataset, recipe, group, or by "
-        "recency, all with a limit. Sorted by most recently updated."
+        "Supports filtering on display status, model, dataset, recipe, group ID, "
+        "or by recency, all with a limit. Sorted by most recently updated."
     ),
     epilog=(
         "Examples:\n"
-        "  training-gym run list --status failed --since 24h\n"
-        "  training-gym run list --status completed "
-        "--group nightly-tau-bench -j"
+        "  training-gym run list --display-status failed --since 24h\n"
+        "  training-gym run list --display-status completed "
+        "--group-id nightly-tau-bench -j"
     ),
 )
 @_run_filter_options

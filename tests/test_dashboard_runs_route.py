@@ -59,17 +59,9 @@ def test_runs_route_returns_typed_joined_summaries(fake_volume, monkeypatch, tmp
     assert summary["dataset"] == "openai/gsm8k"
     assert summary["recipe"] == "slime"
     assert summary["group_id"] == "route-group"
-    assert summary["list_fields"] == {
-        "run_id": "run-route-1",
-        "status": "completed",
-        "stage": "",
-        "model": "Qwen/Qwen3-4B",
-        "dataset": "openai/gsm8k",
-        "recipe": "slime",
-        "group": "route-group",
-        "created_at": 100,
-        "last_updated_at": summary["updated_at"],
-    }
+    assert summary["display_status"] == "completed"
+    assert summary["display_stage"] == ""
+    assert "list_fields" not in summary
     assert summary["has_train_result"] is True
     assert summary["train_result"]["checkpoint_dir"] == ("/checkpoints/run-route-1")
 
@@ -114,7 +106,7 @@ def test_runs_route_filters_and_sorts_by_last_update(
     ).save()
 
     with _client(monkeypatch, tmp_path) as client:
-        filtered = client.get("/api/runs?status=failed&since=175&limit=1")
+        filtered = client.get("/api/runs?display_status=failed&since=175&limit=1")
         all_runs = client.get("/api/runs")
 
     assert filtered.status_code == 200

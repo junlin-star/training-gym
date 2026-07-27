@@ -112,24 +112,17 @@
   });
 
   function getRecipe(run) {
-    return run.list_fields?.recipe || run.framework || "(untagged)";
+    return run.recipe || run.framework || "(untagged)";
   }
 
   const NO_GROUP = "(no group)";
 
   function getGroup(run) {
-    return safeText(run.list_fields?.group) || safeText(run.group_id) || NO_GROUP;
+    return safeText(run.group_id) || NO_GROUP;
   }
 
   function getStatus(run) {
-    const rawStatus = safeText(run.list_fields?.status || run.status).toLowerCase();
-    if (run.train_result || rawStatus === "completed") return "Completed";
-    if (rawStatus === "cancelled") return "Cancelled";
-    if (rawStatus === "stopped") return "Stopped";
-    if (rawStatus === "failed") return "Failed";
-    if (rawStatus === "running") return "Pending";
-    if (rawStatus === "pending") return "Pending";
-    return rawStatus ? rawStatus[0].toUpperCase() + rawStatus.slice(1) : "Pending";
+    return safeText(run.display_status) || "pending";
   }
 
   function getTrainingRunStatus(run) {
@@ -146,7 +139,7 @@
   }
 
   function modelName(run) {
-    return run.list_fields?.model || run.model || "—";
+    return run.model || "—";
   }
 
   function safeText(value) {
@@ -454,10 +447,10 @@
     }));
   });
 
-  let completedTotal = $derived(allRuns.filter((run) => run.train_result).length);
-  let cancelledTotal = $derived(allRuns.filter((run) => getStatus(run) === "Cancelled").length);
-  let stoppedTotal = $derived(allRuns.filter((run) => getStatus(run) === "Stopped").length);
-  let failedTotal = $derived(allRuns.filter((run) => getStatus(run) === "Failed").length);
+  let completedTotal = $derived(allRuns.filter((run) => getStatus(run) === "completed").length);
+  let cancelledTotal = $derived(allRuns.filter((run) => getStatus(run) === "cancelled").length);
+  let stoppedTotal = $derived(allRuns.filter((run) => getStatus(run) === "stopped").length);
+  let failedTotal = $derived(allRuns.filter((run) => getStatus(run) === "failed").length);
   let runningTotal = $derived(
     allRuns.length - completedTotal - cancelledTotal - stoppedTotal - failedTotal,
   );
@@ -909,7 +902,6 @@
         {error}
         {modelName}
         {getStatus}
-        {getFrameworkStatus}
         {showFrameworkStatus}
         {fmtDuration}
         bind:search

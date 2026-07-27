@@ -36,6 +36,8 @@ def _summary(**overrides):
         "training_run_id": "run-1",
         "run_id": "run-1",
         "status": "failed",
+        "display_status": "failed",
+        "display_stage": "Training",
         "framework_status": "training",
         "model": "org/model",
         "dataset": "org/data",
@@ -52,14 +54,20 @@ def test_run_list_help_derives_filter_flags_from_schema():
     result = CliRunner().invoke(cli_module.entrypoint_cli, ["run", "list", "--help"])
 
     assert result.exit_code == 0
-    for flag in ("--status", "--model", "--dataset", "--recipe", "--group"):
+    for flag in (
+        "--display-status",
+        "--model",
+        "--dataset",
+        "--recipe",
+        "--group-id",
+    ):
         assert flag in result.stdout
     assert "--since" in result.stdout
     assert "--limit" in result.stdout
     assert "-j, --json" in result.stdout
 
 
-def test_run_list_forwards_filters_and_prints_only_list_fields_as_json():
+def test_run_list_forwards_filters_and_prints_configured_fields_as_json():
     FakeDashboardClient.payload = [_summary()]
 
     result = CliRunner().invoke(
@@ -67,9 +75,9 @@ def test_run_list_forwards_filters_and_prints_only_list_fields_as_json():
         [
             "run",
             "list",
-            "--status",
+            "--display-status",
             "failed",
-            "--group",
+            "--group-id",
             "nightly",
             "--since",
             "2026-07-23T12:00:00Z",
@@ -84,11 +92,11 @@ def test_run_list_forwards_filters_and_prints_only_list_fields_as_json():
         (
             "/api/runs",
             {
-                "status": "failed",
+                "display_status": "failed",
                 "model": None,
                 "dataset": None,
                 "recipe": None,
-                "group": "nightly",
+                "group_id": "nightly",
                 "since": 1784808000,
                 "limit": 3,
             },
@@ -97,14 +105,14 @@ def test_run_list_forwards_filters_and_prints_only_list_fields_as_json():
     assert json.loads(result.stdout) == [
         {
             "run_id": "run-1",
-            "status": "failed",
-            "stage": "Training",
+            "display_status": "failed",
+            "display_stage": "Training",
             "model": "org/model",
             "dataset": "org/data",
             "recipe": "slime",
-            "group": "nightly",
+            "group_id": "nightly",
             "created_at": 100,
-            "last_updated_at": 200,
+            "updated_at": 200,
         }
     ]
 

@@ -1,15 +1,11 @@
 from __future__ import annotations
 
 from modal_training_gym.common.run_list import (
-    build_run_list_item,
     filter_run_summaries,
     run_list_field_metadata,
+    select_run_list_fields,
 )
-from modal_training_gym.common.run_summary import (
-    FrameworkProgress,
-    RunSummary,
-    TrainResultSummary,
-)
+from modal_training_gym.common.run_summary import RunSummary
 
 
 def _summary(**overrides) -> RunSummary:
@@ -17,6 +13,8 @@ def _summary(**overrides) -> RunSummary:
         "training_run_id": "run-1",
         "run_id": "run-1",
         "status": "running",
+        "display_status": "pending",
+        "display_stage": "Training",
         "framework_status": "training",
         "model": "org/model",
         "dataset": "org/data",
@@ -29,34 +27,18 @@ def _summary(**overrides) -> RunSummary:
     return RunSummary(**values)
 
 
-def test_projection_generates_dashboard_list_fields_from_summary():
-    item = build_run_list_item(
-        _summary(
-            framework_status="download_model",
-            framework_progress=FrameworkProgress(is_active=False),
-        )
-    )
-
-    assert item.model_dump() == {
+def test_selects_configured_fields_from_summary():
+    assert select_run_list_fields(_summary()) == {
         "run_id": "run-1",
-        "status": "pending",
-        "stage": "Queuing for GPU — Downloading model",
+        "display_status": "pending",
+        "display_stage": "Training",
         "model": "org/model",
         "dataset": "org/data",
         "recipe": "slime",
-        "group": "nightly",
+        "group_id": "nightly",
         "created_at": 100,
-        "last_updated_at": 200,
+        "updated_at": 200,
     }
-
-
-def test_projection_treats_train_result_as_completed_without_mutating_summary():
-    summary = _summary(
-        train_result=TrainResultSummary(training_run_id="run-1"),
-    )
-
-    assert summary.status == "running"
-    assert build_run_list_item(summary).status == "completed"
 
 
 def test_schema_metadata_drives_columns_and_filters():
@@ -64,21 +46,21 @@ def test_schema_metadata_drives_columns_and_filters():
 
     assert list(fields) == [
         "run_id",
-        "status",
-        "stage",
+        "display_status",
+        "display_stage",
         "model",
         "dataset",
         "recipe",
-        "group",
+        "group_id",
         "created_at",
-        "last_updated_at",
+        "updated_at",
     ]
     assert {name for name, metadata in fields.items() if metadata["filterable"]} == {
-        "status",
+        "display_status",
         "model",
         "dataset",
         "recipe",
-        "group",
+        "group_id",
     }
 
 
@@ -88,9 +70,13 @@ def test_filtering_uses_projection_values_and_update_recency():
         run_id="newer",
         training_run_id="newer",
         status="failed",
+        display_status="failed",
         created_at=250,
         updated_at=300,
     )
 
-    assert filter_run_summaries([older, newer], filters={"status": "FAILED"}) == [newer]
+    assert filter_run_summaries(
+        [older, newer],
+        filters={"display_status": "FAILED"},
+    ) == [newer]
     assert filter_run_summaries([older, newer], since=225, limit=1) == [newer]

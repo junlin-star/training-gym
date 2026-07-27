@@ -37,7 +37,6 @@ from starlette.requests import Request
 from modal_training_gym.common.advantage_distribution import AdvantageDistribution
 from modal_training_gym.common.run import FrameworkStatusUpdate, TrainingRun
 from modal_training_gym.common.run_list import (
-    build_run_list_item,
     filter_run_summaries,
     run_list_field_metadata,
 )
@@ -735,13 +734,7 @@ def fastapi_app():
             since=since,
             limit=limit,
         )
-        return [
-            {
-                **summary.model_dump(mode="json"),
-                "list_fields": build_run_list_item(summary).model_dump(mode="json"),
-            }
-            for summary in filtered
-        ]
+        return [summary.model_dump(mode="json") for summary in filtered]
 
     @web.post("/api/framework-status")
     async def framework_status(
