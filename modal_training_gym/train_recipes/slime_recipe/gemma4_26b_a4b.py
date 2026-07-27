@@ -53,9 +53,6 @@ class Gemma4_26B_A4B_Recipe(SlimeRecipe):
     use_precision_aware_optimizer: bool = True
 
     # Rollout sglang
-    # Capture CUDA graphs up to the rollout concurrency (sglang_max_running_requests)
-    # so decode runs on graphs instead of eager. max_bs=1 left graphs off at the
-    # real batch (decode ran with #running-req=4 and "cuda graph: False").
     sglang_cuda_graph_max_bs: int = 4
     sglang_max_running_requests: int | None = 4
 
@@ -75,10 +72,5 @@ class Gemma4_26B_A4B_Recipe(SlimeRecipe):
     eval_interval: int | None = None
 
     def __post_init__(self) -> None:
-        # Gemma terminates an assistant turn with <end_of_turn> (106); its HF
-        # generation config stops on eos = [<eos>=1, <end_of_turn>=106]. Without
-        # these, sglang gets stop_token_ids=None (see [STOP_TOKEN_DIAG] in the
-        # rollout logs) and generations run to rollout_max_response_len instead
-        # of stopping at the turn boundary.
         if self.rollout_stop_token_ids is None:
             object.__setattr__(self, "rollout_stop_token_ids", [1, 106])
