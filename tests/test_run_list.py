@@ -3,7 +3,6 @@ from __future__ import annotations
 from modal_training_gym.common.run_list import (
     filter_run_summaries,
     run_list_field_metadata,
-    select_run_list_fields,
 )
 from modal_training_gym.common.run_summary import RunSummary
 
@@ -25,20 +24,6 @@ def _summary(**overrides) -> RunSummary:
     }
     values.update(overrides)
     return RunSummary(**values)
-
-
-def test_selects_configured_fields_from_summary():
-    assert select_run_list_fields(_summary()) == {
-        "run_id": "run-1",
-        "display_status": "pending",
-        "display_stage": "Training",
-        "model": "org/model",
-        "dataset": "org/data",
-        "recipe": "slime",
-        "group_id": "nightly",
-        "created_at": 100,
-        "updated_at": 200,
-    }
 
 
 def test_schema_metadata_drives_columns_and_filters():

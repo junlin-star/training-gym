@@ -55,7 +55,7 @@ def test_run_list_help_derives_filter_flags_from_schema():
 
     assert result.exit_code == 0
     for flag in (
-        "--display-status",
+        "--status",
         "--model",
         "--dataset",
         "--recipe",
@@ -75,7 +75,7 @@ def test_run_list_forwards_filters_and_prints_configured_fields_as_json():
         [
             "run",
             "list",
-            "--display-status",
+            "--status",
             "failed",
             "--group-id",
             "nightly",

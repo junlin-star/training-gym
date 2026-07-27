@@ -9,10 +9,7 @@ from typing import Any
 import click
 from pydantic import ValidationError
 
-from modal_training_gym.common.run_list import (
-    run_list_field_metadata,
-    select_run_list_fields,
-)
+from modal_training_gym.common.run_list import run_list_field_metadata
 from modal_training_gym.common.run_summary import RunSummary
 from modal_training_gym.common.time_utils import parse_time
 
@@ -31,7 +28,7 @@ def parse_since(value: str, *, now: float | None = None) -> int:
     parsed = parse_time(value, time.time() if now is None else now)
     if parsed is None:
         raise click.BadParameter(
-            "must be epoch seconds, ISO 8601, or a relative time such as 24h"
+            "Must be epoch seconds, ISO 8601, or a relative time such as 24h"
         )
     return int(parsed)
 
@@ -41,11 +38,12 @@ def _run_filter_options(function: Callable[..., Any]) -> Callable[..., Any]:
     for name, metadata in reversed(run_list_field_metadata().items()):
         if not metadata.get("filterable"):
             continue
+        option_name = name.removeprefix("display_")
         function = click.option(
-            f"--{name.replace('_', '-')}",
+            f"--{option_name.replace('_', '-')}",
             name,
             default=None,
-            metavar=name.upper(),
+            metavar=option_name.upper(),
             help=f"Only runs with this {str(metadata['label']).lower()}.",
         )(function)
     return function
@@ -57,16 +55,17 @@ def _format_timestamp(value: object) -> str:
     return time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(value))
 
 
-def _table_rows(summaries: list[RunSummary]) -> list[list[object]]:
-    fields = run_list_field_metadata()
+def _table_rows(
+    summaries: list[RunSummary],
+    fields: dict[str, dict[str, object]],
+) -> list[list[object]]:
     rows: list[list[object]] = []
     for summary in summaries:
-        values = select_run_list_fields(summary)
         rows.append(
             [
-                _format_timestamp(values[name])
+                _format_timestamp(getattr(summary, name))
                 if metadata.get("timestamp")
-                else values[name] or "—"
+                else getattr(summary, name) or "—"
                 for name, metadata in fields.items()
             ]
         )
@@ -103,15 +102,19 @@ def list_runs(
             error="invalid_dashboard_response",
             exit_code=ExitCode.BACKEND,
         ) from exc
-    if json_output:
-        print_json([select_run_list_fields(summary) for summary in summaries])
-        return
-
     fields = run_list_field_metadata()
-    print_table(
-        [str(metadata["label"]) for metadata in fields.values()],
-        _table_rows(summaries),
-    )
+    if json_output:
+        print_json(
+            [
+                summary.model_dump(include=set(fields), mode="json")
+                for summary in summaries
+            ]
+        )
+    else:
+        print_table(
+            [str(metadata["label"]) for metadata in fields.values()],
+            _table_rows(summaries, fields),
+        )
 
 
 @click.group("run", cls=_TrainingGymGroup)
@@ -123,13 +126,13 @@ def run_group() -> None:
     "list",
     help=(
         "List training runs with their top-level metadata.\n\n"
-        "Supports filtering on display status, model, dataset, recipe, group ID, "
+        "Supports filtering on status, model, dataset, recipe, group ID, "
         "or by recency, all with a limit. Sorted by most recently updated."
     ),
     epilog=(
         "Examples:\n"
-        "  training-gym run list --display-status failed --since 24h\n"
-        "  training-gym run list --display-status completed "
+        "  training-gym run list --status failed --since 24h\n"
+        "  training-gym run list --status completed "
         "--group-id nightly-tau-bench -j"
     ),
 )

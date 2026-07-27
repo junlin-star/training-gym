@@ -17,20 +17,11 @@ def run_list_field_metadata() -> dict[str, dict[str, object]]:
         if not extra.get("list"):
             continue
         metadata[field_name] = {
-            "field_name": field_name,
             "label": field.title or field_name.replace("_", " ").title(),
             "filterable": bool(extra.get("filterable")),
             "timestamp": bool(extra.get("timestamp")),
         }
     return metadata
-
-
-def select_run_list_fields(summary: RunSummary) -> dict[str, object]:
-    """Select the configured list fields from a full run summary."""
-    return {
-        name: getattr(summary, str(metadata["field_name"]))
-        for name, metadata in run_list_field_metadata().items()
-    }
 
 
 def filter_run_summaries(
@@ -50,11 +41,10 @@ def filter_run_summaries(
 
     selected: list[RunSummary] = []
     for summary in summaries:
-        values = select_run_list_fields(summary)
         if since is not None and max(summary.created_at, summary.updated_at) < since:
             continue
         if any(
-            str(values[name]).casefold() != expected
+            str(getattr(summary, name)).casefold() != expected
             for name, expected in active_filters.items()
         ):
             continue

@@ -708,14 +708,14 @@ def fastapi_app():
 
     # ── Training runs ────────────────────────────────────────────────────
 
-    @web.get("/api/runs")
+    @web.get("/api/runs", response_model=list[RunSummary])
     async def runs(
         request: Request,
         since: int | None = None,
         limit: int | None = None,
     ):
         if limit is not None and limit < 1:
-            raise HTTPException(status_code=400, detail="limit must be positive")
+            raise HTTPException(status_code=400, detail="Limit must be positive")
         try:
             data = await get_cached_list("runs", load_runs)
         except Exception:
@@ -734,7 +734,7 @@ def fastapi_app():
             since=since,
             limit=limit,
         )
-        return [summary.model_dump(mode="json") for summary in filtered]
+        return filtered
 
     @web.post("/api/framework-status")
     async def framework_status(
