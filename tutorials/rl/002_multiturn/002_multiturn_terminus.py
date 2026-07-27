@@ -91,7 +91,7 @@ BENCHMARKS: dict[str, BenchmarkConfig] = {
 SERVED_MODEL_NAME = "qwen3-6-35b"
 
 # Per-episode wall-clock cap for the *training* rollout. 
-ROLLOUT_TIMEOUT_SEC = 600.0
+ROLLOUT_TIMEOUT_SEC = 900.0
 
 # litellm addresses an OpenAI-compatible endpoint via the `hosted_vllm/<name>`
 # prefix; terminus-2 needs model_info to know its context budget.
@@ -442,8 +442,8 @@ async def run_one_trial(
         environment=EnvironmentConfig(
             type=EnvironmentType.MODAL,
             kwargs={
-                "sandbox_idle_timeout_secs": 240,   # reap if no exec activity for 2 min
-                "sandbox_timeout_secs": 900,        # hard cap, comfortably > the 240s agent cap
+                "sandbox_idle_timeout_secs": int(ROLLOUT_TIMEOUT_SEC),
+                "sandbox_timeout_secs": int(ROLLOUT_TIMEOUT_SEC) + 300,
             },
             delete=True,                            # tear down resources on stop
         ),
@@ -750,7 +750,7 @@ def train(
             extra_config={
                 "served_model_name": SERVED_MODEL_NAME,
                 "harbor_dataset_ref": benchmark.dataset_ref,
-                "log_multi_turn": True,
+                "log_multi_turn": False, # ~20MB per rollout step
             },
             sglang_reasoning_parser=SGLANG_REASONING_PARSER,
             colocate=False,
@@ -829,7 +829,7 @@ def _add_rollout_steps_arg(p: argparse.ArgumentParser) -> None:
     p.add_argument(
         "--rollout-steps",
         type=int,
-        default=50,
+        default=100,
         help=(
             "Number of rollout steps to train for (slime's num_rollout) "
             "(default: %(default)s)"
