@@ -62,6 +62,9 @@ _NB = "notebook"
 # Buckets the tutorial catalog is grouped into. Display order in the README
 # sections and ordering within each bucket fall back to meta["order"].
 _BUCKETS = ("intro", "rl", "sft", "singlenode", "agent", "multinode", "misc")
+# Docs-only buckets render on the docs site (scripts/generate_tutorial_pages.py)
+# but produce no runnable tutorials/<bucket>/ outputs and no README table rows.
+_DOCS_ONLY_BUCKETS = ("tools",)
 _BUCKET_DISPLAY = {
     "intro": "Intro",
     "rl": "RL",
@@ -89,6 +92,7 @@ _MULTINODE_DISCLAIMER_MARKDOWN = (
     "> your Modal workspace must have multi-node enabled. Contact\n"
     "> [support@modal.com](mailto:support@modal.com) to enable multi-node."
 )
+
 
 @dataclass
 class Cell:
@@ -235,7 +239,7 @@ def _secret_check_code(required_modal_secrets: tuple[dict[str, str], ...]) -> st
             f'    modal.Secret.from_name("{secret["name"]}", required_keys=["{secret["key"]}"]).hydrate()\n'
             "except modal.exception.NotFoundError as e:\n"
             "    raise RuntimeError(\n"
-            f'        "Missing Modal Secret \'{secret["name"]}\'. Create one at "\n'
+            f"        \"Missing Modal Secret '{secret['name']}'. Create one at \"\n"
             f'        "https://modal.com/secrets with a {secret["key"]} entry, then re-run."\n'
             "    ) from e"
         )
@@ -257,7 +261,7 @@ def _secret_check_code(required_modal_secrets: tuple[dict[str, str], ...]) -> st
         "    except modal.exception.NotFoundError as e:\n"
         "        raise RuntimeError(\n"
         "            f\"Missing Modal Secret '{secret_name}'. Create one at \"\n"
-        "            f\"https://modal.com/secrets with a {required_key} entry, then re-run.\"\n"
+        '            f"https://modal.com/secrets with a {required_key} entry, then re-run."\n'
         "        ) from e"
     )
 
@@ -275,7 +279,9 @@ def _inject_secret_check(
             targets=both,
         ),
         Cell(kind="markdown", source=_NOTEBOOK_GPU_NOTE_MARKDOWN, targets=nb_only),
-        Cell(kind="code", source=_secret_check_code(required_modal_secrets), targets=both),
+        Cell(
+            kind="code", source=_secret_check_code(required_modal_secrets), targets=both
+        ),
     ]
     for i, cell in enumerate(cells):
         if cell.kind == "code":
@@ -708,11 +714,18 @@ def _update_readme_table(entries: list[tuple[str, str, dict]]) -> bool:
 def _iter_source_files() -> list[pathlib.Path]:
     """Return every tutorial source under `tutorial_generator/<bucket>/`.
 
-    Skips `__init__.py` at any level; skips files that aren't inside a known
-    bucket subdirectory (so a stray top-level file produces a clear error in
-    `_bucket_for` rather than a silent no-op).
+    Skips `__init__.py` at any level; skips docs-only buckets (rendered by
+    scripts/generate_tutorial_pages.py, never emitted as runnable tutorials);
+    skips files that aren't inside a known bucket subdirectory (so a stray
+    top-level file produces a clear error in `_bucket_for` rather than a
+    silent no-op).
     """
-    return sorted(p for p in INPUT_DIR.rglob("*.py") if p.name != "__init__.py")
+    return sorted(
+        p
+        for p in INPUT_DIR.rglob("*.py")
+        if p.name != "__init__.py"
+        and p.relative_to(INPUT_DIR).parts[0] not in _DOCS_ONLY_BUCKETS
+    )
 
 
 def _collect_all_metadata() -> list[tuple[str, str, dict]]:

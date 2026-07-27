@@ -277,7 +277,14 @@ def _render_field_table(
 def _page_preamble(cls: type, entry: dict) -> list[str]:
     """Shared page opening: frontmatter, import block, summary, inheritance."""
     docstring = inspect.getdoc(cls) or ""
-    first_para = docstring.split("\n\n")[0] if docstring else ""
+    # Render everything before the first ## group header — the intro prose,
+    # not just the first paragraph. Group sections are rendered as tables.
+    intro_lines: list[str] = []
+    for line in docstring.splitlines():
+        if line.startswith("## "):
+            break
+        intro_lines.append(line)
+    first_para = "\n".join(intro_lines).strip()
     module_path = entry["module"]
 
     lines = [
