@@ -68,6 +68,28 @@ def test_run_list_help_derives_filter_flags_from_schema():
     assert "--group GROUP" in result.stdout
 
 
+@pytest.mark.parametrize(
+    ("flag", "value", "backend_field"),
+    [
+        ("--status", "failed", "display_status"),
+        ("--model", "org/model", "model"),
+        ("--dataset", "org/data", "dataset"),
+        ("--recipe", "slime", "recipe"),
+        ("--group", "nightly", "group_id"),
+    ],
+)
+def test_run_list_forwards_each_filter_flag(flag, value, backend_field):
+    result = CliRunner().invoke(
+        cli_module.entrypoint_cli,
+        ["run", "list", flag, value, "-j"],
+    )
+
+    assert result.exit_code == 0
+    path, params = FakeDashboardClient.requests[0]
+    assert path == "/api/runs"
+    assert params[backend_field] == value
+
+
 def test_run_list_forwards_filters_and_prints_configured_fields_as_json():
     FakeDashboardClient.payload = [_summary()]
 
