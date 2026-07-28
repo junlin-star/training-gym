@@ -249,12 +249,10 @@ class SlimeRecipe(BaseTrainRecipe):
     no_save_optim : bool
         Omit optim state from checkpoints (smaller, but no exact resume).
     async_save : bool
-        Write ``torch_dist`` checkpoints in the background so training (and the
-        node's Ray raylet) isn't blocked for the duration of a large save.
-        Requires ``use_persistent_ckpt_worker``.
+        Write checkpoints in the background; requires ``use_persistent_ckpt_worker``.
     use_persistent_ckpt_worker : bool
-        Persistent Megatron checkpoint-writer worker per rank; required for
-        ``async_save`` with distributed (``torch_dist``) checkpoints.
+        Persistent Megatron checkpoint-writer worker per rank (needed for
+        ``async_save`` with ``torch_dist`` checkpoints).
     megatron_to_hf_mode : str
         Mode used to export saved Megatron checkpoints back to HF format;
         empty disables the export step.

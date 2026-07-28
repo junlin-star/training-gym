@@ -35,10 +35,6 @@ class GLM_4_7_Recipe(SlimeRecipe):
     sglang_mem_fraction_static: float = 0.7
 
     save_interval: int = 10
-    # A synchronous torch_dist save of the 355B distributed-optimizer state
-    # blocks the training node for minutes, starving the Ray raylet until the
-    # GCS falsely marks the node dead. Async save moves the write off the
-    # critical path (requires the persistent checkpoint worker).
     async_save: bool = True
     use_persistent_ckpt_worker: bool = True
 
