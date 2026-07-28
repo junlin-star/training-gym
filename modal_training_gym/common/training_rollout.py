@@ -13,7 +13,7 @@ import time
 from collections.abc import Awaitable
 from typing import Any, cast
 
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field
 
 from modal_training_gym.common.coerce import safe_int
 from modal_training_gym.common.sample import Sample
@@ -216,19 +216,13 @@ class TrainingRolloutResult(BaseModel):
         cls, training_run_id: str
     ) -> list[TrainingRolloutSummary]:
         """Lightweight per-rollout summaries for one run, sorted by rollout_id."""
-        items = cast(
-            list[dict[str, Any]] | None,
-            vol_get_summary_items(MetadataStore.TRAINING_ROLLOUTS_SUMMARY),
-        ) or []
-        summaries: list[TrainingRolloutSummary] = []
-        for item in items:
-            if (
-                not isinstance(item, dict)
-                or item.get("training_run_id") != training_run_id
-            ):
-                continue
-            try:
-                summaries.append(TrainingRolloutSummary.model_validate(item))
-            except ValidationError:
-                continue
-        return sorted(summaries, key=lambda summary: summary.rollout_id)
+        items = vol_get_summary_items(MetadataStore.TRAINING_ROLLOUTS_SUMMARY) or []
+        return sorted(
+            (
+                TrainingRolloutSummary.model_validate(item)
+                for item in items
+                if isinstance(item, dict)
+                and item.get("training_run_id") == training_run_id
+            ),
+            key=lambda summary: summary.rollout_id,
+        )

@@ -48,17 +48,24 @@
   let run = $state(null);
   let runLoading = $state(false);
   let runError = $state("");
+  let runNotFound = $state(false);
 
   async function loadRun(id, signal) {
     runLoading = true;
     try {
       const nextRun = await fetchRun(id, { signal });
       if (signal.aborted) return;
+      if (nextRun === null) {
+        run = null;
+        runNotFound = true;
+        runError = `Training run "${id}" was not found.`;
+        return;
+      }
       run = nextRun;
+      runNotFound = false;
       runError = "";
     } catch (err) {
       if (signal.aborted) return;
-      // Preserve an already-rendered run through transient refresh failures.
       if (!run) runError = String(err?.message || err);
     } finally {
       if (!signal.aborted) runLoading = false;
@@ -88,6 +95,7 @@
     const id = runId;
     run = null;
     runError = "";
+    runNotFound = false;
     if (!id) {
       runLoading = false;
       return;
@@ -96,7 +104,11 @@
     const controller = new AbortController();
     void loadRun(id, controller.signal);
     const interval = window.setInterval(() => {
-      if (runLoading || (runStatus && runStatus !== "running")) return;
+      if (
+        runLoading ||
+        runNotFound ||
+        (runStatus && runStatus !== "running")
+      ) return;
       void loadRun(id, controller.signal);
     }, 5000);
 

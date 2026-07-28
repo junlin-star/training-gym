@@ -143,7 +143,11 @@
   }
 
   $effect(() => {
-    if (drawerRunId && !allRuns.some((run) => run.run_id === drawerRunId)) {
+    if (
+      !loading &&
+      drawerRunId &&
+      !allRuns.some((run) => run.run_id === drawerRunId)
+    ) {
       onCloseDrawer();
     }
   });

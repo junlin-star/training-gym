@@ -78,6 +78,7 @@ export async function fetchRun(trainingRunId, { signal } = {}) {
     `${SERVER}/runs/${encodeURIComponent(trainingRunId)}`,
     { signal },
   );
+  if (res.status === 404) return null;
   if (!res.ok) {
     throw new Error(await getErrorFromResponse(res));
   }
