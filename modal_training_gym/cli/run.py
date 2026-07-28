@@ -12,7 +12,7 @@ from pydantic import ValidationError
 
 from modal_training_gym.common.run_list import run_list_field_metadata
 from modal_training_gym.common.run_summary import RunSummary
-from modal_training_gym.common.time_utils import parse_time
+from modal_training_gym.common.time import parse_time
 
 from .client import DashboardClient
 from .commands import _TrainingGymGroup
@@ -28,17 +28,6 @@ CLI_FIELD_NAMES = {
     "group_id": "group",
     "updated_at": "last_updated_at",
 }
-
-
-def parse_since(value: str, *, now: float | None = None) -> int:
-    """Parse epoch, ISO 8601, or relative time into epoch seconds."""
-    parsed = parse_time(value, time.time() if now is None else now)
-    if parsed is None:
-        raise click.BadParameter(
-            "Must be epoch seconds, ISO 8601, or a relative time such as 24h"
-        )
-    return int(parsed)
-
 
 def _run_filter_options(function: Callable[..., Any]) -> Callable[..., Any]:
     """Generate Click filters from list fields marked filterable on RunSummary."""
@@ -106,9 +95,14 @@ def list_runs(
     filters: dict[str, str | None],
 ) -> None:
     """Fetch, validate, and render the run list."""
+    parsed_since = parse_time(since, time.time()) if since else None
+    if since and parsed_since is None:
+        raise click.BadParameter(
+            "Must be epoch seconds, ISO 8601, or a relative time such as 24h"
+        )
     params: dict[str, str | int | None] = {
         **filters,
-        "since": parse_since(since) if since else None,
+        "since": int(parsed_since) if parsed_since is not None else None,
         "limit": limit,
     }
     with DashboardClient() as client:

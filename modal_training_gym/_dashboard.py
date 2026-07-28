@@ -45,7 +45,7 @@ from modal_training_gym.common.run_summary import (
     RunSummary,
     build_run_summaries,
 )
-from modal_training_gym.common.time_utils import parse_time as _parse_log_time
+from modal_training_gym.common.time import parse_time as _parse_log_time
 from modal_training_gym.common.training_rollout import TrainingRolloutResult
 
 SummaryLoader = Callable[[], Awaitable[list[JsonDict]]]
