@@ -16,6 +16,7 @@ This module keeps the reporting entry points (``report_*``, ``log_*``,
 from __future__ import annotations
 
 import time
+import warnings
 from dataclasses import dataclass
 from typing import Any
 
@@ -189,10 +190,16 @@ def _rollout_log_decision(result: Any, samples: Any) -> tuple[Any, bool]:
         return result, False
     if isinstance(result, bool):
         return samples, result
-    raise TypeError(
-        "custom_rollout_log_function must return None, bool, list, tuple, or "
-        f"RolloutLogResult; got {type(result).__name__}"
+    warnings.warn(
+        "custom_rollout_log_function should return None, bool, list, tuple, or "
+        f"RolloutLogResult; got {type(result).__name__}.",
+        RuntimeWarning,
+        stacklevel=2,
     )
+    try:
+        return samples, bool(result)
+    except Exception:
+        return samples, False
 
 
 def log_rollout_data(

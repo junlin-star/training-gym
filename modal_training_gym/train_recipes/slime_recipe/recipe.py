@@ -401,7 +401,9 @@ class SlimeRecipe(BaseTrainRecipe):
         ``phase_reporting.RolloutLogResult``) picks what gets uploaded.
         Collapse a per-step rollout to one sample per episode and only that
         list is sent. Returning ``None``/``bool`` keeps every sample, as
-        slime's own contract does.
+        slime's own contract does. A ``list``/``tuple`` only redirects the
+        dashboard payload; to also skip slime's default W&B logging, return
+        ``True`` or ``RolloutLogResult(samples=..., skip_default_logging=True)``.
     custom_eval_rollout_log_function : Callable | str | None
         Called with each eval rollout's data for logging. Unlike the train
         hook above, this path still follows slime's bool/None contract only:
