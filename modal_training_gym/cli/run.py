@@ -14,6 +14,7 @@ from pydantic import ValidationError
 from modal_training_gym.common.run_list import run_list_field_metadata
 from modal_training_gym.common.run_summary import RunSummary
 from modal_training_gym.common.time_utils import parse_time
+from modal_training_gym.common.training_rollout import TrainingRolloutSummary
 
 from .client import DashboardClient
 from .commands import _TrainingGymGroup
@@ -99,8 +100,8 @@ def _table_rows(
     return rows
 
 
-def _format_reward(value: object) -> str:
-    if not isinstance(value, (int, float)) or isinstance(value, bool):
+def _format_reward(value: float | None) -> str:
+    if value is None:
         return "—"
     return f"{value:.4f}".rstrip("0").rstrip(".")
 
@@ -154,16 +155,21 @@ def _validate_run_summaries(payload: object) -> list[RunSummary]:
     return [_validate_run_summary(item) for item in payload]
 
 
-def _validate_rollouts(payload: object) -> list[dict[str, object]]:
-    if not isinstance(payload, list) or any(
-        not isinstance(item, dict) for item in payload
-    ):
+def _validate_rollouts(payload: object) -> list[TrainingRolloutSummary]:
+    if not isinstance(payload, list):
         raise CLIError(
             "Dashboard returned invalid rollout data.",
             error="invalid_dashboard_response",
             exit_code=ExitCode.BACKEND,
         )
-    return payload
+    try:
+        return [TrainingRolloutSummary.model_validate(item) for item in payload]
+    except ValidationError as exc:
+        raise CLIError(
+            "Dashboard returned invalid rollout data.",
+            error="invalid_dashboard_response",
+            exit_code=ExitCode.BACKEND,
+        ) from exc
 
 
 def _format_step(summary: RunSummary) -> str:
@@ -208,13 +214,16 @@ def get_run(*, run_id: str, verbose: bool, json_output: bool) -> None:
         if verbose:
             payload["reward_over_time"] = [
                 {
-                    "rollout_id": rollout.get("rollout_id"),
-                    "reward": rollout.get("mean"),
-                    "created_at": _format_timestamp(rollout.get("created_at")),
+                    "rollout_id": rollout.rollout_id,
+                    "reward": rollout.mean,
+                    "created_at": _format_timestamp(rollout.created_at),
                 }
                 for rollout in rollouts
             ]
-            payload["rollouts"] = rollouts
+            payload["rollouts"] = [
+                rollout.model_dump(mode="json", exclude_none=True)
+                for rollout in rollouts
+            ]
         print_json(payload)
         return
 
@@ -250,9 +259,9 @@ def get_run(*, run_id: str, verbose: bool, json_output: bool) -> None:
         ["Rollout", "Reward", "Recorded"],
         [
             [
-                rollout.get("rollout_id", "—"),
-                _format_reward(rollout.get("mean")),
-                _format_timestamp(rollout.get("created_at")),
+                rollout.rollout_id,
+                _format_reward(rollout.mean),
+                _format_timestamp(rollout.created_at),
             ]
             for rollout in rollouts
         ],
@@ -262,16 +271,16 @@ def get_run(*, run_id: str, verbose: bool, json_output: bool) -> None:
         ["Rollout", "Samples", "Duration", "Errors"],
         [
             [
-                rollout.get("rollout_id", "—"),
-                rollout.get("total", "—"),
+                rollout.rollout_id,
+                rollout.total,
                 (
-                    f"{float(duration):.2f}s"
-                    if isinstance(duration := rollout.get("rollout_time"), (int, float))
+                    f"{rollout.rollout_time:.2f}s"
+                    if rollout.rollout_time is not None
                     else "—"
                 ),
                 (
-                    rollout.get("error_summary", {}).get("verdict", "—")
-                    if isinstance(rollout.get("error_summary"), dict)
+                    rollout.error_summary.get("verdict", "—")
+                    if rollout.error_summary is not None
                     else "—"
                 ),
             ]

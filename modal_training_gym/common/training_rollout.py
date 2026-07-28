@@ -11,9 +11,9 @@ from __future__ import annotations
 
 import time
 from collections.abc import Awaitable
-from typing import Any
+from typing import Any, cast
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from modal_training_gym.common.coerce import safe_int
 from modal_training_gym.common.sample import Sample
@@ -68,6 +68,19 @@ def _tag_stats_for_samples(samples: list[Sample]) -> dict[str, dict[str, Any]]:
         }
         for tag, values in values_by_tag.items()
     }
+
+
+class TrainingRolloutSummary(BaseModel):
+    """Lightweight rollout data returned by the run-rollouts list endpoint."""
+
+    training_run_id: str
+    rollout_id: int
+    created_at: int
+    total: int
+    mean: float
+    rollout_time: float | None = None
+    error_summary: dict[str, Any] | None = None
+    tag_stats: dict[str, dict[str, Any]] | None = None
 
 
 class TrainingRolloutResult(BaseModel):
@@ -199,15 +212,23 @@ class TrainingRolloutResult(BaseModel):
         )
 
     @classmethod
-    def list_summaries_for_run(cls, training_run_id: str) -> list[dict[str, Any]]:
+    def list_summaries_for_run(
+        cls, training_run_id: str
+    ) -> list[TrainingRolloutSummary]:
         """Lightweight per-rollout summaries for one run, sorted by rollout_id."""
-        items = vol_get_summary_items(MetadataStore.TRAINING_ROLLOUTS_SUMMARY) or []
-        return sorted(
-            (
-                item
-                for item in items
-                if isinstance(item, dict)
-                and item.get("training_run_id") == training_run_id
-            ),
-            key=lambda item: int(item.get("rollout_id", 0) or 0),
-        )
+        items = cast(
+            list[dict[str, Any]] | None,
+            vol_get_summary_items(MetadataStore.TRAINING_ROLLOUTS_SUMMARY),
+        ) or []
+        summaries: list[TrainingRolloutSummary] = []
+        for item in items:
+            if (
+                not isinstance(item, dict)
+                or item.get("training_run_id") != training_run_id
+            ):
+                continue
+            try:
+                summaries.append(TrainingRolloutSummary.model_validate(item))
+            except ValidationError:
+                continue
+        return sorted(summaries, key=lambda summary: summary.rollout_id)
