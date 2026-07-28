@@ -631,10 +631,6 @@ class SlimeRecipe(BaseTrainRecipe):
     sglang_enable_dp_lm_head: bool = False
     sglang_disable_custom_all_reduce: bool = False
     sglang_cuda_graph_bs: list[int] | None = None
-    # SGLang's CUDA default is the breakable prefill graph, which cannot run
-    # with the memory-saver mode Slime enables for colocated rollouts. ``None``
-    # means select a topology-safe default in ``_fields``; callers can opt into
-    # tc_piecewise after validating support for their model architecture.
     sglang_cuda_graph_backend_prefill: str | None = None
     sglang_max_running_requests: int | None = None
     sglang_tool_call_parser: str | None = None
