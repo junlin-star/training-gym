@@ -575,8 +575,6 @@ class SlimeRecipe(BaseTrainRecipe):
     save: str = "/checkpoints"
     load: str = ""
     no_save_optim: bool = False
-    async_save: bool = False
-    use_persistent_ckpt_worker: bool = False
     megatron_to_hf_mode: str = ""
     use_fault_tolerance: bool = True
 

@@ -139,9 +139,6 @@ _PATCH_DIST_CKPT_QUANTIZED_B64 = encode_patch(
 )
 # OPD / multi-turn: zero-std metrics must skip non-numeric rewards (dict/None).
 _PATCH_ZERO_STD_METRICS_B64 = encode_patch("patch_zero_std_metrics", _SLIME_PATCHES)
-_PATCH_SGLANG_PARALLEL_ALIASES_B64 = encode_patch(
-    "patch_sglang_parallel_aliases", _SLIME_PATCHES
-)
 
 
 def _build_slime_base_image() -> "Image":
@@ -162,7 +159,6 @@ def _build_slime_base_image() -> "Image":
             f"echo {_PATCH_LOG_ELIDE_B64} | base64 -d | python3",
             f"echo {_PATCH_DIST_CKPT_QUANTIZED_B64} | base64 -d | python3",
             f"echo {_PATCH_ZERO_STD_METRICS_B64} | base64 -d | python3",
-            f"echo {_PATCH_SGLANG_PARALLEL_ALIASES_B64} | base64 -d | python3",
         )
     )
 
