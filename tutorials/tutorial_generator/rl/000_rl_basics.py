@@ -295,7 +295,7 @@ def _train_intro():
 @code
 def _define_training_run():
     async def haiku_rm(args, sample, **kwargs) -> float:
-        return score_haiku(sample.response)
+        return score_haiku(sample.response.replace("<|im_end|>", ""))
     
     training_run = TrainConfig(
         model=base_model,
