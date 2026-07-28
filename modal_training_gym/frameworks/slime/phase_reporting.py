@@ -16,6 +16,7 @@ This module keeps the reporting entry points (``report_*``, ``log_*``,
 from __future__ import annotations
 
 import time
+from dataclasses import dataclass
 from typing import Any
 
 from modal_training_gym.common.status import SlimeStatus
@@ -119,6 +120,12 @@ def report_phase(
     )
 
 
+@dataclass(frozen=True)
+class RolloutLogResult:
+    samples: Any = None
+    skip_default_logging: bool = False
+
+
 def report_rollout_samples(
     rollout_id: int,
     args: Any,
@@ -148,6 +155,8 @@ def report_rollout_samples(
         ]
     except TypeError:
         return
+    if not sample_dicts:
+        return
     payload = {
         **_run_context(args),
         "rollout_id": int(rollout_id),
@@ -170,6 +179,22 @@ def _call_hook(path_key: str, args: Any, *hook_args: Any, **hook_kwargs: Any) ->
     return hook(*hook_args, **hook_kwargs)
 
 
+def _rollout_log_decision(result: Any, samples: Any) -> tuple[Any, bool]:
+    if result is None:
+        return samples, False
+    if isinstance(result, RolloutLogResult):
+        report = samples if result.samples is None else result.samples
+        return report, bool(result.skip_default_logging)
+    if isinstance(result, (list, tuple)):
+        return result, False
+    if isinstance(result, bool):
+        return samples, result
+    raise TypeError(
+        "custom_rollout_log_function must return None, bool, list, tuple, or "
+        f"RolloutLogResult; got {type(result).__name__}"
+    )
+
+
 def log_rollout_data(
     rollout_id: int,
     args: Any,
@@ -187,9 +212,6 @@ def log_rollout_data(
         metrics=rollout_extra_metrics,
         rollout_time=rollout_time,
     )
-    report_rollout_samples(
-        rollout_id, args, samples, rollout_extra_metrics, rollout_time
-    )
     result = _call_hook(
         CUSTOM_ROLLOUT_LOG_FUNCTION_PATH_KEY,
         args,
@@ -199,9 +221,11 @@ def log_rollout_data(
         rollout_extra_metrics,
         rollout_time,
     )
-    if result is None:
-        return False
-    return bool(result)
+    report, skip_default_logging = _rollout_log_decision(result, samples)
+    report_rollout_samples(
+        rollout_id, args, report, rollout_extra_metrics, rollout_time
+    )
+    return skip_default_logging
 
 
 def log_eval_rollout_data(
@@ -302,6 +326,7 @@ def report_step_event(
 
 
 __all__ = [
+    "RolloutLogResult",
     "before_log_prob_hook",
     "before_train_step_hook",
     "report_advantage_distribution",

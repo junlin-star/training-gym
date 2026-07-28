@@ -396,9 +396,17 @@ class SlimeRecipe(BaseTrainRecipe):
         Replaces slime's entire rollout loop (``--rollout-function-path``).
     custom_rollout_log_function : Callable | str | None
         Called with each rollout's data for logging; the gym wraps it so
-        phase reporting and dashboard capture still run.
+        phase reporting and dashboard capture still run. The hook runs
+        *before* the dashboard post, so returning a list of samples (or a
+        ``phase_reporting.RolloutLogResult``) picks what gets uploaded.
+        Collapse a per-step rollout to one sample per episode and only that
+        list is sent. Returning ``None``/``bool`` keeps every sample, as
+        slime's own contract does.
     custom_eval_rollout_log_function : Callable | str | None
-        Same as above, for eval rollouts.
+        Called with each eval rollout's data for logging. Unlike the train
+        hook above, this path still follows slime's bool/None contract only:
+        ``None``/falsy keeps slime's default W&B eval logging, truthy skips
+        it. There is no sample rewrite and no ``RolloutLogResult`` support.
     custom_megatron_before_log_prob_hook : Callable | str | None
         Hook run in the Megatron trainer before log-prob computation.
     custom_megatron_before_train_step_hook : Callable | str | None
