@@ -99,7 +99,7 @@ class DashboardClient:
 
         if response.status_code == 404 and not_found_error is not None:
             raise not_found_error
-        
+
         self._raise_for_status(response.status_code)
         try:
             return response.json()
