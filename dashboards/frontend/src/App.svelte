@@ -352,6 +352,8 @@
   $effect(() => {
     if (!activeTrainingRunId && !hasLoadedRuns) {
       void loadRuns();
+    } else if (activeTrainingRunId && !hasLoadedRuns) {
+      loading = false;
     }
     if (activePage === "evals" && !hasLoadedEvals) {
       void loadEvals();
