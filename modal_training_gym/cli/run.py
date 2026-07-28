@@ -6,6 +6,7 @@ import time
 from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import quote
 
 import click
 from pydantic import ValidationError
@@ -98,6 +99,188 @@ def _table_rows(
     return rows
 
 
+def _format_reward(value: object) -> str:
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return "—"
+    return f"{value:.4f}".rstrip("0").rstrip(".")
+
+
+def _current_step(summary: RunSummary) -> tuple[int | None, int | None, str]:
+    progress = summary.framework_progress
+    if progress is None:
+        return None, None, "step"
+    return progress.current, progress.total, progress.unit
+
+
+def _run_payload(summary: RunSummary) -> dict[str, object]:
+    current_step, total_steps, step_unit = _current_step(summary)
+    return {
+        "run_id": summary.run_id,
+        "status": summary.display_status,
+        "stage": summary.display_stage or None,
+        "current_step": current_step,
+        "total_steps": total_steps,
+        "step_unit": step_unit,
+        "current_reward": (
+            summary.latest_rollout.mean if summary.latest_rollout is not None else None
+        ),
+        "model": summary.model or None,
+        "dataset": summary.dataset or None,
+        "recipe": summary.recipe or None,
+        "group": summary.group_id or None,
+        "created_at": _format_timestamp(summary.created_at),
+        "last_updated_at": _format_timestamp(summary.updated_at),
+    }
+
+
+def _validate_run_summary(payload: object) -> RunSummary:
+    try:
+        return RunSummary.model_validate(payload)
+    except ValidationError as exc:
+        raise CLIError(
+            "Dashboard returned an invalid run summary.",
+            error="invalid_dashboard_response",
+            exit_code=ExitCode.BACKEND,
+        ) from exc
+
+
+def _validate_run_summaries(payload: object) -> list[RunSummary]:
+    if not isinstance(payload, list):
+        raise CLIError(
+            "Dashboard returned an invalid run list.",
+            error="invalid_dashboard_response",
+            exit_code=ExitCode.BACKEND,
+        )
+    return [_validate_run_summary(item) for item in payload]
+
+
+def _validate_rollouts(payload: object) -> list[dict[str, object]]:
+    if not isinstance(payload, list) or any(
+        not isinstance(item, dict) for item in payload
+    ):
+        raise CLIError(
+            "Dashboard returned invalid rollout data.",
+            error="invalid_dashboard_response",
+            exit_code=ExitCode.BACKEND,
+        )
+    return payload
+
+
+def _format_step(summary: RunSummary) -> str:
+    current, total, unit = _current_step(summary)
+    if current is None:
+        return "—"
+    value = f"{current} / {total}" if total is not None else str(current)
+    return f"{value} {unit}".strip()
+
+
+def get_run(*, run_id: str, verbose: bool, json_output: bool) -> None:
+    """Fetch and render one run, optionally including rollout history."""
+    encoded_run_id = quote(run_id, safe="")
+    not_found_error = CLIError(
+        f"Training run {run_id!r} was not found.",
+        error="run_not_found",
+        exit_code=ExitCode.NOT_FOUND,
+        run_id=run_id,
+        hint="training-gym run list",
+    )
+    with DashboardClient() as client:
+        summary = _validate_run_summary(
+            client.get_json(
+                f"/api/runs/{encoded_run_id}",
+                params=None,
+                not_found_error=not_found_error,
+            )
+        )
+        rollouts = (
+            _validate_rollouts(
+                client.get_json(
+                    f"/api/runs/{encoded_run_id}/rollouts",
+                    params=None,
+                )
+            )
+            if verbose
+            else []
+        )
+
+    if json_output:
+        payload = _run_payload(summary)
+        if verbose:
+            payload["reward_over_time"] = [
+                {
+                    "rollout_id": rollout.get("rollout_id"),
+                    "reward": rollout.get("mean"),
+                    "created_at": _format_timestamp(rollout.get("created_at")),
+                }
+                for rollout in rollouts
+            ]
+            payload["rollouts"] = rollouts
+        print_json(payload)
+        return
+
+    print_table(
+        ["Field", "Value"],
+        [
+            ["Run", summary.run_id],
+            ["Status", summary.display_status or "—"],
+            ["Stage", summary.display_stage or "—"],
+            ["Current step", _format_step(summary)],
+            [
+                "Current reward",
+                _format_reward(
+                    summary.latest_rollout.mean
+                    if summary.latest_rollout is not None
+                    else None
+                ),
+            ],
+            ["Model", summary.model or "—"],
+            ["Dataset", summary.dataset or "—"],
+            ["Recipe", summary.recipe or "—"],
+            ["Group", summary.group_id or "—"],
+            ["Created", _format_timestamp(summary.created_at)],
+            ["Last updated", _format_timestamp(summary.updated_at)],
+        ],
+        title=f"Run {summary.run_id}",
+        show_header=False,
+    )
+    if not verbose:
+        return
+
+    print_table(
+        ["Rollout", "Reward", "Recorded"],
+        [
+            [
+                rollout.get("rollout_id", "—"),
+                _format_reward(rollout.get("mean")),
+                _format_timestamp(rollout.get("created_at")),
+            ]
+            for rollout in rollouts
+        ],
+        title="Reward over time",
+    )
+    print_table(
+        ["Rollout", "Samples", "Duration", "Errors"],
+        [
+            [
+                rollout.get("rollout_id", "—"),
+                rollout.get("total", "—"),
+                (
+                    f"{float(duration):.2f}s"
+                    if isinstance(duration := rollout.get("rollout_time"), (int, float))
+                    else "—"
+                ),
+                (
+                    rollout.get("error_summary", {}).get("verdict", "—")
+                    if isinstance(rollout.get("error_summary"), dict)
+                    else "—"
+                ),
+            ]
+            for rollout in rollouts
+        ],
+        title="Rollouts",
+    )
+
+
 def list_runs(
     *,
     since: str | None,
@@ -114,20 +297,7 @@ def list_runs(
     with DashboardClient() as client:
         payload = client.get_json("/api/runs", params=params)
 
-    if not isinstance(payload, list):
-        raise CLIError(
-            "Dashboard returned an invalid run list.",
-            error="invalid_dashboard_response",
-            exit_code=ExitCode.BACKEND,
-        )
-    try:
-        summaries = [RunSummary.model_validate(item) for item in payload]
-    except ValidationError as exc:
-        raise CLIError(
-            "Dashboard returned an invalid run summary.",
-            error="invalid_dashboard_response",
-            exit_code=ExitCode.BACKEND,
-        ) from exc
+    summaries = _validate_run_summaries(payload)
     fields = run_list_field_metadata()
     if json_output:
         print_json(
@@ -153,6 +323,28 @@ def list_runs(
 @click.group("run", cls=_TrainingGymGroup)
 def run_group() -> None:
     """Inspect and manage training runs."""
+
+
+@run_group.command(
+    "get",
+    help="Show status and top-level metadata for a single run.",
+    epilog=(
+        "Examples:\n"
+        "  training-gym run get run_8f2a\n"
+        "  training-gym run get run_8f2a --verbose"
+    ),
+)
+@click.argument("run_id")
+@click.option(
+    "--verbose",
+    is_flag=True,
+    default=False,
+    help="Include reward-over-time and rollout data.",
+)
+@json_option
+def get_command(*, run_id: str, verbose: bool, json_output: bool) -> None:
+    """Show status and top-level metadata for a single run."""
+    get_run(run_id=run_id, verbose=verbose, json_output=json_output)
 
 
 @run_group.command(

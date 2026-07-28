@@ -43,6 +43,7 @@ from modal_training_gym.common.run_list import (
 from modal_training_gym.common.run_summary import (
     JsonDict,
     RunSummary,
+    build_run_summary,
     build_run_summaries,
 )
 from modal_training_gym.common.time_utils import parse_time as _parse_log_time
@@ -735,6 +736,25 @@ def fastapi_app():
             limit=limit,
         )
         return filtered
+
+    @web.get("/api/runs/{training_run_id}", response_model=RunSummary)
+    async def get_run(training_run_id: str):
+        try:
+            run = await TrainingRun.from_id(training_run_id, is_async=True)
+        except KeyError:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Training run {training_run_id!r} not found",
+            )
+        try:
+            result = await vol_get(
+                MetadataStore.TRAIN_RESULTS,
+                training_run_id,
+                is_async=True,
+            )
+        except KeyError:
+            result = None
+        return build_run_summary(run.model_dump(mode="json"), result)
 
     @web.post("/api/framework-status")
     async def framework_status(

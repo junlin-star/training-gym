@@ -43,10 +43,12 @@ def print_table(
     rows: Sequence[Sequence[object]],
     *,
     title: str = "",
+    show_header: bool = True,
 ) -> None:
     table = Table(
         *columns,
         title=title or None,
+        show_header=show_header,
     )
     for row in rows:
         cells = [

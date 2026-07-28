@@ -11,6 +11,8 @@ from modal_training_gym.cli import run as run_module
 
 class FakeDashboardClient:
     payload: object = []
+    payloads: dict[str, object] = {}
+    not_found_paths: set[str] = set()
     requests: list[tuple[str, dict[str, object]]] = []
 
     def __enter__(self):
@@ -19,14 +21,18 @@ class FakeDashboardClient:
     def __exit__(self, *_args):
         return None
 
-    def get_json(self, path, *, params):
+    def get_json(self, path, *, params=None, not_found_error=None):
         self.requests.append((path, params))
-        return self.payload
+        if path in self.not_found_paths and not_found_error is not None:
+            raise not_found_error
+        return self.payloads.get(path, self.payload)
 
 
 @pytest.fixture(autouse=True)
 def fake_dashboard(monkeypatch):
     FakeDashboardClient.payload = []
+    FakeDashboardClient.payloads = {}
+    FakeDashboardClient.not_found_paths = set()
     FakeDashboardClient.requests = []
     monkeypatch.setattr(run_module, "DashboardClient", FakeDashboardClient)
 
@@ -66,6 +72,126 @@ def test_run_list_help_derives_filter_flags_from_schema():
     assert "--limit" in result.stdout
     assert "-j, --json" in result.stdout
     assert "--group GROUP" in result.stdout
+
+
+def test_run_get_help_documents_flags_and_examples():
+    result = CliRunner().invoke(cli_module.entrypoint_cli, ["run", "get", "--help"])
+
+    assert result.exit_code == 0
+    assert "Show status and top-level metadata for a single run." in result.stdout
+    assert "RUN_ID" in result.stdout
+    assert "--verbose" in result.stdout
+    assert "-j, --json" in result.stdout
+    assert "Examples:" in result.stdout
+    assert result.stdout.count("training-gym run get run_8f2a") == 2
+
+
+def test_run_get_prints_top_level_status():
+    FakeDashboardClient.payload = _summary(
+        display_status="pending",
+        display_stage="Generating rollouts",
+        framework_progress={
+            "current": 3,
+            "total": 10,
+            "unit": "step",
+        },
+        latest_rollout={
+            "rollout_id": 2,
+            "mean": 0.625,
+            "total": 16,
+            "created_at": 190,
+        },
+    )
+
+    result = CliRunner().invoke(
+        cli_module.entrypoint_cli,
+        ["run", "get", "run-1"],
+    )
+
+    assert result.exit_code == 0
+    assert FakeDashboardClient.requests == [("/api/runs/run-1", None)]
+    assert "pending" in result.stdout
+    assert "Generating rollouts" in result.stdout
+    assert "3 / 10 step" in result.stdout
+    assert "0.625" in result.stdout
+    assert "Field" not in result.stdout
+    assert "Value" not in result.stdout
+
+
+def test_run_get_verbose_json_includes_reward_history_and_rollouts():
+    FakeDashboardClient.payloads = {
+        "/api/runs/run-1": _summary(
+            display_status="pending",
+            framework_progress={"current": 4, "total": 10, "unit": "step"},
+            latest_rollout={
+                "rollout_id": 2,
+                "mean": 0.75,
+                "total": 8,
+                "created_at": 200,
+            },
+        ),
+        "/api/runs/run-1/rollouts": [
+            {
+                "training_run_id": "run-1",
+                "rollout_id": 1,
+                "created_at": 150,
+                "total": 8,
+                "mean": 0.5,
+                "rollout_time": 12.5,
+            },
+            {
+                "training_run_id": "run-1",
+                "rollout_id": 2,
+                "created_at": 200,
+                "total": 8,
+                "mean": 0.75,
+            },
+        ],
+    }
+
+    result = CliRunner().invoke(
+        cli_module.entrypoint_cli,
+        ["run", "get", "run-1", "--verbose", "-j"],
+    )
+
+    assert result.exit_code == 0
+    assert FakeDashboardClient.requests == [
+        ("/api/runs/run-1", None),
+        ("/api/runs/run-1/rollouts", None),
+    ]
+    payload = json.loads(result.stdout)
+    assert payload["current_step"] == 4
+    assert payload["total_steps"] == 10
+    assert payload["current_reward"] == 0.75
+    assert payload["reward_over_time"] == [
+        {
+            "rollout_id": 1,
+            "reward": 0.5,
+            "created_at": "1970-01-01T00:02:30Z",
+        },
+        {
+            "rollout_id": 2,
+            "reward": 0.75,
+            "created_at": "1970-01-01T00:03:20Z",
+        },
+    ]
+    assert (
+        payload["rollouts"] == FakeDashboardClient.payloads["/api/runs/run-1/rollouts"]
+    )
+
+
+def test_run_get_missing_run_returns_not_found_without_fetching_rollouts():
+    FakeDashboardClient.not_found_paths = {"/api/runs/missing"}
+
+    result = CliRunner().invoke(
+        cli_module.entrypoint_cli,
+        ["run", "get", "missing", "--verbose"],
+    )
+
+    assert result.exit_code == 3
+    assert "Training run 'missing' was not found." in result.stderr
+    assert "training-gym run list" in result.stderr
+    assert FakeDashboardClient.requests == [("/api/runs/missing", None)]
 
 
 @pytest.mark.parametrize(
