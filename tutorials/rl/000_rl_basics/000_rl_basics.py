@@ -44,6 +44,23 @@ from modal_training_gym import (
     list_checkpoints,
 )
 
+# ## Serve the base model
+#
+# So, how does Qwen3-4B currently fare at writing haikus? We can
+# serve the base model and find out.
+#
+# The training gym has several config classes so you can define deployment, training, and evaluation configurations,
+# and reuse them across different runs for parameter sweeps.
+#
+# Let's start by initializing a `DeploymentConfig`.
+#
+# Calling `DeploymentConfig.serve()` builds and deploys an SGLang app, then
+# returns a `ModelDeployment` with the endpoint URL. Pass
+# `unauthenticated=True` so the endpoint is reachable without Modal
+# proxy-auth tokens.
+
+base_model = Qwen3_4B()
+
 # Let's now cover the evaluation part of the tutorial.
 #
 # A good eval takes a particular outcome and assigns a score to it. It can be binary (pass/fail) or continuous (0-100),
@@ -137,7 +154,8 @@ def eval_response_fn(_example: dict, response: str) -> EvalRowResult:
 # You can also add patches to slime using the `image_overlay` argument.
 
 async def haiku_rm(args, sample, **kwargs) -> float:
-    return score_haiku(sample.response.replace("<|im_end|>", ""))
+    response = base_model.parse_response(sample.response)
+    return score_haiku(response.content)
 
 import modal
 
@@ -152,22 +170,6 @@ def _main_impl() -> None:
             "https://modal.com/secrets with an HF_TOKEN entry, then re-run."
         ) from e
 
-    # ## Serve the base model
-    #
-    # So, how does Qwen3-4B currently fare at writing haikus? We can
-    # serve the base model and find out.
-    #
-    # The training gym has several config classes so you can define deployment, training, and evaluation configurations,
-    # and reuse them across different runs for parameter sweeps.
-    #
-    # Let's start by initializing a `DeploymentConfig`.
-    #
-    # Calling `DeploymentConfig.serve()` builds and deploys an SGLang app, then
-    # returns a `ModelDeployment` with the endpoint URL. Pass
-    # `unauthenticated=True` so the endpoint is reachable without Modal
-    # proxy-auth tokens.
-
-    base_model = Qwen3_4B()
     base_model_deployment = DeploymentConfig(
         model=base_model,
         unauthenticated=True,
