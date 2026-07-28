@@ -137,7 +137,7 @@ def eval_response_fn(_example: dict, response: str) -> EvalRowResult:
 # You can also add patches to slime using the `image_overlay` argument.
 
 async def haiku_rm(args, sample, **kwargs) -> float:
-    return score_haiku(sample.response)
+    return score_haiku(sample.response.replace("<|im_end|>", ""))
 
 import modal
 
