@@ -1,3 +1,5 @@
+from dataclasses import field
+
 from pydantic import ConfigDict
 from pydantic.dataclasses import dataclass
 
@@ -11,6 +13,10 @@ class Gemma4_26B_A4B_Recipe(SlimeRecipe):
     gpu_type: str = "H100"
     slime_model_script: str = "scripts/models/gemma4-26B-A4B.sh"
     hf_checkpoint: str = "google/gemma-4-26B-A4B-it"
+    # Model overflows container disk, so reserve 1 TiB.
+    train_function_kwargs: dict[str, int] = field(
+        default_factory=lambda: {"ephemeral_disk": 1_048_576}
+    )
     colocate: bool = True
     tensor_model_parallel_size: int = 2
     sequence_parallel: bool = True
