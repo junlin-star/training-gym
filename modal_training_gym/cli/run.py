@@ -29,6 +29,7 @@ CLI_FIELD_NAMES = {
     "updated_at": "last_updated_at",
 }
 
+
 def _run_filter_options(function: Callable[..., Any]) -> Callable[..., Any]:
     """Generate Click filters from list fields marked filterable on RunSummary."""
     for name, metadata in reversed(run_list_field_metadata().items()):
