@@ -34,9 +34,8 @@ def _fmt_secs(seconds: float | int | None) -> str:
     if n >= 60:
         minutes = int(n // 60)
         rem = n - minutes * 60
-        rem_s = f"{rem:.3f}".rstrip("0").rstrip(".")
-        return f"{minutes}m {rem_s}s"
-    return f"{n:.3f}".rstrip("0").rstrip(".") + "s"
+        return f"{minutes}m {rem:.3f}s"
+    return f"{n:.3f}s"
 
 
 @dataclass
