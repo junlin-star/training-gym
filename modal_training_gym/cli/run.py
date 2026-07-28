@@ -145,16 +145,6 @@ def _validate_run_summary(payload: object) -> RunSummary:
         ) from exc
 
 
-def _validate_run_summaries(payload: object) -> list[RunSummary]:
-    if not isinstance(payload, list):
-        raise CLIError(
-            "Dashboard returned an invalid run list.",
-            error="invalid_dashboard_response",
-            exit_code=ExitCode.BACKEND,
-        )
-    return [_validate_run_summary(item) for item in payload]
-
-
 def _validate_rollouts(payload: object) -> list[TrainingRolloutSummary]:
     if not isinstance(payload, list):
         raise CLIError(
@@ -306,7 +296,13 @@ def list_runs(
     with DashboardClient() as client:
         payload = client.get_json("/api/runs", params=params)
 
-    summaries = _validate_run_summaries(payload)
+    if not isinstance(payload, list):
+        raise CLIError(
+            "Dashboard returned an invalid run list.",
+            error="invalid_dashboard_response",
+            exit_code=ExitCode.BACKEND,
+        )
+    summaries = [_validate_run_summary(item) for item in payload]
     fields = run_list_field_metadata()
     if json_output:
         print_json(
