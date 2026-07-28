@@ -98,12 +98,15 @@
     }
 
     window.addEventListener("popstate", syncPageWithPath);
-    void loadRuns();
 
     // Auto-refresh the active page's data every 5s so running training runs,
     // their status/stage and rollouts stay live. Current data stays on screen
-    // (no skeleton) and only the refresh button spins while fetching.
-    const refresh = window.setInterval(load, 5000);
+    // (no skeleton) and only the refresh button spins while fetching. A run
+    // detail page refreshes its own run, so skip the full list there.
+    const refresh = window.setInterval(() => {
+      if (activePage === "training" && activeTrainingRunId) return;
+      void load();
+    }, 5000);
 
     return () => {
       window.removeEventListener("popstate", syncPageWithPath);
@@ -347,6 +350,9 @@
   }
 
   $effect(() => {
+    if (!activeTrainingRunId && !hasLoadedRuns) {
+      void loadRuns();
+    }
     if (activePage === "evals" && !hasLoadedEvals) {
       void loadEvals();
     }
@@ -870,7 +876,6 @@
     {#if activePage === "training" && activeTrainingRunId}
       <TrainingRunDetailPage
         runId={activeTrainingRunId}
-        {allRuns}
         {modelName}
         {getStatus}
         {getFrameworkStatus}
