@@ -402,8 +402,8 @@ def run_group() -> None:
     help="Show status and top-level metadata for a single run.",
     epilog=(
         "Examples:\n"
-        "  training-gym run get run_8f2a\n"
-        "  training-gym run get run_8f2a --verbose"
+        "  training-gym run get brave-falcon-3fa8\n"
+        "  training-gym run get brave-falcon-3fa8 --verbose"
     ),
 )
 @click.argument("run_id")
