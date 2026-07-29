@@ -210,3 +210,43 @@ def test_rejects_absolute_request_path():
 
     assert exc_info.value.error == "invalid_dashboard_path"
     assert exc_info.value.exit_code == ExitCode.ERROR
+
+
+def test_iter_sse_parses_named_and_default_events(mock_transport):
+    mock_transport(
+        lambda _request: httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            text=(
+                ": keepalive\n\n"
+                'data: {"line":"hello"}\n\n'
+                "event: dropped\n"
+                'data: {"dropped":2}\n\n'
+                "event: done\n"
+                "data: {}\n\n"
+            ),
+        )
+    )
+
+    with DashboardClient() as client:
+        events = list(client.iter_sse("/api/logs/stream"))
+
+    assert events == [
+        ("message", '{"line":"hello"}'),
+        ("dropped", '{"dropped":2}'),
+        ("done", "{}"),
+    ]
+
+
+def test_iter_sse_disables_read_timeout(mock_transport):
+    seen = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, text="event: done\ndata: {}\n\n")
+
+    mock_transport(respond)
+    with DashboardClient() as client:
+        assert list(client.iter_sse("/api/logs/stream")) == [("done", "{}")]
+
+    assert seen[0].extensions["timeout"]["read"] is None

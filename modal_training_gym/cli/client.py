@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from types import TracebackType
 from typing import Any, Self
 from urllib.parse import urlsplit
@@ -108,6 +108,69 @@ class DashboardClient:
                 "Dashboard returned malformed JSON.",
                 error="invalid_dashboard_response",
                 exit_code=ExitCode.BACKEND,
+            ) from exc
+
+    def iter_sse(
+        self,
+        path: str,
+        *,
+        params: QueryParams | None = None,
+        not_found_error: CLIError | None = None,
+    ) -> Iterator[tuple[str, str]]:
+        """Stream ``(event, data)`` pairs from a dashboard SSE endpoint."""
+        parsed_path = urlsplit(path)
+        if parsed_path.scheme or parsed_path.netloc:
+            raise CLIError(
+                "Dashboard request path must be relative.",
+                error="invalid_dashboard_path",
+            )
+
+        query = (
+            {key: value for key, value in params.items() if value is not None}
+            if params
+            else None
+        )
+        try:
+            with self._client.stream(
+                "GET",
+                path.lstrip("/"),
+                params=query,
+                timeout=None,
+            ) as response:
+                if response.status_code == 404 and not_found_error is not None:
+                    raise not_found_error
+                self._raise_for_status(response.status_code)
+
+                event = "message"
+                data_lines: list[str] = []
+                for line in response.iter_lines():
+                    if not line:
+                        if data_lines:
+                            yield event, "\n".join(data_lines)
+                        event = "message"
+                        data_lines = []
+                        continue
+                    if line.startswith(":"):
+                        continue
+                    if line.startswith("event:"):
+                        event = line.removeprefix("event:").lstrip() or "message"
+                    elif line.startswith("data:"):
+                        data_lines.append(line.removeprefix("data:").lstrip())
+
+                if data_lines:
+                    yield event, "\n".join(data_lines)
+        except httpx.TimeoutException as exc:
+            raise CLIError(
+                "Dashboard log stream timed out.",
+                error="dashboard_timeout",
+                exit_code=ExitCode.BACKEND,
+            ) from exc
+        except httpx.RequestError as exc:
+            raise CLIError(
+                "Dashboard log stream disconnected.",
+                error="dashboard_unreachable",
+                exit_code=ExitCode.BACKEND,
+                hint="training-gym run logs RUN_ID --follow",
             ) from exc
 
     @staticmethod
