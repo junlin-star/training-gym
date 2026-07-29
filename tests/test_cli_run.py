@@ -110,7 +110,7 @@ def test_run_get_prints_top_level_status():
 
     assert result.exit_code == 0
     assert FakeDashboardClient.requests == [("/api/runs/run-1", None)]
-    assert "pending" in result.stdout
+    assert "PENDING" in result.stdout
     assert "Generating rollouts" in result.stdout
     assert "3 / 10 step" in result.stdout
     assert "0.625" in result.stdout

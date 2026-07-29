@@ -10,6 +10,11 @@ from urllib.parse import quote
 
 import click
 from pydantic import ValidationError
+from rich.columns import Columns
+from rich.console import Group
+from rich.panel import Panel
+from rich.table import Table
+from rich.text import Text
 
 from modal_training_gym.common.run_list import run_list_field_metadata
 from modal_training_gym.common.run_summary import RunSummary
@@ -20,7 +25,7 @@ from .client import DashboardClient
 from .commands import _TrainingGymGroup
 from .errors import CLIError, ExitCode
 from .options import json_option
-from .output import print_json, print_table
+from .output import print_json, print_renderable, print_table
 
 
 DEFAULT_RUN_LIMIT = 50
@@ -160,6 +165,129 @@ def _format_step(summary: RunSummary) -> str:
     return f"{value} {unit}".strip()
 
 
+def _chip(value: str, *, style: str) -> Text:
+    return Text(f" {value} ", style=style)
+
+
+def _run_summary_panel(summary: RunSummary) -> Panel:
+    status = summary.display_status or "pending"
+    status_style = {
+        "completed": "bold bright_green",
+        "failed": "bold red",
+        "cancelled": "bold yellow",
+        "stopped": "bold yellow",
+        "pending": "bold cyan",
+    }.get(status, "bold")
+    heading = Text()
+    heading.append("● ", style=status_style)
+    heading.append(status.upper(), style=status_style)
+    if summary.display_stage:
+        heading.append("  ")
+        heading.append(summary.display_stage, style="bold")
+
+    reward = summary.latest_rollout.mean if summary.latest_rollout is not None else None
+    metrics = Table.grid(padding=(0, 4))
+    metrics.add_row(
+        Text.assemble(("Step  ", "dim"), (_format_step(summary), "bold")),
+        Text.assemble(("Reward  ", "dim"), (_format_reward(reward), "bold")),
+    )
+
+    chips = [
+        _chip(summary.model, style="black on bright_green") if summary.model else None,
+        _chip(summary.dataset, style="black on cyan") if summary.dataset else None,
+        _chip(summary.recipe, style="black on white") if summary.recipe else None,
+        _chip(summary.group_id, style="white on grey23") if summary.group_id else None,
+    ]
+    footer = Text.assemble(
+        ("Updated ", "dim"),
+        (_format_table_timestamp(summary.updated_at), "dim bold"),
+        ("  ·  Created ", "dim"),
+        (_format_table_timestamp(summary.created_at), "dim bold"),
+    )
+    body = Group(
+        heading,
+        Text(""),
+        metrics,
+        Text(""),
+        Columns([chip for chip in chips if chip is not None], padding=(0, 1)),
+        Text(""),
+        footer,
+    )
+    return Panel(
+        body,
+        title=summary.run_id,
+        title_align="left",
+        border_style="bright_green",
+        padding=(1, 2),
+    )
+
+
+def _reward_sparkline(rollouts: list[TrainingRolloutSummary]) -> str:
+    if not rollouts:
+        return ""
+    blocks = "▁▂▃▄▅▆▇█"
+    rewards = [rollout.mean for rollout in rollouts]
+    low, high = min(rewards), max(rewards)
+    if low == high:
+        return blocks[len(blocks) // 2] * len(rewards)
+    return "".join(
+        blocks[round((reward - low) / (high - low) * (len(blocks) - 1))]
+        for reward in rewards
+    )
+
+
+def _reward_panel(rollouts: list[TrainingRolloutSummary]) -> Panel:
+    if not rollouts:
+        content: Text | Group = Text("No rollout rewards recorded.", style="dim")
+    else:
+        first, latest = rollouts[0].mean, rollouts[-1].mean
+        table = Table(
+            "Rollout",
+            "Reward",
+            "Samples",
+            "Duration",
+            "Errors",
+            box=None,
+            header_style="bold bright_green",
+            pad_edge=False,
+            expand=True,
+        )
+        for rollout in rollouts:
+            table.add_row(
+                str(rollout.rollout_id),
+                _format_reward(rollout.mean),
+                str(rollout.total),
+                (
+                    f"{rollout.rollout_time:.2f}s"
+                    if rollout.rollout_time is not None
+                    else "—"
+                ),
+                (
+                    str(rollout.error_summary.get("verdict", "—"))
+                    if rollout.error_summary is not None
+                    else "—"
+                ),
+            )
+        content = Group(
+            Text(_reward_sparkline(rollouts), style="bold bright_green"),
+            Text.assemble(
+                (_format_reward(first), "dim"),
+                ("  →  ", "dim"),
+                (_format_reward(latest), "bold"),
+                (f"   {len(rollouts)} rollouts", "dim"),
+            ),
+            Text(""),
+            table,
+        )
+    return Panel(
+        content,
+        title="Reward over time",
+        title_align="left",
+        border_style="cyan",
+        padding=(1, 2),
+    )
+
+
 def get_run(*, run_id: str, verbose: bool, json_output: bool) -> None:
     """Fetch and render one run, optionally including rollout history."""
     encoded_run_id = quote(run_id, safe="")
@@ -207,67 +335,11 @@ def get_run(*, run_id: str, verbose: bool, json_output: bool) -> None:
         print_json(payload)
         return
 
-    print_table(
-        ["Field", "Value"],
-        [
-            ["Run", summary.run_id],
-            ["Status", summary.display_status or "—"],
-            ["Stage", summary.display_stage or "—"],
-            ["Current step", _format_step(summary)],
-            [
-                "Current reward",
-                _format_reward(
-                    summary.latest_rollout.mean
-                    if summary.latest_rollout is not None
-                    else None
-                ),
-            ],
-            ["Model", summary.model or "—"],
-            ["Dataset", summary.dataset or "—"],
-            ["Recipe", summary.recipe or "—"],
-            ["Group", summary.group_id or "—"],
-            ["Created", _format_timestamp(summary.created_at)],
-            ["Last updated", _format_timestamp(summary.updated_at)],
-        ],
-        title=f"Run {summary.run_id}",
-        show_header=False,
-    )
+    print_renderable(_run_summary_panel(summary))
     if not verbose:
         return
 
-    print_table(
-        ["Rollout", "Reward", "Recorded"],
-        [
-            [
-                rollout.rollout_id,
-                _format_reward(rollout.mean),
-                _format_timestamp(rollout.created_at),
-            ]
-            for rollout in rollouts
-        ],
-        title="Reward over time",
-    )
-    print_table(
-        ["Rollout", "Samples", "Duration", "Errors"],
-        [
-            [
-                rollout.rollout_id,
-                rollout.total,
-                (
-                    f"{rollout.rollout_time:.2f}s"
-                    if rollout.rollout_time is not None
-                    else "—"
-                ),
-                (
-                    rollout.error_summary.get("verdict", "—")
-                    if rollout.error_summary is not None
-                    else "—"
-                ),
-            ]
-            for rollout in rollouts
-        ],
-        title="Rollouts",
-    )
+    print_renderable(_reward_panel(rollouts))
 
 
 def list_runs(
