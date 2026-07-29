@@ -15,12 +15,13 @@ import json
 import os
 
 import pytest
+from modal.exception import NotFoundError
 
 from modal_training_gym.common import run as run_mod
 from modal_training_gym.common.framework import Framework
 from modal_training_gym.common.train_result import TrainResult
 from modal_training_gym.common.training_rollout import TrainingRolloutResult
-from modal_training_gym.utils.metadata import MetadataStore
+from modal_training_gym.utils.metadata import MetadataStore, vol_list
 
 
 @pytest.mark.parametrize("fw", list(Framework))
@@ -59,6 +60,23 @@ def test_rollout_async_save_survives_unmounted_volume(fake_volume):
         f"{MetadataStore.TRAINING_ROLLOUTS_SUMMARY.value}/summary.json"
     ]
     assert json.loads(summary)["items"][0]["summary_key"] == "t3__00000000"
+
+
+def test_list_treats_missing_modal_directory_as_empty(fake_volume):
+    """Modal reports an absent Volume directory with its own NotFoundError."""
+
+    def missing_sync(_path: str):
+        raise NotFoundError("No such file or directory")
+
+    async def missing_async(_path: str):
+        raise NotFoundError("No such file or directory")
+        yield
+
+    fake_volume.iterdir._sync_fn = missing_sync
+    fake_volume.iterdir.aio = missing_async
+
+    assert vol_list("missing-store") == []
+    assert asyncio.run(vol_list("missing-store", is_async=True)) == []
 
 
 @pytest.mark.parametrize("fw", list(Framework))

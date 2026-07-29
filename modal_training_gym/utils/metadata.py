@@ -338,6 +338,8 @@ def vol_get(
 def vol_list(
     store: MetadataStore | str, *, is_async: bool = False
 ) -> list[dict[str, Any]] | Awaitable[list[dict[str, Any]]]:
+    from modal.exception import NotFoundError
+
     vol = _metadata_volume()
     if is_async:
 
@@ -349,7 +351,7 @@ def vol_list(
                     if entry.path.endswith(".json"):
                         chunks = [c async for c in vol.read_file.aio(entry.path)]
                         results.append(json.loads(b"".join(chunks)))
-            except FileNotFoundError:
+            except (FileNotFoundError, NotFoundError):
                 pass
             return results
 
@@ -366,7 +368,7 @@ def vol_list(
                     data = b"".join(vol.read_file(entry.path))
                     results.append(json.loads(data))
             return results
-        except FileNotFoundError:
+        except (FileNotFoundError, NotFoundError):
             return results
         except Exception as exc:
             if "rate limit" in str(exc).lower() and attempt < 2:
