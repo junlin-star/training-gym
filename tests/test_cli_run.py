@@ -68,6 +68,19 @@ def test_run_list_help_derives_filter_flags_from_schema():
     assert "--group GROUP" in result.stdout
 
 
+def test_run_list_cli_field_names_are_unique():
+    fields = run_module.run_list_field_metadata()
+    output_names = [run_module.CLI_FIELD_NAMES.get(name, name) for name in fields]
+    option_names = [
+        run_module.CLI_FIELD_NAMES.get(name, name).replace("_", "-")
+        for name, metadata in fields.items()
+        if metadata.get("filterable")
+    ]
+
+    assert len(output_names) == len(set(output_names))
+    assert len(option_names) == len(set(option_names))
+
+
 @pytest.mark.parametrize(
     ("flag", "value", "backend_field"),
     [
