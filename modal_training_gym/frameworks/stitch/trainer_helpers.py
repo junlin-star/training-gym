@@ -170,8 +170,11 @@ def _smoke_once(
     gateway = pool.gateway_url()
     print(f"Gateway URL: {gateway}")
     # A fresh pool has no claimed run, so version 0 is unpinnable — an exact-version
-    # request would 409. Gate on plain serving until a run has claimed the pool.
-    if _get_json(f"{gateway}/server_info", timeout=60).get("run_id") is None:
+    # request would 409. The claimed run shows up as the run component of the applied
+    # pointer (``server_info["run_id"]`` is only the sidecar's static label).
+    info = _get_json(f"{gateway}/server_info", timeout=60)
+    print(f"Gateway server_info: {info}")
+    if not _applied_run(info):
         if expected != 0:
             raise RuntimeError(
                 f"pool is unclaimed; cannot serve expected weight version {expected}"
@@ -199,6 +202,11 @@ def _smoke_once(
         info = _get_json(f"{target}/server_info", timeout=30)
         print(f"{target} server_info={info}")
         _check_version(_applied_version(info), expected, target)
+
+
+def _applied_run(info: dict) -> str:
+    """Run id the replica's applied pointer belongs to, empty if it has none."""
+    return str(info.get("applied") or "").rpartition("/")[0]
 
 
 def _applied_version(info: dict) -> int:

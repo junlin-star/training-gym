@@ -33,7 +33,10 @@ class Qwen3_4b_Stitch_Recipe(StitchRecipe):
             "--weight-loader-drop-cache-after-load": "",
             "--reasoning-parser": "qwen3",
             "--context-length": "16384",
-            "--mem-fraction-static": "0.84",
+            # An in-place delta apply loads the new shard alongside the live
+            # weights, so the static pool has to leave that much GPU headroom on
+            # a replica that is already serving at full concurrency.
+            "--mem-fraction-static": "0.80",
             "--chunked-prefill-size": "4096",
             "--max-prefill-tokens": "4096",
         }
