@@ -394,7 +394,7 @@ def show_run_params(*, run_id: str, json_output: bool) -> None:
             ]
             for name, value in configured_params.items()
         ],
-        title=f"Training recipe · {run_id}",
+        title=f"Training recipe for {run_id}",
         show_header=False,
     )
 
@@ -479,9 +479,7 @@ def get_command(*, run_id: str, verbose: bool, json_output: bool) -> None:
 @run_group.command(
     "params",
     help=(
-        "Show the framework training recipe for a single run.\n\n"
-        "By default, displays configured recipe values in a readable table. "
-        "Use --json to return the full raw framework parameter object."
+        "Show the framework training recipe for a single run."
     ),
     epilog=(
         "Examples:\n"
