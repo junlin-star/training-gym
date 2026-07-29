@@ -27,6 +27,17 @@ from modal_training_gym.train_recipes.slime_recipe import SlimeRecipe
 VALIDATION_EPHEMERAL_DISK_MIB = 2_097_152
 
 
+def _fmt_secs(seconds: float | int | None) -> str:
+    if seconds is None:
+        return "—"
+    n = float(seconds)
+    if n >= 60:
+        minutes = int(n // 60)
+        rem = n - minutes * 60
+        return f"{minutes}m {rem:.3f}s"
+    return f"{n:.3f}s"
+
+
 @dataclass
 class TutorialResult:
     base_model_name: str
@@ -34,12 +45,14 @@ class TutorialResult:
     training_run_id: str
     training_run_status: TrainingRunStatus
     total_duration_s: float
+    step_times: dict[str, dict[str, int | None]] | None = None
+    substep_times: dict[str, dict[str, dict[str, float | None]]] | None = None
 
     @property
     def succeeded(self) -> bool:
         return self.training_run_status == TrainingRunStatus.COMPLETED
 
-    def format_tutorial_result(self) -> None:
+    def print_summary(self) -> None:
         print(f"Training run result for {self.training_run_id}")
         print("Parameters:")
         print(f"Base model name: {self.base_model_name}")
@@ -47,6 +60,29 @@ class TutorialResult:
         print("Result:")
         print(f"Training run status: {self.training_run_status}")
         print(f"Total duration (s): {self.total_duration_s}")
+
+        step_keys = set(self.step_times or {})
+        sub_keys = set(self.substep_times or {})
+        keys = sorted(step_keys | sub_keys, key=lambda k: int(k) if k.isdigit() else k)
+        if not keys:
+            return
+
+        print("Timings:")
+        for key in keys:
+            step = (self.step_times or {}).get(key) or {}
+            duration = step.get("duration_s")
+            print(f"Step {key} ({_fmt_secs(duration)})")
+
+            subs = (self.substep_times or {}).get(key, {})
+            ordered = sorted(
+                subs.items(),
+                key=lambda item: (
+                    item[1].get("start") is None,
+                    item[1].get("start") or 0,
+                ),
+            )
+            for name, entry in ordered:
+                print(f"    {name}: {_fmt_secs(entry.get('duration_s'))}")
 
     def to_dict(self) -> dict:
         data = asdict(self)
@@ -62,6 +98,8 @@ class TutorialResult:
             training_run_id=data["training_run_id"],
             training_run_status=TrainingRunStatus(data["training_run_status"]),
             total_duration_s=data["total_duration_s"],
+            step_times=data.get("step_times"),
+            substep_times=data.get("substep_times"),
         )
 
 
@@ -279,6 +317,8 @@ def run_base_training_on_slime(
         training_run_id=train_result.training_run_id,
         training_run_status=training_run.status,
         total_duration_s=float(training_run.duration_seconds or 0.0),
+        step_times=training_run.step_times,
+        substep_times=training_run.substep_times,
     )
 
 
@@ -414,7 +454,7 @@ def __main__():
         save_interval=args.save_interval,
         colocate=False if args.non_colocated else None,
     )
-    tutorial_result.format_tutorial_result()
+    tutorial_result.print_summary()
 
     if args.output:
         Path(args.output).write_text(json.dumps(tutorial_result.to_dict()))
