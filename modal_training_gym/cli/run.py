@@ -481,8 +481,8 @@ def get_command(*, run_id: str, verbose: bool, json_output: bool) -> None:
     help=("Show the framework training recipe for a single run."),
     epilog=(
         "Examples:\n"
-        "  training-gym run params run_8f2a\n"
-        "  training-gym run params run_8f2a --json"
+        "  training-gym run params brave-falcon-3fa8\n"
+        "  training-gym run params brave-falcon-3fa8 --json"
     ),
 )
 @click.argument("run_id")
