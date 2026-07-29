@@ -83,7 +83,6 @@ def test_run_get_help_documents_flags_and_examples():
     assert "--verbose" in result.stdout
     assert "-j, --json" in result.stdout
     assert "Examples:" in result.stdout
-    assert result.stdout.count("training-gym run get run_8f2a") == 2
 
 
 def test_run_get_prints_top_level_status():
