@@ -124,6 +124,17 @@ def start_ray_worker(my_ip: str, master_addr: str, *, ray_port: int) -> None:
     )
 
 
+def wait_for_teardown(poll_seconds: float = 10.0) -> None:
+    """Keep a Ray worker container alive until Modal tears the cluster down.
+
+    A clustered function runs on every rank, but only rank 0 drives training —
+    the other ranks must not return, or their Ray node leaves the cluster
+    mid-run. Modal stops the whole cluster when rank 0's input completes.
+    """
+    while True:
+        time.sleep(poll_seconds)
+
+
 def _print_ray_logs() -> None:
     log_dir = Path("/tmp/ray/session_latest/logs")
     for name in (

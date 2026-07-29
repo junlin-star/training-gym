@@ -2,7 +2,8 @@
 
 Vendored from the stitch cookbook (``cookbook/common/launch.py`` +
 ``cookbook/common/smoke.py``): resolve HF repo ids and materialize inline YAML
-configs, build the ``train.py`` command, and smoke the deployed Flash pool.
+configs, build the ``train.py`` command, reach the rollout pool's Flash gateway,
+and smoke a deployed Flash pool.
 """
 
 from __future__ import annotations
@@ -95,12 +96,25 @@ def smoke_flash_pool(
         time.sleep(10)
 
 
-def await_pool_ready(
+def flash_gateway_url(server_cls: Any) -> str:
+    """The rollout pool's Flash gateway URL, from the app's own ``Server`` handle.
+
+    Called from the trainer container with the class object the app was built
+    with: that handle is hydrated for the container's own app, so it resolves in
+    an ephemeral run — unlike ``Cls.from_name``/``ModalFlashPool``, which can only
+    look a Flash service up once the app is deployed.
+    """
+    urls = server_cls._experimental_get_flash_urls()
+    if not urls:
+        raise RuntimeError(f"no Flash gateway URL for {server_cls}")
+    return str(urls[0]).rstrip("/")
+
+
+def await_gateway_ready(
+    gateway: str,
     *,
-    app_name: str,
-    cls_name: str,
     timeout_seconds: float = 20 * 60,
-    interval_seconds: float = 30.0,
+    interval_seconds: float = 15.0,
 ) -> bool:
     """Block until the pool's gateway answers ``/health`` 200.
 
@@ -109,7 +123,6 @@ def await_pool_ready(
     timeout it warns and returns ``False``; the caller proceeds because the
     trainer's rollout requests retry.
     """
-    gateway = _FlashPool(app_name, cls_name).gateway_url()
     deadline = time.time() + timeout_seconds
     while time.time() < deadline:
         try:

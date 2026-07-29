@@ -1,19 +1,21 @@
 """Factory that builds a Modal app for a disaggregated slime run via stitch.
 
-Unlike the colocated slime launcher (``build_slime_app``, driven by
-``modal run ::train``), the disaggregated flow is **deploy-based**: a persistent
-Modal Flash pool of SGLang rollout servers plus a clustered trainer that
-publishes sparse weight deltas to a Modal Volume bulletin board the pool syncs
-from. Build the app with :func:`build_stitch_app` (which returns a
-:class:`StitchApp` bundle), ``modal deploy`` it, then spawn a run through the
-``launch_train`` local entrypoint the example module wires up::
+Same shape as the colocated launchers (``build_slime_app`` / ``build_miles_app``):
+:func:`build_stitch_app` returns a ``modal.App`` with ``download``,
+``prepare_dataset``, and ``train``, so a run is one call::
 
-    launch = build_stitch_app(model=..., dataset=..., recipe=StitchRecipe(...))
-    app = launch.app
+    TrainConfig(model=..., dataset=..., recipe=StitchRecipe(...)).train()
 
-    uv run modal deploy -m <module_with_app>
-    uv run modal run -m <module_with_app>::launch_train
-    uv run modal run -m <module_with_app>::smoke_flash_pool
+What differs is what the app contains: rollouts are served by a Modal Flash pool
+of SGLang replicas (the ``Server`` class, brought up with the app) that self-sync
+to sparse weight deltas the clustered ``train`` function publishes to a Modal
+Volume bulletin board. The trainer reaches the pool through its Flash gateway,
+resolved from the in-app class handle — so the single ``train()`` call works in an
+ephemeral run, with no separate ``modal deploy`` step.
+
+The app is still deployable (``modal deploy``) when a pool should outlive a single
+run; only then can the publish hook wake replicas by app name — otherwise they
+pick the new pointer up on their next reconcile poll.
 
 This packages the stitch ``slime_disagg`` cookbook (``cookbook/slime_disagg``)
 around a training-gym ``StitchRecipe`` + ``ModelConfig`` + ``DatasetConfig``.
@@ -26,16 +28,19 @@ import subprocess
 import tempfile
 import time
 import uuid
-from dataclasses import dataclass
+from pathlib import PurePosixPath
 from types import SimpleNamespace
 
+import cloudpickle
 import modal
 import modal.experimental
 
 from modal_training_gym.common import COMMON_TRAINING_GYM_TAGS, modal_tag_value
 from modal_training_gym.common.dataset import DatasetConfig
-from modal_training_gym.common.framework import Framework
+from modal_training_gym.common.framework import Framework, resolve_caller_module
+from modal_training_gym.common.modal_refs import register_modal_cloudpickle_reducers
 from modal_training_gym.common.modal_urls import modal_app_dashboard_url
+from modal_training_gym.common.ray_cluster import clustered_if
 from modal_training_gym.common.models import ModelConfig
 from modal_training_gym.common.run import (
     TrainingRun,
@@ -43,6 +48,7 @@ from modal_training_gym.common.run import (
     record_wandb_attempt,
     wandb_run_id_for_attempt,
 )
+from modal_training_gym.common.train_result import TrainResult
 from modal_training_gym.common.wandb import preflight_wandb
 from modal_training_gym.frameworks.stitch import serving_image
 from modal_training_gym.train_recipes.stitch_recipe.pins import (
@@ -68,33 +74,22 @@ SERVER_STARTUP_TIMEOUT = 35 * MINUTES
 LOCAL_CHECKPOINT_PATH = "/local-checkpoint"
 
 
-@dataclass
-class StitchApp:
-    """What :func:`build_stitch_app` returns: the deployable Modal ``App`` plus
-    handles to its ``download_model`` / ``prepare_dataset`` functions.
+class _SlimeArgs:
+    """Runtime carrier for the slime args the trainer runs with.
 
-    ``download_model`` and ``prepare_dataset`` are defined as closures inside the
-    factory (they capture the model/dataset), so ``modal run`` can't address
-    them by name. The example module exposes them by wrapping ``.remote()`` in
-    module-level ``@app.local_entrypoint``\\ s.
-    """
-
-    app: modal.App
-    download_model: modal.Function
-    prepare_dataset: modal.Function
-
-
-class _ShippedSlimeConfig:
-    """Runtime carrier for the slime args shipped to a deployed Trainer.
-
-    ``launch_train`` resolves a :class:`StitchRecipe` + model + dataset locally
-    into a plain field dict and spawns it as data, so new or edited recipes run
-    without a redeploy. The Trainer rebuilds this carrier, injects the per-run
-    fields (rollout endpoint, bulletin dir, custom config), then materializes
-    YAML configs and builds the ``train.py`` command from :meth:`cli_args`.
+    The recipe + model + dataset resolve to a plain field dict
+    (:meth:`StitchRecipe.to_payload`); ``train`` rebuilds this carrier, injects
+    the per-run fields (rollout endpoint, bulletin dir, custom config), then
+    materializes YAML configs and builds the ``train.py`` command from
+    :meth:`cli_args`.
     """
 
     _CONTROL = {"async_mode", "slime_model_script"}
+
+    # Per-run fields the trainer injects (the rest come from the field dict).
+    rollout_endpoint_url: str
+    update_weight_disk_dir: str
+    custom_config_path: dict | str
 
     def __init__(
         self, fields: dict, *, async_mode: bool, slime_model_script: str
@@ -278,20 +273,32 @@ def build_stitch_app(
     model: ModelConfig,
     dataset: DatasetConfig,
     recipe: StitchRecipe,
+    training_run_id: str = "",
     name: str | None = None,
-) -> StitchApp:
-    """Build the deployable Modal App for disaggregated slime training.
+    group_id: str | None = None,
+) -> modal.App:
+    """Build the Modal App for disaggregated slime training.
 
-    Defines a ``Server`` Flash-pool class, a clustered ``Trainer`` class, and
-    ``download_model`` / ``prepare_dataset`` functions. Returns a
-    :class:`StitchApp` bundle (``.app`` plus the two function handles); the
-    example module wraps those in module-level ``launch_train`` /
-    ``smoke_flash_pool`` / ``download_model`` / ``prepare_dataset`` entrypoints.
+    Returns an app with ``download``, ``prepare_dataset``, and ``train`` (same
+    surface as ``build_slime_app``), plus the ``Server`` Flash-pool class that
+    serves rollouts. ``train`` brings the pool's gateway up, claims it for the
+    run, and drives slime; :class:`~modal_training_gym.common.train.TrainConfig`
+    calls it for :class:`StitchRecipe` recipes.
     """
     StitchRecipe._resolve_data_paths(dataset)  # validate dataset paths resolve
 
-    app_name = name or recipe.name or f"stitch-{modal_tag_value(model.model_name)}"
-    delta_volume_name = recipe.delta_volume_name or f"stitch-delta-bulletin-{app_name}"
+    # Serialize the caller's module by value so inline ModelConfig/DatasetConfig
+    # subclasses defined in a user script reach the containers.
+    caller_module = resolve_caller_module()
+    if caller_module is not None and caller_module.__name__ != "__main__":
+        cloudpickle.register_pickle_by_value(caller_module)
+    register_modal_cloudpickle_reducers()
+
+    app_name = recipe.name or name or f"stitch-{modal_tag_value(model.model_name)}"
+    # Volumes are keyed by recipe (not by run) so runs of the same recipe reuse
+    # the same dataset / checkpoints / bulletin board.
+    volume_prefix = f"stitch-{modal_tag_value(type(recipe).__name__)}"
+    delta_volume_name = recipe.delta_volume_name or f"{volume_prefix}-delta-bulletin"
     delta_bulletin_root = recipe.delta_bulletin_root
     model_name = model.model_path or model.model_name
     rollout_concurrency = recipe.sglang_server_concurrency
@@ -333,16 +340,17 @@ def build_stitch_app(
         "huggingface-cache", create_if_missing=True
     )
     data_volume = modal.Volume.from_name(
-        f"stitch-data-{app_name}", create_if_missing=True
+        f"{volume_prefix}-data", create_if_missing=True
     )
+    checkpoints_volume_name = f"{volume_prefix}-checkpoints"
     checkpoints_volume = modal.Volume.from_name(
-        f"stitch-checkpoints-{app_name}", create_if_missing=True
+        checkpoints_volume_name, create_if_missing=True
     )
     delta_volume = modal.Volume.from_name(
         delta_volume_name, create_if_missing=True, version=2
     )
     sglang_cache_volume = modal.Volume.from_name("sglang-cache", create_if_missing=True)
-    train_volumes = {
+    train_volumes: dict[str | PurePosixPath, modal.Volume | modal.CloudBucketMount] = {
         str(HF_CACHE_PATH): hf_cache_volume,
         str(DATA_PATH): data_volume,
         str(CHECKPOINTS_PATH): checkpoints_volume,
@@ -412,7 +420,7 @@ def build_stitch_app(
 
             server.serve_stop(self)
 
-    @app.cls(
+    @app.function(
         image=image,
         gpu=f"{recipe.gpu_type}:{recipe.actor_num_gpus_per_node}",
         memory=memory,
@@ -422,133 +430,159 @@ def build_stitch_app(
         secrets=train_secrets,
         timeout=24 * 60 * MINUTES,
         startup_timeout=20 * MINUTES,
-        scaledown_window=30 * MINUTES,
         experimental_options={"efa_enabled": True},
         serialized=True,
+        name="train",
     )
-    @modal.experimental.clustered(n_train_nodes, rdma=True)
-    class Trainer:
-        """slime actor cluster. The Ray cluster comes up once per container in
-        enter(), so back-to-back runs reuse it instead of rebuilding it."""
+    @clustered_if(True, n_train_nodes, gpu_type=recipe.gpu_type)
+    def train(
+        modal_app_id: str = "",
+        modal_app_url: str = "",
+        framework_status_url: str = "",
+        framework_status_token: str = "",
+    ) -> dict:
+        """Bring up Ray, claim the rollout pool for this run, and drive slime."""
+        del modal_app_url  # derived from modal_app_id in the run record
+        from modal_training_gym.frameworks.stitch import (
+            bulletin_hooks,
+            ray_cluster,
+            sidecar_process,
+            trainer_helpers,
+        )
 
-        @modal.enter()
-        def start_ray(self) -> None:
-            from modal_training_gym.frameworks.stitch import (
-                ray_cluster,
-                sidecar_process,
-            )
+        rank, master_addr, my_ip = ray_cluster.get_modal_cluster_context(n_train_nodes)
+        os.environ.update(
+            {
+                "SLIME_HOST_IP": my_ip,
+                "SGLANG_HOST_IP": my_ip,
+                "HOST_IP": my_ip,
+                "MASTER_ADDR": master_addr,
+                "RAY_ADDRESS": f"{master_addr}:{RAY_PORT}",
+                "no_proxy": f"127.0.0.1,{master_addr},{my_ip}",
+                "NO_PROXY": f"127.0.0.1,{master_addr},{my_ip}",
+                "DELTA_VOLUME_NAME": delta_volume_name,
+                "DELTA_APP_NAME": app_name,
+                "DELTA_SERVER_CLS_NAME": "Server",
+                "DELTA_BULLETIN_ROOT": delta_bulletin_root,
+                **{str(k): str(v) for k, v in recipe.environment.items()},
+            }
+        )
+        if framework_status_url:
+            os.environ["TRAINING_GYM_FRAMEWORK_STATUS_URL"] = framework_status_url
+        if framework_status_token:
+            os.environ["TRAINING_GYM_FRAMEWORK_STATUS_TOKEN"] = framework_status_token
+        sidecar_process.start_host_mem_monitor()  # per-node host-RAM trace
 
-            rank, master_addr, my_ip = ray_cluster.get_modal_cluster_context(
-                n_train_nodes
-            )
-            self.rank = rank
-            os.environ.update(
-                {
-                    "SLIME_HOST_IP": my_ip,
-                    "SGLANG_HOST_IP": my_ip,
-                    "HOST_IP": my_ip,
-                    "MASTER_ADDR": master_addr,
-                    "RAY_ADDRESS": f"{master_addr}:{RAY_PORT}",
-                    "no_proxy": f"127.0.0.1,{master_addr},{my_ip}",
-                    "NO_PROXY": f"127.0.0.1,{master_addr},{my_ip}",
-                    "DELTA_VOLUME_NAME": delta_volume_name,
-                    "DELTA_APP_NAME": app_name,
-                    "DELTA_SERVER_CLS_NAME": "Server",
-                    "DELTA_BULLETIN_ROOT": delta_bulletin_root,
-                    **{str(k): str(v) for k, v in recipe.environment.items()},
-                }
-            )
-            sidecar_process.start_host_mem_monitor()  # per-node host-RAM trace
-            if rank == 0:
-                ray_cluster.start_ray_head(my_ip, n_train_nodes, ray_port=RAY_PORT)
-            else:
-                ray_cluster.start_ray_worker(my_ip, master_addr, ray_port=RAY_PORT)
+        # Rank 0 drives the run; the other ranks only host Ray workers, and stay
+        # alive until Modal tears the cluster down with rank 0's input.
+        if rank != 0:
+            ray_cluster.start_ray_worker(my_ip, master_addr, ray_port=RAY_PORT)
+            ray_cluster.wait_for_teardown()
+            return {}
+        ray_cluster.start_ray_head(my_ip, n_train_nodes, ray_port=RAY_PORT)
+        for volume in (hf_cache_volume, data_volume, checkpoints_volume):
+            volume.reload()
 
-        @modal.method()
-        def train(self, payload: dict) -> None:
-            from stitch.pools.modal_flash import ModalFlashPool
+        payload = recipe.to_payload(model=model, dataset=dataset)
+        cfg = _SlimeArgs(
+            payload["fields"],
+            async_mode=payload["async_mode"],
+            slime_model_script=payload["slime_model_script"],
+        )
+        # Reach the pool through its Flash gateway. The in-app class handle is
+        # hydrated in this container, so this resolves in an ephemeral run too
+        # (Flash lookups by app name only work once the app is deployed).
+        cfg.rollout_endpoint_url = trainer_helpers.flash_gateway_url(Server)
+        # Flash holds requests through a cold-starting pool, but slime's first
+        # rollout would otherwise meet engines that are still loading.
+        trainer_helpers.await_gateway_ready(
+            cfg.rollout_endpoint_url, timeout_seconds=SERVER_STARTUP_TIMEOUT
+        )
+        # Fresh run id per launch: slime writes this run's chain under
+        # <bulletin_root>/<run_id>/weight_v{N}/ and the canonical `latest`
+        # pointer is self-identifying, so a new run never collides with a
+        # finished one — no manual bulletin reset needed.
+        run_id = uuid.uuid4().hex[:12]
+        cfg.update_weight_disk_dir = f"{delta_bulletin_root}/{run_id}"
+        # stitch's publish + request hooks read these off the slime args
+        # namespace; merge over any user extra_config already on
+        # custom_config_path.
+        custom_config = dict(getattr(cfg, "custom_config_path", None) or {})
+        custom_config.update(
+            {
+                "update_weight_delta_volume_name": delta_volume_name,
+                "rollout_modal_flash_app_name": app_name,
+                "rollout_modal_flash_server_cls_name": "Server",
+                "run_id": run_id,
+            }
+        )
+        cfg.custom_config_path = custom_config
 
-            from modal_training_gym.frameworks.stitch import (
-                bulletin_hooks,
-                trainer_helpers,
-            )
+        trainer_helpers.prepare_config(cfg, tempfile.mkdtemp(), YAML_CONFIG_FIELDS)
+        cmd = trainer_helpers.build_train_cmd(
+            cfg, SLIME_ROOT, model_script_attr="slime_model_script"
+        )
 
-            for volume in train_volumes.values():
-                volume.reload()
-            # Rank 0 drives; other ranks only need the Ray worker from enter().
-            if self.rank != 0:
-                return
+        # Claim the pool for this run before slime publishes: write the empty
+        # pointer and wake the pool so every replica resets to base now.
+        bulletin_hooks.claim_pool(
+            SimpleNamespace(
+                update_weight_disk_dir=cfg.update_weight_disk_dir,
+                **custom_config,
+            )
+        )
 
-            cfg = _ShippedSlimeConfig(
-                payload["fields"],
-                async_mode=payload["async_mode"],
-                slime_model_script=payload["slime_model_script"],
-            )
-            cfg.rollout_endpoint_url = ModalFlashPool(app_name, "Server").gateway_url()
-            # Fresh run id per launch: slime writes this run's chain under
-            # <bulletin_root>/<run_id>/weight_v{N}/ and the canonical `latest`
-            # pointer is self-identifying, so a new run never collides with a
-            # finished one — no manual bulletin reset needed.
-            run_id = uuid.uuid4().hex[:12]
-            cfg.update_weight_disk_dir = f"{delta_bulletin_root}/{run_id}"
-            # stitch's publish + request hooks read these off the slime args
-            # namespace; merge over any user extra_config already on
-            # custom_config_path.
-            custom_config = dict(getattr(cfg, "custom_config_path", None) or {})
-            custom_config.update(
-                {
-                    "update_weight_delta_volume_name": delta_volume_name,
-                    "rollout_modal_flash_app_name": app_name,
-                    "rollout_modal_flash_server_cls_name": "Server",
-                    "run_id": run_id,
-                }
-            )
-            cfg.custom_config_path = custom_config
+        print(
+            f"Training on {app_name}: nodes={n_train_nodes}, "
+            f"rollout_endpoint={cfg.rollout_endpoint_url}"
+        )
+        print(f"Command: {cmd}")
 
-            trainer_helpers.prepare_config(cfg, tempfile.mkdtemp(), YAML_CONFIG_FIELDS)
-            cmd = trainer_helpers.build_train_cmd(
-                cfg, SLIME_ROOT, model_script_attr="slime_model_script"
-            )
+        record_id = training_run_id or run_id
+        run_record = _record_run_started(
+            run_id=record_id,
+            recipe=recipe,
+            model=model,
+            dataset=dataset,
+            config_fields=payload["fields"],
+            modal_app_id=modal_app_id,
+        )
+        wandb_run_id = ""
+        if recipe.wandb is not None:
+            # Force slime's W&B run to use the same id recorded in the
+            # dashboard deep-link (slime/wandb honor these env vars). Without
+            # this, wandb autogenerates a run id and the dashboard link 404s.
+            wandb_run_id = wandb_run_id_for_attempt(record_id, 1)
+            os.environ["WANDB_RUN_ID"] = wandb_run_id
+            os.environ["WANDB_RESUME"] = "allow"
+            if recipe.wandb.entity:
+                os.environ["WANDB_ENTITY"] = recipe.wandb.entity
+        status = TrainingRunStatus.COMPLETED
+        try:
+            subprocess.run(["bash", "-lc", cmd], check=True)
+        except BaseException:
+            status = TrainingRunStatus.FAILED
+            raise
+        finally:
+            _record_run_finished(run_record, status)
 
-            # Claim the pool for this run before slime publishes: write the empty
-            # pointer and wake the pool so every replica resets to base now.
-            bulletin_hooks.claim_pool(
-                SimpleNamespace(
-                    update_weight_disk_dir=cfg.update_weight_disk_dir,
-                    **custom_config,
-                )
-            )
-
-            print(
-                f"Training on {app_name}: nodes={n_train_nodes}, "
-                f"rollout_endpoint={cfg.rollout_endpoint_url}"
-            )
-            print(f"Command: {cmd}")
-
-            run_record = _record_run_started(
-                run_id=run_id,
-                recipe=recipe,
-                model=model,
-                dataset=dataset,
-                config_fields=payload["fields"],
-                modal_app_id=payload.get("modal_app_id", ""),
-            )
-            if recipe.wandb is not None:
-                # Force slime's W&B run to use the same id recorded in the
-                # dashboard deep-link (slime/wandb honor these env vars). Without
-                # this, wandb autogenerates a run id and the dashboard link 404s.
-                os.environ["WANDB_RUN_ID"] = wandb_run_id_for_attempt(run_id, 1)
-                os.environ["WANDB_RESUME"] = "allow"
-                if recipe.wandb.entity:
-                    os.environ["WANDB_ENTITY"] = recipe.wandb.entity
-            status = TrainingRunStatus.COMPLETED
-            try:
-                subprocess.run(["bash", "-lc", cmd], check=True)
-            except BaseException:
-                status = TrainingRunStatus.FAILED
-                raise
-            finally:
-                _record_run_finished(run_record, status)
+        result = TrainResult(
+            app_name=app_name,
+            framework=Framework.STITCH,
+            training_run_id=record_id,
+            checkpoint_dir=str(recipe.save),
+            checkpoints_volume_name=checkpoints_volume_name,
+            checkpoints_mount_path=str(CHECKPOINTS_PATH),
+            model_config=model,
+            wandb_project=recipe.wandb.project if recipe.wandb else "",
+            wandb_entity=recipe.wandb.entity if recipe.wandb else "",
+            wandb_training_run_id=wandb_run_id,
+            group_id=group_id or "",
+            extra={"rollout_endpoint_url": cfg.rollout_endpoint_url, "run_id": run_id},
+        )
+        result.save()
+        checkpoints_volume.commit()
+        return result._to_dict()
 
     @app.function(
         image=image,
@@ -556,8 +590,9 @@ def build_stitch_app(
         timeout=2 * 60 * MINUTES,
         secrets=[hf_secret],
         serialized=True,
+        name="download",
     )
-    def download_model() -> None:
+    def download() -> None:
         model.download()
         hf_cache_volume.commit()
 
@@ -567,6 +602,7 @@ def build_stitch_app(
         timeout=2 * 60 * MINUTES,
         secrets=[hf_secret],
         serialized=True,
+        name="prepare_dataset",
     )
     def prepare_dataset() -> None:
         data_volume.reload()
@@ -574,47 +610,12 @@ def build_stitch_app(
         dataset.prepare(prompt_data, eval_paths)
         data_volume.commit()
 
-    return StitchApp(
-        app=app, download_model=download_model, prepare_dataset=prepare_dataset
-    )
+    # Expose the functions as attributes (app.train, app.download, …) the way the
+    # other launchers do, so callers address them without the registry.
+    for tag, fn in app.registered_functions.items():
+        setattr(app, tag, fn)
 
-
-def spawn_training_run(
-    *,
-    app_name: str,
-    recipe: StitchRecipe,
-    model: ModelConfig,
-    dataset: DatasetConfig,
-) -> str:
-    """Spawn a training run on a deployed stitch app (call from a
-    ``@app.local_entrypoint``). Training args ship as data, so recipe edits run
-    without a redeploy; infra changes (GPU, nodes, pool size, Volume names)
-    still require ``modal deploy``. Returns the spawned call's object id."""
-    from modal.exception import NotFoundError
-
-    from modal_training_gym.frameworks.stitch import trainer_helpers
-
-    payload = recipe.to_payload(model=model, dataset=dataset)
-    # Resolve the deployed app id client-side so the trainer records a working
-    # "Open in Modal" dashboard link — a spawned deployed function's own
-    # MODAL_APP_ID env is not reliably populated.
-    try:
-        payload["modal_app_id"] = modal.App.lookup(app_name).app_id or ""
-    except Exception:  # noqa: BLE001
-        payload["modal_app_id"] = ""
-    try:
-        trainer = modal.Cls.from_name(app_name, "Trainer")()
-        # Flash holds requests through a cold-starting pool, but slime's first
-        # rollout would otherwise meet engines that are still loading.
-        trainer_helpers.await_pool_ready(app_name=app_name, cls_name="Server")
-        call = trainer.train.spawn(payload)
-    except NotFoundError:
-        raise SystemExit(
-            f"App {app_name!r} is not deployed. Run:\n"
-            f"  uv run modal deploy -m <module_with_app>"
-        )
-    print(f"Spawned train on {app_name}: {call.object_id}")
-    return call.object_id
+    return app
 
 
 def smoke_flash_pool(

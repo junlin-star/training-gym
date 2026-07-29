@@ -13,9 +13,9 @@ This is the training-gym packaging of the ``stitch`` ``slime_disagg`` cookbook
 this recipe + :func:`build_stitch_app` play the role the cookbook's config +
 ``modal_train.py`` play there.
 
-Unlike ``SlimeRecipe`` (colocated, ephemeral ``modal run ::train``), the Flash
-rollout pool is a *deployed* app: build the app with :func:`build_stitch_app`,
-``modal deploy`` it, then spawn a run via the ``launch_train`` entrypoint.
+It launches like the other recipes — ``TrainConfig(model=..., dataset=...,
+recipe=StitchRecipe(...)).train()`` — with the Flash rollout pool coming up as
+part of the same app.
 """
 
 from __future__ import annotations
@@ -329,7 +329,7 @@ class StitchRecipe(BaseTrainRecipe):
         model: ModelConfig | None = None,
         dataset: DatasetConfig | None = None,
     ) -> dict[str, Any]:
-        """Plain-data payload shipped to the deployed Trainer at launch."""
+        """Plain-data slime args the trainer runs with."""
         return {
             "fields": self.slime_fields(model=model, dataset=dataset),
             "environment": dict(self.environment),

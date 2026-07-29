@@ -421,13 +421,22 @@ class TrainConfig:
                 group_id=self.group_id,
             )
         if recipe_type == RecipeType.STITCH:
-            raise TrainingGymConfigError(
-                "StitchRecipe drives disaggregated (deploy-based) slime training and "
-                "is not launched through TrainConfig.build_app(). Build its Modal app "
-                "directly with modal_training_gym.frameworks.stitch.build_stitch_app("
-                "model=..., dataset=..., recipe=...), then `modal deploy` it and spawn "
-                "runs via the app's launch_train entrypoint (see "
-                "modal_training_gym/frameworks/stitch/examples/qwen3_4b_gsm8k.py)."
+            from modal_training_gym.frameworks.stitch import build_stitch_app
+            from modal_training_gym.train_recipes.stitch_recipe.recipe import (
+                StitchRecipe,
+            )
+
+            if not isinstance(self.recipe, StitchRecipe):
+                raise TrainingGymConfigError(
+                    f"Recipe type {recipe_type} requires StitchRecipe, got {type(self.recipe).__name__}"
+                )
+            return build_stitch_app(
+                training_run_id=self.training_run_id,
+                recipe=cast(StitchRecipe, self.recipe),
+                model=self.model,
+                dataset=self.dataset,
+                name=self.training_run_id,
+                group_id=self.group_id,
             )
         raise TrainingGymConfigError(f"Unknown recipe type: {recipe_type}")
 
@@ -438,15 +447,20 @@ class TrainConfig:
             return Framework.SLIME
         if isinstance(self.recipe, MilesConfig):
             return Framework.MILES
+        if self.recipe.recipe_type == RecipeType.STITCH:
+            return Framework.STITCH
         raise TrainingGymConfigError(
             f"Unknown recipe type: {type(self.recipe).__name__}"
         )
 
     def _initializing_status(self) -> FrameworkStatus:
-        if isinstance(self.recipe, SlimeRecipe):
-            return SlimeStatus.INITIALIZING
         if isinstance(self.recipe, MilesConfig):
             return MilesStatus.INITIALIZING
+        # stitch runs slime in the trainer, so it reports slime's phases too.
+        if isinstance(self.recipe, SlimeRecipe) or (
+            self.recipe.recipe_type == RecipeType.STITCH
+        ):
+            return SlimeStatus.INITIALIZING
         raise TrainingGymConfigError(
             f"Unknown recipe type: {type(self.recipe).__name__}"
         )
@@ -497,6 +511,13 @@ class TrainConfig:
                 "actor_num_nodes": recipe.actor_num_nodes,
                 "actor_num_gpus_per_node": recipe.actor_num_gpus_per_node,
             }
+        elif recipe.recipe_type == RecipeType.STITCH:
+            from modal_training_gym.train_recipes.stitch_recipe.recipe import (
+                StitchRecipe,
+            )
+
+            stitch = cast(StitchRecipe, recipe)
+            summary["recipe"] = stitch.slime_fields(model=model, dataset=dataset)
 
         return summary
 
@@ -670,6 +691,13 @@ class TrainConfig:
                                 framework_status_url=framework_status_url,
                                 framework_status_token=framework_status_token,
                             )
+                    elif self.recipe.recipe_type == RecipeType.STITCH:
+                        # No checkpoint conversion: the stitch trainer's slime
+                        # loads the HF checkpoint through megatron-bridge.
+                        _set_status(SlimeStatus.DOWNLOAD_MODEL, is_active=False)
+                        app.download.remote()
+                        _set_status(SlimeStatus.PREPARE_DATASET, is_active=False)
+                        app.prepare_dataset.remote()
                     elif isinstance(self.recipe, MilesConfig) and needs_conversion:
                         _set_status(MilesStatus.DOWNLOAD_MODEL, is_active=False)
                         app.download.remote(
