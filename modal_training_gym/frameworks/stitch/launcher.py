@@ -45,7 +45,7 @@ from modal_training_gym.common.run import (
 )
 from modal_training_gym.common.wandb import preflight_wandb
 from modal_training_gym.frameworks.stitch import serving_image
-from modal_training_gym.frameworks.stitch.pins import (
+from modal_training_gym.train_recipes.stitch_recipe.pins import (
     SLIME_ROOT,
     STITCH_REPO_REF,
     STITCH_REPO_URL,
@@ -591,8 +591,8 @@ def spawn_training_run(
     without a redeploy; infra changes (GPU, nodes, pool size, Volume names)
     still require ``modal deploy``. Returns the spawned call's object id."""
     from modal.exception import NotFoundError
-    from stitch.pools.modal_flash import ModalFlashPool
-    from stitch.service import await_pool_ready
+
+    from modal_training_gym.frameworks.stitch import trainer_helpers
 
     payload = recipe.to_payload(model=model, dataset=dataset)
     # Resolve the deployed app id client-side so the trainer records a working
@@ -606,7 +606,7 @@ def spawn_training_run(
         trainer = modal.Cls.from_name(app_name, "Trainer")()
         # Flash holds requests through a cold-starting pool, but slime's first
         # rollout would otherwise meet engines that are still loading.
-        await_pool_ready(ModalFlashPool(app_name, "Server"))
+        trainer_helpers.await_pool_ready(app_name=app_name, cls_name="Server")
         call = trainer.train.spawn(payload)
     except NotFoundError:
         raise SystemExit(

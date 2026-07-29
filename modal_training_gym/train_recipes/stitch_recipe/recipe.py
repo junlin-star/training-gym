@@ -32,7 +32,7 @@ from pydantic.dataclasses import dataclass
 from modal_training_gym.common.dataset import DatasetConfig
 from modal_training_gym.common.models import ModelConfig
 from modal_training_gym.common.wandb import WandbConfig
-from modal_training_gym.frameworks.stitch.pins import (
+from modal_training_gym.train_recipes.stitch_recipe.pins import (
     DEFAULT_SGLANG_RUNTIME,
     SLIME_IMAGE_TAG,
     SLIME_REPO_REF,

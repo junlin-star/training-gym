@@ -15,8 +15,8 @@ import urllib.request
 from collections.abc import Iterable
 from typing import Any
 
-from stitch.pools.modal_flash import ModalFlashPool
-from stitch.types import VersionRef
+import modal
+import modal.experimental
 
 # ── Config preparation ────────────────────────────────────────────────────────
 
@@ -71,8 +71,12 @@ def smoke_flash_pool(
 ) -> None:
     """Poll until the pool serves completions at ``weight_version`` — through the
     gateway (Flash holds the request through a scaled-down pool's cold start) and then
-    each live replica's ``/server_info``."""
-    pool = ModalFlashPool(app_name, cls_name)
+    each live replica's ``/server_info``.
+
+    This runs on the launching client, which has no ``stitch`` install, so the pool
+    is addressed through Modal's Flash APIs directly rather than ``ModalFlashPool``.
+    """
+    pool = _FlashPool(app_name, cls_name)
     deadline = time.time() + timeout_seconds
     last_error: str | None = None
     while True:
@@ -91,8 +95,74 @@ def smoke_flash_pool(
         time.sleep(10)
 
 
+def await_pool_ready(
+    *,
+    app_name: str,
+    cls_name: str,
+    timeout_seconds: float = 20 * 60,
+    interval_seconds: float = 30.0,
+) -> bool:
+    """Block until the pool's gateway answers ``/health`` 200.
+
+    Flash holds requests through a cold-starting pool, so this only matters for
+    the trainer's first rollout meeting engines that are still loading. On
+    timeout it warns and returns ``False``; the caller proceeds because the
+    trainer's rollout requests retry.
+    """
+    gateway = _FlashPool(app_name, cls_name).gateway_url()
+    deadline = time.time() + timeout_seconds
+    while time.time() < deadline:
+        try:
+            _get_json(f"{gateway}/health", timeout=10)
+            return True
+        except Exception:  # noqa: BLE001
+            pass
+        time.sleep(interval_seconds)
+    print(f"WARNING: pool at {gateway} not ready after {timeout_seconds:.0f}s")
+    return False
+
+
+class _FlashPool:
+    """The two Flash lookups the smoke needs: gateway URL and live replica URLs."""
+
+    def __init__(self, app_name: str, cls_name: str) -> None:
+        self.app_name = app_name
+        self.cls_name = cls_name
+
+    def _cls(self) -> modal.Cls:
+        try:
+            return modal.Cls.from_name(self.app_name, self.cls_name)
+        except Exception as exc:  # noqa: BLE001
+            raise RuntimeError(
+                f"cannot resolve {self.app_name}.{self.cls_name} — is the pool deployed?"
+            ) from exc
+
+    def gateway_url(self) -> str:
+        urls = self._cls()._experimental_get_flash_urls()
+        if not urls:
+            raise RuntimeError(
+                f"no Flash gateway URL for {self.app_name}.{self.cls_name}"
+            )
+        return str(urls[0]).rstrip("/")
+
+    def discover_replicas(self) -> list[str]:
+        containers = modal.experimental.flash_get_containers(
+            self.app_name, self.cls_name
+        )
+        hosts = [
+            c.get("host") if isinstance(c, dict) else getattr(c, "host", None)
+            for c in containers
+        ]
+        return [_url(str(h)) for h in hosts if h]
+
+
+def _url(host: str) -> str:
+    host = host.rstrip("/")
+    return host if host.startswith(("http://", "https://")) else f"https://{host}"
+
+
 def _smoke_once(
-    pool: ModalFlashPool,
+    pool: _FlashPool,
     model_name: str,
     expected: int,
     expect_min_containers: int,
@@ -132,8 +202,14 @@ def _smoke_once(
 
 
 def _applied_version(info: dict) -> int:
-    applied = info.get("applied")
-    return VersionRef.parse(applied).version if applied else -1
+    """Version of the replica's applied pointer (``[<run_id>/]weight_vNNNNNN``)."""
+    applied = str(info.get("applied") or "").strip()
+    if not applied:
+        return -1
+    tail = applied.rpartition("/")[2].removeprefix("weight_v")
+    if not tail.isdigit():
+        raise ValueError(f"unparseable applied pointer: {applied!r}")
+    return int(tail)
 
 
 def _check_version(current: int, expected: int, target: str) -> None:
@@ -177,7 +253,8 @@ def _completion(model_name: str, expected: int | None = None) -> dict:
 
 def _get_json(url: str, *, timeout: float) -> dict:
     with urllib.request.urlopen(url, timeout=timeout) as resp:
-        return json.load(resp)
+        body = resp.read().decode()
+    return json.loads(body) if body.strip().startswith("{") else {}
 
 
 def _post_json(url: str, payload: dict, *, timeout: float) -> dict:

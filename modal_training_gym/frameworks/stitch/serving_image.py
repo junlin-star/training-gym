@@ -13,7 +13,7 @@ from collections.abc import Mapping, Sequence
 
 import modal
 
-from modal_training_gym.frameworks.stitch.pins import (
+from modal_training_gym.train_recipes.stitch_recipe.pins import (
     DEFAULT_SGLANG_RUNTIME,
     STITCH_REPO_REF,
     STITCH_REPO_URL,
