@@ -387,9 +387,9 @@ def show_run_params(*, run_id: str, json_output: bool) -> None:
             [
                 name,
                 (
-                    json.dumps(value, ensure_ascii=False)
-                    if isinstance(value, (dict, list))
-                    else str(value)
+                    value
+                    if isinstance(value, str)
+                    else json.dumps(value, ensure_ascii=False)
                 ),
             ]
             for name, value in configured_params.items()
