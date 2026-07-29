@@ -1300,6 +1300,9 @@ def build_slime_app(
             initialized_cluster = ModalRayCluster()
             initialized_cluster.discover_cluster(slime.total_nodes)
             setup_rank_is_head = initialized_cluster.is_head
+            initialized_cluster.emit_member_identity(
+                training_run_id=training_run_id
+            )
 
             await asyncio.gather(
                 hf_cache_volume.reload.aio(),

@@ -10,6 +10,8 @@
 
 import asyncio
 import inspect
+import json
+import os
 import socket
 import subprocess
 import threading
@@ -27,6 +29,7 @@ _MAX_DIAGNOSTIC_RESOURCE_FIELDS = 256
 _MAX_DIAGNOSTIC_NODE_TEXT = 4_000
 _MAX_DIAGNOSTIC_STATUS_TEXT = 12_000
 _RAY_API_DIAGNOSTIC_TIMEOUT_SECONDS = 5.0
+MODAL_CLUSTER_MEMBER_EVENT = "TRAINING_GYM_MODAL_CLUSTER_MEMBER"
 
 # GPU families with an RDMA/EFA fabric; other types don't support it and would fail
 # if it were forced on.
@@ -471,6 +474,34 @@ class ModalRayCluster:
             "rank_ordered_container_ipv4_ips": list(self.container_ipv4_ips),
             "head_addr": self.head_addr,
         }
+
+    def emit_member_identity(self, *, training_run_id: str) -> dict[str, Any]:
+        """Emit the rank/IP/task binding needed to address one clustered container."""
+
+        if not self._discovered:
+            raise RuntimeError(
+                "ModalRayCluster.discover_cluster() has not been called yet"
+            )
+        task_id = os.environ.get("MODAL_TASK_ID", "")
+        if not task_id:
+            raise RuntimeError("Modal did not provide MODAL_TASK_ID")
+        if not training_run_id:
+            raise RuntimeError("training run ID is required for cluster-member identity")
+        value = {
+            "schema_version": 1,
+            "training_run_id": training_run_id,
+            "cluster_id": self.cluster_id or None,
+            "node_count": self.n_nodes,
+            "rank": self.rank,
+            "container_ipv4_ip": self.node_ip,
+            "task_id": task_id,
+        }
+        print(
+            f"{MODAL_CLUSTER_MEMBER_EVENT} "
+            f"{json.dumps(value, sort_keys=True, separators=(',', ':'))}",
+            flush=True,
+        )
+        return value
 
     def start_ray(
         self,

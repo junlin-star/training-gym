@@ -100,6 +100,38 @@ def test_cluster_identity_requires_discovery():
         ModalRayCluster().identity_snapshot()
 
 
+def test_cluster_member_identity_binds_rank_ip_and_modal_task(
+    monkeypatch, capsys
+):
+    import modal.experimental
+
+    monkeypatch.setattr(
+        modal.experimental,
+        "get_cluster_info",
+        lambda: SimpleNamespace(
+            rank=1,
+            cluster_id="cluster-abc",
+            container_ipv4_ips=["10.0.0.1", "10.0.0.2"],
+        ),
+    )
+    monkeypatch.setenv("MODAL_TASK_ID", "ta-worker-1")
+    cluster = ModalRayCluster()
+    cluster.discover_cluster(2)
+
+    assert cluster.emit_member_identity(training_run_id="run-abc") == {
+        "schema_version": 1,
+        "training_run_id": "run-abc",
+        "cluster_id": "cluster-abc",
+        "node_count": 2,
+        "rank": 1,
+        "container_ipv4_ip": "10.0.0.2",
+        "task_id": "ta-worker-1",
+    }
+    output = capsys.readouterr().out
+    assert output.startswith("TRAINING_GYM_MODAL_CLUSTER_MEMBER ")
+    assert '"task_id":"ta-worker-1"' in output
+
+
 def test_ray_worker_waits_for_head_and_retries_failed_start(monkeypatch):
     connections = []
     starts = []
