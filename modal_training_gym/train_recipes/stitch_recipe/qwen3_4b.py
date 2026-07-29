@@ -26,6 +26,11 @@ class Qwen3_4b_Stitch_Recipe(StitchRecipe):
     sglang_server_concurrency: int = 64
     sglang_server_args: dict[str, str] = field(
         default_factory=lambda: {
+            # The no-GDS fastsafetensors path — hosts have no nvidia-fs, and it is
+            # also the load format the sidecar reuses for each delta reload.
+            "--load-format": "fastsafetensors",
+            "--model-loader-extra-config": '{"enable_gds":false}',
+            "--weight-loader-drop-cache-after-load": "",
             "--reasoning-parser": "qwen3",
             "--context-length": "16384",
             "--mem-fraction-static": "0.84",

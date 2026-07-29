@@ -1,8 +1,8 @@
-"""Shared trainer-side launch helpers for the disaggregated slime flow.
+"""Launch-side helpers for the disaggregated slime flow.
 
-Vendored from the stitch ``slime_disagg`` cookbook: resolve HF repo ids +
-materialize inline YAML configs, build the ``train.py`` command (optionally
-sourcing a model arch script), and smoke the deployed Flash rollout pool.
+Vendored from the stitch cookbook (``cookbook/common/launch.py`` +
+``cookbook/common/smoke.py``): resolve HF repo ids and materialize inline YAML
+configs, build the ``train.py`` command, and smoke the deployed Flash pool.
 """
 
 from __future__ import annotations
@@ -11,22 +11,20 @@ import json
 import os
 import shlex
 import time
-import urllib.error
 import urllib.request
-from collections import namedtuple
 from collections.abc import Iterable
 from typing import Any
 
-from stitch.providers.modal import discover_flash_targets, resolve_flash_gateway_url
-
+from stitch.pools.modal_flash import ModalFlashPool
+from stitch.types import VersionRef
 
 # ── Config preparation ────────────────────────────────────────────────────────
 
 
 def prepare_config(cfg: Any, tmpdir: str, yaml_config_fields: Iterable[str]) -> None:
     """Resolve HF repo IDs to local paths and materialize inline YAML configs."""
-    from huggingface_hub import snapshot_download
     import yaml
+    from huggingface_hub import snapshot_download
 
     for attr in ("hf_checkpoint", "load", "ref_load", "critic_load"):
         if (val := getattr(cfg, attr, None)) and not str(val).startswith("/"):
@@ -59,7 +57,7 @@ def build_train_cmd(cfg: Any, trainer_root: str, *, model_script_attr: str) -> s
 
 
 class VersionAheadError(RuntimeError):
-    """Raised when a monotonic rollout pool has already advanced past a smoke version."""
+    """A monotonic rollout pool has already advanced past the smoke's expected version."""
 
 
 def smoke_flash_pool(
@@ -71,19 +69,15 @@ def smoke_flash_pool(
     expect_min_containers: int,
     timeout_seconds: int,
 ) -> None:
-    """Poll the Flash gateway until the warm pool serves completions at the
-    expected weight version, via the gateway and each container directly."""
+    """Poll until the pool serves completions at ``weight_version`` — through the
+    gateway (Flash holds the request through a scaled-down pool's cold start) and then
+    each live replica's ``/server_info``."""
+    pool = ModalFlashPool(app_name, cls_name)
     deadline = time.time() + timeout_seconds
     last_error: str | None = None
     while True:
         try:
-            _smoke_warm_floor(
-                app_name,
-                cls_name,
-                model_name,
-                weight_version,
-                expect_min_containers,
-            )
+            _smoke_once(pool, model_name, weight_version, expect_min_containers)
             return
         except VersionAheadError:
             raise
@@ -97,126 +91,88 @@ def smoke_flash_pool(
         time.sleep(10)
 
 
-def _smoke_warm_floor(
-    app_name: str,
-    cls_name: str,
+def _smoke_once(
+    pool: ModalFlashPool,
     model_name: str,
     expected: int,
     expect_min_containers: int,
 ) -> None:
-    gateway = resolve_flash_gateway_url(app_name, cls_name)
-    targets = discover_flash_targets(app_name, cls_name)
-    if len(targets) < expect_min_containers:
-        raise RuntimeError(
-            f"expected at least {expect_min_containers} containers, found {len(targets)}: {targets}"
-        )
+    gateway = pool.gateway_url()
     print(f"Gateway URL: {gateway}")
-    print(f"Direct container URLs ({len(targets)}):")
-    for target in targets:
-        print(f"  {target}")
-    _assert_containers_at_version([gateway, *targets], expected)
-    _assert_gateway_completion_exact(gateway, model_name, expected)
-
-
-def _assert_containers_at_version(targets: list[str], expected: int) -> None:
-    for target in targets:
-        info = _get_json(f"{target}/server_info", timeout=30)
-        print(f"{target} server_info={info}")
-        current = int(info["current_version"])
-        if current > expected:
-            raise VersionAheadError(
-                f"{target} current_version={current} already passed expected {expected}"
-            )
-        if current != expected:
+    # A fresh pool has no claimed run, so version 0 is unpinnable — an exact-version
+    # request would 409. Gate on plain serving until a run has claimed the pool.
+    if _get_json(f"{gateway}/server_info", timeout=60).get("run_id") is None:
+        if expected != 0:
             raise RuntimeError(
-                f"{target} current_version={current} expected {expected}"
+                f"pool is unclaimed; cannot serve expected weight version {expected}"
             )
-
-
-def _assert_gateway_completion_exact(
-    gateway: str, model_name: str, expected: int
-) -> None:
+        data = _post_json(
+            f"{gateway}/v1/chat/completions", _completion(model_name), timeout=900
+        )
+        _check_serves(data)
+        print(f"Pool serves base (unclaimed): {data.get('choices')}")
+        return
     data = _post_json(
         f"{gateway}/v1/chat/completions",
-        _completion_payload(model_name, expected),
-        timeout=180,
+        _completion(model_name, expected),
+        timeout=900,
     )
     print(f"Gateway completion: {data}")
-    if (
-        int(data.get("weight_version_start", -1)) != expected
-        or int(data.get("weight_version_end", -1)) != expected
-    ):
+    _check_completion(data, expected)
+    replicas = pool.discover_replicas()
+    if len(replicas) < expect_min_containers:
+        raise RuntimeError(
+            f"expected at least {expect_min_containers} containers, "
+            f"found {len(replicas)}: {replicas}"
+        )
+    for target in replicas:
+        info = _get_json(f"{target}/server_info", timeout=30)
+        print(f"{target} server_info={info}")
+        _check_version(_applied_version(info), expected, target)
+
+
+def _applied_version(info: dict) -> int:
+    applied = info.get("applied")
+    return VersionRef.parse(applied).version if applied else -1
+
+
+def _check_version(current: int, expected: int, target: str) -> None:
+    if current > expected:
+        raise VersionAheadError(
+            f"{target} applied={current} already past expected {expected}"
+        )
+    if current != expected:
+        raise RuntimeError(f"{target} applied={current}, expected {expected}")
+
+
+def _check_completion(data: dict, expected: int) -> None:
+    start = int(data.get("weight_version_start", -1))
+    end = int(data.get("weight_version_end", -1))
+    if start > expected or end > expected:
+        raise VersionAheadError(
+            f"gateway served {start}->{end}, already past expected {expected}"
+        )
+    if start != expected or end != expected:
         raise RuntimeError(f"unexpected gateway weight metadata: {data}")
 
 
-def _completion_payload(model_name: str, expected: int) -> dict:
-    return {
+def _check_serves(data: dict) -> None:
+    choices = data.get("choices") or []
+    if not choices or not ((choices[0].get("message") or {}).get("content")):
+        raise RuntimeError(f"pool did not return a completion: {data}")
+
+
+def _completion(model_name: str, expected: int | None = None) -> dict:
+    payload: dict[str, Any] = {
         "model": model_name,
         "messages": [{"role": "user", "content": "Reply with exactly OK."}],
         "max_tokens": 8,
         "temperature": 0,
-        "weight_version": {"exact_version": expected},
         "chat_template_kwargs": {"enable_thinking": False},
     }
-
-
-# ── Post-publish sync barrier ─────────────────────────────────────────────────
-
-_SyncDetail = namedtuple("_SyncDetail", "synced count summary")
-
-
-def wait_pool_synced(
-    *,
-    app_name: str,
-    cls_name: str,
-    version: int,
-    timeout_seconds: float,
-    poll_interval: float,
-    min_containers: int = 1,
-) -> bool:
-    """Block until every discovered Flash target reports ``current_version >=
-    version`` (and at least ``min_containers`` are present), so the next rollout
-    generates against a fully-synced pool instead of racing servers that are
-    still applying the just-published delta (which drops in-flight requests and
-    hangs generation).
-
-    Returns ``True`` once the pool is synced, or ``False`` if it did not reach
-    the version within ``timeout_seconds`` — the caller proceeds regardless,
-    since the staleness-gated rollout requests (bounded retries) remain the
-    backstop and a hard block here would be worse than a brief version skew.
-    """
-    deadline = time.time() + timeout_seconds
-    while True:
-        detail = _pool_sync_detail(app_name, cls_name, version)
-        if detail.synced and detail.count >= min_containers:
-            print(f"[sync barrier] pool at v>={version}: {detail.summary}")
-            return True
-        if time.time() >= deadline:
-            print(
-                f"[sync barrier] pool did not reach v{version} within "
-                f"{timeout_seconds:.0f}s ({detail.summary}); proceeding anyway"
-            )
-            return False
-        print(f"[sync barrier] waiting for pool to reach v{version}: {detail.summary}")
-        time.sleep(poll_interval)
-
-
-def _pool_sync_detail(app_name: str, cls_name: str, version: int) -> _SyncDetail:
-    try:
-        targets = discover_flash_targets(app_name, cls_name)
-    except Exception as exc:  # noqa: BLE001
-        return _SyncDetail(False, 0, f"discover failed: {type(exc).__name__}: {exc}")
-    versions: list[int] = []
-    for target in targets:
-        try:
-            info = _get_json(f"{target}/server_info", timeout=15)
-            versions.append(int(info.get("current_version", -1)))
-        except Exception:  # noqa: BLE001
-            versions.append(-1)
-    synced = bool(versions) and all(v >= version for v in versions)
-    at = sum(1 for v in versions if v >= version)
-    summary = f"{at}/{len(versions)} at >=v{version} (versions={versions})"
-    return _SyncDetail(synced, len(targets), summary)
+    if expected is not None:  # pin the version only against a claimed pool
+        payload["weight_version"] = {"exact_version": expected}
+    return payload
 
 
 def _get_json(url: str, *, timeout: float) -> dict:

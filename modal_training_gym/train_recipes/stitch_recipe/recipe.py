@@ -32,6 +32,13 @@ from pydantic.dataclasses import dataclass
 from modal_training_gym.common.dataset import DatasetConfig
 from modal_training_gym.common.models import ModelConfig
 from modal_training_gym.common.wandb import WandbConfig
+from modal_training_gym.frameworks.stitch.pins import (
+    DEFAULT_SGLANG_RUNTIME,
+    SLIME_IMAGE_TAG,
+    SLIME_REPO_REF,
+    SLIME_REPO_URL,
+    SGLangRuntime,
+)
 from modal_training_gym.train_recipes.base import BaseTrainRecipe, RecipeType
 from modal_training_gym.train_recipes.slime_recipe.recipe import (
     CHECKPOINTS_PATH,
@@ -51,15 +58,6 @@ __all__ = [
     "YAML_CONFIG_FIELDS",
     "StitchRecipe",
 ]
-
-# ── Pinned slime fork ──────────────────────────────────────────────────────────
-# The fork carries the generic HTTP rollout endpoint + publish-only disk-delta
-# hooks the disagg flow drives; the stock ``slimerl/slime`` image does not. Pin
-# an exact commit (not a branch tip): the build's ``git fetch && checkout`` is a
-# cached image layer, so a moving tip would silently leave a stale slime.
-SLIME_IMAGE_TAG = "slimerl/slime:nightly-dev-20260527a"
-SLIME_REPO_URL = "https://github.com/modal-projects/slime.git"
-SLIME_REPO_REF = "ebfe153949b1a69c39e92f947ed5d475166dd724"
 
 # Fields slime reads as YAML files at runtime. Recipes set them as inline dicts;
 # the launcher materializes them to temp YAML files before building the command.
@@ -85,15 +83,16 @@ _STITCH_SKIP = {
     "region",
     "memory",
     "rollout_min_containers",
+    "rollout_max_containers",
     "proxy_regions",
-    "rollout_sync_barrier",
-    "rollout_sync_barrier_timeout_seconds",
-    "rollout_sync_barrier_poll_seconds",
     # stitch / rollout-pool infra
     "delta_volume_name",
     "delta_bulletin_root",
     "sidecar_commit_mode",
     "sidecar_debug_requests",
+    "sidecar_flush_cache_on_commit",
+    "sglang_delta_update_mode",
+    "sglang_runtime",
     "sglang_server_concurrency",
     "sglang_server_args",
     "slime_image_tag",
@@ -136,16 +135,8 @@ class StitchRecipe(BaseTrainRecipe):
     actor_num_nodes: int = 1
     actor_num_gpus_per_node: int = 8
     rollout_min_containers: int = 3
+    rollout_max_containers: int | None = None
     proxy_regions: list[str] = field(default_factory=lambda: ["us-east"])
-    # Post-publish sync barrier (launcher instruction, injected into the
-    # trainer's custom_config, not a slime CLI flag). After publishing a delta,
-    # the trainer blocks until the Flash pool reports the new version before the
-    # next rollout generates — otherwise generation races servers mid-reload,
-    # which drops in-flight requests and hangs the rollout. Bounded by the
-    # timeout, then proceeds (staleness-gated requests are the backstop).
-    rollout_sync_barrier: bool = True
-    rollout_sync_barrier_timeout_seconds: int = 600
-    rollout_sync_barrier_poll_seconds: float = 3.0
 
     # ── stitch / Flash rollout pool infrastructure ──────────────────────────
     # Modal Volume that backs the weight-delta bulletin board. Empty → derived
@@ -157,8 +148,19 @@ class StitchRecipe(BaseTrainRecipe):
     # "quiesce" drains in-flight requests before applying.
     sidecar_commit_mode: str = "in_place"
     sidecar_debug_requests: bool = False
+    # Drop the engine's KV cache when a version commits. Off by default: the
+    # engine namespaces cached prefixes per version, so a flush only costs
+    # recompute.
+    sidecar_flush_cache_on_commit: bool = False
+    # Where the engine applies a delta: "disk" patches a host-local checkpoint
+    # copy and reloads from it; "cpu" applies against a pinned CPU weight cache
+    # (requires --enable-cpu-weight-cache in sglang_server_args).
+    sglang_delta_update_mode: str = "disk"
+    # The SGLang fork the pool serves on — it exposes /stage_weight_update, which
+    # stitch's engine adapter drives.
+    sglang_runtime: SGLangRuntime = DEFAULT_SGLANG_RUNTIME
     # SGLang rollout concurrency per container (drives Modal concurrency +
-    # --max-running-requests / --cuda-graph-max-bs on the served engine).
+    # --max-running-requests / --cuda-graph-max-bs-decode on the served engine).
     sglang_server_concurrency: int = 64
     # Extra SGLang server args for the rollout pool, merged over the structural
     # args the launcher sets (e.g. {"--reasoning-parser": "qwen3"}).
@@ -191,7 +193,7 @@ class StitchRecipe(BaseTrainRecipe):
     # Pins each rollout request to a served weight version; a lagging replica
     # returns a retryable 409 so requests flow across a weight update.
     custom_rollout_request_hook_path: str = (
-        "stitch.trainers.slime.rollout_request_weight_version_hook"
+        "modal_training_gym.frameworks.stitch.bulletin_hooks.gated_rollout_request_hook"
     )
     rollout_request_weight_version_mode: str = "exact"
     rollout_request_weight_version_lag: int = 0

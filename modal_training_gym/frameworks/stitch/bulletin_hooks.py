@@ -1,219 +1,124 @@
-"""Modal Volume bulletin-board hooks for delta publish + rollout gating.
+"""Trainer-side stitch hooks: publish a version, claim the pool, gate requests.
 
-Vendored from the stitch ``slime_disagg`` cookbook (``cookbook/bulletin_hooks.py``).
-The slime trainer resolves these by dotted path off the recipe:
+Vendored from the stitch cookbook (``cookbook/common/hooks.py``). slime resolves
+these by dotted path off the recipe:
 
-- :func:`commit_and_wake` — ``StitchRecipe.custom_delta_pre_push_path``: advance
-  the ``latest`` pointer, commit the Volume, best-effort wake the Flash pool.
+- :func:`commit_and_wake` — ``StitchRecipe.custom_delta_pre_push_path``: make the
+  written version durable, advance ``latest``, wake the Flash pool.
+- :func:`gated_rollout_request_hook` — ``StitchRecipe.custom_rollout_request_hook_path``:
+  pin each rollout request to a bounded-staleness version.
 - :func:`claim_pool` — called by the launcher before training publishes, to reset
-  the pool to base for this run.
-- :func:`gated_rollout_request_hook` — optional
-  ``custom_rollout_request_hook_path`` that pins each request to a bounded-
-  staleness weight version.
+  every replica to base for this run.
 
-Config is read off the trainer's ``args`` namespace (slime setattr's every
-``--custom-config-path`` key onto ``args``), with ``DELTA_*`` env vars as
-fallback.
+Each hook reads the run's coordinates off the trainer's ``args`` namespace (slime
+``setattr``\\ s every ``--custom-config-path`` key onto it), with ``DELTA_*`` env
+vars as the fallback, and drives the stitch core against a ``ModalVolumeStore`` +
+``ModalFlashPool``.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import time
 from pathlib import Path
 from typing import Any
 
-from stitch.bulletin import FilesystemBulletinBoard
-from stitch.protocol import BASE_VERSION, PointerRewind, parse_weight_identity
-from stitch.providers.modal import (
-    commit_volume,
-    discover_flash_targets,
-    volume_reloader,
-    wake_targets,
-)
+from stitch.pools.modal_flash import ModalFlashPool
+from stitch.publish import claim_run, constrain_request, publish_version
+from stitch.stores.modal_volume import ModalVolumeStore
+from stitch.types import PointerRewind
 
-from modal_training_gym.frameworks.stitch.rollout_control import (
-    apply_session_affinity,
-    distributed_rank,
-)
+from modal_training_gym.frameworks.stitch import sidecar_process
 
 logger = logging.getLogger(__name__)
 
 
-# ── Publish hook ──────────────────────────────────────────────────────────────
+def sample_affinity_key(sample: Any) -> str | None:
+    """One stable routing key for a rollout trajectory or GRPO group, so siblings
+    land on the same replica."""
+    group_index = getattr(sample, "group_index", None)
+    if group_index is not None:
+        return f"group-{group_index}"
+    for name in ("routing_key", "session_id"):
+        value = getattr(sample, name, None)
+        if value is not None:
+            return str(value)
+    return None
 
 
-def commit_and_wake(args: Any, version_dir: str, rollout_engines: list[Any]) -> None:
-    """Trainer ``custom_delta_pre_push_path`` hook (publish-only, bulletin board).
+# ── Publish ───────────────────────────────────────────────────────────────────
 
-    The trainer has written ``weight_v{N}/`` to the Modal Volume. Advance the
-    committed ``latest`` pointer, commit the Volume so the rollout pool's
-    ``reload`` sees the new version, then best-effort wake the Flash pool. The
-    sidecars self-sync (wake RPC, periodic poll, startup), so a missed wake only
-    costs latency.
+
+def commit_and_wake(args: Any, published_dir: str, rollout_engines: Any = None) -> None:
+    """Bridge slime's disk-delta publish to the stitch store.
+
+    slime fires this at each durability boundary: a version dir (``weight_vNNNNNN``,
+    holding the HF index) and — at baseline/pointer commit — the run dir. Every rank
+    flushes its writes, then version-dir calls rendezvous before rank 0 advances the
+    pointer, so no index naming another rank's shard is ever exposed early. Keying on
+    the dir name (rather than reading an index) keeps run-dir calls a clean no-op.
     """
     del rollout_engines
-    version = parse_weight_identity(Path(version_dir).name)
-    rank = distributed_rank()
-
-    if version is not None and rank in (None, 0):
-        board = FilesystemBulletinBoard(_transport_root(args), layout="slime")
-        try:
-            board.advance(_run_id(args), version)
-        except PointerRewind:
-            logger.warning(
-                "publish of version %s would rewind latest; dropping (run %r)",
-                version,
-                _run_id(args),
-                exc_info=True,
-            )
-            return
-    commit_volume(_volume_name(args))
-
-    if version is None or rank not in (None, 0):
+    store = _store(args)
+    store.commit()
+    if not Path(published_dir).name.startswith("weight_v"):
         return
-    _best_effort_wake(args, version)
-    _barrier_until_synced(args, version)
-
-
-def _barrier_until_synced(args: Any, version: int) -> None:
-    """Block until the Flash pool serves ``version`` before returning control to
-    slime, so the next rollout generation targets a fully-synced pool. Without
-    this, slime dispatches the next rollout's requests while the pool is still
-    applying the just-published delta; sglang drops those in-flight requests on
-    reload and the rollout hangs waiting for completions that never arrive.
-
-    Bounded by a timeout (then proceeds): the staleness-gated rollout requests
-    are the backstop, and a hard block here would be worse than a brief skew.
-    Toggle via the ``rollout_sync_barrier`` config key (or ``DELTA_ROLLOUT_SYNC_BARRIER``)."""
-    if not _barrier_enabled(args):
+    sidecar_process.dist_barrier()
+    if sidecar_process.dist_rank() not in (None, 0):
         return
     try:
-        from modal_training_gym.frameworks.stitch.trainer_helpers import (
-            wait_pool_synced,
-        )
-
-        app_name = (
-            getattr(args, "rollout_modal_flash_app_name", None)
-            or os.environ["DELTA_APP_NAME"]
-        )
-        cls_name = getattr(
-            args, "rollout_modal_flash_server_cls_name", None
-        ) or os.getenv("DELTA_SERVER_CLS_NAME", "Server")
-        wait_pool_synced(
-            app_name=app_name,
-            cls_name=cls_name,
-            version=version,
-            timeout_seconds=float(
-                getattr(args, "rollout_sync_barrier_timeout_seconds", None) or 600.0
-            ),
-            poll_interval=float(
-                getattr(args, "rollout_sync_barrier_poll_seconds", None) or 3.0
-            ),
-        )
-    except Exception:  # noqa: BLE001
+        publish_version(store, _pool(args), published_dir, run_id=_run_id(args))
+    except PointerRewind:
+        # A same-run republish (e.g. a retried step) — drop it rather than serve stale.
         logger.warning(
-            "Rollout sync barrier for version %s failed; proceeding "
-            "(staleness-gated requests remain the backstop)",
-            version,
-            exc_info=True,
+            "publish of %s would rewind latest; dropping", published_dir, exc_info=True
         )
-
-
-def _barrier_enabled(args: Any) -> bool:
-    val = getattr(args, "rollout_sync_barrier", None)
-    if val is None:
-        val = os.getenv("DELTA_ROLLOUT_SYNC_BARRIER", "1")
-    return str(val).strip().lower() not in ("0", "false", "no", "")
 
 
 def claim_pool(args: Any) -> None:
-    """Launch hook (rank 0): claim the rollout pool for this run.
-
-    Write the empty pointer ``<run_id>/weight_v000000``, commit the Volume, and
-    wake the pool — so every replica resets to base before the first delta
-    publishes. ``run_id`` must be fresh per launch (the run's fence token).
-    """
-    if distributed_rank() not in (None, 0):
+    """Launch hook (rank 0): reset every replica to base before the first publish, so
+    a cold pool — or one still warm from a finished run — starts this run clean."""
+    if sidecar_process.dist_rank() not in (None, 0):
         return
-    board = FilesystemBulletinBoard(_transport_root(args), layout="slime")
-    board.claim(_run_id(args))
-    commit_volume(_volume_name(args))
-    _best_effort_wake(args, BASE_VERSION)
-
-
-def _best_effort_wake(args: Any, version: int) -> None:
-    """Nudge warm Flash containers to reconcile now. Best-effort: a transient
-    Modal control-plane error must not kill the training step — ``latest`` is
-    already committed and sidecars self-sync on their next poll/startup."""
-    try:
-        app_name = (
-            getattr(args, "rollout_modal_flash_app_name", None)
-            or os.environ["DELTA_APP_NAME"]
-        )
-        cls_name = getattr(
-            args, "rollout_modal_flash_server_cls_name", None
-        ) or os.getenv("DELTA_SERVER_CLS_NAME", "Server")
-        wake_targets(
-            discover_flash_targets(app_name=app_name, cls_name=cls_name), version
-        )
-    except Exception:  # noqa: BLE001
-        logger.warning(
-            "Best-effort rollout wake failed for version %s; sidecars will self-sync",
-            version,
-            exc_info=True,
-        )
+    claim_run(_store(args), _pool(args), _run_id(args))
 
 
 # ── Staleness-gated rollout requests ──────────────────────────────────────────
 
 
-class CachedLatestPointer:
-    """TTL-cached ``(run_id, version)`` from the bulletin board's ``latest`` pointer."""
-
-    def __init__(self) -> None:
-        self.version: int = 0
-        self.run_id: str | None = None
-        self._refreshed_at: float = -1e9
-        self._board: FilesystemBulletinBoard | None = None
-
-    async def get(self, args: Any, ttl: float = 2.0) -> int:
-        now = time.monotonic()
-        if self._board is None:
-            self._board = _gate_board(args)
-        if now - self._refreshed_at >= ttl:
-            self._refreshed_at = now
-            try:
-                await self._board.refresh()
-                run_id, version = self._board.read_latest()
-                self.run_id = run_id
-                self.version = int(version)
-            except Exception:  # noqa: BLE001
-                logger.warning(
-                    "gate: could not read latest published version; using cached %s",
-                    self.version,
-                    exc_info=True,
-                )
-        return self.version
-
-
-_latest_cache = CachedLatestPointer()
-
-
 async def gated_rollout_request_hook(
     args: Any, sample: Any, request: dict[str, Any]
 ) -> None:
-    """Optional ``custom_rollout_request_hook_path``: gate each rollout on
-    ``weight_version - k`` so unusable (too-stale) rollouts are never generated."""
+    """Pin each request to a bounded-staleness version, so a too-stale replica returns
+    a retryable 409 (nudging it to sync) instead of the trainer spending rollout
+    compute on weights beyond its lag bound."""
+    payload, headers = request["payload"], dict(request.get("headers") or {})
     mode = str(getattr(args, "rollout_request_weight_version_mode", "min"))
-    if mode != "none":
-        latest = await _latest_cache.get(args)
-        lag = int(getattr(args, "rollout_request_weight_version_lag", 0))
-        target = max(0, latest - lag)
-        key = "exact_version" if mode == "exact" else "min_required_version"
-        request["payload"]["weight_version"] = {key: target}
+    affinity = str(
+        getattr(args, "rollout_session_affinity_header", "x-session-affinity")
+    )
 
+    latest = exact = None
+    lag = 0
+    if mode != "none":
+        floor = await _latest.get(args)
+        lag = int(getattr(args, "rollout_request_weight_version_lag", 0))
+        if mode == "exact":
+            exact = max(0, floor - lag)
+        else:
+            latest = floor
+    constrain_request(
+        payload,
+        headers,
+        latest=latest,
+        lag=lag,
+        exact=exact,
+        session_id=sample_affinity_key(sample),
+        affinity_header=affinity,
+    )
+    request["headers"] = headers
     request["max_retries"] = int(
         getattr(args, "rollout_request_retry_attempts", request.get("max_retries", 60))
     )
@@ -221,50 +126,81 @@ async def gated_rollout_request_hook(
         getattr(args, "rollout_request_retry_sleep", request.get("retry_sleep", 1.0))
     )
 
-    header = str(getattr(args, "rollout_session_affinity_header", "x-session-affinity"))
-    apply_session_affinity(request, getattr(sample, "session_id", None), header)
+
+class _CachedPointer:
+    """TTL-cached ``latest`` version. The per-request hook gets no rollout id, so the
+    staleness floor comes from the published pointer (already advanced by the publish
+    hook), cached with a Volume reload so it isn't reloaded once per request."""
+
+    def __init__(self) -> None:
+        self._version = 0
+        self._at = -1e9
+        self._store: ModalVolumeStore | None = None
+
+    async def get(self, args: Any, ttl: float = 2.0) -> int:
+        store = self._store
+        root = Path(_transport_root(args))
+        volume = _volume_name(args)
+        if store is None or store.root != root or store.volume_name != (volume or None):
+            store = self._store = _store(args)
+            self._version = 0
+            self._at = -1e9
+        now = time.monotonic()
+        if now - self._at >= ttl:
+            self._at = now
+            try:
+                # reload is blocking; keep the event loop free.
+                await asyncio.to_thread(store.refresh)
+                pointer = store.read_pointer()
+                self._version = pointer.version if pointer else 0
+            except Exception:  # noqa: BLE001
+                logger.warning(
+                    "gate: could not read latest; using cached %s",
+                    self._version,
+                    exc_info=True,
+                )
+        return self._version
 
 
-# ── Shared helpers ────────────────────────────────────────────────────────────
+_latest = _CachedPointer()
 
 
-def _volume_name(args: Any) -> str:
-    return str(
-        getattr(args, "update_weight_delta_volume_name", None)
-        or os.environ["DELTA_VOLUME_NAME"]
+# ── args → run coordinates ────────────────────────────────────────────────────
+
+
+def _store(args: Any) -> ModalVolumeStore:
+    volume = _volume_name(args)
+    return ModalVolumeStore(_transport_root(args), volume_name=volume or None)
+
+
+def _pool(args: Any) -> ModalFlashPool:
+    app = getattr(args, "rollout_modal_flash_app_name", None) or os.environ.get(
+        "DELTA_APP_NAME"
     )
+    cls = getattr(args, "rollout_modal_flash_server_cls_name", None) or os.environ.get(
+        "DELTA_SERVER_CLS_NAME", "Server"
+    )
+    return ModalFlashPool(app, cls)
 
 
-def bulletin_root(args: Any) -> str:
-    """Where the trainer writes version dirs: ``<transport_root>/<run_id>``."""
-    return str(
-        getattr(args, "update_weight_disk_dir", None)
-        or os.environ.get("DELTA_BULLETIN_ROOT", "/delta-bulletin")
+def _volume_name(args: Any) -> str | None:
+    return getattr(args, "update_weight_delta_volume_name", None) or os.environ.get(
+        "DELTA_VOLUME_NAME"
     )
 
 
 def _transport_root(args: Any) -> str:
-    """The Volume mount root holding the canonical ``latest`` pointer — the
-    parent of the per-run write dir."""
-    return str(Path(bulletin_root(args)).parent)
+    # The trainer writes version dirs under <root>/<run_id>; the Store is rooted at <root>.
+    write_dir = getattr(args, "update_weight_disk_dir", None) or os.environ.get(
+        "DELTA_BULLETIN_ROOT", "/delta-bulletin"
+    )
+    return str(Path(write_dir).parent)
 
 
 def _run_id(args: Any) -> str:
-    """The run partition (chain identity), passed explicitly via custom_config."""
     run_id = getattr(args, "run_id", None)
     if not run_id:
         raise ValueError(
-            "run_id is required (pass it via custom_config_path); the bulletin "
-            "hooks no longer derive it from the write-dir basename"
+            "run_id is required (pass it via custom_config_path) — it is the run's fence token"
         )
     return str(run_id)
-
-
-def _gate_board(args: Any) -> FilesystemBulletinBoard:
-    vol = getattr(args, "update_weight_delta_volume_name", None) or os.environ.get(
-        "DELTA_VOLUME_NAME"
-    )
-    refresh = volume_reloader(vol) if vol else None
-    return FilesystemBulletinBoard(
-        _transport_root(args), refresh=refresh, layout="slime"
-    )
