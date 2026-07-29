@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import time
 
-from modal_training_gym.common.run import TrainingRun, TrainingRunStatus
+from modal_training_gym.common.run import (
+    TrainingRun,
+    TrainingRunStatus,
+    training_run_event_journal_enabled,
+)
+from modal_training_gym.common.run_events import delete_training_run_events
 from modal_training_gym.utils.metadata import (
     MetadataStore,
     vol_get_summary_items,
@@ -28,8 +33,14 @@ def cleanup(*, older_than_days: int = 7, dry_run: bool = False) -> None:
         if "training_run_id" not in raw and "run_id" in raw:
             raw["training_run_id"] = raw["run_id"]
         try:
-            runs.append(TrainingRun.model_validate(raw))
+            cached = TrainingRun.model_validate(raw)
+            runs.append(
+                TrainingRun.from_id(cached.training_run_id)
+                if training_run_event_journal_enabled(raw)
+                else cached
+            )
         except Exception:
+            # A corrupt or unavailable authority is never permission to delete.
             continue
 
     targets = [
@@ -59,9 +70,13 @@ def cleanup(*, older_than_days: int = 7, dry_run: bool = False) -> None:
     deleted_runs = 0
     deleted_rollouts = 0
     deleted_tokens = 0
+    deleted_run_events = 0
 
     for r in targets:
         rid = r.training_run_id
+        # Delete journal authority before its disposable cache. Otherwise
+        # TrainingRun.from_id can reconstruct a run that cleanup just removed.
+        deleted_run_events += delete_training_run_events(rid)
         if vol_remove(MetadataStore.TRAINING_RUNS, rid):
             deleted_runs += 1
         vol_remove(MetadataStore.FRAMEWORK_STATUS_TOKENS, rid)
@@ -93,5 +108,5 @@ def cleanup(*, older_than_days: int = 7, dry_run: bool = False) -> None:
 
     print(
         f"\nDone: {deleted_runs} run(s), {deleted_rollouts} rollout(s), "
-        f"{deleted_tokens} token(s) removed."
+        f"{deleted_tokens} token(s), {deleted_run_events} run event(s) removed."
     )

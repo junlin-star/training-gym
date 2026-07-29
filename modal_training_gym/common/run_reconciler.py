@@ -11,7 +11,11 @@ from modal_training_gym.common.modal_lifecycle import (
     app_live_status,
     get_app_lifecycle_state,
 )
-from modal_training_gym.common.run import TrainingRun, TrainingRunStatus
+from modal_training_gym.common.run import (
+    TrainingRun,
+    TrainingRunStatus,
+    training_run_event_journal_enabled,
+)
 from modal_training_gym.utils.metadata import (
     MetadataStore,
     vol_get,
@@ -156,8 +160,22 @@ def _parse_running_run(raw: dict[str, Any]) -> TrainingRun | None:
     if "training_run_id" not in raw and "run_id" in raw:
         raw = {**raw, "training_run_id": raw["run_id"]}
     try:
-        run = TrainingRun.model_validate(raw)
-    except Exception:
+        cached = TrainingRun.model_validate(raw)
+        # Canonical JSON is a cache for committed attempts. Resolve through
+        # the append-only journal before deciding that a run is orphaned;
+        # otherwise a delayed RUNNING cache write could make the reconciler
+        # publish a CANCELLED terminal after the real terminal.
+        run = (
+            TrainingRun.from_id(cached.training_run_id)
+            if training_run_event_journal_enabled(raw)
+            else cached
+        )
+    except Exception as exc:
+        print(
+            "WARNING: refusing to reconcile an unmaterializable training run "
+            f"{raw.get('training_run_id', raw.get('run_id', '<unknown>'))}: "
+            f"{type(exc).__name__}: {exc}"
+        )
         return None
     if run.status != TrainingRunStatus.RUNNING:
         return None

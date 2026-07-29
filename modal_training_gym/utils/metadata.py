@@ -170,6 +170,40 @@ def vol_remove(store: MetadataStore | str, key: str) -> bool:
         raise
 
 
+def vol_remove_store(store: MetadataStore | str) -> int:
+    """Delete every JSON item in one flat metadata store.
+
+    Returns the number of files removed. This is intended for content-addressed
+    per-run stores whose keys are not available from a mutable index.
+    """
+    from modal.exception import InvalidError, NotFoundError
+
+    vol = _metadata_volume()
+    store_path = _store_path(store).rstrip("/")
+    _safe_reload(vol)
+    try:
+        paths = [
+            entry.path
+            for entry in vol.iterdir(store_path)
+            if entry.path.endswith(".json")
+        ]
+    except FileNotFoundError:
+        return 0
+
+    removed = 0
+    for path in paths:
+        try:
+            vol.remove_file(path)
+            removed += 1
+        except (FileNotFoundError, NotFoundError):
+            continue
+        except InvalidError as exc:
+            if "No such file or directory" in str(exc):
+                continue
+            raise
+    return removed
+
+
 def vol_put(
     store: MetadataStore | str,
     key: str,
@@ -193,6 +227,82 @@ def vol_put(
         return _run()
     with vol.batch_upload(force=True) as batch:
         batch.put_file(io.BytesIO(data), path)
+
+
+def vol_put_immutable(
+    store: MetadataStore | str,
+    key: str,
+    value: dict[str, Any],
+    *,
+    is_async: bool = False,
+) -> None | Awaitable[None]:
+    """Create one content-addressed metadata item without overwriting it.
+
+    Modal Volumes do not expose compare-and-swap.  Immutable journals avoid
+    needing it: callers choose a key derived from the canonical payload, and
+    readers verify that derivation.  A repeated identical write is idempotent;
+    an existing path with different bytes is corruption and fails closed.
+    """
+    vol = _metadata_volume()
+    data = json.dumps(
+        value,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode()
+    path = f"{_store_path(store)}/{key}.json"
+
+    def _verify(existing: bytes) -> None:
+        if existing != data:
+            raise RuntimeError(f"immutable metadata conflict at {path}")
+
+    if is_async:
+
+        async def _run() -> None:
+            try:
+                existing = b"".join([chunk async for chunk in vol.read_file.aio(path)])
+            except FileNotFoundError:
+                existing = None
+            if existing is not None:
+                _verify(existing)
+                return
+            try:
+                async with vol.batch_upload(force=False) as batch:
+                    batch.put_file(io.BytesIO(data), path)
+            except Exception as write_exc:
+                # A concurrent identical publisher may have won the create.
+                # Verify that case; otherwise preserve the write exception.
+                try:
+                    existing = b"".join(
+                        [chunk async for chunk in vol.read_file.aio(path)]
+                    )
+                except FileNotFoundError:
+                    raise write_exc
+                _verify(existing)
+                return
+            existing = b"".join([chunk async for chunk in vol.read_file.aio(path)])
+            _verify(existing)
+
+        return _run()
+
+    try:
+        existing = b"".join(vol.read_file(path))
+    except FileNotFoundError:
+        existing = None
+    if existing is not None:
+        _verify(existing)
+        return
+    try:
+        with vol.batch_upload(force=False) as batch:
+            batch.put_file(io.BytesIO(data), path)
+    except Exception as write_exc:
+        try:
+            existing = b"".join(vol.read_file(path))
+        except FileNotFoundError:
+            raise write_exc
+        _verify(existing)
+        return
+    _verify(b"".join(vol.read_file(path)))
 
 
 def vol_get(
@@ -526,6 +636,7 @@ __all__ = [
     "compact_summary_store",
     "vol_get_summary_items_healed",
     "vol_put",
+    "vol_put_immutable",
     "vol_remove",
     "vol_get_summary_items",
     "vol_put_summary_items",

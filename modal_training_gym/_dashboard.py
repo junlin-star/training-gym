@@ -30,7 +30,11 @@ from starlette.requests import Request
 # Used as endpoint parameter annotations, so — like ``Request`` above — these
 # must resolve from this module's globals.
 from modal_training_gym.common.advantage_distribution import AdvantageDistribution
-from modal_training_gym.common.run import FrameworkStatusUpdate, TrainingRun
+from modal_training_gym.common.run import (
+    FrameworkStatusUpdate,
+    TrainingRun,
+    materialize_training_run_summaries,
+)
 from modal_training_gym.common.training_rollout import TrainingRolloutResult
 
 # A JSON object as stored in the metadata volume (summary rows, result
@@ -461,7 +465,8 @@ def fastapi_app():
         return items
 
     async def load_runs() -> list[JsonDict]:
-        return await load_list_summary(MetadataStore.TRAINING_RUNS_SUMMARY)
+        items = await load_list_summary(MetadataStore.TRAINING_RUNS_SUMMARY)
+        return await materialize_training_run_summaries(items)
 
     async def load_train_results() -> list[JsonDict]:
         return await load_list_summary(MetadataStore.TRAIN_RESULTS_SUMMARY)
@@ -552,9 +557,20 @@ def fastapi_app():
         ):
             raise HTTPException(status_code=403, detail="Invalid status token")
 
-    async def _get_run_or_404(training_run_id: str) -> TrainingRun:
+    async def _get_run_or_404(
+        training_run_id: str,
+        *,
+        authoritative: bool = True,
+    ) -> TrainingRun:
         try:
-            return await TrainingRun.from_id(training_run_id, is_async=True)
+            if authoritative:
+                return await TrainingRun.from_id(training_run_id, is_async=True)
+            cached = await vol_get(
+                MetadataStore.TRAINING_RUNS,
+                training_run_id,
+                is_async=True,
+            )
+            return TrainingRun.model_validate(cached)
         except KeyError:
             raise HTTPException(
                 status_code=404,
@@ -576,11 +592,35 @@ def fastapi_app():
         update: FrameworkStatusUpdate,
         authorization: str | None = Header(default=None),
     ):
-        run = await _get_run_or_404(update.training_run_id)
+        # Presentation updates deliberately use the cache so every optimizer
+        # step does not replay the immutable journal. A racing cache write
+        # cannot alter terminal or active-attempt authority; dashboard,
+        # reconciler, and cleanup readers materialize that authority.
+        run = await _get_run_or_404(
+            update.training_run_id,
+            authoritative=False,
+        )
         await _require_framework_status_token(update.training_run_id, authorization)
 
-        status = await run_in_threadpool(run.apply_framework_status, update)
-        if status is None:
+        rejection = run.framework_status_rejection(update)
+        if rejection == "attempt_mismatch":
+            active_attempt_id = str((run.metadata or {}).get("active_attempt_id") or "")
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Framework status belongs to a stale or unversioned attempt: "
+                    f"reported={update.attempt_id!r}, active={active_attempt_id!r}"
+                ),
+            )
+        if rejection == "terminal_run":
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Framework status cannot update terminal training run "
+                    f"{update.training_run_id!r} ({run.status.value})"
+                ),
+            )
+        if rejection == "unsupported_phase":
             raise HTTPException(
                 status_code=400,
                 detail=(
@@ -588,7 +628,16 @@ def fastapi_app():
                     f"for {run.framework.value}"
                 ),
             )
-        await run.save(is_async=True)
+        status = await run_in_threadpool(run.apply_framework_status, update)
+        if status is None:
+            raise HTTPException(
+                status_code=409,
+                detail="Framework status was rejected after validation",
+            )
+        # Phase/progress is disposable presentation state. Attempt start,
+        # snapshots, failures, and terminals remain in the immutable journal;
+        # journaling every optimizer-step POST creates unbounded Volume IO.
+        await run.save_cache(is_async=True)
         invalidate_cache("runs")
         return JSONResponse({"status": "ok", "framework_status": status.value})
 
