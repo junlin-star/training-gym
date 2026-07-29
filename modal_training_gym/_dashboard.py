@@ -678,10 +678,14 @@ def fastapi_app():
                         return "\n\n".join(parts).strip()
             except (ValueError, SyntaxError):
                 pass
-        cleaned = re.sub(r"<\|[^|]*\|>", "", text)
+        cleaned = re.sub(r"<\|(?:turn|channel)>|<(?:turn|channel)\|>", "", text)
+        cleaned = re.sub(r"<(?:bos|eos)>", "", cleaned)
+        cleaned = re.sub(r"<\|[^|<>]*\|>", "", cleaned)
         cleaned = re.sub(r"</?think>", "", cleaned)
         # Drop standalone role-header lines left behind by the template.
-        cleaned = re.sub(r"(?m)^(system|user|assistant)\s*$\n?", "", cleaned)
+        cleaned = re.sub(
+            r"(?m)^(system|user|assistant|model|thought)\s*$\n?", "", cleaned
+        )
         return re.sub(r"\n{3,}", "\n\n", cleaned).strip()
 
     def _apply_parsed(rows: object) -> None:
