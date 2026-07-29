@@ -480,3 +480,77 @@ def parse_kimi_k2_response(text: str) -> ParsedResponse:
         tool_calls=tool_calls,
         thinking=thinking,
     )
+
+
+# ── Gemma family (Gemma 4) ─────────────────────────────────────────────
+
+# Gemma 4 mirrors its delimiters (``<|x>`` … ``<x|>``) and wraps tool-call 
+# strings in ``<|"|>``:
+#
+#   <|turn>model
+#   <|channel>thought
+#   ...reasoning...
+#   <channel|>
+#   <|tool_call>call:get_weather{city:<|"|>Beijing<|"|>,days:3}<tool_call|>
+#   <turn|>
+#
+_GEMMA4_THOUGHT_RE = re.compile(r"<\|channel>thought\n?(.*?)\n?<channel\|>", re.DOTALL)
+_GEMMA4_TOOL_CALL_RE = re.compile(
+    r"<\|tool_call>call:([^{]*)\{(.*?)\}<tool_call\|>", re.DOTALL
+)
+_GEMMA4_ARG_RE = re.compile(
+    r'([^,{}:]+):\s*(<\|"\|>.*?<\|"\|>|\{.*?\}|[^,}]*)',
+    re.DOTALL,
+)
+_GEMMA4_STR_DELIM = '<|"|>'
+
+
+def parse_gemma4_response(text: str) -> ParsedResponse:
+    """Parse Gemma 4 output into structured content.
+
+    Handles the ``<|turn>ROLE``/``<turn|>`` turn delimiters, the
+    ``<|channel>thought``/``<channel|>`` reasoning channel, and
+    ``<|tool_call>call:NAME{...}<tool_call|>`` blocks whose string arguments are
+    wrapped in ``<|"|>``.
+    """
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+
+    if "<|turn>model" in text:
+        text = text.rsplit("<|turn>model", 1)[-1]
+    # Anything past the turn terminator belongs to a following turn, not output.
+    text = text.split("<turn|>", 1)[0]
+
+    thoughts = [match.strip() for match in _GEMMA4_THOUGHT_RE.findall(text)]
+    text = _GEMMA4_THOUGHT_RE.sub("", text)
+    # The generation prompt opens the thought channel, so a response can begin
+    # inside one and close it with a bare ``<channel|>``.
+    if "<channel|>" in text:
+        head, text = text.split("<channel|>", 1)
+        thoughts.append(head.replace("<|channel>thought", "").strip())
+    # A channel left open means the model never stopped reasoning.
+    if "<|channel>thought" in text:
+        text, tail = text.split("<|channel>thought", 1)
+        thoughts.append(tail.strip())
+    thinking = "\n".join(thought for thought in thoughts if thought) or None
+
+    tool_calls: list[ToolCall] = []
+    for match in _GEMMA4_TOOL_CALL_RE.finditer(text):
+        name = match.group(1).strip()
+        if not name:
+            continue
+        # Swapping the string delimiter for a double quote turns scalars and
+        # nested objects alike into JSON that ``_coerce_arg_value`` decodes.
+        arguments = {
+            key.replace(_GEMMA4_STR_DELIM, "").strip(): _coerce_arg_value(
+                value.replace(_GEMMA4_STR_DELIM, '"')
+            )
+            for key, value in _GEMMA4_ARG_RE.findall(match.group(2))
+        }
+        tool_calls.append(ToolCall(name=name, arguments=arguments))
+    content = _GEMMA4_TOOL_CALL_RE.sub("", text).strip()
+
+    return ParsedResponse(
+        content=content,
+        tool_calls=tool_calls,
+        thinking=thinking,
+    )

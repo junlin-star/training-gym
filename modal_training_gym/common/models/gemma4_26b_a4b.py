@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from .base import HFModelConfiguration, ModelArchitecture
+from .base import HFModelConfiguration, ModelArchitecture, parse_gemma4_response
 
 
 class Gemma4_26B_A4B(HFModelConfiguration):
@@ -13,9 +13,8 @@ class Gemma4_26B_A4B(HFModelConfiguration):
     """
 
     model_name = "google/gemma-4-26B-A4B-it"
+    response_parser = staticmethod(parse_gemma4_response)
 
-    # text_config from scripts/models/gemma4-26B-A4B.sh (informational — the
-    # model script drives training flags; see module docstring).
     architecture = ModelArchitecture(
         num_layers=30,
         hidden_size=2816,
