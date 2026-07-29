@@ -22,7 +22,7 @@ class Gemma4_26B_A4B_Recipe(SlimeRecipe):
     sequence_parallel: bool = True
     rollout_num_gpus_per_engine: int = 8
 
-    num_rollout: int = 3000
+    num_rollout: int = 2
     rollout_batch_size: int = 4
     rollout_max_response_len: int = 512
     rollout_temperature: float = 0.8
@@ -59,7 +59,7 @@ class Gemma4_26B_A4B_Recipe(SlimeRecipe):
     use_precision_aware_optimizer: bool = True
 
     # Rollout sglang
-    sglang_cuda_graph_max_bs: int = 4
+    sglang_cuda_graph_max_bs: int = 1
     sglang_max_running_requests: int | None = 4
 
     # Training
