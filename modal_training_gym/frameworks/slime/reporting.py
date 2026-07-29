@@ -59,6 +59,11 @@ def _run_context(args: Any) -> dict[str, Any]:
         or os.environ.get("TRAINING_GYM_APP_NAME", "")
         or "",
         "modal_app_id": os.environ.get("MODAL_APP_ID", ""),
+        "attempt_id": _arg_value(args, "training_gym_attempt_id")
+        or _arg_value(args, "drift_async_rl_attempt_id")
+        or os.environ.get("TRAINING_GYM_ATTEMPT_ID", "")
+        or os.environ.get("DRIFT_ASYNC_RL_ATTEMPT_ID", "")
+        or "",
     }
 
 

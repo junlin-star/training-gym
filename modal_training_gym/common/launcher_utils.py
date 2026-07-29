@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import shlex
+from collections.abc import Mapping
 from os import PathLike
 from typing import Any
 
@@ -33,6 +34,48 @@ _ARCH_VALUE_FIELDS = [
     ("norm_epsilon", "norm-epsilon"),
     ("rotary_base", "rotary-base"),
 ]
+
+_REDACTED_ENV_VALUE = "[redacted]"
+
+
+def _is_sensitive_env_name(name: object) -> bool:
+    """Return whether an environment-variable-like name carries credentials."""
+    normalized = str(name).strip().lower().replace("-", "_")
+    if normalized.endswith("_token_id") or normalized.endswith("_token_ids"):
+        return False
+    return any(
+        marker in normalized
+        for marker in (
+            "api_key",
+            "access_key",
+            "private_key",
+            "secret",
+            "password",
+            "passwd",
+            "token",
+            "credential",
+            "authorization",
+            "cookie",
+        )
+    )
+
+
+def redact_runtime_env(value: Any) -> Any:
+    """Return a recursively redacted copy suitable for launcher diagnostics."""
+    if isinstance(value, Mapping):
+        return {
+            key: (
+                _REDACTED_ENV_VALUE
+                if _is_sensitive_env_name(key) and item not in (None, "")
+                else redact_runtime_env(item)
+            )
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [redact_runtime_env(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(redact_runtime_env(item) for item in value)
+    return value
 
 
 def is_local_checkpoint_ref(ref: str | PathLike) -> bool:

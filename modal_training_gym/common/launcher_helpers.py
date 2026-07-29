@@ -289,7 +289,7 @@ async def init_training_run_record(
         )
     if not framework_status_token:
         framework_status_token = _secrets.token_urlsafe(32)
-    await run_record.save(is_async=True)
+    await run_record.save(is_async=True, event_kind="started")
     await vol_put(
         MetadataStore.FRAMEWORK_STATUS_TOKENS,
         training_run_id,
@@ -364,16 +364,325 @@ def mark_run_stopped(run_record: Any) -> None:
     )
 
 
-def mark_run_failed(run_record: Any, exc: BaseException) -> None:
-    """Mark the run FAILED, preserving any more-specific error already set."""
+def _has_ray_failure_diagnostic(
+    diagnostics: list[dict[str, Any]],
+    *,
+    attempt_id: str | None,
+    attempt_count: int | None,
+) -> bool:
+    """Return whether this logical attempt already owns a Ray snapshot."""
+    if attempt_id:
+        return any(item.get("attempt_id") == attempt_id for item in diagnostics)
+    if attempt_count is not None:
+        return any(item.get("attempt_count") == attempt_count for item in diagnostics)
+    return False
+
+
+def record_ray_failure_diagnostic(
+    run_record: Any,
+    snapshot: dict[str, Any],
+    *,
+    attempt_id: str | None = None,
+    attempt_count: int | None = None,
+    ray_job_id: str | None = None,
+    ray_job_status: str,
+    failure_stage: str,
+) -> bool:
+    """Attach at most one bounded Ray snapshot to a training attempt.
+
+    The return value says whether a new entry was appended. Keeping one entry
+    per immutable attempt avoids recording a second snapshot when the normal
+    failed-job path records diagnostics and then raises into the launcher's
+    terminal exception handler.
+    """
+    metadata = dict(run_record.metadata or {})
+    if attempt_id is None:
+        attempt_id = str(metadata.get("active_attempt_id") or "") or None
+    if attempt_count is None:
+        try:
+            attempt_count = int(metadata.get("attempt_count"))
+        except (TypeError, ValueError):
+            attempt_count = None
+    if attempt_count is not None and attempt_count < 1:
+        attempt_count = None
+
+    raw_diagnostics = metadata.get("ray_failure_diagnostics")
+    diagnostics = (
+        [dict(item) for item in raw_diagnostics[-8:] if isinstance(item, dict)]
+        if isinstance(raw_diagnostics, list)
+        else []
+    )
+    if _has_ray_failure_diagnostic(
+        diagnostics,
+        attempt_id=attempt_id,
+        attempt_count=attempt_count,
+    ):
+        return False
+
+    diagnostic: dict[str, Any] = {
+        "ray_job_status": ray_job_status,
+        "failure_stage": failure_stage,
+        "snapshot": dict(snapshot),
+    }
+    if attempt_id:
+        diagnostic["attempt_id"] = attempt_id
+    if attempt_count is not None:
+        diagnostic["attempt_count"] = attempt_count
+    if ray_job_id:
+        diagnostic["ray_job_id"] = ray_job_id
+
+    diagnostics.append(diagnostic)
+    metadata["ray_failure_diagnostics"] = diagnostics[-8:]
+    run_record.metadata = metadata
+    return True
+
+
+def capture_and_record_ray_failure_diagnostic(
+    run_record: Any,
+    capture_snapshot: Callable[[], dict[str, Any]],
+    *,
+    attempt_id: str | None = None,
+    attempt_count: int | None = None,
+    ray_job_id: str | None = None,
+    ray_job_status: str,
+    failure_stage: str,
+) -> bool:
+    """Best-effort fallback capture that cannot replace the launch failure."""
+    metadata = dict(run_record.metadata or {})
+    raw_diagnostics = metadata.get("ray_failure_diagnostics")
+    diagnostics = (
+        [item for item in raw_diagnostics[-8:] if isinstance(item, dict)]
+        if isinstance(raw_diagnostics, list)
+        else []
+    )
+    resolved_attempt_id = (
+        attempt_id or str(metadata.get("active_attempt_id") or "") or None
+    )
+    resolved_attempt_count = attempt_count
+    if resolved_attempt_count is None:
+        try:
+            resolved_attempt_count = int(metadata.get("attempt_count"))
+        except (TypeError, ValueError):
+            resolved_attempt_count = None
+    if _has_ray_failure_diagnostic(
+        diagnostics,
+        attempt_id=resolved_attempt_id,
+        attempt_count=resolved_attempt_count,
+    ):
+        return False
+
+    try:
+        snapshot = capture_snapshot()
+    except Exception as exc:  # noqa: BLE001 - never mask the causal failure
+        print(
+            "Failed to capture Ray diagnostics while preserving the original "
+            f"launcher exception: {type(exc).__name__}: {exc}",
+            flush=True,
+        )
+        return False
+
+    return record_ray_failure_diagnostic(
+        run_record,
+        snapshot,
+        attempt_id=resolved_attempt_id,
+        attempt_count=resolved_attempt_count,
+        ray_job_id=ray_job_id,
+        ray_job_status=ray_job_status,
+        failure_stage=failure_stage,
+    )
+
+
+def record_last_committed_boundary_snapshot(
+    run_record: Any,
+    boundary: dict[str, Any] | None,
+    *,
+    active_attempt_id: str | None = None,
+    captured_at: int | None = None,
+) -> dict[str, Any]:
+    """Record a fixed-size, metadata-only view of durable training progress.
+
+    A generated-ahead batch is intentionally separate from
+    ``trained_through_rollout_id`` so an in-flight "Generating N/N" status
+    cannot be interpreted as evidence that rollout N was optimized.
+    """
+    metadata = dict(run_record.metadata or {})
+    resolved_active_attempt_id = (
+        active_attempt_id or str(metadata.get("active_attempt_id") or "") or None
+    )
+    pending = (
+        boundary.get("pending_rollout")
+        if isinstance(boundary, dict)
+        and isinstance(boundary.get("pending_rollout"), dict)
+        else None
+    )
+    snapshot: dict[str, Any] = {
+        "schema_version": 1,
+        "captured_at": int(time.time()) if captured_at is None else int(captured_at),
+        "metadata_only": True,
+        "found": boundary is not None,
+        "active_attempt_id": resolved_active_attempt_id,
+        "committed_attempt_id": (
+            str(boundary.get("attempt_id") or "") or None
+            if boundary is not None
+            else None
+        ),
+        "scientific_commit_id": (
+            str(boundary.get("scientific_commit_id") or "") or None
+            if boundary is not None
+            else None
+        ),
+        "parent_commit_id": (
+            str(boundary.get("parent_commit_id") or "") or None
+            if boundary is not None
+            else None
+        ),
+        "trained_through_rollout_id": (
+            int(boundary["rollout_id"]) if boundary is not None else None
+        ),
+        "checkpoint_iteration": (
+            int(boundary["checkpoint_iteration"]) if boundary is not None else None
+        ),
+        "pending_generated_rollout_id": (
+            int(pending["rollout_id"]) if pending is not None else None
+        ),
+        "terminal": bool(boundary.get("terminal")) if boundary is not None else False,
+        "boundary_sha256": (
+            str(boundary.get("boundary_sha256") or "") or None
+            if boundary is not None
+            else None
+        ),
+    }
+    metadata["last_committed_boundary"] = snapshot
+    run_record.metadata = metadata
+    return snapshot
+
+
+def record_attempt_failure(
+    run_record: Any,
+    error_message: str,
+    *,
+    attempt_id: str | None = None,
+    attempt_count: int | None = None,
+    recorded_at: int | None = None,
+) -> str:
+    """Record an attempt failure without replacing the run's root cause.
+
+    Modal reports the exception from the final retry. That exception is often
+    secondary (for example, a fail-closed resume guard rejecting a retry) and
+    can otherwise overwrite the exception that killed the first attempt.
+
+    ``error_message`` is recorded against the current attempt while
+    ``metadata["primary_failure"]`` and the top-level ``error_message`` retain
+    the first observed failure. The returned string is that primary message so
+    callers can raise it as the terminal exception Modal surfaces.
+    """
+    message = str(error_message).strip() or "Training attempt failed."
+    metadata = dict(run_record.metadata or {})
+
+    if attempt_id is None:
+        for key in ("active_attempt_id", "current_attempt_id", "attempt_id"):
+            value = metadata.get(key)
+            if value:
+                attempt_id = str(value)
+                break
+
+    if attempt_count is None:
+        try:
+            attempt_count = int(metadata.get("attempt_count"))
+        except (TypeError, ValueError):
+            attempt_count = None
+    if attempt_count is not None and attempt_count < 1:
+        attempt_count = None
+
+    failure: dict[str, Any] = {
+        "message": message,
+        "recorded_at": int(time.time()) if recorded_at is None else int(recorded_at),
+    }
+    if attempt_id:
+        failure["attempt_id"] = attempt_id
+    if attempt_count is not None:
+        failure["attempt_count"] = attempt_count
+
+    raw_failures = metadata.get("attempt_failures")
+    failures = (
+        [dict(item) for item in raw_failures if isinstance(item, dict)]
+        if isinstance(raw_failures, list)
+        else []
+    )
+
+    def _same_attempt(item: dict[str, Any]) -> bool:
+        if attempt_id:
+            return item.get("attempt_id") == attempt_id
+        if attempt_count is not None:
+            return item.get("attempt_count") == attempt_count
+        return False
+
+    matching_index = next(
+        (index for index, item in enumerate(failures) if _same_attempt(item)),
+        None,
+    )
+    if matching_index is None:
+        failures.append(failure)
+    else:
+        failures[matching_index] = failure
+    metadata["attempt_failures"] = failures
+
+    raw_primary = metadata.get("primary_failure")
+    primary = dict(raw_primary) if isinstance(raw_primary, dict) else None
+    primary_message = (
+        str(primary.get("message", "")).strip() if primary is not None else ""
+    )
+    if not primary_message:
+        existing_error = str(run_record.error_message or "").strip()
+        if existing_error:
+            primary_message = existing_error
+            primary = {
+                "message": existing_error,
+                # For records created before per-attempt failure provenance,
+                # the original attempt identity is unknown.
+                "recorded_at": failure["recorded_at"],
+            }
+        else:
+            primary_message = message
+            primary = dict(failure)
+        metadata["primary_failure"] = primary
+
+    run_record.metadata = metadata
+    run_record.error_message = primary_message
+    return primary_message
+
+
+def mark_run_failed(run_record: Any, exc: BaseException) -> str:
+    """Mark the run FAILED and return the preserved causal failure message."""
     run_record.status = TrainingRunStatus.FAILED
     terminal_error = f"{type(exc).__name__}: {exc}"
-    # Prefer a more specific message already set (e.g. the raw Ray driver
-    # message from the is_success check) over the generic wrapper.
-    run_record.error_message = run_record.error_message or terminal_error
+    metadata = dict(run_record.metadata or {})
+    active_attempt_id = str(metadata.get("active_attempt_id") or "")
+    raw_failures = metadata.get("attempt_failures")
+    already_recorded = isinstance(raw_failures, list) and any(
+        isinstance(item, dict)
+        and active_attempt_id
+        and item.get("attempt_id") == active_attempt_id
+        for item in raw_failures
+    )
+    if not already_recorded:
+        primary_error = record_attempt_failure(run_record, terminal_error)
+    else:
+        raw_primary = metadata.get("primary_failure")
+        primary_error = (
+            str(raw_primary.get("message") or "").strip()
+            if isinstance(raw_primary, dict)
+            else ""
+        )
+        if not primary_error:
+            primary_error = str(run_record.error_message or "").strip()
+        if not primary_error:
+            primary_error = terminal_error
+        run_record.error_message = primary_error
     mark_training_attempt_finished(
         run_record, status="failed", ended_at=int(time.time())
     )
+    return primary_error
 
 
 async def build_terminal_run_record(run_record: Any, training_run_id: str) -> Any:
@@ -386,15 +695,112 @@ async def build_terminal_run_record(run_record: Any, training_run_id: str) -> An
     except Exception:
         latest_run_record = run_record
 
+    local_metadata = dict(run_record.metadata or {})
+    latest_metadata = dict(latest_run_record.metadata or {})
+    local_attempt_id = str(local_metadata.get("active_attempt_id") or "").strip()
+    latest_attempt_id = str(latest_metadata.get("active_attempt_id") or "").strip()
+    if local_attempt_id and latest_attempt_id and local_attempt_id != latest_attempt_id:
+        print(
+            "Ignoring stale terminal finalization from attempt "
+            f"{local_attempt_id}; active attempt is {latest_attempt_id}.",
+            flush=True,
+        )
+        return latest_run_record
+
     latest_run_record.status = run_record.status
     latest_run_record.ended_at = finished_at
+    # Framework-status reports can update the persisted record while the
+    # launcher is running, hence the re-fetch above.  Conversely, terminal
+    # attempt provenance is accumulated only on the launcher's in-memory
+    # record.  Merge those explicit fields instead of replacing all metadata
+    # (which would roll back newer framework progress).
+    terminal_metadata_keys = {
+        "attempts",
+        "attempt_count",
+        "active_attempt_id",
+        "active_attempt_root",
+        "attempt_mode",
+        "attempt_failures",
+        "finalized_from_terminal_parent",
+        "last_attempt_ended_at",
+        "last_attempt_started_at",
+        "last_attempt_status",
+        "last_committed_boundary",
+        "logical_save_root",
+        "max_retries",
+        "primary_failure",
+        "ray_failure_diagnostics",
+        "resume_boundary",
+        "wandb_accepted_run_id",
+        "wandb_attempts",
+        "wandb_latest_run_id",
+    }
+    for key in terminal_metadata_keys:
+        if key in local_metadata:
+            latest_metadata[key] = local_metadata[key]
+    latest_run_record.metadata = latest_metadata
     # Propagate the terminal error onto the re-fetched record so the save
     # below persists it (the fresh fetch wouldn't carry it).
-    if run_record.error_message:
-        latest_run_record.error_message = run_record.error_message
+    latest_run_record.error_message = run_record.error_message
     if latest_run_record.completed_at is None:
         latest_run_record.completed_at = finished_at
     latest_run_record.duration_seconds = max(
         0, finished_at - latest_run_record.started_at
     )
     return latest_run_record
+
+
+async def load_preserved_primary_failure(training_run_id: str) -> str:
+    """Return the journaled first failure, including during retry setup.
+
+    A Modal retry can fail before it constructs its in-memory ``run_record``.
+    Reading through ``TrainingRun.from_id`` materializes the append-only event
+    journal, so a setup failure cannot hide the earlier causal exception.
+    """
+    try:
+        run_record = await TrainingRun.from_id(training_run_id, is_async=True)
+    except Exception:
+        return ""
+    metadata = dict(run_record.metadata or {})
+    primary = metadata.get("primary_failure")
+    if isinstance(primary, dict):
+        message = str(primary.get("message") or "").strip()
+        if message:
+            return message
+    return str(run_record.error_message or "").strip()
+
+
+async def record_setup_failure(
+    training_run_id: str,
+    exc: BaseException,
+) -> str:
+    """Terminalize an attempt that failed before the launcher's main guard.
+
+    ``init_training_run_record`` publishes the immutable start before writing
+    the status token. If that or any later setup operation fails, recover the
+    materialized attempt here, journal its failure, and preserve any older
+    primary cause.
+    """
+    try:
+        run_record = await TrainingRun.from_id(training_run_id, is_async=True)
+    except Exception:
+        return ""
+    if run_record.status == TrainingRunStatus.RUNNING:
+        primary = mark_run_failed(run_record, exc)
+        metadata = dict(run_record.metadata or {})
+        has_attempt = bool(metadata.get("active_attempt_id")) and bool(
+            metadata.get("attempt_count")
+        )
+        try:
+            if has_attempt:
+                await run_record.save(is_async=True, event_kind="failure")
+            else:
+                await run_record.save_cache(is_async=True)
+        except Exception as save_exc:  # noqa: BLE001
+            print(
+                "Failed to persist setup-failure reporting while preserving "
+                f"the original exception: {type(save_exc).__name__}: {save_exc}",
+                flush=True,
+            )
+        return primary
+    return await load_preserved_primary_failure(training_run_id)

@@ -16,6 +16,10 @@ Then: `uv run modal run <tutorial_file>.py::train`.
 """
 
 import asyncio
+import dataclasses
+import hashlib
+import inspect
+import json
 import os
 import shlex
 import subprocess
@@ -23,7 +27,7 @@ import tempfile
 import time
 from pathlib import Path, PurePosixPath
 from typing import Any
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from enum import Enum
 from modal import App, Dict as ModalDict, Image, Secret, Volume, Retries
 
@@ -39,30 +43,52 @@ from modal_training_gym.common.modal_urls import modal_app_dashboard_url
 from modal_training_gym.common.ray_cluster import (
     ModalRayCluster,
     _supports_rdma,
+    capture_ray_cluster_diagnostics,
     clustered_if,
 )
 from modal_training_gym.common.run import (
     TrainingRunStatus,
     has_torch_dist_checkpoint,
     mark_training_attempt_finished,
+    record_training_attempt_cluster_identity,
+    record_wandb_attempt,
     record_resume_checkpoint,
+    select_accepted_wandb_attempt,
     torch_dist_resume_checkpoint,
+)
+from modal_training_gym.common.attempts import (
+    RUN_CONTRACT_SCHEMA_VERSION,
+    attempt_root,
+    create_attempt_namespace,
+    load_latest_committed_boundary,
+    run_contract_sha256,
+    write_accepted_lineage,
 )
 from modal_training_gym.common.launcher_helpers import (
     build_app_tags,
     build_terminal_run_record,
     build_train_result,
+    capture_and_record_ray_failure_diagnostic,
     compute_save_root,
     init_training_run_record,
     mark_run_failed,
     mark_run_stopped,
+    record_attempt_failure,
+    record_setup_failure,
+    record_last_committed_boundary_snapshot,
+    record_ray_failure_diagnostic,
     resolve_caller_context,
     resolve_checkpoint_volumes,
     run_download_phase,
     run_prepare_dataset,
     ship_callable,
 )
-from modal_training_gym.common.wandb import WandbConfig
+from modal_training_gym.common.wandb import (
+    WandbConfig,
+    build_wandb_runtime_env,
+    install_wandb_api_key_in_process,
+)
+from modal_training_gym.common.launcher_utils import redact_runtime_env
 from modal_training_gym.common.status import SlimeStatus
 
 from modal_training_gym.train_recipes.slime_recipe.recipe import (
@@ -234,8 +260,10 @@ def _is_sensitive_recipe_field(name: str) -> bool:
     return (
         any(
             marker in normalized
-            for marker in ("api_key", "access_key", "secret", "password", "token")
+            for marker in ("api_key", "access_key", "secret", "password")
         )
+        or normalized in {"token", "auth", "authorization", "cookie", "wandb_key"}
+        or normalized.endswith(("_token", "_auth", "_authorization", "_cookie"))
         or normalized == "wandb_key"
     )
 
@@ -247,8 +275,20 @@ def _serialize_slime_param_value(name: str, value: Any) -> Any:
         return {
             str(k): _serialize_slime_param_value(str(k), v) for k, v in value.items()
         }
-    if isinstance(value, list | tuple | set):
+    if isinstance(value, list | tuple):
         return [_serialize_slime_param_value(name, v) for v in value]
+    if isinstance(value, set | frozenset):
+        converted = [_serialize_slime_param_value(name, v) for v in value]
+        return sorted(
+            converted,
+            key=lambda item: json.dumps(
+                item,
+                allow_nan=False,
+                ensure_ascii=True,
+                separators=(",", ":"),
+                sort_keys=True,
+            ),
+        )
     return _serialize_recipe_value(value)
 
 
@@ -258,10 +298,319 @@ def _serialize_slime_params(
     dataset: DatasetConfig | None = None,
     model: ModelConfig | None = None,
 ) -> dict[str, Any]:
-    return {
+    serialized = {
         key: _serialize_slime_param_value(key, value)
         for key, value in recipe._fields(dataset=dataset, model=model).items()
     }
+    # ``attempt_mode`` is intentionally not a Slime CLI flag, but it is part
+    # of the durable reporting contract. In particular the first attempt-start
+    # event is written before metadata["attempt_mode"] is populated later in
+    # launcher setup, so the config snapshot must carry this discriminator.
+    serialized["attempt_mode"] = recipe.attempt_mode
+    return serialized
+
+
+def _setup_rank_owns_logical_run_failure(is_head: bool | None) -> bool:
+    """Only a positively discovered rank 0 may terminalize the logical run."""
+    return is_head is True
+
+
+def _contract_value(value: Any, *, field_name: str = "") -> Any:
+    """Convert a scientific config value to deterministic, credential-safe JSON."""
+    if field_name and _is_sensitive_recipe_field(field_name):
+        return "[redacted]" if value not in (None, "", False) else value
+    if value is None or isinstance(value, str | int | bool):
+        return value
+    if isinstance(value, float):
+        # ``run_contract_sha256`` rejects NaN/Infinity via allow_nan=False.
+        return value
+    if isinstance(value, Enum):
+        return _contract_value(value.value, field_name=field_name)
+    if isinstance(value, Path | PurePosixPath):
+        return str(value)
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        return _contract_value(dataclasses.asdict(value), field_name=field_name)
+    model_dump = getattr(value, "model_dump", None)
+    if callable(model_dump):
+        return _contract_value(model_dump(mode="json"), field_name=field_name)
+    if isinstance(value, Mapping):
+        return {
+            str(key): _contract_value(item, field_name=str(key))
+            for key, item in value.items()
+        }
+    if isinstance(value, list | tuple):
+        return [_contract_value(item, field_name=field_name) for item in value]
+    if isinstance(value, set | frozenset):
+        converted = [_contract_value(item, field_name=field_name) for item in value]
+        return sorted(
+            converted,
+            key=lambda item: json.dumps(
+                item,
+                allow_nan=False,
+                ensure_ascii=True,
+                separators=(",", ":"),
+                sort_keys=True,
+            ),
+        )
+    if callable(value):
+        module = getattr(value, "__module__", "")
+        name = getattr(value, "__qualname__", getattr(value, "__name__", ""))
+        if module and name:
+            return {"callable": f"{module}.{name}"}
+    raise TypeError(
+        "scientific run contract contains a non-canonical value "
+        f"for {field_name or '<root>'}: {type(value).__name__}"
+    )
+
+
+def _public_config_snapshot(value: Any) -> dict[str, Any]:
+    """Capture public declarative class defaults plus instance overrides."""
+    names: set[str] = set()
+    for cls in reversed(type(value).__mro__):
+        for name, raw in vars(cls).items():
+            if (
+                name.startswith("_")
+                or isinstance(raw, property | staticmethod | classmethod)
+                or callable(raw)
+            ):
+                continue
+            names.add(name)
+    names.update(name for name in vars(value) if not name.startswith("_"))
+    snapshot: dict[str, Any] = {}
+    for name in sorted(names):
+        raw = getattr(value, name)
+        if callable(raw):
+            module = getattr(raw, "__module__", "")
+            qualname = getattr(raw, "__qualname__", getattr(raw, "__name__", ""))
+            snapshot[name] = {"callable": f"{module}.{qualname}"}
+        else:
+            snapshot[name] = _contract_value(raw, field_name=name)
+    return {
+        "class": f"{type(value).__module__}.{type(value).__qualname__}",
+        "fields": snapshot,
+    }
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(8 * 1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _source_tree_sha256(root: Path) -> str:
+    """Hash the exact regular files copied into a source-backed image layer."""
+    root = root.resolve()
+    if not root.is_dir():
+        raise ValueError(f"source tree does not exist: {root}")
+    ignored = {".git", ".venv", "__pycache__"}
+    files = [
+        path
+        for path in root.rglob("*")
+        if path.is_file()
+        and not path.is_symlink()
+        and not any(part in ignored for part in path.relative_to(root).parts)
+        and path.suffix != ".pyc"
+    ]
+    digest = hashlib.sha256()
+    for path in sorted(files, key=lambda item: item.relative_to(root).as_posix()):
+        relative = path.relative_to(root).as_posix()
+        digest.update(relative.encode())
+        digest.update(b"\0")
+        digest.update(bytes.fromhex(_file_sha256(path)))
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def _image_overlay_contract(
+    overlay: Any,
+    source_roots: list[str],
+    *,
+    required: bool,
+) -> dict[str, Any] | None:
+    """Bind a custom image overlay and every local source tree it copies.
+
+    Modal's image object does not expose a portable content digest while the
+    app is being constructed. Committed mode therefore requires the caller to
+    declare local overlay inputs explicitly. The contract stores hashes only,
+    never local absolute paths or file contents.
+    """
+    if overlay is None:
+        if source_roots:
+            raise ValueError(
+                "image_overlay_source_roots were provided without image_overlay"
+            )
+        return None
+    if required and not source_roots:
+        raise ValueError(
+            "committed attempt mode requires image_overlay_source_roots so the "
+            "custom image content is bound into the scientific run contract"
+        )
+
+    module = str(getattr(overlay, "__module__", "") or "")
+    qualname = str(
+        getattr(overlay, "__qualname__", getattr(overlay, "__name__", "")) or ""
+    )
+    source_file_receipt = None
+    try:
+        source_file = Path(inspect.getsourcefile(overlay) or "")
+    except (TypeError, OSError):
+        source_file = Path()
+    if source_file.is_file():
+        source_file_receipt = {
+            "name": source_file.name,
+            "sha256": _file_sha256(source_file),
+        }
+    if required and (not module or not qualname or source_file_receipt is None):
+        raise ValueError(
+            "committed image_overlay must be a source-backed callable with a "
+            "stable module and qualified name"
+        )
+
+    roots: list[dict[str, Any]] = []
+    seen_labels: set[str] = set()
+    for raw_root in source_roots:
+        root = Path(raw_root)
+        if not root.exists():
+            raise ValueError(f"image overlay source root does not exist: {root}")
+        label = root.name
+        if not label or label in seen_labels:
+            raise ValueError(
+                "image_overlay_source_roots must have unique nonempty basenames"
+            )
+        seen_labels.add(label)
+        if root.is_file() and not root.is_symlink():
+            roots.append(
+                {
+                    "label": label,
+                    "kind": "file",
+                    "sha256": _file_sha256(root),
+                }
+            )
+        elif root.is_dir() and not root.is_symlink():
+            roots.append(
+                {
+                    "label": label,
+                    "kind": "directory",
+                    "sha256": _source_tree_sha256(root),
+                }
+            )
+        else:
+            raise ValueError(
+                "image overlay source roots must be regular files or directories"
+            )
+    return {
+        "callable": f"{module}.{qualname}" if module and qualname else "",
+        "source_file": source_file_receipt,
+        "source_roots": sorted(roots, key=lambda item: item["label"]),
+    }
+
+
+def _scientific_run_contract(
+    *,
+    training_run_id: str,
+    recipe: SlimeRecipe,
+    model: ModelConfig,
+    dataset: DatasetConfig,
+    checkpoint: Checkpoint | None,
+    caller_script: str | None,
+    has_hybrid_spec: bool,
+    has_gdn: bool,
+    train_ephemeral_disk: Any,
+    train_experimental_options: Mapping[str, Any],
+    image_overlay_contract: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Build the immutable contract that every retry boundary must match."""
+    patch_receipts = []
+    for raw_path in recipe.patch_files:
+        path = Path(raw_path)
+        if not path.is_file():
+            raise ValueError(f"scientific image patch does not exist: {path}")
+        patch_receipts.append(
+            {
+                "remote_name": path.name,
+                "sha256": _file_sha256(path),
+            }
+        )
+    caller_receipt = None
+    if caller_script is not None:
+        caller_path = Path(caller_script)
+        if not caller_path.is_file():
+            raise ValueError(f"scientific caller source does not exist: {caller_path}")
+        caller_receipt = {
+            "remote_name": caller_path.name,
+            "sha256": _file_sha256(caller_path),
+        }
+    local_slime_receipt = (
+        {
+            "source_tree_sha256": _source_tree_sha256(Path(recipe.local_slime)),
+        }
+        if recipe.local_slime
+        else None
+    )
+    checkpoint_identity = (
+        {
+            "checkpoint_type": checkpoint.checkpoint_type.value,
+            "name": checkpoint.name,
+            "path": checkpoint.path,
+            "training_run_id": checkpoint.training_run_id,
+            "checkpoints_volume_name": checkpoint.checkpoints_volume_name,
+            "checkpoints_mount_path": checkpoint.checkpoints_mount_path,
+        }
+        if checkpoint is not None
+        else None
+    )
+    payload = {
+        "schema_version": RUN_CONTRACT_SCHEMA_VERSION,
+        "framework": "slime",
+        "training_run_id": training_run_id,
+        "effective_train_fields": _contract_value(
+            _serialize_slime_params(recipe, dataset=dataset, model=model)
+        ),
+        "retry_policy": {
+            "attempt_mode": recipe.attempt_mode,
+            "max_retries": int(recipe.max_retries),
+            "save_interval": int(recipe.save_interval),
+        },
+        "model": _public_config_snapshot(model),
+        "dataset": _public_config_snapshot(dataset),
+        "initial_checkpoint": checkpoint_identity,
+        "image": {
+            "base_image": SLIME_IMAGE,
+            "training_gym_source_sha256": _source_tree_sha256(
+                Path(__file__).resolve().parents[2]
+            ),
+            "image_environment": _contract_value(recipe.image_env),
+            "runtime_environment": _contract_value(recipe.environment),
+            "image_run_commands": list(recipe.image_run_commands),
+            "image_overlay": image_overlay_contract,
+            "patches": patch_receipts,
+            "caller_source": caller_receipt,
+            "local_slime": local_slime_receipt,
+            "built_in_patch_profile": {
+                "hybrid": bool(has_hybrid_spec),
+                "gdn": bool(has_gdn),
+                "bridge": recipe.megatron_to_hf_mode == "bridge",
+            },
+        },
+        "modal_execution": {
+            "gpu_type": recipe.gpu_type,
+            "total_nodes": int(recipe.total_nodes),
+            "actor_num_nodes": int(recipe.actor_num_nodes),
+            "actor_num_gpus_per_node": int(recipe.actor_num_gpus_per_node),
+            "rollout_num_gpus": int(recipe.rollout_num_gpus or 0),
+            "memory": _contract_value(recipe.memory),
+            "cloud": recipe.cloud,
+            "region": recipe.region,
+            "ephemeral_disk": _contract_value(train_ephemeral_disk),
+            "experimental_options": _contract_value(train_experimental_options),
+        },
+    }
+    # Round-trip now so an unsupported object or non-finite numeric fails before
+    # a claim-grade attempt can allocate GPUs or inspect an earlier boundary.
+    run_contract_sha256(payload)
+    return payload
 
 
 def _preflight_wandb(wandb_cfg: WandbConfig) -> str:
@@ -269,6 +618,18 @@ def _preflight_wandb(wandb_cfg: WandbConfig) -> str:
     from modal_training_gym.common.wandb import preflight_wandb
 
     return preflight_wandb(wandb_cfg)
+
+
+def _validate_committed_dataset_inputs(
+    slime: SlimeRecipe,
+    dataset: DatasetConfig,
+) -> None:
+    if slime.attempt_mode == "committed" and dataset.always_prepare:
+        raise ValueError(
+            "committed attempt mode requires dataset.always_prepare=False: "
+            "deleting and rebuilding shared materialized data on retry would "
+            "invalidate an authenticated parent boundary"
+        )
 
 
 def build_slime_app(
@@ -287,6 +648,7 @@ def build_slime_app(
 
     SlimeRecipe._validate_custom_model_architecture(model)
     SlimeRecipe._validate_dataset(dataset)
+    _validate_committed_dataset_inputs(slime, dataset)
 
     # Models that can't do THD packing (model.requires_bshd, e.g. Qwen3-ASR) must
     # train on padded (bshd) batches; fail fast with the fix if the recipe didn't.
@@ -343,8 +705,14 @@ def build_slime_app(
         and getattr(model.architecture, "megatron_spec", None)
         and not slime.slime_model_script
     )
-    if slime.image_overlay is not None:
-        image = slime.image_overlay(image)
+    image_overlay = slime.image_overlay
+    image_overlay_contract = _image_overlay_contract(
+        image_overlay,
+        list(slime.image_overlay_source_roots),
+        required=slime.attempt_mode == "committed",
+    )
+    if image_overlay is not None:
+        image = image_overlay(image)
         object.__setattr__(slime, "image_overlay", None)
 
     for patch in slime.patch_files:
@@ -806,8 +1174,33 @@ def build_slime_app(
         unsupported = ", ".join(sorted(train_function_kwargs))
         raise TypeError(f"Unsupported slime.train_function_kwargs keys: {unsupported}")
 
+    scientific_run_contract = (
+        _scientific_run_contract(
+            training_run_id=training_run_id,
+            recipe=slime,
+            model=model,
+            dataset=dataset,
+            checkpoint=checkpoint,
+            caller_script=caller_script,
+            has_hybrid_spec=bool(_has_hybrid_spec),
+            has_gdn=bool(_has_gdn),
+            train_ephemeral_disk=train_ephemeral_disk,
+            train_experimental_options=train_experimental_options,
+            image_overlay_contract=image_overlay_contract,
+        )
+        if slime.attempt_mode == "committed"
+        else None
+    )
+    scientific_run_contract_sha256 = (
+        run_contract_sha256(scientific_run_contract)
+        if scientific_run_contract is not None
+        else ""
+    )
+
     async def write_step_times(
-        run_id: str, num_steps: int
+        run_id: str,
+        attempt_id: str,
+        num_steps: int,
     ) -> dict[str, dict[str, int | None]]:
         step_times_dict = ModalDict.from_name(
             "training-gym-step-times", create_if_missing=True
@@ -815,8 +1208,8 @@ def build_slime_app(
 
         step_times: dict[str, dict[str, int | None]] = {}
         for current_step_num in range(1, num_steps + 1):
-            start_key = f"{run_id}:{current_step_num}:start"
-            finish_key = f"{run_id}:{current_step_num}:finish"
+            start_key = f"{run_id}:{attempt_id}:{current_step_num}:start"
+            finish_key = f"{run_id}:{attempt_id}:{current_step_num}:finish"
 
             current_step_start_time, current_step_end_time = await asyncio.gather(
                 step_times_dict.get.aio(start_key),
@@ -842,7 +1235,11 @@ def build_slime_app(
 
         return step_times
 
-    async def clear_step_times(run_id: str, num_steps: int) -> None:
+    async def clear_step_times(
+        run_id: str,
+        attempt_id: str,
+        num_steps: int,
+    ) -> None:
         step_times_dict = ModalDict.from_name(
             "training-gym-step-times", create_if_missing=True
         )
@@ -852,8 +1249,8 @@ def build_slime_app(
                 step_times_dict.pop.aio(key, None)
                 for current_step_num in range(1, num_steps + 1)
                 for key in (
-                    f"{run_id}:{current_step_num}:start",
-                    f"{run_id}:{current_step_num}:finish",
+                    f"{run_id}:{attempt_id}:{current_step_num}:start",
+                    f"{run_id}:{attempt_id}:{current_step_num}:finish",
                 )
             )
         )
@@ -868,12 +1265,10 @@ def build_slime_app(
         secrets=train_secrets or None,
         ephemeral_disk=train_ephemeral_disk,
         timeout=48 * 60 * 60,  # 2d — extended-horizon runs
-        # Retries exist for transient failures (preemption/NCCL), where a retry
-        # resumes from the last checkpoint. But a *deterministic* crash (esp.
-        # before the first save_interval checkpoint) re-runs from scratch and
-        # crashloops through every attempt — 10 wasted ~4h of a 40-GPU cluster on
-        # a step-1 crash. Cap low so a persistent failure surfaces fast.
-        retries=Retries(max_retries=3, initial_delay=0.0),
+        # Retry policy is recipe-controlled. In committed attempt mode a retry
+        # writes to a fresh namespace and may load only an authenticated boundary;
+        # without a boundary it restarts from the recipe's original initialization.
+        retries=Retries(max_retries=slime.max_retries, initial_delay=0.0),
         single_use_containers=True,
         experimental_options=train_experimental_options or None,
         serialized=True,
@@ -898,77 +1293,165 @@ def build_slime_app(
         if framework_status_token:
             os.environ["TRAINING_GYM_FRAMEWORK_STATUS_TOKEN"] = framework_status_token
 
-        await asyncio.gather(
-            hf_cache_volume.reload.aio(),
-            data_volume.reload.aio(),
-            checkpoints_volume.reload.aio(),
-        )
+        setup_rank_is_head: bool | None = None
 
-        cluster = ModalRayCluster()
-        cluster.discover_cluster(slime.total_nodes)
+        async def _initialize_cluster_and_attempt():
+            nonlocal setup_rank_is_head
+            initialized_cluster = ModalRayCluster()
+            initialized_cluster.discover_cluster(slime.total_nodes)
+            setup_rank_is_head = initialized_cluster.is_head
 
-        os.environ["SLIME_HOST_IP"] = cluster.node_ip
-        os.environ["SGLANG_HOST_IP"] = cluster.node_ip
-        os.environ["HOST_IP"] = cluster.node_ip
-
-        ray_worker_wait_retries = int(
-            (slime.environment or {}).get(
-                "TRAINING_GYM_RAY_WORKER_WAIT_RETRIES",
-                os.environ.get("TRAINING_GYM_RAY_WORKER_WAIT_RETRIES", "60"),
+            await asyncio.gather(
+                hf_cache_volume.reload.aio(),
+                data_volume.reload.aio(),
+                checkpoints_volume.reload.aio(),
             )
-        )
-        cluster.start_ray(worker_wait_retries=ray_worker_wait_retries)
 
-        if not cluster.is_head:
-            await cluster.wait_forever()
+            os.environ["SLIME_HOST_IP"] = initialized_cluster.node_ip
+            os.environ["SGLANG_HOST_IP"] = initialized_cluster.node_ip
+            os.environ["HOST_IP"] = initialized_cluster.node_ip
+            # Modal injects the W&B Secret independently into every clustered
+            # container. Install the backwards-compatible config fallback
+            # before Ray starts as well; Ray workers then inherit authentication
+            # without the key appearing in JobSubmission runtime_env metadata.
+            install_wandb_api_key_in_process(slime.wandb)
+
+            initialized_wait_retries = int(
+                (slime.environment or {}).get(
+                    "TRAINING_GYM_RAY_WORKER_WAIT_RETRIES",
+                    os.environ.get("TRAINING_GYM_RAY_WORKER_WAIT_RETRIES", "60"),
+                )
+            )
+            if not initialized_cluster.is_head:
+                initialized_cluster.start_ray(
+                    worker_wait_retries=initialized_wait_retries
+                )
+                await initialized_cluster.wait_forever()
+                return None
+
+            # Create the logical attempt record before the Ray head waits for
+            # every worker. Otherwise a missing second node exits before any
+            # structured record exists.
+            initialized_wandb_entity = (
+                slime.wandb.entity or os.environ.get("WANDB_ENTITY", "")
+                if slime.wandb is not None
+                else ""
+            )
+            initialized_wandb_run_id = ""
+
+            print(f"Training run id: {training_run_id}")
+            config_summary: dict = {
+                "model": {"model_name": model.model_name} if model else {},
+                "recipe": _serialize_slime_params(
+                    slime,
+                    dataset=dataset,
+                    model=model,
+                ),
+                "wandb": (
+                    {
+                        "project": slime.wandb.project,
+                        "group": slime.wandb.group,
+                        "entity": initialized_wandb_entity,
+                        "run_id": initialized_wandb_run_id,
+                    }
+                    if slime.wandb
+                    else {}
+                ),
+                "dataset": {
+                    "hf_repo": getattr(dataset, "hf_repo", ""),
+                    "name": type(dataset).__name__,
+                },
+                "lr": slime.lr,
+                "global_batch_size": slime.global_batch_size,
+                "scientific_run_contract_sha256": scientific_run_contract_sha256,
+                "scientific_run_contract": scientific_run_contract,
+            }
+            (
+                initialized_run_record,
+                initialized_wandb_run_id,
+                initialized_status_token,
+            ) = await init_training_run_record(
+                training_run_id=training_run_id,
+                modal_app_id=modal_app_id,
+                modal_app_url=(modal_app_url or modal_app_dashboard_url(modal_app_id)),
+                framework=Framework.SLIME,
+                initializing_status=SlimeStatus.INITIALIZING,
+                config_summary=config_summary,
+                wandb_cfg=slime.wandb,
+                wandb_entity=initialized_wandb_entity,
+                framework_status_token=framework_status_token,
+            )
+            return (
+                initialized_cluster,
+                initialized_wait_retries,
+                initialized_run_record,
+                initialized_wandb_entity,
+                initialized_wandb_run_id,
+                initialized_status_token,
+            )
+
+        try:
+            initialized = await _initialize_cluster_and_attempt()
+        except BaseException as exc:
+            # Only rank 0 owns logical-run state. Worker cancellation and
+            # worker-local setup failures are evidence for the head/Ray/Modal
+            # diagnostics, not authority to terminalize the shared attempt.
+            if not _setup_rank_owns_logical_run_failure(setup_rank_is_head):
+                raise
+            primary_error = await record_setup_failure(training_run_id, exc)
+            current_error = f"{type(exc).__name__}: {exc}"
+            if primary_error and primary_error != current_error:
+                print(
+                    "Retry setup failed after the causal failure; surfacing "
+                    f"the preserved primary failure: {primary_error}",
+                    flush=True,
+                )
+                raise RuntimeError(primary_error) from exc
+            raise
+        if initialized is None:
             return
-
-        # Fail fast on W&B access before any GPU work, not as a recurring CommError
-        # mid-training.
-        wandb_entity = ""
-        if slime.wandb is not None:
-            wandb_entity = _preflight_wandb(slime.wandb)
-
-        wandb_run_id = ""
-
-        print(f"Training run id: {training_run_id}")
-        config_summary: dict = {
-            "model": {"model_name": model.model_name} if model else {},
-            "recipe": _serialize_slime_params(slime, dataset=dataset, model=model),
-            "wandb": (
-                {
-                    "project": slime.wandb.project,
-                    "group": slime.wandb.group,
-                    "entity": wandb_entity,
-                    "run_id": wandb_run_id,
-                }
-                if slime.wandb
-                else {}
-            ),
-            "dataset": {
-                "hf_repo": getattr(dataset, "hf_repo", ""),
-                "name": type(dataset).__name__,
-            },
-            "lr": slime.lr,
-            "global_batch_size": slime.global_batch_size,
-        }
         (
+            cluster,
+            ray_worker_wait_retries,
             run_record,
+            wandb_entity,
             wandb_run_id,
             framework_status_token,
-        ) = await init_training_run_record(
-            training_run_id=training_run_id,
-            modal_app_id=modal_app_id,
-            modal_app_url=modal_app_url or modal_app_dashboard_url(modal_app_id),
-            framework=Framework.SLIME,
-            initializing_status=SlimeStatus.INITIALIZING,
-            config_summary=config_summary,
-            wandb_cfg=slime.wandb,
-            wandb_entity=wandb_entity,
-            framework_status_token=framework_status_token,
-        )
+        ) = initialized
+        attempt_metadata = dict(run_record.metadata or {})
+        attempt_id = str(attempt_metadata.get("active_attempt_id") or "")
+        attempt_count = int(attempt_metadata.get("attempt_count") or 0)
+        ray_started = False
+        ray_diagnostic_recorded = False
+        ray_failure_stage = "ray_cluster_bootstrap"
+        committed_attempt_mode = slime.attempt_mode == "committed"
+        logical_save_root: str | None = None
 
         try:  # Wraps all post-setup work so any failure marks the run terminal.
+            record_training_attempt_cluster_identity(
+                run_record, cluster.identity_snapshot()
+            )
+            # Persist the attempt-to-Modal-cluster mapping before Ray bootstrap;
+            # a worker can disappear while the head is waiting for Ray nodes.
+            await run_record.save(is_async=True)
+            cluster.start_ray(worker_wait_retries=ray_worker_wait_retries)
+            ray_started = True
+            ray_failure_stage = "post_ray_start_setup"
+
+            # Fail fast on W&B access before model initialization or a Ray job,
+            # rather than surfacing a recurring CommError mid-training.
+            if slime.wandb is not None:
+                wandb_entity = _preflight_wandb(slime.wandb)
+                run_record.config["wandb"]["entity"] = wandb_entity
+                record_wandb_attempt(
+                    run_record,
+                    entity=wandb_entity,
+                    project=slime.wandb.project,
+                    group=slime.wandb.group,
+                    run_id=wandb_run_id,
+                    attempt_count=attempt_count,
+                )
+
             # In-flight status updates are fire-and-forget via the dashboard's
             # /api/framework-status endpoint so the training thread doesn't pay
             # the ~300ms volume-write latency on each transition. Terminal state
@@ -982,7 +1465,10 @@ def build_slime_app(
             def _set_framework_status(status: SlimeStatus) -> None:
                 run_record.framework_status = status
                 enqueue_framework_status(
-                    training_run_id, status.value, token=framework_status_token
+                    training_run_id,
+                    status.value,
+                    token=framework_status_token,
+                    attempt_id=attempt_id,
                 )
 
             async def _set_framework_status_async(status: SlimeStatus) -> None:
@@ -1023,63 +1509,220 @@ def build_slime_app(
                         dataset.validate_prepared(ep)
 
             await _set_framework_status_async(SlimeStatus.CONVERT_MODEL)
-            prepare_slime_config(slime, model, tempfile.mkdtemp())
 
-            if wandb_key := os.environ.get("WANDB_API_KEY", ""):
-                if slime.wandb is not None:
-                    slime.wandb.key = wandb_key
-
-            save_root = compute_save_root(
+            logical_save_root = compute_save_root(
                 slime.save,
                 recipe_default_save_root=str(CHECKPOINTS_PATH).rstrip("/"),
                 mounted_save_root=checkpoints_mount_path,
                 training_run_id=training_run_id,
             )
+            if committed_attempt_mode:
+                mounted_root = Path(checkpoints_mount_path).resolve()
+                resolved_logical_root = Path(logical_save_root).resolve()
+                if (
+                    resolved_logical_root != mounted_root
+                    and mounted_root not in resolved_logical_root.parents
+                ):
+                    raise RuntimeError(
+                        "committed attempt mode requires the logical save root "
+                        "to be inside the mounted checkpoints Volume: "
+                        f"save={resolved_logical_root} mount={mounted_root}"
+                    )
+            resume_boundary: dict[str, Any] | None = None
+            terminal_parent_complete = False
+            if committed_attempt_mode:
+                if not attempt_id or attempt_count < 1:
+                    raise RuntimeError(
+                        "committed attempt mode requires an initialized attempt identity"
+                    )
+                resume_boundary = load_latest_committed_boundary(
+                    logical_save_root,
+                    verify_hashes=True,
+                    expected_run_contract_sha256=scientific_run_contract_sha256,
+                )
+                if resume_boundary is not None and resume_boundary["terminal"]:
+                    expected_terminal_rollout = slime.num_rollout - 1
+                    if int(resume_boundary["rollout_id"]) != expected_terminal_rollout:
+                        raise RuntimeError(
+                            "terminal committed boundary does not match this recipe: "
+                            f"boundary={resume_boundary['rollout_id']} "
+                            f"expected={expected_terminal_rollout}"
+                        )
+                    terminal_parent_complete = True
+                    accepted_wandb_run_id = select_accepted_wandb_attempt(
+                        run_record,
+                        accepted_attempt_id=str(resume_boundary["attempt_id"]),
+                        skipped_attempt_count=attempt_count,
+                    )
+                    if accepted_wandb_run_id:
+                        wandb_run_id = accepted_wandb_run_id
+                        if slime.wandb is not None:
+                            run_record.config["wandb"]["run_id"] = wandb_run_id
+                initial_attempt_load = (
+                    str(
+                        attempt_root(
+                            logical_save_root,
+                            resume_boundary["attempt_id"],
+                        )
+                    )
+                    if resume_boundary is not None
+                    else str(slime.load or slime.ref_load or "")
+                )
+                save_root = str(
+                    create_attempt_namespace(
+                        logical_save_root,
+                        run_id=training_run_id,
+                        attempt_id=attempt_id,
+                        attempt_count=attempt_count,
+                        initial_load=initial_attempt_load,
+                        parent_boundary=resume_boundary,
+                        run_contract_sha256=scientific_run_contract_sha256,
+                    )
+                )
+                # Worker-node containers mounted this Volume before the head
+                # allocated the attempt. Persist the immutable owner now; the
+                # framework's startup barrier reloads it on every writer node.
+                await checkpoints_volume.commit.aio()
+            else:
+                save_root = logical_save_root
 
             original_save = slime.save
             original_load = slime.load
             original_ref_load = slime.ref_load
+            original_extra_config = slime.extra_config
             object.__setattr__(slime, "save", save_root)
 
-            # Resolve the local HF snapshot dir (used for bridge-mode load below).
-            _hf_ref: str | None = None
-            if model and (slime.megatron_to_hf_mode == "bridge" or slime.ref_load):
-                from huggingface_hub import snapshot_download as _snap0
-
-                _hf_ref = (
-                    str(model.model_path)
-                    if model.model_path
-                    else _snap0(model.model_name, local_files_only=True)
+            if committed_attempt_mode:
+                if resume_boundary is None:
+                    resume_checkpoint = None
+                else:
+                    checkpoint_path = str(
+                        Path(logical_save_root)
+                        / str(resume_boundary["checkpoint_path"])
+                    )
+                    if not _is_complete_torch_dist_checkpoint(checkpoint_path):
+                        raise RuntimeError(
+                            "committed resume boundary references an incomplete "
+                            f"checkpoint: {checkpoint_path}"
+                        )
+                    resume_checkpoint = {
+                        "resume_checkpoint_path": checkpoint_path,
+                        "resume_checkpoint_name": Path(checkpoint_path).name,
+                        "resume_from_iteration": int(
+                            resume_boundary["checkpoint_iteration"]
+                        ),
+                    }
+            else:
+                resume_checkpoint = torch_dist_resume_checkpoint(
+                    save_root, is_complete=_is_complete_torch_dist_checkpoint
                 )
-
-            resume_checkpoint = torch_dist_resume_checkpoint(
-                save_root, is_complete=_is_complete_torch_dist_checkpoint
-            )
             record_resume_checkpoint(run_record, resume_checkpoint)
+            run_metadata = dict(run_record.metadata or {})
+            run_metadata.update(
+                {
+                    "active_attempt_id": attempt_id,
+                    "active_attempt_root": save_root,
+                    "logical_save_root": logical_save_root,
+                    "attempt_mode": slime.attempt_mode,
+                    "max_retries": slime.max_retries,
+                    "scientific_run_contract_sha256": scientific_run_contract_sha256,
+                    "resume_boundary": (
+                        {
+                            key: resume_boundary[key]
+                            for key in (
+                                "attempt_id",
+                                "rollout_id",
+                                "checkpoint_iteration",
+                                "terminal",
+                                "boundary_manifest",
+                                "boundary_sha256",
+                            )
+                        }
+                        if resume_boundary is not None
+                        else None
+                    ),
+                    "finalized_from_terminal_parent": terminal_parent_complete,
+                }
+            )
+            raw_attempts = run_metadata.get("attempts")
+            if isinstance(raw_attempts, list):
+                updated_attempts: list[Any] = []
+                for raw_attempt in raw_attempts:
+                    if (
+                        isinstance(raw_attempt, dict)
+                        and raw_attempt.get("attempt_id") == attempt_id
+                    ):
+                        attempt_record = dict(raw_attempt)
+                        attempt_record.update(
+                            {
+                                "attempt_root": save_root,
+                                "resume_from": run_metadata["resume_boundary"],
+                            }
+                        )
+                        updated_attempts.append(attempt_record)
+                    else:
+                        updated_attempts.append(raw_attempt)
+                run_metadata["attempts"] = updated_attempts
+            run_record.metadata = run_metadata
             await run_record.save(is_async=True)
 
-            if resume_checkpoint is not None:
-                print(
-                    f"WARNING: detected existing checkpoint in "
-                    f"{resume_checkpoint['resume_checkpoint_path']}; "
-                    "resuming training from last saved iteration."
-                )
-                object.__setattr__(slime, "load", save_root)
-            elif (
-                slime.megatron_to_hf_mode == "bridge" and not slime.ref_load and _hf_ref
-            ):
-                # Fresh bridge run: load the HF weights directly via AutoBridge. slime falls back
-                # args.load -> args.ref_load, and _load_checkpoint_hf maps the HF dir into Megatron
-                # (weights only — no optimizer/RNG state, so no torch_dist is required). Pointing
-                # ref_load at a torch_dist here would instead trigger the full-resume path and fail
-                # on the missing optimizer state.
-                object.__setattr__(slime, "ref_load", _hf_ref)
             try:
+                if resume_checkpoint is not None:
+                    print(
+                        f"WARNING: detected existing checkpoint in "
+                        f"{resume_checkpoint['resume_checkpoint_path']}; "
+                        "resuming training from last saved iteration."
+                    )
+                    if committed_attempt_mode:
+                        assert resume_boundary is not None
+                        parent_attempt_root = str(
+                            attempt_root(
+                                logical_save_root,
+                                resume_boundary["attempt_id"],
+                            )
+                        )
+                        object.__setattr__(slime, "load", parent_attempt_root)
+                        # This must happen before prepare_slime_config materializes
+                        # extra_config into YAML. Updating it afterwards either
+                        # fails on the path string or silently omits --ckpt-step.
+                        resume_extra_config = dict(slime.extra_config or {})
+                        resume_extra_config["ckpt_step"] = int(
+                            resume_boundary["checkpoint_iteration"]
+                        )
+                        object.__setattr__(slime, "extra_config", resume_extra_config)
+                    else:
+                        object.__setattr__(slime, "load", save_root)
+
+                prepare_slime_config(slime, model, tempfile.mkdtemp())
+
+                # Resolve the local HF snapshot dir (used for a fresh bridge-mode
+                # load below). prepare_slime_config may have populated model_path.
+                _hf_ref: str | None = None
+                if model and (slime.megatron_to_hf_mode == "bridge" or slime.ref_load):
+                    from huggingface_hub import snapshot_download as _snap0
+
+                    _hf_ref = (
+                        str(model.model_path)
+                        if model.model_path
+                        else _snap0(model.model_name, local_files_only=True)
+                    )
+
+                if (
+                    resume_checkpoint is None
+                    and slime.megatron_to_hf_mode == "bridge"
+                    and not slime.ref_load
+                    and _hf_ref
+                ):
+                    # Fresh bridge run: load HF weights via AutoBridge. Pointing
+                    # ref_load at torch_dist would trigger full-resume semantics
+                    # and require optimizer/RNG state.
+                    object.__setattr__(slime, "ref_load", _hf_ref)
                 cmd = build_train_cmd(slime, SLIME_ROOT, model=model, dataset=dataset)
             finally:
                 object.__setattr__(slime, "save", original_save)
                 object.__setattr__(slime, "load", original_load)
                 object.__setattr__(slime, "ref_load", original_ref_load)
+                object.__setattr__(slime, "extra_config", original_extra_config)
 
             phase_report_url = (
                 os.environ.get("TRAINING_GYM_FRAMEWORK_STATUS_URL")
@@ -1093,12 +1736,11 @@ def build_slime_app(
                     "container. Phase reporting is disabled for this run."
                 )
 
-            wandb_env = {}
-            if wandb_run_id:
-                wandb_env["WANDB_RUN_ID"] = wandb_run_id
-                wandb_env["WANDB_RESUME"] = "allow"
-            if wandb_entity:
-                wandb_env["WANDB_ENTITY"] = wandb_entity
+            wandb_env = build_wandb_runtime_env(
+                slime.wandb,
+                run_id=wandb_run_id,
+                entity=wandb_entity,
+            )
 
             runtime_env = {
                 "env_vars": {
@@ -1123,34 +1765,122 @@ def build_slime_app(
                     "TRAINING_GYM_FRAMEWORK_STATUS_URL": phase_report_url,
                     **wandb_env,
                     **slime.environment,
-                    "TRAINING_GYM_FRAMEWORK_STATUS_TOKEN": framework_status_token,
+                    "TRAINING_GYM_ATTEMPT_MODE": slime.attempt_mode,
+                    "TRAINING_GYM_ATTEMPT_ID": attempt_id,
+                    "TRAINING_GYM_LOGICAL_SAVE_ROOT": logical_save_root,
+                    "TRAINING_GYM_CHECKPOINTS_VOLUME_NAME": checkpoints_volume_name,
+                    "TRAINING_GYM_RUN_CONTRACT_SHA256": (
+                        scientific_run_contract_sha256
+                    ),
+                    "DRIFT_ASYNC_RL_ATTEMPT_ID": attempt_id,
+                    "DRIFT_ASYNC_RL_WRITER_ATTEMPT_ID": attempt_id,
+                    "DRIFT_ASYNC_RL_GENERATION_ATTEMPT_ID": attempt_id,
+                    "DRIFT_ASYNC_RL_PARENT_ATTEMPT_ID": (
+                        str(resume_boundary["attempt_id"])
+                        if resume_boundary is not None
+                        else ""
+                    ),
+                    "DRIFT_ASYNC_RL_PARENT_COMMIT_ID": (
+                        str(resume_boundary.get("scientific_commit_id") or "")
+                        if resume_boundary is not None
+                        else ""
+                    ),
+                    "DRIFT_ASYNC_RL_RESUME_BOUNDARY": (
+                        str(
+                            Path(logical_save_root)
+                            / str(resume_boundary["scientific_commit_path"])
+                        )
+                        if resume_boundary is not None
+                        and resume_boundary.get("scientific_commit_path")
+                        else ""
+                    ),
                 }
             }
+            # Credentials are inherited from the Ray daemons' ambient
+            # environment, never serialized into Ray Job metadata. Reject the
+            # generic recipe environment as an accidental reintroduction path.
+            for sensitive_name in (
+                "WANDB_API_KEY",
+                "TRAINING_GYM_FRAMEWORK_STATUS_TOKEN",
+            ):
+                runtime_env["env_vars"].pop(sensitive_name, None)
 
             mode = "async" if slime.async_mode else "sync"
             print(
                 f"Training {app_name} — {slime.total_nodes} node(s) × {gpu_spec}  ({mode})"
             )
             print(slime.gpu_allocation.summary())
-            print(f"Command: {cmd}, runtime_env: {runtime_env}")
+            print(f"Command: {cmd}, runtime_env: {redact_runtime_env(runtime_env)}")
 
             await _set_framework_status_async(SlimeStatus.ROLLOUT_INITIALIZING)
-            async with cluster.forward_dashboard() as tunnel:
-                print(f"Ray dashboard: {tunnel.url}")
-                result = await cluster.submit_and_tail(cmd, runtime_env=runtime_env)
-                if not result.is_success:
-                    run_record.error_message = result.message
-                    raise RuntimeError(
-                        result.message
-                        or f"Ray job finished with status: {result.status}"
-                    )
-                print(f"Ray job completed: {result.status}")
+            if terminal_parent_complete:
+                assert resume_boundary is not None
+                print(
+                    "Authenticated terminal boundary already covers the requested "
+                    f"{slime.num_rollout} rollouts; finalizing its accepted parent "
+                    "without replaying training."
+                )
+            else:
+                ray_failure_stage = "ray_dashboard_setup"
+                async with cluster.forward_dashboard() as tunnel:
+                    print(f"Ray dashboard: {tunnel.url}")
+                    ray_failure_stage = "ray_job_submission_or_streaming"
+                    result = await cluster.submit_and_tail(cmd, runtime_env=runtime_env)
+                    ray_failure_stage = "ray_job_terminal_result"
+                    if not result.is_success:
+                        attempt_error = (
+                            result.message
+                            or f"Ray job finished with status: {result.status}"
+                        )
+                        if result.diagnostics is not None:
+                            ray_diagnostic_recorded = record_ray_failure_diagnostic(
+                                run_record,
+                                result.diagnostics,
+                                attempt_id=attempt_id,
+                                attempt_count=attempt_count,
+                                ray_job_id=result.job_id,
+                                ray_job_status=result.status,
+                                failure_stage=ray_failure_stage,
+                            )
+                        primary_error = record_attempt_failure(
+                            run_record,
+                            attempt_error,
+                            attempt_id=attempt_id,
+                            attempt_count=attempt_count,
+                        )
+                        if primary_error != attempt_error:
+                            print(
+                                "Secondary retry failure (primary failure preserved): "
+                                f"{attempt_error}",
+                                flush=True,
+                            )
+                        raise RuntimeError(primary_error)
+                    print(f"Ray job completed: {result.status}")
+                    ray_failure_stage = "post_ray_job_finalization"
 
+            if committed_attempt_mode:
+                accepted_final_attempt_id = (
+                    str(resume_boundary["attempt_id"])
+                    if terminal_parent_complete and resume_boundary is not None
+                    else attempt_id
+                )
+                accepted_lineage = write_accepted_lineage(
+                    logical_save_root,
+                    final_attempt_id=accepted_final_attempt_id,
+                    final_rollout_id=slime.num_rollout - 1,
+                )
+                print(f"Accepted attempt lineage saved: {accepted_lineage}")
+
+            result_checkpoint_dir = (
+                str(attempt_root(logical_save_root, resume_boundary["attempt_id"]))
+                if terminal_parent_complete and resume_boundary is not None
+                else save_root
+            )
             result = build_train_result(
                 app_name=app_name,
                 framework=Framework.SLIME,
                 training_run_id=training_run_id,
-                checkpoint_dir=save_root,
+                checkpoint_dir=result_checkpoint_dir,
                 model=model,
                 checkpoints_volume_name=checkpoints_volume_name,
                 checkpoints_mount_path=checkpoints_mount_path,
@@ -1162,7 +1892,13 @@ def build_slime_app(
             await result.save(is_async=True)
             run_record.status = TrainingRunStatus.COMPLETED
             mark_training_attempt_finished(
-                run_record, status="completed", ended_at=int(time.time())
+                run_record,
+                status=(
+                    "finalized_from_terminal_parent"
+                    if terminal_parent_complete
+                    else "completed"
+                ),
+                ended_at=int(time.time()),
             )
             await checkpoints_volume.commit.aio()
             print(f"TrainResult saved: {training_run_id}")
@@ -1171,32 +1907,106 @@ def build_slime_app(
             mark_run_stopped(run_record)
             raise
         except BaseException as exc:
-            mark_run_failed(run_record, exc)
+            if committed_attempt_mode and logical_save_root:
+                try:
+                    failure_boundary = load_latest_committed_boundary(
+                        logical_save_root,
+                        verify_hashes=False,
+                        expected_run_contract_sha256=scientific_run_contract_sha256,
+                    )
+                    record_last_committed_boundary_snapshot(
+                        run_record,
+                        failure_boundary,
+                        active_attempt_id=attempt_id,
+                    )
+                except Exception as boundary_exc:  # noqa: BLE001
+                    print(
+                        "Failed to read the last committed boundary while preserving "
+                        f"the original launcher exception: "
+                        f"{type(boundary_exc).__name__}: {boundary_exc}",
+                        flush=True,
+                    )
+            try:
+                if not ray_diagnostic_recorded:
+                    capture_and_record_ray_failure_diagnostic(
+                        run_record,
+                        capture_ray_cluster_diagnostics,
+                        attempt_id=attempt_id,
+                        attempt_count=attempt_count,
+                        ray_job_id=cluster.last_submitted_job_id,
+                        ray_job_status=(
+                            "CLUSTER_BOOTSTRAP_FAILED"
+                            if not ray_started
+                            else "LAUNCHER_EXCEPTION"
+                        ),
+                        failure_stage=ray_failure_stage,
+                    )
+            except Exception as diagnostic_exc:  # noqa: BLE001
+                print(
+                    "Failed to attach Ray diagnostics while preserving the "
+                    f"original launcher exception: {type(diagnostic_exc).__name__}: "
+                    f"{diagnostic_exc}",
+                    flush=True,
+                )
+            primary_error = mark_run_failed(run_record, exc)
+            try:
+                # Publish the causal failure before unwinding. The later
+                # terminal finalizer enriches this record, but a second failure
+                # during cleanup cannot erase the first immutable event.
+                await run_record.save(is_async=True, event_kind="failure")
+            except Exception as failure_save_exc:  # noqa: BLE001
+                print(
+                    "Failed to journal the launcher failure while preserving "
+                    f"the original exception: {type(failure_save_exc).__name__}: "
+                    f"{failure_save_exc}",
+                    flush=True,
+                )
+            current_error = f"{type(exc).__name__}: {exc}"
+            if primary_error not in {str(exc).strip(), current_error}:
+                print(
+                    "Retry attempt failed after the causal failure; surfacing "
+                    f"the preserved primary failure: {primary_error}",
+                    flush=True,
+                )
+                raise RuntimeError(primary_error) from exc
             raise
         finally:
             latest_run_record = await build_terminal_run_record(
                 run_record, training_run_id
             )
+            latest_attempt_id = str(
+                (latest_run_record.metadata or {}).get("active_attempt_id") or ""
+            )
+            stale_finalizer = bool(
+                attempt_id and latest_attempt_id and latest_attempt_id != attempt_id
+            )
 
             step_times_read = False
-            try:
-                latest_run_record.step_times = await write_step_times(
-                    training_run_id, slime.num_rollout
-                )
-                step_times_read = True
-            except Exception as exc:
-                print(f"Failed to read step times: {exc}")
+            if not stale_finalizer:
+                try:
+                    latest_run_record.step_times = await write_step_times(
+                        training_run_id,
+                        attempt_id,
+                        slime.num_rollout,
+                    )
+                    step_times_read = True
+                except Exception as exc:
+                    print(f"Failed to read step times: {exc}")
 
-            try:
-                await latest_run_record.save(is_async=True)
-            except Exception as exc:
-                print(f"Failed to save run record: {exc}")
-            else:
-                if step_times_read:
-                    try:
-                        await clear_step_times(training_run_id, slime.num_rollout)
-                    except Exception as exc:
-                        print(f"Failed to clear step times: {exc}")
+                try:
+                    await latest_run_record.save(is_async=True)
+                except Exception as exc:
+                    print(f"Failed to save run record: {exc}")
+                else:
+                    if step_times_read:
+                        try:
+                            await clear_step_times(
+                                training_run_id,
+                                attempt_id,
+                                slime.num_rollout,
+                            )
+                        except Exception as exc:
+                            print(f"Failed to clear step times: {exc}")
 
     for tag, fn in app.registered_functions.items():
         setattr(app, tag, fn)

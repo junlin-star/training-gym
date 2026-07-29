@@ -48,7 +48,7 @@ def preflight_wandb(wandb_cfg: WandbConfig) -> str:
     """
     Returns the resolved W&B entity for constructing deep-links to individual runs.
     """
-    key = os.environ.get("WANDB_API_KEY", "") or (wandb_cfg.key or "")
+    key = resolve_wandb_api_key(wandb_cfg)
     if not key:
         raise RuntimeError(
             "W&B logging is enabled (recipe.wandb=...) but no WANDB_API_KEY is "
@@ -85,3 +85,48 @@ def preflight_wandb(wandb_cfg: WandbConfig) -> str:
             "drop wandb= to disable logging."
         ) from exc
     return entity
+
+
+def resolve_wandb_api_key(wandb_cfg: WandbConfig | None) -> str:
+    """Resolve W&B authentication without mutating a recipe/config object."""
+    if wandb_cfg is None:
+        return ""
+    return os.environ.get("WANDB_API_KEY", "") or (wandb_cfg.key or "")
+
+
+def install_wandb_api_key_in_process(wandb_cfg: WandbConfig | None) -> bool:
+    """Install W&B authentication in this container process.
+
+    Ray daemons inherit the Modal Function's environment, so installing the
+    credential before ``ray start`` lets subsequently spawned workers inherit
+    it without serializing the secret into Ray Job ``runtime_env`` metadata.
+    The Modal Secret already wins through :func:`resolve_wandb_api_key`;
+    ``wandb_cfg.key`` remains a backwards-compatible fallback.
+    """
+    api_key = resolve_wandb_api_key(wandb_cfg)
+    if not api_key:
+        return False
+    os.environ["WANDB_API_KEY"] = api_key
+    return True
+
+
+def build_wandb_runtime_env(
+    wandb_cfg: WandbConfig | None,
+    *,
+    run_id: str = "",
+    entity: str = "",
+) -> dict[str, str]:
+    """Build the non-secret W&B portion of a Ray runtime environment.
+
+    Authentication is deliberately absent. Call
+    :func:`install_wandb_api_key_in_process` on every cluster node before
+    starting Ray so the credential is inherited from the Modal Function
+    environment rather than stored in Ray Job control-plane metadata.
+    """
+    env: dict[str, str] = {}
+    if run_id:
+        env["WANDB_RUN_ID"] = run_id
+        env["WANDB_RESUME"] = "allow"
+    if entity:
+        env["WANDB_ENTITY"] = entity
+    return env

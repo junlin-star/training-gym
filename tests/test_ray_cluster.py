@@ -2,9 +2,22 @@
 and the single-node identity path of clustered_if.
 """
 
+import asyncio
+import sys
+import threading
+import time
+from types import SimpleNamespace
+
 import pytest
 
-from modal_training_gym.common.ray_cluster import _supports_rdma, clustered_if
+from modal_training_gym.common import ray_cluster
+from modal_training_gym.common.ray_cluster import (
+    ModalRayCluster,
+    _supports_rdma,
+    capture_ray_cluster_diagnostics,
+    clustered_if,
+    start_ray_worker,
+)
 
 
 @pytest.mark.parametrize(
@@ -25,3 +38,350 @@ def test_clustered_if_single_node_is_identity():
 
     # Single node: no @clustered, just a plain registration — fn returned unchanged.
     assert clustered_if(False, 1, gpu_type="H100")(fn) is fn
+
+
+def test_modal_cluster_identity_snapshot_is_rank_ordered_and_detached(monkeypatch):
+    import modal.experimental
+
+    monkeypatch.setattr(
+        modal.experimental,
+        "get_cluster_info",
+        lambda: SimpleNamespace(
+            rank=1,
+            cluster_id="cluster-abc",
+            container_ipv4_ips=["10.0.0.1", "10.0.0.2"],
+        ),
+    )
+
+    cluster = ModalRayCluster()
+    cluster.discover_cluster(2)
+    identity = cluster.identity_snapshot()
+
+    assert cluster.rank == 1
+    assert cluster.node_ip == "10.0.0.2"
+    assert identity == {
+        "schema_version": 1,
+        "cluster_id": "cluster-abc",
+        "node_count": 2,
+        "rank_ordered_container_ipv4_ips": ["10.0.0.1", "10.0.0.2"],
+        "head_addr": "10.0.0.1",
+    }
+    identity["rank_ordered_container_ipv4_ips"].append("mutated")
+    assert cluster.identity_snapshot()["rank_ordered_container_ipv4_ips"] == [
+        "10.0.0.1",
+        "10.0.0.2",
+    ]
+
+
+def test_single_node_identity_uses_safe_loopback_fallback(monkeypatch):
+    import modal.experimental
+
+    def _unexpected_cluster_lookup():
+        raise AssertionError("size-1 discovery must not require Modal cluster info")
+
+    monkeypatch.setattr(
+        modal.experimental, "get_cluster_info", _unexpected_cluster_lookup
+    )
+
+    cluster = ModalRayCluster()
+    cluster.discover_cluster(1)
+
+    assert cluster.identity_snapshot() == {
+        "schema_version": 1,
+        "cluster_id": None,
+        "node_count": 1,
+        "rank_ordered_container_ipv4_ips": ["127.0.0.1"],
+        "head_addr": "127.0.0.1",
+    }
+
+
+def test_cluster_identity_requires_discovery():
+    with pytest.raises(RuntimeError, match="discover_cluster"):
+        ModalRayCluster().identity_snapshot()
+
+
+def test_ray_worker_waits_for_head_and_retries_failed_start(monkeypatch):
+    connections = []
+    starts = []
+    stops = []
+    sleeps = []
+
+    class _Connection:
+        def close(self):
+            connections.append("closed")
+
+    connect_results = [
+        ConnectionRefusedError("head not ready"),
+        _Connection(),
+    ]
+
+    def _connect(*_args, **_kwargs):
+        result = connect_results.pop(0)
+        if isinstance(result, BaseException):
+            raise result
+        return result
+
+    start_results = [
+        SimpleNamespace(returncode=1, stdout="", stderr="GCS unavailable"),
+        SimpleNamespace(returncode=0, stdout="started", stderr=""),
+    ]
+
+    monkeypatch.setattr(ray_cluster.socket, "create_connection", _connect)
+
+    def _run(command, **_kwargs):
+        if command[:2] == ["ray", "stop"]:
+            stops.append(command)
+            return SimpleNamespace(returncode=0, stdout="stopped", stderr="")
+        starts.append(command)
+        return start_results.pop(0)
+
+    monkeypatch.setattr(ray_cluster.subprocess, "run", _run)
+    monkeypatch.setattr(
+        ray_cluster.time,
+        "sleep",
+        sleeps.append,
+    )
+
+    start_ray_worker(
+        "10.0.0.2",
+        "10.0.0.1",
+        connect_retries=3,
+        retry_interval_seconds=0.25,
+    )
+
+    assert connections == ["closed"]
+    assert len(starts) == 2
+    assert stops == [["ray", "stop", "--force"]]
+    assert starts[0][-2:] == ["--address", "10.0.0.1:6379"]
+    assert sleeps == [0.25, 0.25]
+
+
+def test_ray_worker_surfaces_bounded_last_start_failure(monkeypatch):
+    class _Connection:
+        def close(self):
+            return None
+
+    monkeypatch.setattr(
+        ray_cluster.socket,
+        "create_connection",
+        lambda *_args, **_kwargs: _Connection(),
+    )
+
+    def _run(command, **_kwargs):
+        if command[:2] == ["ray", "stop"]:
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        return SimpleNamespace(
+            returncode=17,
+            stdout="",
+            stderr="x" * 5_000,
+        )
+
+    monkeypatch.setattr(ray_cluster.subprocess, "run", _run)
+    monkeypatch.setattr(ray_cluster.time, "sleep", lambda _seconds: None)
+
+    with pytest.raises(RuntimeError, match="exited with code 17") as exc_info:
+        start_ray_worker(
+            "10.0.0.2",
+            "10.0.0.1",
+            connect_retries=1,
+            start_retries=2,
+            retry_interval_seconds=0,
+        )
+
+    assert len(str(exc_info.value)) < 4_200
+
+
+def test_ray_worker_cleans_partial_state_after_start_timeout(monkeypatch):
+    commands = []
+
+    class _Connection:
+        def close(self):
+            return None
+
+    monkeypatch.setattr(
+        ray_cluster.socket,
+        "create_connection",
+        lambda *_args, **_kwargs: _Connection(),
+    )
+
+    starts = 0
+
+    def _run(command, **kwargs):
+        nonlocal starts
+        commands.append((command, kwargs.get("timeout")))
+        if command[:2] == ["ray", "stop"]:
+            return SimpleNamespace(returncode=0, stdout="stopped", stderr="")
+        starts += 1
+        if starts == 1:
+            raise ray_cluster.subprocess.TimeoutExpired(
+                command,
+                kwargs["timeout"],
+            )
+        return SimpleNamespace(returncode=0, stdout="started", stderr="")
+
+    monkeypatch.setattr(ray_cluster.subprocess, "run", _run)
+    monkeypatch.setattr(ray_cluster.time, "sleep", lambda _seconds: None)
+
+    start_ray_worker(
+        "10.0.0.2",
+        "10.0.0.1",
+        connect_retries=1,
+        start_retries=2,
+        start_timeout_seconds=60,
+        retry_interval_seconds=0,
+    )
+
+    assert commands == [
+        (
+            [
+                "ray",
+                "start",
+                "--node-ip-address=10.0.0.2",
+                "--address",
+                "10.0.0.1:6379",
+            ],
+            60,
+        ),
+        (["ray", "stop", "--force"], 30),
+        (
+            [
+                "ray",
+                "start",
+                "--node-ip-address=10.0.0.2",
+                "--address",
+                "10.0.0.1:6379",
+            ],
+            60,
+        ),
+    ]
+
+
+def test_failure_diagnostics_preserve_dead_node_reason(monkeypatch):
+    fake_ray = SimpleNamespace(
+        nodes=lambda: [
+            {
+                "NodeID": "head",
+                "Alive": True,
+                "NodeManagerAddress": "10.0.0.1",
+                "Resources": {"GPU": 8.0},
+            },
+            {
+                "NodeID": "worker",
+                "Alive": False,
+                "NodeManagerAddress": "10.0.0.2",
+                "DeathReason": "UNEXPECTED_TERMINATION",
+                "DeathReasonMessage": "raylet missed heartbeats",
+            },
+        ],
+        cluster_resources=lambda: {"GPU": 16.0},
+        available_resources=lambda: {"GPU": 8.0},
+    )
+    monkeypatch.setitem(sys.modules, "ray", fake_ray)
+    monkeypatch.setattr(
+        ray_cluster.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(
+            stdout="two nodes, one dead",
+            stderr="",
+            returncode=0,
+        ),
+    )
+
+    diagnostics = capture_ray_cluster_diagnostics()
+
+    assert diagnostics["nodes"][1]["Alive"] is False
+    assert diagnostics["nodes"][1]["DeathReasonMessage"] == "raylet missed heartbeats"
+    assert diagnostics["cluster_resources"] == {"GPU": 16.0}
+    assert diagnostics["ray_status"] == "two nodes, one dead"
+
+
+def test_submitted_job_id_survives_log_stream_failure():
+    class _Client:
+        def submit_job(self, **_kwargs):
+            return "ray-job-before-stream-failure"
+
+        def tail_job_logs(self, _job_id):
+            raise ConnectionError("dashboard disconnected")
+
+    cluster = ModalRayCluster()
+    cluster.discover_cluster(1)
+    cluster._client = _Client()
+
+    with pytest.raises(ConnectionError, match="dashboard disconnected"):
+        asyncio.run(cluster.submit_and_tail("python train.py"))
+
+    assert cluster.last_submitted_job_id == "ray-job-before-stream-failure"
+
+
+def test_failure_diagnostic_payload_is_bounded(monkeypatch):
+    long_reason = "x" * 5_000
+    fake_ray = SimpleNamespace(
+        nodes=lambda: [
+            {
+                "NodeID": f"node-{index}",
+                "Alive": False,
+                "DeathReasonMessage": long_reason,
+            }
+            for index in range(300)
+        ],
+        cluster_resources=lambda: {
+            f"resource-{index}": float(index) for index in range(300)
+        },
+        available_resources=lambda: {},
+    )
+    monkeypatch.setitem(sys.modules, "ray", fake_ray)
+    monkeypatch.setattr(
+        ray_cluster.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(
+            stdout="s" * 13_000,
+            stderr="",
+            returncode=0,
+        ),
+    )
+
+    diagnostics = capture_ray_cluster_diagnostics()
+
+    assert len(diagnostics["nodes"]) == 256
+    assert diagnostics["nodes_truncated"] == 44
+    assert len(diagnostics["nodes"][0]["DeathReasonMessage"]) == 4_000
+    assert len(diagnostics["cluster_resources"]) == 256
+    assert len(diagnostics["ray_status"]) == 12_000
+
+
+def test_failure_diagnostics_bound_wedged_ray_api(monkeypatch):
+    release = threading.Event()
+
+    def _blocked_nodes():
+        release.wait(10)
+        return []
+
+    fake_ray = SimpleNamespace(
+        nodes=_blocked_nodes,
+        cluster_resources=lambda: {},
+        available_resources=lambda: {},
+    )
+    monkeypatch.setitem(sys.modules, "ray", fake_ray)
+    monkeypatch.setattr(
+        ray_cluster,
+        "_RAY_API_DIAGNOSTIC_TIMEOUT_SECONDS",
+        0.01,
+    )
+    monkeypatch.setattr(
+        ray_cluster.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(
+            stdout="status still available",
+            stderr="",
+            returncode=0,
+        ),
+    )
+
+    started = time.monotonic()
+    diagnostics = capture_ray_cluster_diagnostics()
+    elapsed = time.monotonic() - started
+    release.set()
+
+    assert elapsed < 1
+    assert "TimeoutError" in diagnostics["ray_api_error"]
+    assert diagnostics["ray_status"] == "status still available"

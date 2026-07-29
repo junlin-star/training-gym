@@ -66,11 +66,15 @@ class BaseTrainRecipe(ABC):
 
     @staticmethod
     def _wandb_to_fields(w: "WandbConfig") -> dict[str, Any]:
+        # Authentication is deliberately environment-only.  Putting the key on
+        # the CLI exposes it in Ray's entrypoint metadata and in frameworks that
+        # print their parsed arguments. The launchers install WANDB_API_KEY in
+        # each Modal container before Ray starts, so it is inherited without
+        # becoming Ray Job control-plane metadata.
         return {
             "use_wandb": True,
             "wandb_project": w.project,
             "wandb_group": w.group,
-            "wandb_key": w.key,
             "disable_wandb_random_suffix": w.disable_random_suffix,
         }
 
@@ -97,6 +101,10 @@ class BaseTrainRecipe(ABC):
     ) -> list[str]:
         out: list[str] = []
         for key, val in self._fields(dataset=dataset, model=model).items():
+            # Defense in depth for subclasses that construct their own field
+            # mapping instead of using _wandb_to_fields().
+            if key == "wandb_key":
+                continue
             if val is None or val is False or val == "":
                 continue
             flag = f"--{key.replace('_', '-')}"

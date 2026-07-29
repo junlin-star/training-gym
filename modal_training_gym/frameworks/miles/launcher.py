@@ -48,6 +48,11 @@ from modal_training_gym.common.launcher_helpers import (
     ship_callable,
 )
 from modal_training_gym.common.status import MilesStatus
+from modal_training_gym.common.launcher_utils import redact_runtime_env
+from modal_training_gym.common.wandb import (
+    build_wandb_runtime_env,
+    install_wandb_api_key_in_process,
+)
 from modal_training_gym.train_recipes.miles_recipe.recipe import (
     CHECKPOINTS_PATH,
     DATA_PATH,
@@ -419,6 +424,7 @@ def build_miles_app(
         os.environ["MILES_HOST_IP"] = cluster.node_ip
         os.environ["SGLANG_HOST_IP"] = cluster.node_ip
         os.environ["HOST_IP"] = cluster.node_ip
+        install_wandb_api_key_in_process(miles.wandb)
 
         prep_id = hashlib.sha1(training_run_id.encode("utf-8")).hexdigest()[:16]
         prep_marker = os.path.join(
@@ -490,8 +496,12 @@ def build_miles_app(
             if run_record is None:
                 return
             run_record.framework_status = status
+            attempt_id = str((run_record.metadata or {}).get("active_attempt_id") or "")
             enqueue_framework_status(
-                training_run_id, status.value, token=framework_status_token
+                training_run_id,
+                status.value,
+                token=framework_status_token,
+                attempt_id=attempt_id,
             )
 
         async def _prepare_shared_inputs() -> None:
@@ -595,10 +605,6 @@ def build_miles_app(
         try:  # Wraps all post-setup work so any failure marks the run terminal.
             prepare_miles_config(miles, model, tempfile.mkdtemp())
 
-            if wandb_key := os.environ.get("WANDB_API_KEY", ""):
-                if miles.wandb is not None:
-                    miles.wandb.key = wandb_key
-
             save_root = compute_save_root(
                 miles.save,
                 recipe_default_save_root=str(CHECKPOINTS_PATH).rstrip("/"),
@@ -626,12 +632,11 @@ def build_miles_app(
                 miles.save = original_save
                 miles.load = original_load
 
-            wandb_env = {}
-            if wandb_run_id:
-                wandb_env["WANDB_RUN_ID"] = wandb_run_id
-                wandb_env["WANDB_RESUME"] = "allow"
-            if wandb_entity:
-                wandb_env["WANDB_ENTITY"] = wandb_entity
+            wandb_env = build_wandb_runtime_env(
+                miles.wandb,
+                run_id=wandb_run_id,
+                entity=wandb_entity,
+            )
 
             runtime_env = {
                 "env_vars": {
@@ -641,13 +646,14 @@ def build_miles_app(
                     **miles.environment,
                 }
             }
+            runtime_env["env_vars"].pop("WANDB_API_KEY", None)
 
             mode = "async" if miles.async_mode else "sync"
             print(
                 f"Training {app_name} - {miles.total_nodes} node(s) x {gpu_spec} ({mode})"
             )
             print(miles.gpu_allocation.summary())
-            print(f"Command: {cmd}, runtime_env: {runtime_env}")
+            print(f"Command: {cmd}, runtime_env: {redact_runtime_env(runtime_env)}")
 
             await _set_framework_status(MilesStatus.TRAINING)
             async with cluster.forward_dashboard() as tunnel:

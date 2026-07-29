@@ -2,7 +2,7 @@ import os
 from collections.abc import Callable
 from dataclasses import field
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from modal_training_gym.train_recipes.base import (
     BaseTrainRecipe,
@@ -44,6 +44,7 @@ _SLIME_SKIP = {
     "capture_trace",
     "trace_sample_limit",
     "image_overlay",
+    "image_overlay_source_roots",
     "local_slime",
     "memory",
     "cloud",
@@ -64,6 +65,8 @@ _SLIME_SKIP = {
     "image_run_commands",
     "image_env",
     "train_function_kwargs",
+    "attempt_mode",
+    "max_retries",
     "conversion_pipeline_model_parallel_size",
     "conversion_tensor_model_parallel_size",
     "conversion_expert_model_parallel_size",
@@ -126,6 +129,10 @@ class SlimeRecipe(BaseTrainRecipe):
     async_mode: bool = False
     wandb: WandbConfig | None = None
     image_overlay: Callable[[modal.Image], modal.Image] | None = None
+    # Local files/directories copied by ``image_overlay`` whose content must be
+    # bound into a committed attempt's scientific run contract. Paths are
+    # never persisted; only stable labels and content hashes are recorded.
+    image_overlay_source_roots: list[str] = field(default_factory=list)
     local_slime: str | None = None
     memory: int | tuple[int, int] | None = None
     cloud: str | None = None
@@ -137,6 +144,10 @@ class SlimeRecipe(BaseTrainRecipe):
     image_run_commands: list[str] = field(default_factory=list)
     image_env: dict[str, str] = field(default_factory=dict)
     train_function_kwargs: dict[str, Any] = field(default_factory=dict)
+    # ``committed`` gives every Modal invocation an immutable save namespace and
+    # permits resume only from a framework-authenticated boundary manifest.
+    attempt_mode: Literal["legacy", "committed"] = "legacy"
+    max_retries: int = 3
 
     # ── Per-sample execution tracing (dashboard timeline) ───────────────────
     # When True, the rollout recorder attaches slime's per-sample trace (the
@@ -300,6 +311,8 @@ class SlimeRecipe(BaseTrainRecipe):
 
     @model_validator(mode="after")
     def _resolve_callable_paths(self) -> "SlimeRecipe":
+        if self.max_retries < 0:
+            raise ValueError("max_retries must be nonnegative")
         cfg = dict(self.extra_config) if isinstance(self.extra_config, dict) else {}
         if self.custom_generate_function is not None:
             if not cfg.get("custom_generate_function_path"):

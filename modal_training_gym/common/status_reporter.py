@@ -142,6 +142,11 @@ def enqueue_framework_status(
     if not resolved or not training_run_id or not phase:
         return
     _ensure_worker()
+    reported_attempt_id = str(
+        extra.pop("attempt_id", "")
+        or os.environ.get("TRAINING_GYM_ATTEMPT_ID", "")
+        or os.environ.get("DRIFT_ASYNC_RL_ATTEMPT_ID", "")
+    ).strip()
     payload: dict[str, Any] = {
         "_url": resolved,
         "_timeout": timeout_seconds,
@@ -150,6 +155,8 @@ def enqueue_framework_status(
         "phase": phase,
         **extra,
     }
+    if reported_attempt_id:
+        payload["attempt_id"] = reported_attempt_id
     try:
         _QUEUE.put_nowait(payload)
     except Exception:

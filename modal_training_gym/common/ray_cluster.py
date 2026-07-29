@@ -10,15 +10,23 @@
 
 import asyncio
 import inspect
+import socket
 import subprocess
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any
 
 from modal.experimental import clustered
 
 RAY_PORT = 6379
 RAY_DASHBOARD_PORT = 8265
+_MAX_DIAGNOSTIC_NODES = 256
+_MAX_DIAGNOSTIC_RESOURCE_FIELDS = 256
+_MAX_DIAGNOSTIC_NODE_TEXT = 4_000
+_MAX_DIAGNOSTIC_STATUS_TEXT = 12_000
+_RAY_API_DIAGNOSTIC_TIMEOUT_SECONDS = 5.0
 
 # GPU families with an RDMA/EFA fabric; other types don't support it and would fail
 # if it were forced on.
@@ -99,9 +107,26 @@ def start_ray_worker(
     head_addr: str,
     *,
     head_port: int = RAY_PORT,
+    connect_retries: int = 60,
+    start_retries: int = 3,
+    start_timeout_seconds: float = 60.0,
+    retry_interval_seconds: float = 1.0,
     extra_start_args: list[str] | None = None,
 ) -> None:
-    """Start a Ray worker connected to the head at `head_addr:head_port`."""
+    """Start a Ray worker after the head is reachable, failing on CLI errors.
+
+    Cluster workers can enter this function while rank zero is still creating
+    the durable training-attempt record. Polling the head port avoids spending
+    Ray's own finite GCS retries before rank zero has launched the head.
+    """
+    if connect_retries < 1:
+        raise ValueError("connect_retries must be positive")
+    if start_retries < 1:
+        raise ValueError("start_retries must be positive")
+    if start_timeout_seconds <= 0:
+        raise ValueError("start_timeout_seconds must be positive")
+    if retry_interval_seconds < 0:
+        raise ValueError("retry_interval_seconds cannot be negative")
     cmd = [
         "ray",
         "start",
@@ -111,7 +136,72 @@ def start_ray_worker(
     ]
     if extra_start_args:
         cmd.extend(extra_start_args)
-    subprocess.Popen(cmd)
+
+    head_error = ""
+    for attempt in range(connect_retries):
+        try:
+            connection = socket.create_connection(
+                (head_addr, head_port),
+                timeout=1.0,
+            )
+            connection.close()
+        except OSError as exc:
+            head_error = f"{type(exc).__name__}: {exc}"
+        else:
+            break
+        if attempt + 1 < connect_retries:
+            time.sleep(retry_interval_seconds)
+    else:
+        raise RuntimeError(
+            f"Ray head {head_addr}:{head_port} was not reachable after "
+            f"{connect_retries} attempts: {head_error}"
+        )
+
+    last_error = ""
+    for attempt in range(start_retries):
+        try:
+            completed = subprocess.run(
+                cmd,
+                capture_output=True,
+                check=False,
+                text=True,
+                timeout=start_timeout_seconds,
+            )
+        except subprocess.TimeoutExpired as exc:
+            last_error = f"ray start timed out after {exc.timeout} seconds"
+        else:
+            if completed.returncode == 0:
+                return
+            output = ((completed.stdout or "") + (completed.stderr or ""))[-4_000:]
+            last_error = f"ray start exited with code {completed.returncode}: {output}"
+
+        # A timed-out `ray start` may already have spawned a raylet and session
+        # directory. Retrying into that partial state deterministically fails
+        # with "Ray processes already running", so restore a clean local node
+        # before every subsequent attempt (and before surfacing final failure).
+        try:
+            stopped = subprocess.run(
+                ["ray", "stop", "--force"],
+                capture_output=True,
+                check=False,
+                text=True,
+                timeout=30,
+            )
+        except subprocess.TimeoutExpired as exc:
+            last_error += f"; ray stop timed out after {exc.timeout} seconds"
+            break
+        if stopped.returncode != 0:
+            stop_output = ((stopped.stdout or "") + (stopped.stderr or ""))[-2_000:]
+            last_error += (
+                f"; ray stop exited with code {stopped.returncode}: {stop_output}"
+            )
+            break
+        if attempt + 1 < start_retries:
+            time.sleep(retry_interval_seconds)
+    raise RuntimeError(
+        f"Failed to start Ray worker against {head_addr}:{head_port} "
+        f"after {start_retries} attempts: {last_error}"
+    )
 
 
 @dataclass
@@ -119,6 +209,129 @@ class ModalRayJobResult:
     status: str
     is_success: bool
     message: str | None = None
+    diagnostics: dict[str, Any] | None = None
+    job_id: str | None = None
+
+
+def _bounded_resource_map(resources: Any) -> dict[str, Any]:
+    if not isinstance(resources, dict):
+        return {}
+    return dict(list(resources.items())[:_MAX_DIAGNOSTIC_RESOURCE_FIELDS])
+
+
+def _bounded_node_value(field: str, value: Any) -> Any:
+    if field == "Resources":
+        return _bounded_resource_map(value)
+    if isinstance(value, str):
+        return value[-_MAX_DIAGNOSTIC_NODE_TEXT:]
+    return value
+
+
+def _capture_ray_api_snapshot() -> dict[str, Any]:
+    import ray
+
+    return {
+        "nodes": list(ray.nodes()),
+        "cluster_resources": ray.cluster_resources(),
+        "available_resources": ray.available_resources(),
+    }
+
+
+def _call_with_timeout(
+    fn: Callable[[], dict[str, Any]],
+    *,
+    timeout_seconds: float,
+) -> dict[str, Any]:
+    """Run a diagnostic call on a daemon thread with a hard caller deadline."""
+    result: dict[str, Any] = {}
+    error: list[BaseException] = []
+
+    def _target() -> None:
+        try:
+            result.update(fn())
+        except BaseException as exc:  # noqa: BLE001 - forwarded to caller
+            error.append(exc)
+
+    thread = threading.Thread(
+        target=_target,
+        name="training-gym-ray-diagnostics",
+        daemon=True,
+    )
+    thread.start()
+    thread.join(timeout=max(0.0, timeout_seconds))
+    if thread.is_alive():
+        raise TimeoutError(
+            f"Ray control-plane diagnostics exceeded {timeout_seconds:.1f} seconds"
+        )
+    if error:
+        raise error[0]
+    return result
+
+
+def capture_ray_cluster_diagnostics() -> dict[str, Any]:
+    """Capture a bounded, best-effort Ray control-plane snapshot.
+
+    Modal's own container metrics remain the authority for host OOMs and
+    preemptions. This snapshot records what Ray knew about every node when the
+    job became terminal, which is the missing link for raylet heartbeat loss.
+    """
+    snapshot: dict[str, Any] = {"captured_at": int(time.time())}
+    try:
+        node_fields = (
+            "NodeID",
+            "Alive",
+            "NodeManagerAddress",
+            "NodeManagerHostname",
+            "NodeManagerPort",
+            "NodeName",
+            "State",
+            "StateMessage",
+            "DeathReason",
+            "DeathReasonMessage",
+            "Resources",
+        )
+        ray_snapshot = _call_with_timeout(
+            _capture_ray_api_snapshot,
+            timeout_seconds=_RAY_API_DIAGNOSTIC_TIMEOUT_SECONDS,
+        )
+        raw_nodes = ray_snapshot["nodes"]
+        snapshot["nodes"] = [
+            {
+                key: _bounded_node_value(key, node[key])
+                for key in node_fields
+                if key in node
+            }
+            for node in raw_nodes[:_MAX_DIAGNOSTIC_NODES]
+        ]
+        if len(raw_nodes) > _MAX_DIAGNOSTIC_NODES:
+            snapshot["nodes_truncated"] = len(raw_nodes) - _MAX_DIAGNOSTIC_NODES
+        snapshot["cluster_resources"] = _bounded_resource_map(
+            ray_snapshot["cluster_resources"]
+        )
+        snapshot["available_resources"] = _bounded_resource_map(
+            ray_snapshot["available_resources"]
+        )
+    except BaseException as exc:  # noqa: BLE001 - diagnostics must not mask failure
+        snapshot["ray_api_error"] = (f"{type(exc).__name__}: {exc}")[
+            -_MAX_DIAGNOSTIC_NODE_TEXT:
+        ]
+
+    try:
+        status = subprocess.run(
+            ["ray", "status"],
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=10,
+        )
+        output = (status.stdout or "") + (status.stderr or "")
+        snapshot["ray_status_exit_code"] = status.returncode
+        snapshot["ray_status"] = output[-_MAX_DIAGNOSTIC_STATUS_TEXT:]
+    except Exception as exc:  # noqa: BLE001 - diagnostics must not mask the failure
+        snapshot["ray_status_error"] = (f"{type(exc).__name__}: {exc}")[
+            -_MAX_DIAGNOSTIC_NODE_TEXT:
+        ]
+    return snapshot
 
 
 class ModalRayCluster:
@@ -133,6 +346,10 @@ class ModalRayCluster:
     ---------------------------------------------------
     n_nodes : int
         Total cluster node count.
+    cluster_id : str
+        Modal's stable clustered-function invocation ID, when available.
+    container_ipv4_ips : list[str]
+        Container IPv4 addresses ordered by Modal rank.
     rank : int
         This container's rank (0 = head).
     head_addr : str
@@ -161,10 +378,13 @@ class ModalRayCluster:
     def __init__(self) -> None:
         # Populated by discover_cluster(); see _discovered for readiness check.
         self.n_nodes: int = 0
+        self.cluster_id: str = ""
+        self.container_ipv4_ips: list[str] = []
         self.rank: int = 0
         self.head_addr: str = ""
         self.node_ip: str = ""
         self._client = None
+        self.last_submitted_job_id: str | None = None
         self._discovered: bool = False
         self._started: bool = False
 
@@ -192,7 +412,7 @@ class ModalRayCluster:
         return self._client
 
     def discover_cluster(self, n_nodes: int) -> None:
-        """Populate `rank`, `head_addr`, `node_ip`, and `n_nodes` from Modal.
+        """Populate cluster identity and addresses from Modal.
 
         Does not start Ray. Call this first if you need to read cluster state
         (e.g. to set framework-specific env vars) before `start_ray()` inherits
@@ -200,10 +420,14 @@ class ModalRayCluster:
         """
         if self._discovered:
             return
+        if n_nodes < 1:
+            raise ValueError(f"n_nodes must be positive, got {n_nodes}")
 
         if n_nodes == 1:
             # Modal may omit container IPv4s for size-1 clustered functions.
-            rank, head_addr, node_ip = 0, "127.0.0.1", "127.0.0.1"
+            cluster_id = ""
+            ips = ["127.0.0.1"]
+            rank, head_addr, node_ip = 0, ips[0], ips[0]
         else:
             import modal.experimental
 
@@ -213,15 +437,40 @@ class ModalRayCluster:
                 raise RuntimeError(
                     f"Modal cluster size mismatch: expected {n_nodes} nodes, got {len(ips)}"
                 )
-            rank = info.rank
+            cluster_id = str(getattr(info, "cluster_id", "") or "")
+            rank = int(info.rank)
+            if not 0 <= rank < n_nodes:
+                raise RuntimeError(
+                    f"Modal cluster rank out of range: rank {rank}, size {n_nodes}"
+                )
             head_addr = ips[0]
             node_ip = ips[rank]
 
         self.n_nodes = n_nodes
+        self.cluster_id = cluster_id
+        self.container_ipv4_ips = ips
         self.rank = rank
         self.head_addr = head_addr
         self.node_ip = node_ip
         self._discovered = True
+
+    def identity_snapshot(self) -> dict[str, Any]:
+        """Return the immutable fields that identify this Modal cluster attempt.
+
+        The returned mapping owns its address list, so attaching it to a run
+        record cannot be mutated through this object's internal state.
+        """
+        if not self._discovered:
+            raise RuntimeError(
+                "ModalRayCluster.discover_cluster() has not been called yet"
+            )
+        return {
+            "schema_version": 1,
+            "cluster_id": self.cluster_id or None,
+            "node_count": self.n_nodes,
+            "rank_ordered_container_ipv4_ips": list(self.container_ipv4_ips),
+            "head_addr": self.head_addr,
+        }
 
     def start_ray(
         self,
@@ -254,6 +503,7 @@ class ModalRayCluster:
             start_ray_worker(
                 self.node_ip,
                 self.head_addr,
+                connect_retries=worker_wait_retries,
                 extra_start_args=self.worker_extra_start_args(),
             )
         self._started = True
@@ -298,6 +548,7 @@ class ModalRayCluster:
             entrypoint=entrypoint,
             runtime_env=runtime_env or {},
         )
+        self.last_submitted_job_id = job_id
         print(f"Submitted Ray job: {job_id}")
 
         _TERMINAL = {"SUCCEEDED", "FAILED", "STOPPED"}
@@ -342,12 +593,21 @@ class ModalRayCluster:
                 message = getattr(info, "message", None) or None
             except Exception:  # noqa: BLE001 — best-effort enrichment
                 pass
+            diagnostics = capture_ray_cluster_diagnostics()
             suffix = f": {message}" if message else ""
             print(f"Ray job {job_id} finished with status: {status}{suffix}")
             return ModalRayJobResult(
-                status=status, is_success=status == "SUCCEEDED", message=message
+                status=status,
+                is_success=status == "SUCCEEDED",
+                message=message,
+                diagnostics=diagnostics,
+                job_id=job_id,
             )
-        return ModalRayJobResult(status=status, is_success=status == "SUCCEEDED")
+        return ModalRayJobResult(
+            status=status,
+            is_success=status == "SUCCEEDED",
+            job_id=job_id,
+        )
 
     async def wait_forever(self, poll_seconds: float = 10) -> None:
         """Keep a worker container alive until the head terminates the cluster."""
