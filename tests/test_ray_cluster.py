@@ -2,12 +2,17 @@
 the single-node identity path of clustered_if, and PYTHONPATH handoff into Ray jobs.
 """
 
+import sys
+import types
+
 import pytest
 
 from modal_training_gym.common.ray_cluster import (
+    _GCS_HEALTH_CHECK_ENV,
     _supports_rdma,
     _with_container_pythonpath,
     clustered_if,
+    start_ray_head,
 )
 
 
@@ -63,3 +68,25 @@ def test_no_container_pythonpath_is_a_noop(monkeypatch):
     runtime_env = {"env_vars": {"PYTHONPATH": "/root/Megatron-LM/"}}
 
     assert _with_container_pythonpath(runtime_env) == runtime_env
+
+
+def test_start_ray_head_sets_gcs_health_check_env(monkeypatch):
+    captured: dict = {}
+
+    def fake_popen(cmd, env=None):
+        captured["env"] = env
+        return None
+
+    fake_ray = types.SimpleNamespace(
+        init=lambda address: None,
+        nodes=lambda: [{"Alive": True}],
+    )
+    monkeypatch.setitem(sys.modules, "ray", fake_ray)
+    monkeypatch.setattr(
+        "modal_training_gym.common.ray_cluster.subprocess.Popen", fake_popen
+    )
+
+    start_ray_head("10.0.0.1", n_nodes=1)
+
+    for key, value in _GCS_HEALTH_CHECK_ENV.items():
+        assert captured["env"][key] == value
