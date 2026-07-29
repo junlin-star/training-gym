@@ -478,9 +478,7 @@ def get_command(*, run_id: str, verbose: bool, json_output: bool) -> None:
 
 @run_group.command(
     "params",
-    help=(
-        "Show the framework training recipe for a single run."
-    ),
+    help=("Show the framework training recipe for a single run."),
     epilog=(
         "Examples:\n"
         "  training-gym run params run_8f2a\n"
