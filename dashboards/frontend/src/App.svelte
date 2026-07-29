@@ -721,6 +721,9 @@
   let evalFailedTotal = $derived(
     allEvals.filter((ev) => getEvalStatus(ev) === "Failed").length,
   );
+  let activeTrainingRun = $derived(
+    allRuns.find((run) => run.run_id === activeTrainingRunId) || null,
+  );
 
   let statusText = $derived.by(() => {
     if (activePage === "training" && loading) return "loading...";
@@ -878,6 +881,7 @@
     {#if activePage === "training" && activeTrainingRunId}
       <TrainingRunDetailPage
         runId={activeTrainingRunId}
+        initialRun={activeTrainingRun}
         {modelName}
         {getStatus}
         {getFrameworkStatus}

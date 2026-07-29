@@ -31,6 +31,7 @@
 
   let {
     runId,
+    initialRun = null,
     modelName,
     getStatus,
     getFrameworkStatus,
@@ -93,7 +94,7 @@
 
   $effect(() => {
     const id = runId;
-    run = null;
+    run = initialRun?.run_id === id ? initialRun : null;
     runError = "";
     runNotFound = false;
     if (!id) {
