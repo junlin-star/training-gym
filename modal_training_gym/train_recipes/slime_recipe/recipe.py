@@ -886,6 +886,9 @@ class SlimeRecipe(BaseTrainRecipe):
         from modal_training_gym.train_recipes.slime_recipe.qwen3_6_35b import (
             Qwen3_6_35b_Recipe,
         )
+        from modal_training_gym.train_recipes.slime_recipe.qwen3_6_27b import (
+            Qwen3_6_27b_Recipe,
+        )
         from modal_training_gym.train_recipes.slime_recipe.qwen3_asr_1_7b import (
             Qwen3_ASR_1_7b_Recipe,
         )
@@ -909,6 +912,8 @@ class SlimeRecipe(BaseTrainRecipe):
             return Qwen3_8b_Recipe()
         if model_config.model_name == "Qwen/Qwen3.6-35B-A3B":
             return Qwen3_6_35b_Recipe()
+        if model_config.model_name == "Qwen/Qwen3.6-27B":
+            return Qwen3_6_27b_Recipe()
         raise TrainingGymConfigError(
             f"no base slime recipe for model {model_config.model_name!r}"
         )

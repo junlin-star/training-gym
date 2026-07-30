@@ -163,6 +163,13 @@ API_REFERENCE_MANIFEST = [
         "class_type": "config_data",
         "sidebar_label": "Qwen3.6-35B-A3B",
     },
+    {
+        "class_name": "Qwen3_6_27B",
+        "module": "modal_training_gym.common.models.qwen3_6_27b",
+        "group": "models",
+        "class_type": "config_data",
+        "sidebar_label": "Qwen3.6-27B",
+    },
     # --- Training ---
     {
         "class_name": "TrainConfig",
@@ -191,6 +198,13 @@ API_REFERENCE_MANIFEST = [
         "group": "training",
         "class_type": "config_data",
         "sidebar_label": "Qwen3_6_35b_Recipe",
+    },
+    {
+        "class_name": "Qwen3_6_27b_Recipe",
+        "module": "modal_training_gym.train_recipes.slime_recipe.qwen3_6_27b",
+        "group": "training",
+        "class_type": "config_data",
+        "sidebar_label": "Qwen3_6_27b_Recipe",
     },
     # --- Deployment ---
     {
