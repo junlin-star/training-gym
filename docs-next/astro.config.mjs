@@ -129,6 +129,10 @@ export default defineConfig({
               label: 'Agents',
               autogenerate: { directory: 'tutorials/agent' },
             },
+            {
+              label: 'Tools',
+              autogenerate: { directory: 'tutorials/tools' },
+            },
           ],
         },
         {

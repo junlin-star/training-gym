@@ -109,11 +109,10 @@ def _main_impl() -> None:
         recipe=recipe,
     )
 
-    print(f"Training run: {training_run.training_run_id}")
     print(f"Total nodes: {recipe.total_nodes}")
     print("--- Starting training... ---")
     train_result = training_run.train()
-    print("--- Training complete ---")
+    print(f"--- Training complete: {train_result.training_run_id} ---")
 
     # ## Serve the trained checkpoint
     #
@@ -130,6 +129,7 @@ def _main_impl() -> None:
         recipe=GLM_4_7_SglangRecipe(),
         app_name="glm-4-7-serve",
         served_model_name="glm-4-7",
+        unauthenticated=True,
     ).serve()
     print(f"Deployed to {deployment.url}")
 

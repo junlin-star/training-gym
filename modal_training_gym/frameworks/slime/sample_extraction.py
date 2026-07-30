@@ -15,6 +15,8 @@ import json
 import os
 from typing import Any
 
+from modal_training_gym.common.sample import Sample
+
 # Import path of the run model's response parser (a (str) -> ParsedResponse
 # callable). The launcher exports it; the recorder resolves and applies it.
 RESPONSE_PARSER_PATH_ENV = "TRAINING_GYM_RESPONSE_PARSER_PATH"
@@ -47,6 +49,28 @@ _TRAJECTORY_MSG_CHARS_MAX = 8000
 _TRAJECTORY_MAX_MESSAGES = 128
 
 
+# Keys handled separately below (compacted/size-limited their own way) —
+# never copy them through the generic passthrough too, or they'd end up
+# duplicated under the same name with two different shapes.
+_RESERVED_METADATA_KEYS = frozenset({"trajectory_messages", "eval_report"})
+# Per-tag cap on the generic metadata passthrough so a stray large value a
+# reward function stashes on the sample can't bloat the rollout payload.
+_MAX_TAG_VALUE_BYTES = 2048
+
+
+def _is_small_json_value(value: Any, max_bytes: int = _MAX_TAG_VALUE_BYTES) -> bool:
+    """Best-effort check that ``value`` is JSON-serializable and small.
+
+    Reward/rollout functions can stash arbitrary tags on ``sample.metadata``;
+    this keeps the passthrough safe (skip non-serializable values) and
+    bounded (skip oversized ones) without requiring callers to sanitize.
+    """
+    try:
+        return len(json.dumps(value)) <= max_bytes
+    except (TypeError, ValueError):
+        return False
+
+
 def _resolve_hook(path: str | None) -> Any:
     if not path:
         return None
@@ -70,11 +94,35 @@ def _coerce_text(value: Any) -> str:
     return str(value)
 
 
-def _coerce_score(value: Any) -> float:
-    try:
+# Metadata key for the dashboard score when ``sample.reward`` is not a float
+# yet (common with OPD: reward holds the teacher ``/generate`` payload until
+# post-process). Custom generate / RM hooks should set:
+#
+#   sample.metadata["shaped_reward"] = float(task_score)
+#
+# Extraction maps that onto gym ``Sample.score``; do not grow gym Sample with
+# slime/OPD fields like ``reward: dict``.
+_SHAPED_REWARD_KEY = "shaped_reward"
+
+
+def _sample_score(sample: Sample, reward: float | None = None) -> float:
+    """Resolve reward score from a training gym Sample.
+
+    Resolution order:
+
+    1. Numeric ``reward`` (normal GRPO / post-process).
+    2. ``sample.metadata["shaped_reward"]`` — set this in custom generate/RM
+       when the framework reward must stay non-scalar until later (OPD).
+    3. ``0.0``.
+    """
+    if reward is not None:
+        return float(reward)
+
+    value = sample.metadata.get(_SHAPED_REWARD_KEY)
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
         return float(value)
-    except (TypeError, ValueError):
-        return 0.0
+
+    return 0.0
 
 
 _RESPONSE_PARSER: Any = None
@@ -128,6 +176,13 @@ def _trace_sample_limit() -> int:
     except (TypeError, ValueError):
         return _TRACE_SAMPLE_LIMIT_DEFAULT
     return max(0, n)
+
+
+def _coerce_int(value: Any) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError, OverflowError):
+        return 0
 
 
 def _coerce_float(value: Any) -> float | None:
@@ -226,6 +281,35 @@ def _extract_trace(sample: Any) -> Any:
         if isinstance(meta, dict):
             raw = meta.get("trace")
     return raw
+
+
+def _duck_get(obj: Any, key: str, default: Any = None) -> Any:
+    """Unified field access for dict or object."""
+    return (
+        obj.get(key, default) if isinstance(obj, dict) else getattr(obj, key, default)
+    )
+
+
+def _extract_inference_metadata(sample: Any) -> dict[str, Any] | None:
+    """Extract per-sample inference stats: token counts and prefix cache info."""
+    prefix_info = _duck_get(sample, "prefix_cache_info")
+    if prefix_info is None:
+        return None
+
+    total = _coerce_int(_duck_get(prefix_info, "total_prompt_tokens", 0))
+    cached = _coerce_int(_duck_get(prefix_info, "cached_tokens", 0))
+    resp_len = _duck_get(sample, "response_length")
+
+    inference: dict[str, Any] = {
+        "tokens_in": total,
+        "cached_tokens": cached,
+        "new_tokens": max(0, total - cached),
+        "cache_hit_rate": cached / total if total else 0.0,
+    }
+    if resp_len is not None:
+        inference["tokens_out"] = _coerce_int(resp_len)
+
+    return inference
 
 
 def _extract_audio_from_prompt(prompt: Any) -> str | None:
@@ -425,27 +509,28 @@ def _sample_to_dict(
 
     prompt = get("prompt") if attrs is not None else get("prompt", "")
     response = get("response") if attrs is not None else get("response", "")
-    reward = get("reward") if attrs is not None else get("reward", 0.0)
+    reward = get("reward") if attrs is not None else get("reward", None)
 
     metadata: dict[str, Any] = {}
     for key in ("response_length", "prompt_length", "rollout_id", "rollout_idx"):
         value = get(key) if attrs is not None else get(key, None)
         if value is not None:
             metadata[key] = value
+    if inference := _extract_inference_metadata(sample):
+        metadata["inference"] = inference
 
-    # Pull display-relevant fields from the sample's own metadata dict so the
-    # dashboard can render exit status, eval checks, etc. without needing the
-    # (potentially huge) full trajectory_messages blob.
+    # Pull the sample's own metadata dict through to the dashboard so it can
+    # render exit status, eval checks, custom reward-function tags, etc.
+    # Reserved keys are handled separately below (their own compaction), and
+    # oversized/non-serializable values are dropped rather than bloating the
+    # rollout payload.
     sample_meta = get("metadata") if attrs is not None else get("metadata", None)
     if isinstance(sample_meta, dict):
-        for key in (
-            "exit_status",
-            "eval_detail",
-            "training_response_source",
-            "training_assistant_turns",
-        ):
-            if key in sample_meta and sample_meta[key] is not None:
-                metadata[key] = sample_meta[key]
+        for key, value in sample_meta.items():
+            if key in _RESERVED_METADATA_KEYS or value is None:
+                continue
+            if _is_small_json_value(value):
+                metadata[key] = value
         # Multi-turn trajectory (capped to the first N samples): lets the
         # dashboard's ConversationView render the full agent conversation.
         # Without it, multi-turn rollouts collapse to a single flat block.
@@ -483,8 +568,15 @@ def _sample_to_dict(
         metadata["image"] = image_uri
 
     response_text = _coerce_text(response)
+    # Score via gym Sample: numeric reward, else metadata["shaped_reward"] (OPD).
+    numeric_reward = (
+        float(reward)
+        if isinstance(reward, (int, float)) and not isinstance(reward, bool)
+        else None
+    )
+    score = _sample_score(Sample(metadata=metadata), numeric_reward)
     out: dict[str, Any] = {
-        "score": _coerce_score(reward),
+        "score": score,
         "prompt": _coerce_text(prompt),
         "response": response_text,
         "metadata": metadata,

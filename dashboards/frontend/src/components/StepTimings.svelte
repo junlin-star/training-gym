@@ -496,6 +496,8 @@
     overflow-y: hidden;
     padding-bottom: 6px;
     overscroll-behavior-x: contain;
+    touch-action: pan-x;
+    -webkit-overflow-scrolling: touch;
   }
 
   .tl-track {
@@ -509,8 +511,13 @@
     flex-direction: column;
     gap: 3px;
     flex-basis: 0;
-    min-width: 3px;
     overflow: hidden;
+  }
+
+  @media (max-width: 900px) {
+    .tl-step {
+      min-width: 72px;
+    }
   }
 
   .tl-step-head {

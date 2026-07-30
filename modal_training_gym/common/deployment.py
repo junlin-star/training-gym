@@ -11,12 +11,16 @@ the live endpoint URL and convenience methods for generation and eval.
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
-from enum import Enum
 import inspect
+import json
 import os
 import threading
+import warnings
+from dataclasses import dataclass
+from enum import Enum
+from typing import Any
 
+from modal.experimental import list_deployed_apps
 from pydantic import BaseModel, ConfigDict, field_serializer, field_validator
 
 from modal_training_gym.common.checkpoint import (
@@ -26,12 +30,11 @@ from modal_training_gym.common.checkpoint import (
 )
 from modal_training_gym.common.errors import TrainingGymConfigError
 from modal_training_gym.common.ids import create_hash
-from modal_training_gym.common.models import ModelConfig
 from modal_training_gym.common.modal_urls import modal_app_dashboard_url
+from modal_training_gym.common.models import ModelConfig
+from modal_training_gym.deploy_recipes.base import DeployRecipeType
 from modal_training_gym.deploy_recipes.sglang_recipe import SglangRecipe
 from modal_training_gym.deploy_recipes.vllm_recipe import VllmRecipe
-from modal_training_gym.deploy_recipes.base import DeployRecipeType
-from modal.experimental import list_deployed_apps
 from modal_training_gym.utils.metadata import (
     MetadataStore,
     vol_get,
@@ -96,11 +99,13 @@ def _modal_proxy_auth_headers() -> dict[str, str]:
 def _raise_for_proxy_auth(status_code: int, url: str) -> None:
     """Turn a 401 into an actionable proxy-auth hint.
 
-    Served endpoints (``DeploymentConfig.serve()``) sit behind Modal proxy auth.
-    A 401 almost always means the ``MODAL_KEY`` / ``MODAL_SECRET`` proxy-auth
-    token pair is missing from the environment (so :func:`_modal_proxy_auth_headers`
-    returned no headers) rather than a real authorization problem — surface that
-    instead of a bare ``HTTPError``/``TimeoutError``. No-op for any other status.
+    SGLang endpoints are public by default (``unauthenticated=True``). When
+    an endpoint was served with ``unauthenticated=False``, a 401 almost
+    always means the ``MODAL_KEY`` / ``MODAL_SECRET`` proxy-auth token pair
+    is missing from the environment (so :func:`_modal_proxy_auth_headers`
+    returned no headers) rather than a real authorization problem — surface
+    that instead of a bare ``HTTPError``/``TimeoutError``. No-op for any
+    other status.
     """
     if status_code != 401:
         return
@@ -117,8 +122,36 @@ def _raise_for_proxy_auth(status_code: int, url: str) -> None:
         "https://modal.com/settings/proxy-auth-tokens and export MODAL_KEY (wk-…) "
         "and MODAL_SECRET (ws-…) in the shell that runs the eval/serve. For calls "
         "issued from remote workers (e.g. a custom rm/reward function), also "
-        "forward the pair into the worker via a modal.Secret."
+        "forward the pair into the worker via a modal.Secret. SGLang endpoints "
+        "are public by default; pass DeploymentConfig(unauthenticated=False) to "
+        "require proxy auth."
     )
+
+
+def _messages_to_openai(messages: list[dict]) -> list[dict]:
+    """Serialize internal tool-call arguments without mutating caller messages."""
+    wire_messages = []
+    for message in messages:
+        wire_message = dict(message)
+        tool_calls = message.get("tool_calls")
+        if isinstance(tool_calls, list):
+            wire_tool_calls = []
+            for tool_call in tool_calls:
+                if not isinstance(tool_call, dict):
+                    wire_tool_calls.append(tool_call)
+                    continue
+                wire_tool_call = dict(tool_call)
+                function = tool_call.get("function")
+                if isinstance(function, dict):
+                    wire_function = dict(function)
+                    arguments = function.get("arguments")
+                    if isinstance(arguments, dict):
+                        wire_function["arguments"] = json.dumps(arguments)
+                    wire_tool_call["function"] = wire_function
+                wire_tool_calls.append(wire_tool_call)
+            wire_message["tool_calls"] = wire_tool_calls
+        wire_messages.append(wire_message)
+    return wire_messages
 
 
 @dataclass
@@ -134,6 +167,7 @@ class DeploymentConfig:
 
     app_name: str | None = None
     served_model_name: str | None = None
+    unauthenticated: bool = True
 
     def _checkpoints_volume_name(self) -> str | None:
         if self.checkpoint is not None and self.checkpoint.checkpoints_volume_name:
@@ -218,8 +252,19 @@ class DeploymentConfig:
                 checkpoints_volume=checkpoints_volume,
                 checkpoints_mount_path=checkpoints_mount_path,
                 deployment_id=deployment_id,
+                unauthenticated=self.unauthenticated,
             )
         elif isinstance(recipe, VllmRecipe):
+            # unauthenticated is SGLang-only; vLLM's http_server has no
+            # proxy-auth. Default True is a silent no-op; warn only
+            # when the caller explicitly requests authenticated access.
+            if self.unauthenticated is False:
+                warnings.warn(
+                    "DeploymentConfig(unauthenticated=False) is not supported for "
+                    "VllmRecipe: modal.experimental.http_server has no proxy-auth, so the endpoint remains publicly reachable. Use "
+                    "SglangRecipe if you need Modal proxy auth.",
+                    stacklevel=2,
+                )
             from modal_training_gym.deploy_recipes.vllm_recipe.serve_vllm import (
                 build_vllm_serve_app,
             )
@@ -288,12 +333,24 @@ class DeploymentStatus(Enum):
     INACTIVE = "inactive"
 
 
-def update_deployment_status(deployment_id: str, status: str) -> None:
-    """Update a deployment's status in both individual record and summary."""
+def update_deployment_status(
+    deployment_id: str,
+    status: str,
+    *,
+    seed: dict[str, Any] | None = None,
+) -> bool:
+    """Update a deployment's status in both individual record and summary.
+
+    Returns ``True`` when the write succeeds. If the canonical record is
+    missing, ``seed`` (e.g. a summary-only row) is used to create it.
+    """
     try:
         payload = vol_get(MetadataStore.DEPLOYMENTS, deployment_id)
     except KeyError:
-        return
+        if seed is None:
+            return False
+        payload = dict(seed)
+        payload["deployment_id"] = deployment_id
     payload["status"] = status
     vol_put(MetadataStore.DEPLOYMENTS, deployment_id, payload)
     vol_upsert_summary_item(
@@ -306,6 +363,7 @@ def update_deployment_status(deployment_id: str, status: str) -> None:
         ),
         reverse=True,
     )
+    return True
 
 
 class _CrashloopDetector:
@@ -376,6 +434,7 @@ class ModelDeployment(BaseModel):
         model = deployment_config.get("model")
         if isinstance(model, dict):
             deployment_config["model"] = ModelConfig(**model)
+        deployment_config.setdefault("unauthenticated", True)
         return DeploymentConfig(**deployment_config)
 
     @field_serializer("deployment_config")
@@ -400,14 +459,22 @@ class ModelDeployment(BaseModel):
             },
             "app_name": value.app_name,
             "served_model_name": value.served_model_name,
+            "unauthenticated": value.unauthenticated,
         }
 
-    def generate(
+    # TODO(atoniolo76): A future PR should update all existing tutorials to
+    # use this new function while getting rid of the old generate.
+    def chat(
         self,
-        prompt: str | list[dict],
+        messages: list[dict],
         ensure_ready: bool = True,
+        max_attempts: int = 4,
+        timeout: int = 120,
         **kwargs,
-    ) -> str:
+    ) -> dict:
+        """Return one OpenAI-compatible chat-completion message while
+        preserving structured fields like tool_calls and reasoning_content.
+        """
         import time
 
         import requests
@@ -416,18 +483,17 @@ class ModelDeployment(BaseModel):
             self.wait_until_ready()
         body = {
             "model": self.deployment_config.served_model_name,
-            "messages": [{"role": "user", "content": prompt}],
+            "messages": _messages_to_openai(messages),
             **kwargs,
         }
-        transient_status_codes = {502, 503, 504}
-        max_attempts = 4
+        transient_status_codes = {429, 500, 502, 503, 504}
 
         for attempt in range(1, max_attempts + 1):
             try:
                 resp = requests.post(
                     f"{self.url}/v1/chat/completions",
                     json=body,
-                    timeout=120,
+                    timeout=timeout,
                     headers=_modal_proxy_auth_headers(),
                 )
                 if (
@@ -443,13 +509,7 @@ class ModelDeployment(BaseModel):
                     continue
                 _raise_for_proxy_auth(resp.status_code, self.url)
                 resp.raise_for_status()
-                message = resp.json()["choices"][0]["message"]
-                content = message.get("content")
-                if isinstance(content, str):
-                    return content
-                if content is None:
-                    return message.get("reasoning_content", "")
-                return str(content)
+                return resp.json()["choices"][0]["message"]
             except (requests.ConnectionError, requests.Timeout) as exc:
                 if attempt >= max_attempts:
                     raise
@@ -463,6 +523,27 @@ class ModelDeployment(BaseModel):
         raise RuntimeError(
             f"Failed to generate from {self.url} after {max_attempts} attempts"
         )
+
+    def generate(
+        self,
+        prompt: str | list[dict],
+        ensure_ready: bool = True,
+        **kwargs,
+    ) -> str:
+        messages = kwargs.pop("messages", None)
+        if messages is None:
+            messages = [{"role": "user", "content": prompt}]
+        message = self.chat(
+            messages,
+            ensure_ready=ensure_ready,
+            **kwargs,
+        )
+        content = message.get("content")
+        if isinstance(content, str):
+            return content
+        if content is None:
+            return message.get("reasoning_content", "")
+        return str(content)
 
     def save(self) -> None:
         payload = self.model_dump(mode="json")

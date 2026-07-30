@@ -2,70 +2,91 @@
 
 from __future__ import annotations
 
-import argparse
 import sys
 
+import click
 
-def main():
-    from .setup import setup, open_dashboard, set_password, set_proxy_auth
-    from .cleanup import cleanup
+from .builtin import (
+    cleanup_command,
+    open_command,
+    set_password_command,
+    set_proxy_auth_command,
+    setup_command,
+)
+from .commands import _TrainingGymGroup
+from .errors import CLIError, ExitCode
+from .output import print_error, print_json
 
-    parser = argparse.ArgumentParser(prog="training-gym")
-    sub = parser.add_subparsers(dest="command")
 
-    sub.add_parser("setup", help="Deploy the training-gym dashboard to Modal")
+@click.group(
+    cls=_TrainingGymGroup,
+    context_settings={"help_option_names": ["-h", "--help"]},
+)
+def entrypoint_cli() -> None:
+    """Launch, inspect, and manage training runs."""
 
-    sub.add_parser("open", help="Open the deployed dashboard in your browser")
 
-    sub.add_parser(
-        "set-proxy-auth",
-        help="Set/replace the Modal proxy-auth tokens (MODAL_KEY / MODAL_SECRET)",
-    )
+def _register_commands() -> None:
+    entrypoint_cli.add_command(setup_command, panel="Configuration")
+    entrypoint_cli.add_command(set_password_command, panel="Configuration")
+    entrypoint_cli.add_command(set_proxy_auth_command, panel="Configuration")
+    entrypoint_cli.add_command(open_command, panel="Utilities")
+    entrypoint_cli.add_command(cleanup_command, panel="Utilities")
 
-    password_parser = sub.add_parser(
-        "set-password",
-        help="Set/clear the dashboard password (Basic Auth) and redeploy",
-    )
-    password_parser.add_argument(
-        "--password",
-        default=None,
-        metavar="PASSWORD",
-        help="Password to set (prompted securely if omitted; empty disables auth)",
-    )
 
-    cleanup_parser = sub.add_parser(
-        "cleanup",
-        help="Delete metadata for old failed/cancelled runs",
-    )
-    cleanup_parser.add_argument(
-        "--older-than-days",
-        type=int,
-        default=7,
-        metavar="DAYS",
-        help="Delete failed/cancelled runs older than this many days (default: 7)",
-    )
-    cleanup_parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Show what would be deleted without deleting",
-    )
+_register_commands()
 
-    args = parser.parse_args()
 
-    if args.command == "setup":
-        setup()
-    elif args.command == "open":
-        open_dashboard()
-    elif args.command == "set-proxy-auth":
-        set_proxy_auth()
-    elif args.command == "set-password":
-        set_password(password=args.password)
-    elif args.command == "cleanup":
-        cleanup(older_than_days=args.older_than_days, dry_run=args.dry_run)
-    else:
-        parser.print_help()
-        sys.exit(1)
+def main(argv: list[str] | None = None) -> int:
+    """Run the CLI and return a process exit code."""
+    args = list(argv) if argv is not None else sys.argv[1:]
+    json_output = "-j" in args or "--json" in args
+    try:
+        result = entrypoint_cli.main(
+            args=args,
+            prog_name="training-gym",
+            standalone_mode=False,
+        )
+        return int(result) if isinstance(result, int) else int(ExitCode.SUCCESS)
+    except CLIError as exc:
+        if json_output:
+            print_json(exc.to_json(), stderr=True)
+        else:
+            exc.show(file=sys.stderr)
+        return int(exc.exit_code)
+    except click.ClickException as exc:
+        if json_output:
+            print_json(
+                {
+                    "error": (
+                        "usage_error"
+                        if isinstance(exc, click.UsageError)
+                        else "command_error"
+                    ),
+                    "message": exc.format_message(),
+                },
+                stderr=True,
+            )
+        else:
+            exc.show(file=sys.stderr)
+        return int(exc.exit_code)
+    except click.Abort:
+        if json_output:
+            print_json({"error": "interrupted"}, stderr=True)
+        else:
+            print_error("Interrupted.")
+        return 130
+    except Exception as exc:
+        message = str(exc) or type(exc).__name__
+        if json_output:
+            print_json(
+                {"error": "unexpected_error", "message": message},
+                stderr=True,
+            )
+        else:
+            print_error(f"Error: {message}")
+        return int(ExitCode.ERROR)
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

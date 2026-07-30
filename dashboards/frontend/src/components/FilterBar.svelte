@@ -16,6 +16,7 @@
     activeGroups,
     allGroupsActive,
     search = $bindable(),
+    groupBy = $bindable(),
     onToggleRecipe,
     onSelectAllRecipes,
     onClearRecipes,
@@ -32,12 +33,23 @@
   function toggleMenu(menu) {
     openMenu = openMenu === menu ? null : menu;
   }
+
+  const groupByOptions = [
+    { value: "none", label: "None" },
+    { value: "group", label: "Group" },
+    { value: "dataset", label: "Dataset" },
+    { value: "model", label: "Model" },
+  ];
+
+  let groupByLabel = $derived(
+    groupByOptions.find((option) => option.value === groupBy)?.label ?? "None",
+  );
 </script>
 
 <svelte:window onclick={() => (openMenu = null)} />
 
-<nav class="p-0 flex items-center gap-[0.5rem] relative flex-wrap">
-  <label class="inline-flex items-center gap-[8px] [border:1px_solid_var(--color-c-gray-10,#2f2f2f)] rounded-[6px] [background:transparent] w-[260px] p-[6px_8px]" aria-label="Search training runs by name">
+<nav class="p-0 flex items-center gap-[0.5rem] relative flex-wrap max-[900px]:[align-items:stretch]">
+  <label class="inline-flex items-center gap-[8px] [border:1px_solid_var(--color-c-gray-10,#2f2f2f)] rounded-[6px] [background:transparent] w-[260px] p-[6px_8px] max-[900px]:w-full" aria-label="Search training runs by name">
     <span class="search-icon">
       <Search size={13} />
     </span>
@@ -183,6 +195,47 @@
             </span>
             <span class="item-label">{group}</span>
             <span class="item-count">{groupCounts[group] || 0}</span>
+          </button>
+        {/each}
+      </div>
+    {/if}
+  </div>
+
+  <div class="filterbar-menu-wrap ml-auto">
+    <button
+      class="group-by-button ghost-hover"
+      class:filterbar-open={openMenu === "groupBy"}
+      aria-haspopup="listbox"
+      aria-expanded={openMenu === "groupBy"}
+      onclick={(event) => {
+        event.stopPropagation();
+        toggleMenu("groupBy");
+      }}
+    >
+      <span>Group by:</span>
+      <span class="group-by-value">{groupByLabel}</span>
+      <span class="chevron" class:rotated={openMenu === "groupBy"}>
+        <ChevronDown size={12} />
+      </span>
+    </button>
+    {#if openMenu === "groupBy"}
+      <div class="menu menu-right group-by-menu" role="listbox">
+        {#each groupByOptions as option (option.value)}
+          <button
+            class="menu-item"
+            role="option"
+            aria-selected={groupBy === option.value}
+            onclick={() => {
+              groupBy = option.value;
+              openMenu = null;
+            }}
+          >
+            <span class="w-[14px] h-[14px] flex justify-center items-center">
+              {#if groupBy === option.value}
+                <Check size={11} />
+              {/if}
+            </span>
+            <span class="item-label">{option.label}</span>
           </button>
         {/each}
       </div>

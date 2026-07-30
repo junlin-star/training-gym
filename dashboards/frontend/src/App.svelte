@@ -25,6 +25,7 @@
   let activeRecipes = $state(new Set());
   let activeStatuses = $state(new Set());
   let activeGroups = $state(new Set());
+  let trainingGroupBy = $state("none");
   // Recipe/status/group values we've seen across loads. New ones are
   // auto-enabled in the filters once; the user's selections are never reset by
   // a refresh.
@@ -117,7 +118,7 @@
   const NO_GROUP = "(no group)";
 
   function getGroup(run) {
-    return safeText(run.group_id || run.metadata?.group_id) || NO_GROUP;
+    return safeText(run.group_id) || NO_GROUP;
   }
 
   function getStatus(run) {
@@ -145,7 +146,7 @@
   }
 
   function modelName(run) {
-    return run.train_result?.model_name || run.config_summary?.model_name || "—";
+    return run.model || "—";
   }
 
   function safeText(value) {
@@ -415,9 +416,9 @@
             !includesText(run.run_id, q) &&
             !includesText(run.modal_app_id, q) &&
             !includesText(run.group_id, q) &&
-            !includesText(run.metadata?.group_id, q) &&
-            !includesText(JSON.stringify(run.metadata?.group_tags || {}), q) &&
-            !includesText(run.config_summary?.model_name, q) &&
+            !includesText(JSON.stringify(run.group_tags || {}), q) &&
+            !includesText(run.model, q) &&
+            !includesText(run.dataset, q) &&
             !includesText(run.train_result?.training_run_id, q) &&
             !includesText(run.train_result?.checkpoint_dir, q) &&
             !includesText(run.train_result?.model_name, q) &&
@@ -432,6 +433,26 @@
       })
       .sort((a, b) => (b.created_at || 0) - (a.created_at || 0)),
   );
+
+  const trainingGroupKeyFns = {
+    group: getGroup,
+    dataset: (run) => safeText(run.dataset) || "(no dataset)",
+    model: modelName,
+  };
+
+  const trainingGroupKey = (run, groupBy) => trainingGroupKeyFns[groupBy]?.(run) ?? "";
+
+  // Buckets inherit filteredRuns' recency sort: groups come out ordered by
+  // newest member and runs stay sorted within each group.
+  let trainingRunGroups = $derived.by(() => {
+    if (trainingGroupBy === "none") return [];
+    const buckets = Map.groupBy(filteredRuns, (run) => trainingGroupKey(run, trainingGroupBy));
+    return [...buckets].map(([key, runs]) => ({
+      key,
+      runs,
+      latestCreatedAt: runs[0]?.created_at || null,
+    }));
+  });
 
   let completedTotal = $derived(allRuns.filter((run) => run.train_result).length);
   let cancelledTotal = $derived(allRuns.filter((run) => getStatus(run) === "Cancelled").length);
@@ -822,11 +843,11 @@
   }
 </script>
 
-<div class="min-h-[100vh] grid grid-rows-[auto_1fr] bg-(--bg)">
-  <header class="[border-bottom:1px_solid_var(--color-c-surface-highlight-gray-opaque,#272727)] bg-(--bg-depth) flex items-center justify-between gap-[1rem] min-h-[53px] p-[0_1rem] max-[900px]:min-h-[53px] max-[900px]:p-[0_1rem]">
+<div class="h-[100dvh] grid grid-rows-[auto_1fr] bg-(--bg) overflow-x-hidden">
+  <header class="[border-bottom:1px_solid_var(--color-c-surface-highlight-gray-opaque,#272727)] bg-(--bg-depth) flex items-center justify-between gap-[1rem] min-h-[53px] p-[0_1rem] max-[900px]:min-h-[53px] max-[900px]:p-[0_0.75rem]">
     <div class="inline-flex items-center gap-[0.55rem] flex-[0_0_auto] min-w-0">
       <img src={logoSvg} alt="Modal" class="h-[17.5px] w-auto flex-[0_0_auto]" />
-      <span class="inline-flex items-center gap-[0.18rem] [font-family:var(--font-display)] [font-feature-settings:'ss01'_on] text-[17.6px] leading-[1] [padding-block:0.08rem] font-[600] tracking-[-0.02em] [transform:translateY(1px)] whitespace-nowrap">
+      <span class="inline-flex items-center gap-[0.18rem] [font-family:var(--font-display)] [font-feature-settings:'ss01'_on] text-[17.6px] leading-[1] [padding-block:0.08rem] font-[600] tracking-[-0.02em] [transform:translateY(1px)] whitespace-nowrap max-[360px]:text-[15px]">
         <span class="text-[#ddffdc]">Modal</span>
         <span class="text-(--green)">Training Gym</span>
       </span>
@@ -842,10 +863,10 @@
     </a>
   </header>
 
-  <div class="grid grid-cols-[232px_minmax(0,1fr)] min-h-0 bg-(--bg) max-[900px]:grid-cols-[1fr]">
+  <div class="grid grid-cols-[232px_minmax(0,1fr)] min-h-0 h-full bg-(--bg) max-[900px]:grid-cols-[1fr] max-[900px]:grid-rows-[auto_minmax(0,1fr)]">
     <Sidebar {navItems} {activePage} onNavigate={setActivePage} />
 
-    <main class="p-[16px_24px] max-[900px]:p-[24px]">
+    <main class="min-w-0 min-h-0 h-full flex flex-col overflow-y-auto">
       <DashboardHeader
         title={pageMeta[activePage].title}
         {statusText}
@@ -882,6 +903,8 @@
         {groupCounts}
         {activeGroups}
         {filteredRuns}
+        runGroups={trainingRunGroups}
+        bind:groupBy={trainingGroupBy}
         {loading}
         {error}
         {modelName}

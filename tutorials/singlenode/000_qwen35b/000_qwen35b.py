@@ -109,6 +109,7 @@ def _main_impl() -> None:
         checkpoint=checkpoint,
         app_name="qwen3-6-35b-math-serve",
         served_model_name="qwen3-6-35b-math",
+        unauthenticated=True,
     ).serve()
     print(f"Trained model URL: {trained_deployment.url}")
 

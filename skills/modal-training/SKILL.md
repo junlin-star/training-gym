@@ -29,7 +29,7 @@ This document captures durable repo-specific workflow for agents launching and d
 - Set `MODAL_ENVIRONMENT` explicitly, or pass `--env <env>`, when the target environment matters.
 - If your local setup relies on shell init for auth or helper tooling, ensure that setup is loaded before launching jobs.
 - Store credentials in local shell config or Modal secrets, not in tracked files.
-- **Proxy-auth tokens for served endpoints.** Models served via `DeploymentConfig.serve()` (the sglang/vllm recipes) sit behind Modal proxy auth, so *any* call to a served endpoint — `EvalConfig.evaluate()`, `deployment.generate()`, an OPD teacher `/generate`, health/readiness polls — must send a proxy-auth token pair or it returns **HTTP 401**. Create a token in the Modal dashboard (Settings → Proxy Auth Tokens) and export it in the launching shell as `MODAL_KEY` (`wk-…`) and `MODAL_SECRET` (`ws-…`); the package turns these into `Modal-Key`/`Modal-Secret` headers. For calls issued from **remote workers** (e.g. a custom rm/reward function hitting a teacher endpoint), the driver's shell env does not reach the worker — forward the pair into the worker by attaching a `modal.Secret` (e.g. via the recipe's `train_function_kwargs={"secrets": [...]}`).
+- **Proxy-auth tokens for served endpoints.** SGLang endpoints from `DeploymentConfig.serve()` are public by default (`unauthenticated=True`). Pass `unauthenticated=False` to require Modal proxy auth — then *any* call to that endpoint — `EvalConfig.evaluate()`, `deployment.generate()`, an OPD teacher `/generate`, health/readiness polls — must send a proxy-auth token pair or it returns **HTTP 401**. vLLM cannot honor `unauthenticated` (`modal.experimental.http_server` has no proxy-auth knob): `True` (default) is a silent no-op for `VllmRecipe`; explicit `False` emits `warnings.warn` because the endpoint remains public. Create a token in the Modal dashboard (Settings → Proxy Auth Tokens) and export it in the launching shell as `MODAL_KEY` (`wk-…`) and `MODAL_SECRET` (`ws-…`); the package turns these into `Modal-Key`/`Modal-Secret` headers. For calls issued from **remote workers** (e.g. a custom rm/reward function hitting a teacher endpoint), the driver's shell env does not reach the worker — forward the pair into the worker by attaching a `modal.Secret` (e.g. via the recipe's `train_function_kwargs={"secrets": [...]}`).
 
 ## Finding The Right Entrypoint
 
@@ -95,7 +95,7 @@ modal app stop <app-id>
 modal app logs <app-id> --tail 500 | rg "error|CUDA|OOM|loss"
 
 # Fetch only stderr from a particular function call
-modal app logs <app-id> --source stderr --function-call-id <function-call-id>
+modal app logs <app-id> --source stderr --function-call <function-call-id>
 
 # Search for specific keywords in logs
 modal app logs <app-id> --search "error"

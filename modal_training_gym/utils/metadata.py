@@ -228,6 +228,8 @@ def vol_get(
 def vol_list(
     store: MetadataStore | str, *, is_async: bool = False
 ) -> list[dict[str, Any]] | Awaitable[list[dict[str, Any]]]:
+    from modal.exception import NotFoundError
+
     vol = _metadata_volume()
     if is_async:
 
@@ -239,7 +241,7 @@ def vol_list(
                     if entry.path.endswith(".json"):
                         chunks = [c async for c in vol.read_file.aio(entry.path)]
                         results.append(json.loads(b"".join(chunks)))
-            except FileNotFoundError:
+            except (FileNotFoundError, NotFoundError):
                 pass
             return results
 
@@ -256,7 +258,7 @@ def vol_list(
                     data = b"".join(vol.read_file(entry.path))
                     results.append(json.loads(data))
             return results
-        except FileNotFoundError:
+        except (FileNotFoundError, NotFoundError):
             return results
         except Exception as exc:
             if "rate limit" in str(exc).lower() and attempt < 2:
@@ -274,6 +276,8 @@ def vol_list_prefix(store: MetadataStore | str, prefix: str) -> list[dict[str, A
     matching files. Used to gather the per-DP-rank shards of one
     ``(run, rollout)`` without reading the whole store.
     """
+    from modal.exception import NotFoundError
+
     vol = _metadata_volume()
     _safe_reload(vol)
     results: list[dict[str, Any]] = []
@@ -285,7 +289,7 @@ def vol_list_prefix(store: MetadataStore | str, prefix: str) -> list[dict[str, A
             if not name.startswith(prefix):
                 continue
             results.append(json.loads(b"".join(vol.read_file(entry.path))))
-    except FileNotFoundError:
+    except (FileNotFoundError, NotFoundError):
         return results
     return results
 
@@ -297,13 +301,15 @@ def vol_count_items(store: MetadataStore | str) -> int:
     (summary item count < canonical file count) before paying for a full
     rebuild via ``vol_list``.
     """
+    from modal.exception import NotFoundError
+
     vol = _metadata_volume()
     _safe_reload(vol)
     try:
         return sum(
             1 for e in vol.iterdir(_store_path(store)) if e.path.endswith(".json")
         )
-    except FileNotFoundError:
+    except (FileNotFoundError, NotFoundError):
         return 0
 
 

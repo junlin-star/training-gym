@@ -18,7 +18,7 @@ What this does:
    normal Secrets list in the UI). Credentials are auto-resolved from
    ``MODAL_TOKEN_*`` env vars or the active profile in ``~/.modal.toml``.
 
-2. Deploys the dashboard's ASGI app and hourly orphan-run reconciler.
+2. Deploys the dashboard's ASGI app and orphan reconciler.
 3. Persists the FastAPI web URL to ``~/.training-gym.toml`` so other
    clients (e.g. the slime launcher) can find the dashboard.
 """
@@ -69,7 +69,7 @@ def setup(interactive: bool = True) -> str:
 def ensure_proxy_auth(interactive: bool = True, force: bool = False) -> bool:
     """Prompt for and persist Modal proxy-auth tokens in ``~/.training-gym.toml``.
 
-    Served endpoints (``DeploymentConfig.serve()``) sit behind Modal proxy auth
+    Authenticated served endpoints (``unauthenticated=False``) need Modal proxy auth
     and need a ``MODAL_KEY`` / ``MODAL_SECRET`` token pair. When ``interactive``
     we ask whether the user has created a pair and, if so, read and save it.
     With ``force`` we offer to replace an already-saved pair (e.g. when the old
@@ -102,8 +102,8 @@ def ensure_proxy_auth(interactive: bool = True, force: bool = False) -> bool:
             return True
     else:
         print(
-            "\nServed endpoints (DeploymentConfig.serve()) sit behind Modal proxy "
-            "auth, which needs a proxy-auth token pair (MODAL_KEY / MODAL_SECRET)."
+            "\nAuthenticated served endpoints (DeploymentConfig(unauthenticated=False)) need "
+            "a Modal proxy-auth token pair (MODAL_KEY / MODAL_SECRET)."
         )
         answer = (
             input(

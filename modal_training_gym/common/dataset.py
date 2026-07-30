@@ -43,6 +43,11 @@ class DatasetConfig:
     label_key: str = ""
     apply_chat_template: bool = True
     always_prepare: bool = False
+    # When True (default), ``prepare()`` is expected to materialize every path in
+    # ``eval_paths`` and the launcher validates them strictly. Datasets that use
+    # a separate DatasetConfig instance for offline eval (Toolathlon, BFCL) set
+    # this False so resolvers don't invent a companion ``eval.*`` file.
+    writes_eval_paths: bool = True
 
     def __init__(self, **kwargs: Any) -> None:
         if not self.dataset_id:
@@ -196,7 +201,6 @@ class HuggingFaceDataset(DatasetConfig):
             if sys_prompt:
                 msgs.append({"role": "system", "content": sys_prompt})
             msgs.append({"role": "user", "content": user_content})
-            msgs.append({"role": "assistant", "content": row[out_col]})
             return {"messages": msgs, label_key: str(row[out_col])}
 
         return ds.map(_to_chat, remove_columns=ds.column_names)

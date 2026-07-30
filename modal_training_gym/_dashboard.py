@@ -9,14 +9,21 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import math
 import os
 import re
 import secrets as _secrets
 import time
 from pathlib import Path
-from typing import Awaitable, Callable
+from typing import TYPE_CHECKING, Awaitable, Callable, Iterable, TypedDict
+from datetime import datetime, timezone
 
 import modal
+
+if TYPE_CHECKING:
+    from google.protobuf.timestamp_pb2 import Timestamp
+    from modal.client import _Client
+    from modal_proto import api_pb2
 
 # Imported at module scope so FastAPI can resolve the ``request: Request``
 # annotation in stream_run_logs(). Under ``from __future__ import
@@ -31,12 +38,24 @@ from starlette.requests import Request
 # must resolve from this module's globals.
 from modal_training_gym.common.advantage_distribution import AdvantageDistribution
 from modal_training_gym.common.run import FrameworkStatusUpdate, TrainingRun
+from modal_training_gym.common.run_summary import (
+    JsonDict,
+    RunSummary,
+    build_run_summaries,
+)
 from modal_training_gym.common.training_rollout import TrainingRolloutResult
 
-# A JSON object as stored in the metadata volume (summary rows, result
-# payloads). ``object`` values — not ``Any`` — so readers must narrow.
-JsonDict = dict[str, object]
 SummaryLoader = Callable[[], Awaitable[list[JsonDict]]]
+
+
+# A single historical log line from ``AppFetchLogs``
+class LogEntry(TypedDict):
+    task_id: str
+    line: str
+    fd: int
+    ts: float | None
+    ts_ns: int | None
+
 
 REPO_URL = "https://github.com/modal-projects/training-gym.git"
 REPO_BRANCH = "main"
@@ -106,6 +125,115 @@ PASSWORD_EXEMPT_PATHS = frozenset(
 def _is_local() -> bool:
     """True when we're not running inside a Modal container."""
     return not os.environ.get("MODAL_IS_REMOTE")
+
+
+def _parse_log_time(value: str, now: float) -> float | None:
+    """Parse a log time bound into epoch seconds, or ``None`` if unset.
+
+    It accepts the following formats:
+
+      - empty string → ``None`` (caller supplies a default)
+      - a relative age like ``30m`` / ``2h`` / ``1d`` / ``45s`` → ``now`` minus
+        that duration (i.e. "N ago")
+      - epoch seconds, e.g. ``1720557600`` or ``1720557600.5``
+      - ISO 8601, e.g. ``2026-07-09T18:00:00Z`` (naive values are read as UTC)
+
+    Returns ``None`` for anything unparseable so the caller falls back to its
+    default rather than 400-ing on a slightly-off timestamp.
+    """
+    text = (value or "").strip()
+    if not text:
+        return None
+
+    relative = re.fullmatch(r"(\d+)\s*([smhd])", text)
+    if relative:
+        amount = int(relative.group(1))
+        unit_secs = {"s": 1, "m": 60, "h": 3600, "d": 86400}[relative.group(2)]
+        return now - amount * unit_secs
+
+    try:
+        parsed = float(text)
+        return parsed if math.isfinite(parsed) else None
+    except ValueError:
+        pass
+
+    iso = text[:-1] + "+00:00" if text.endswith("Z") else text
+    try:
+        parsed = datetime.fromisoformat(iso)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.timestamp()
+
+
+def _resolve_log_window(
+    since_ts: float | None,
+    until_ts: float | None,
+    *,
+    default_since: float,
+    default_until: float,
+    now: float,
+) -> tuple[float, float]:
+    """Resolve the ``[since, until]`` log window to concrete epoch seconds.
+
+    ``since_ts`` / ``until_ts`` are the already-parsed request bounds (``None``
+    when the caller didn't supply one). Unset bounds fall back to
+    ``default_since`` / ``default_until`` (typically the run's lifetime), and
+    ``until`` defaults to ``now`` whenever it resolves to a non-positive value
+    (e.g. the run hasn't ended). ``since`` is floored at 0 so a negative
+    relative age can't reach before the epoch.
+    """
+    if since_ts is None:
+        since_ts = float(default_since)
+    if until_ts is None:
+        until_ts = float(default_until)
+    if until_ts <= 0:
+        until_ts = now
+    return max(0.0, since_ts), until_ts
+
+
+def _to_timestamp(secs: float) -> Timestamp:
+    """Convert epoch seconds (with fractional part) to a protobuf ``Timestamp``."""
+    from google.protobuf.timestamp_pb2 import Timestamp
+
+    ts = Timestamp()
+    ts.seconds = int(secs)
+    ts.nanos = int((secs - int(secs)) * 1e9)
+    return ts
+
+
+def _parse_log_batches(batches: Iterable[api_pb2.TaskLogsBatch]) -> list[LogEntry]:
+    """Flatten Modal ``AppFetchLogs`` batches into ``LogEntry`` dicts."""
+    logs: list[LogEntry] = []
+    for batch in batches:
+        for item in batch.items:
+            if not item.data:
+                continue
+            ts = float(getattr(item, "timestamp", 0) or 0)
+            ts_ns = int(getattr(item, "timestamp_ns", 0) or 0)
+            entry: LogEntry = {
+                "task_id": batch.task_id,
+                "line": item.data,
+                "fd": int(getattr(item, "file_descriptor", 0) or 0),
+                "ts": ts or None,
+                "ts_ns": ts_ns or None,
+            }
+            logs.append(entry)
+    return logs
+
+
+def _compute_next_page(logs: list[LogEntry], limit: int) -> tuple[bool, float | None]:
+    """Derive ``(has_more, next_until)`` for keyset pagination."""
+    has_more = len(logs) >= limit
+    next_until: float | None = None
+    if has_more and logs:
+        oldest = logs[0]
+        oldest_ns = oldest.get("ts_ns") or int(
+            (oldest.get("ts") or 0.0) * 1_000_000_000
+        )
+        next_until = (oldest_ns - 1) / 1_000_000_000
+    return has_more, next_until
 
 
 def ensure_creds_secret(interactive: bool = False) -> bool:
@@ -236,17 +364,24 @@ def compact_summaries() -> None:
 
 
 @app.function(schedule=modal.Cron("*/30 * * * *"), secrets=_function_secrets())
-def reconcile_orphan_training_runs() -> None:
-    """Reconcile orphaned pending training runs every 30 minutes."""
-    from modal_training_gym.common.run_reconciler import reconcile_orphan_runs
+def reconcile() -> None:
+    """Reconcile orphaned training runs and deployments every 30 minutes."""
+    from modal_training_gym.common.reconcile import reconcile as _reconcile
 
-    results = reconcile_orphan_runs()
-    if results:
-        print(f"Reconciled {len(results)} orphaned run(s):")
-        for result in results:
+    outcome = _reconcile()
+    if outcome.runs:
+        print(f"Reconciled {len(outcome.runs)} orphaned run(s):")
+        for result in outcome.runs:
             print(f"  {result.training_run_id}: {result.reason}")
     else:
         print("No orphaned runs to reconcile.")
+
+    if outcome.deployments:
+        print(f"Reconciled {len(outcome.deployments)} orphaned deployment(s):")
+        for result in outcome.deployments:
+            print(f"  {result.deployment_id}: {result.reason}")
+    else:
+        print("No orphaned deployments to reconcile.")
 
 
 @app.function(
@@ -321,6 +456,42 @@ def fastapi_app():
     # Hold strong refs to background refresh tasks so they aren't GC'd mid-flight.
     refresh_tasks: set[asyncio.Task[list[JsonDict]]] = set()
     web.mount("/assets", StaticFiles(directory=f"{STATIC_DIR}/assets"), name="assets")
+
+    # ── Shared Modal client ───────────────────────────────────────────────
+    # Opens a client at startup and reuses it across all requests.
+    modal_client: _Client | None = None
+    modal_client_lock = asyncio.Lock()
+
+    async def get_modal_client() -> _Client | None:
+        """Return the shared, connection-open Modal client.
+
+        Creates it once (guarded by a lock) and reuses it thereafter. Returns
+        ``None`` when no credentials are configured.
+        """
+        nonlocal modal_client
+        if modal_client is not None:
+            return modal_client
+
+        token_id = os.environ.get("MODAL_TOKEN_ID", "")
+        token_secret = os.environ.get("MODAL_TOKEN_SECRET", "")
+        if not token_id or not token_secret:
+            return None
+
+        from modal.client import _Client
+
+        async with modal_client_lock:
+            if modal_client is None:
+                modal_client = await _Client.from_credentials(token_id, token_secret)
+            return modal_client
+
+    @web.on_event("startup")
+    async def _open_modal_client() -> None:
+        # Warm the shared client at startup. Failures here are non-fatal:
+        # endpoints fall back to lazy init and surface error if creds are missing.
+        try:
+            await get_modal_client()
+        except Exception:
+            pass
 
     async def refresh_cache(key: str, loader: SummaryLoader) -> list[JsonDict]:
         async with cache_locks[key]:
@@ -461,7 +632,18 @@ def fastapi_app():
         return items
 
     async def load_runs() -> list[JsonDict]:
-        return await load_list_summary(MetadataStore.TRAINING_RUNS_SUMMARY)
+        run_records = await load_list_summary(MetadataStore.TRAINING_RUNS_SUMMARY)
+        try:
+            result_records = await load_list_summary(
+                MetadataStore.TRAIN_RESULTS_SUMMARY
+            )
+        except Exception:
+            # A result-store outage must not hide otherwise healthy run records.
+            result_records = []
+        return [
+            summary.model_dump(mode="json")
+            for summary in build_run_summaries(run_records, result_records)
+        ]
 
     async def load_train_results() -> list[JsonDict]:
         return await load_list_summary(MetadataStore.TRAIN_RESULTS_SUMMARY)
@@ -563,13 +745,15 @@ def fastapi_app():
 
     # ── Training runs ────────────────────────────────────────────────────
 
-    @web.get("/api/runs")
+    @web.get("/api/runs", response_model=list[RunSummary])
     async def runs():
         try:
             data = await get_cached_list("runs", load_runs)
         except Exception:
             data = []
-        return JSONResponse(data)
+        return [
+            RunSummary.model_validate(item) for item in data if isinstance(item, dict)
+        ]
 
     @web.post("/api/framework-status")
     async def framework_status(
@@ -700,7 +884,6 @@ def fastapi_app():
         """
         import json
 
-        from modal.client import _Client
         from modal_proto import api_pb2
 
         run = await _get_run_or_404(training_run_id)
@@ -720,19 +903,17 @@ def fastapi_app():
 
         async def event_stream():
             try:
-                token_id = os.environ.get("MODAL_TOKEN_ID", "")
-                token_secret = os.environ.get("MODAL_TOKEN_SECRET", "")
-                if not token_id or not token_secret:
-                    yield (
-                        "event: error\n"
-                        f"data: {json.dumps({'error': 'No Modal credentials configured. Run training-gym setup.'})}\n\n"
-                    )
-                    return
-                client = await _Client.from_credentials(token_id, token_secret)
+                client = await get_modal_client()
             except Exception as exc:
                 yield (
                     "event: error\n"
                     f"data: {json.dumps({'error': f'auth failed: {exc!s}'})}\n\n"
+                )
+                return
+            if client is None:
+                yield (
+                    "event: error\n"
+                    f"data: {json.dumps({'error': 'No Modal credentials configured. Run training-gym setup.'})}\n\n"
                 )
                 return
 
@@ -829,6 +1010,95 @@ def fastapi_app():
             },
         )
 
+    # ── Historical Modal logs ──────────────
+
+    @web.get("/api/runs/{training_run_id}/logs")
+    async def get_run_logs(
+        training_run_id: str,
+        since: str = "",
+        until: str = "",
+        max_lines: int = 100,
+        search: str = "",
+    ):
+        """Historical log fetch for a run, backed by Modal's ``AppFetchLogs``.
+
+        Returns the most recent ``max_lines`` entries within the ``[since, until]``
+        window, oldest-first.
+
+        Query params:
+          - ``since`` / ``until``: window bounds as epoch seconds, ISO 8601, or a
+            relative age (``30m`` / ``2h`` / ``1d`` / ``45s`` = "N ago").
+            ``since`` is exclusive and ``until`` is inclusive. Defaults to the run's
+            lifetime.
+          - ``max_lines``: max entries to return (default 100). Throws if negative or too large.
+            These are the newest entries in the window (ClickHouse caps a single
+            fetch at 20000).
+          - ``search``: case-insensitive substring filter.
+
+        Returns a JSON object with the following fields:
+          - ``logs``: a list of log entries
+          - ``has_more``: whether there are more log entries to fetch
+          - ``next_until``: the timestamp of the next log entry to fetch
+        """
+        from modal_proto import api_pb2
+
+        if max_lines < 0:
+            raise HTTPException(status_code=400, detail="max_lines must be positive")
+
+        run = await _get_run_or_404(training_run_id)
+
+        app_id = (run.modal_app_id or "").strip()
+        if not app_id:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"TrainingRun {training_run_id!r} has no modal_app_id "
+                    "yet — logs not available."
+                ),
+            )
+
+        now = time.time()
+        since_ts, until_ts = _resolve_log_window(
+            _parse_log_time(since, now),
+            _parse_log_time(until, now),
+            default_since=run.started_at or run.created_at or 0,
+            default_until=run.ended_at or run.completed_at or 0,
+            now=now,
+        )
+
+        try:
+            client = await get_modal_client()
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"Modal auth: {exc!s}")
+        if client is None:
+            raise HTTPException(
+                status_code=503,
+                detail="No Modal credentials configured. Run training-gym setup.",
+            )
+
+        req = api_pb2.AppFetchLogsRequest(
+            app_id=app_id,
+            since=_to_timestamp(since_ts),
+            until=_to_timestamp(until_ts),
+            limit=max_lines,
+            search_text=search.strip(),
+        )
+        try:
+            resp = await client.stub.AppFetchLogs(req)
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"AppFetchLogs: {exc!s}")
+
+        logs = _parse_log_batches(resp.batches)
+        has_more, next_until = _compute_next_page(logs, max_lines)
+
+        return JSONResponse(
+            {
+                "logs": logs,
+                "has_more": has_more,
+                "next_until": next_until,
+            }
+        )
+
     # ── Train results ────────────────────────────────────────────────────
 
     @web.get("/api/train-results")
@@ -888,6 +1158,12 @@ def fastapi_app():
     @web.get("/favicon.svg", include_in_schema=False)
     async def favicon():
         return FileResponse(f"{STATIC_DIR}/favicon.svg", media_type="image/svg+xml")
+
+    @web.get("/apple-touch-icon.png", include_in_schema=False)
+    async def apple_touch_icon():
+        return FileResponse(
+            f"{STATIC_DIR}/apple-touch-icon.png", media_type="image/png"
+        )
 
     # ── SPA fallback ─────────────────────────────────────────────────────
 

@@ -5,13 +5,16 @@ description = "Reusable building blocks for Modal multi-node training examples"
 requires-python = ">=3.12"
 dependencies = [
     "modal==1.5.2",
+    "click>=8.2,<9",
     "cloudpickle",
     "datasets",
+    "httpx",
     "msgspec",
     "openai",
     "pydantic",
     "fastapi",
     "randomname",
+    "rich",
     "transformers>=5.12.1",
 ]
 
@@ -45,4 +48,15 @@ docs = [
 ]
 
 [tool.ruff]
-extend-exclude = ["tutorials/**"]
+# "*.md": ruff 0.16 started formatting Markdown (fenced code blocks), which
+# 0.15 did not — exclude it so the formatter only touches the files it always
+# has, independent of the installed ruff version.
+extend-exclude = ["tutorials/**", "*.md"]
+
+# Pin the rule selection explicitly so linting is deterministic across ruff
+# releases. ruff 0.16 expanded the *default* rule set for projects without an
+# explicit select, which turned CI red overnight. This mirrors ruff's historical
+# default select (E4/E7/E9 + F) so linting matches what we've been enforcing,
+# independent of the installed ruff version.
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]

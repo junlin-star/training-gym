@@ -27,6 +27,50 @@ from modal_training_gym.train_recipes.slime_recipe import SlimeRecipe
 VALIDATION_EPHEMERAL_DISK_MIB = 2_097_152
 
 
+def _fmt_secs(seconds: float | int | None) -> str:
+    if seconds is None:
+        return "—"
+    n = float(seconds)
+    if n >= 60:
+        minutes = int(n // 60)
+        rem = n - minutes * 60
+        return f"{minutes}m {rem:.3f}s"
+    return f"{n:.3f}s"
+
+
+def _substep_label(name: str) -> str:
+    _SUBSTEP_LABELS = {
+        "evaluate_rollouts": "Eval (before)",
+        "generate_rollouts": "Generate rollouts",
+        "offload_rollout": "Offload rollout",
+        "compute_log_probs": "Compute log probs",
+        "optimizer_step": "Optimizer step",
+        "checkpoint_save": "Checkpoint save",
+        "offload_train": "Offload train",
+        "weight_sync": "Weight sync",
+        "evaluate_rollouts_end": "Eval (after)",
+    }
+
+    return _SUBSTEP_LABELS.get(name, name.replace("_", " "))
+
+
+def _step_keys(result: "TutorialResult") -> list[str]:
+    keys = set(result.step_times or {}) | set(result.substep_times or {})
+    return sorted(keys, key=lambda k: int(k) if k.isdigit() else k)
+
+
+def _ordered_substeps(
+    subs: dict[str, dict[str, float | None]],
+) -> list[tuple[str, dict[str, float | None]]]:
+    return sorted(
+        subs.items(),
+        key=lambda item: (
+            item[1].get("start") is None,
+            item[1].get("start") or 0,
+        ),
+    )
+
+
 @dataclass
 class TutorialResult:
     base_model_name: str
@@ -34,12 +78,14 @@ class TutorialResult:
     training_run_id: str
     training_run_status: TrainingRunStatus
     total_duration_s: float
+    step_times: dict[str, dict[str, int | None]] | None = None
+    substep_times: dict[str, dict[str, dict[str, float | None]]] | None = None
 
     @property
     def succeeded(self) -> bool:
         return self.training_run_status == TrainingRunStatus.COMPLETED
 
-    def format_tutorial_result(self) -> None:
+    def print_summary(self) -> None:
         print(f"Training run result for {self.training_run_id}")
         print("Parameters:")
         print(f"Base model name: {self.base_model_name}")
@@ -47,6 +93,23 @@ class TutorialResult:
         print("Result:")
         print(f"Training run status: {self.training_run_status}")
         print(f"Total duration (s): {self.total_duration_s}")
+
+        keys = _step_keys(self)
+        if not keys:
+            return
+
+        print("Timings:")
+        for key in keys:
+            step = (self.step_times or {}).get(key, {})
+            duration = step.get("duration_s")
+            print(f"Step {key} ({_fmt_secs(duration)})")
+
+            for name, entry in _ordered_substeps(
+                (self.substep_times or {}).get(key, {})
+            ):
+                print(
+                    f"    {_substep_label(name)}: {_fmt_secs(entry.get('duration_s'))}"
+                )
 
     def to_dict(self) -> dict:
         data = asdict(self)
@@ -62,6 +125,8 @@ class TutorialResult:
             training_run_id=data["training_run_id"],
             training_run_status=TrainingRunStatus(data["training_run_status"]),
             total_duration_s=data["total_duration_s"],
+            step_times=data.get("step_times"),
+            substep_times=data.get("substep_times"),
         )
 
 
@@ -279,7 +344,30 @@ def run_base_training_on_slime(
         training_run_id=train_result.training_run_id,
         training_run_status=training_run.status,
         total_duration_s=float(training_run.duration_seconds or 0.0),
+        step_times=training_run.step_times,
+        substep_times=training_run.substep_times,
     )
+
+
+def _status_label(result: TutorialResult) -> str:
+    if result.succeeded:
+        return "✅ completed"
+    return f"❌ {result.training_run_status.value}"
+
+
+def _format_secs_delta(
+    current: float | int | None, baseline: float | int | None
+) -> str | None:
+    """Compact delta vs baseline, or None when either timing is missing."""
+    if current is None or baseline is None:
+        return None
+    current_f = float(current)
+    baseline_f = float(baseline)
+    delta_s = current_f - baseline_f
+    if baseline_f <= 0:
+        return f"{delta_s:+.3f}s"
+    percent = delta_s / baseline_f * 100
+    return f"{delta_s:+.3f}s ({percent:+.0f}%)"
 
 
 def _training_run_link(training_run_id: str, dashboard_url: str | None) -> str:
@@ -308,28 +396,113 @@ def _format_duration_delta(
     return f"{delta} from {_training_run_link(baseline.training_run_id, dashboard_url)}"
 
 
+def _load_baseline(baseline_path: Path | None) -> TutorialResult | None:
+    if baseline_path is None or not baseline_path.is_file():
+        return None
+    return TutorialResult.from_dict(json.loads(baseline_path.read_text()))
+
+
+def _format_result_details(
+    result: TutorialResult,
+    baseline: TutorialResult | None = None,
+    dashboard_url: str | None = None,
+) -> list[str]:
+    """Markdown <details> block with run status and a consolidated timing table."""
+    lines = [
+        "<details>",
+        f"<summary>{result.base_model_name}</summary>",
+        "",
+        f"{_training_run_link(result.training_run_id, dashboard_url)} — {_status_label(result)}",
+        "",
+    ]
+
+    keys = _step_keys(result)
+    if not keys:
+        lines.extend(["_No step timing data._", "", "</details>", ""])
+        return lines
+
+    if baseline is not None:
+        lines.extend(
+            [
+                "| Phase | Duration | Delta |",
+                "| --- | --- | --- |",
+            ]
+        )
+    else:
+        lines.extend(
+            [
+                "| Phase | Duration |",
+                "| --- | --- |",
+            ]
+        )
+
+    def _row(phase: str, duration: float | int | None, base: float | int | None) -> str:
+        if baseline is None:
+            return f"| {phase} | {_fmt_secs(duration)} |"
+        delta = _format_secs_delta(duration, base) or "—"
+        return f"| {phase} | {_fmt_secs(duration)} | {delta} |"
+
+    for key in keys:
+        step = (result.step_times or {}).get(key) or {}
+        baseline_step = ((baseline.step_times or {}).get(key) or {}) if baseline else {}
+        baseline_subs = (
+            ((baseline.substep_times or {}).get(key) or {}) if baseline else {}
+        )
+        for name, entry in _ordered_substeps(
+            (result.substep_times or {}).get(key) or {}
+        ):
+            base_entry = baseline_subs.get(name) or {}
+            lines.append(
+                _row(
+                    _substep_label(name),
+                    entry.get("duration_s"),
+                    base_entry.get("duration_s"),
+                )
+            )
+        lines.append(
+            _row(
+                f"Step {key}",
+                step.get("duration_s"),
+                baseline_step.get("duration_s"),
+            )
+        )
+    lines.append(
+        _row(
+            "Total duration",
+            result.total_duration_s,
+            baseline.total_duration_s if baseline else None,
+        )
+    )
+    lines.extend(["", "</details>", ""])
+    return lines
+
+
 def summarize_results(
     results_dir: str, baseline_dir: str | None, dashboard_url: str | None = None
 ) -> str:
     rows = []
+    details: list[str] = []
     for path in sorted(Path(results_dir).glob("*.json")):
         result = TutorialResult.from_dict(json.loads(path.read_text()))
-        status = (
-            "✅ completed"
-            if result.succeeded
-            else f"❌ {result.training_run_status.value}"
-        )
+        status = _status_label(result)
         row = (
             f"| {result.base_model_name} | {status} "
             f"| {result.total_duration_s:.1f}s | {result.step_count} "
             f"| {_training_run_link(result.training_run_id, dashboard_url)} |"
         )
+        baseline_path = (
+            Path(baseline_dir) / path.name if baseline_dir is not None else None
+        )
         if baseline_dir is not None:
-            delta = _format_duration_delta(
-                result, Path(baseline_dir) / path.name, dashboard_url
-            )
+            assert baseline_path is not None
+            delta = _format_duration_delta(result, baseline_path, dashboard_url)
             row += f" {delta} |"
         rows.append(row)
+        details.extend(
+            _format_result_details(
+                result, _load_baseline(baseline_path), dashboard_url
+            )
+        )
 
     header = "| Model | Status | Duration | Steps | Run |"
     divider = "| --- | --- | --- | --- | --- |"
@@ -347,7 +520,10 @@ def summarize_results(
         divider,
     ]
     lines.extend(rows or [empty])
-    return "\n".join(lines)
+    if details:
+        lines.extend(["", "### Step timings", ""])
+        lines.extend(details)
+    return "\n".join(lines).rstrip() + "\n"
 
 
 def __main__():
@@ -467,7 +643,7 @@ def __main__():
         save_interval=args.save_interval,
         colocate=False if args.non_colocated else None,
     )
-    tutorial_result.format_tutorial_result()
+    tutorial_result.print_summary()
 
     if args.output:
         Path(args.output).write_text(json.dumps(tutorial_result.to_dict()))

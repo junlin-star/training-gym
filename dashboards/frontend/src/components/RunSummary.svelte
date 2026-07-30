@@ -1,13 +1,12 @@
 <script>
+  import { onDestroy } from "svelte";
+  import { Search } from "lucide-svelte";
   import StatusPill from "./StatusPill.svelte";
   import FrameworkStageProgress from "./FrameworkStageProgress.svelte";
   import TimeAgo from "./TimeAgo.svelte";
   import { formatTagValue, getGroupTags, smoothedStageLabel } from "../lib/format.js";
 
-  // The run-summary block shared by the list drawer and the detail page's
-  // Summary tab, so both render identical metadata: status, stage, model,
-  // dataset, recipe, timing, the full Slime parameter dump, and the tuned
-  // recipe fields.
+  // Shared by the list drawer and the detail page Summary tab.
   let { run, getStatus, showFrameworkStatus, getFrameworkStatus, modelName, fmtDuration } =
     $props();
 
@@ -17,8 +16,55 @@
       ([, value]) => value !== undefined && value !== null && String(value) !== "",
     ),
   );
+  let recipeParams = $derived.by(() =>
+    recipeEntries.map(([key, value]) => {
+      let fullValue;
+      if (typeof value === "number") {
+        fullValue = Number.isInteger(value) ? String(value) : value.toExponential(1);
+      } else if (typeof value === "object") {
+        fullValue = JSON.stringify(value);
+      } else {
+        fullValue = String(value);
+      }
+      return {
+        key,
+        label: key.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase()),
+        fullValue,
+        displayValue: fullValue.length <= 72 ? fullValue : `${fullValue.slice(0, 71)}…`,
+      };
+    }),
+  );
   let recipeJson = $derived.by(() =>
-    Object.keys(recipe).length ? JSON.stringify(recipe, null, 2) : "",
+    recipeEntries.length ? JSON.stringify(Object.fromEntries(recipeEntries), null, 2) : "",
+  );
+  let paramFilter = $state("");
+  let copiedRecipeJson = $state(false);
+  let copyFailed = $state(false);
+  let copyResetTimer = null;
+
+  $effect(() => {
+    run?.run_id;
+    paramFilter = "";
+    copiedRecipeJson = false;
+    copyFailed = false;
+    if (copyResetTimer) {
+      clearTimeout(copyResetTimer);
+      copyResetTimer = null;
+    }
+  });
+  let filteredRecipeParams = $derived.by(() => {
+    const q = paramFilter.trim().toLowerCase();
+    if (!q) return recipeParams;
+    return recipeParams.filter(
+      (row) =>
+        row.key.toLowerCase().includes(q) ||
+        row.label.toLowerCase().includes(q) ||
+        row.fullValue.toLowerCase().includes(q),
+    );
+  });
+  let showParamFilter = $derived(recipeParams.length > 8 || Boolean(paramFilter.trim()));
+  let recipeSectionTitle = $derived(
+    String(run?.framework || "").toLowerCase() === "slime" ? "Slime parameters" : "Training recipe",
   );
   let modalAppUrl = $derived.by(() =>
     run?.modal_app_url ||
@@ -27,38 +73,19 @@
   let groupTags = $derived(getGroupTags(run));
   let wandbLinks = $derived(run?.wandb_links || []);
   let attemptMetadata = $derived.by(() => {
-    const metadata = run?.metadata;
-    if (!metadata || typeof metadata !== "object") return null;
-    const attemptCount = Number(metadata.attempt_count) || 0;
-    const lastAttemptStartedAt = Number(metadata.last_attempt_started_at) || 0;
-    const lastAttemptStatus = String(metadata.last_attempt_status || "");
-    const resumeCheckpointPath = String(metadata.resume_checkpoint_path || "");
-    const resumeCheckpointName = String(metadata.resume_checkpoint_name || "");
-    const resumeFromIteration = Number(metadata.resume_from_iteration);
-    const resumedFromCheckpoint =
-      metadata.resumed_from_checkpoint === true || Boolean(resumeCheckpointPath);
-    if (
-      !attemptCount &&
-      !lastAttemptStartedAt &&
-      !lastAttemptStatus &&
-      !resumedFromCheckpoint
-    ) {
-      return null;
-    }
+    const state = run?.resume_state;
+    if (!state) return null;
     return {
-      attemptCount,
-      lastAttemptStartedAt,
-      lastAttemptStatus,
-      resumedFromCheckpoint,
-      resumeCheckpointPath,
-      resumeCheckpointName,
-      resumeFromIteration: Number.isFinite(resumeFromIteration) ? resumeFromIteration : null,
+      attemptCount: Number(state.attempt_count) || 0,
+      lastAttemptStartedAt: Number(state.last_attempt_started_at) || 0,
+      lastAttemptStatus: String(state.last_attempt_status || ""),
+      resumedFromCheckpoint: state.resumed_from_checkpoint === true,
+      resumeCheckpointPath: String(state.resume_checkpoint_path || ""),
+      resumeCheckpointName: String(state.resume_checkpoint_name || ""),
+      resumeFromIteration:
+        state.resume_from_iteration == null ? null : Number(state.resume_from_iteration),
     };
   });
-
-  function isSlimeRun() {
-    return String(run?.framework || "").toLowerCase() === "slime";
-  }
 
   function frameworkProgress() {
     const p = run?.framework_progress;
@@ -93,17 +120,27 @@
     return "—";
   }
 
-  function formatFieldLabel(field) {
-    return field.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
+  async function copyRecipeJson() {
+    if (!recipeJson) return;
+    try {
+      await navigator.clipboard.writeText(recipeJson);
+      copiedRecipeJson = true;
+      copyFailed = false;
+    } catch {
+      copiedRecipeJson = false;
+      copyFailed = true;
+    }
+    if (copyResetTimer) clearTimeout(copyResetTimer);
+    copyResetTimer = setTimeout(() => {
+      copiedRecipeJson = false;
+      copyFailed = false;
+      copyResetTimer = null;
+    }, 1200);
   }
 
-  function formatFieldValue(value) {
-    if (typeof value === "number") {
-      return Number.isInteger(value) ? String(value) : value.toExponential(1);
-    }
-    if (typeof value === "object") return JSON.stringify(value);
-    return String(value);
-  }
+  onDestroy(() => {
+    if (copyResetTimer) clearTimeout(copyResetTimer);
+  });
 </script>
 
 {#if run}
@@ -131,11 +168,11 @@
       </div>
       <div class="kv">
         <span class="kv-key">Dataset</span>
-        <span class="kv-value">{run.config_summary?.dataset_name || "—"}</span>
+        <span class="kv-value">{run.dataset || "—"}</span>
       </div>
       <div class="kv">
         <span class="kv-key">Recipe</span>
-        <span class="kv-value">{run.framework || "—"}</span>
+        <span class="kv-value">{run.recipe || "—"}</span>
       </div>
       {#if modalAppUrl}
         <div class="kv">
@@ -265,22 +302,59 @@
       </section>
     {/if}
 
-    {#if isSlimeRun() && recipeJson}
-      <section class="summary-section">
-        <h3 class="summary-section-title">Full Slime parameters</h3>
-        <pre class="[border:1px_solid_var(--color-c-gray-10,#2f2f2f)] rounded-[8px] [background:color-mix(in_srgb,var(--panel-alt)_74%,black)] text-(--text) [font-family:var(--font-mono)] text-[11px] leading-[16px] m-0 max-h-[360px] overflow-auto p-[10px] whitespace-pre">{recipeJson}</pre>
-      </section>
-    {/if}
-
     <section class="summary-section">
-      <h3 class="summary-section-title">Training recipe</h3>
-      {#if recipeEntries.length}
-        {#each recipeEntries as [field, value] (field)}
-          <div class="kv">
-            <span class="kv-key">{formatFieldLabel(field)}</span>
-            <span class="kv-value kv-value-mono">{formatFieldValue(value)}</span>
+      <div class="recipe-params-header">
+        <h3 class="summary-section-title recipe-params-title">{recipeSectionTitle}</h3>
+        {#if recipeParams.length}
+          <span class="recipe-params-count">{recipeParams.length}</span>
+          {#if recipeJson}
+            <button
+              type="button"
+              class="recipe-params-copy"
+              onclick={copyRecipeJson}
+              title="Copy recipe JSON"
+              aria-label="Copy recipe JSON"
+            >
+              {#if copiedRecipeJson}
+                Copied
+              {:else if copyFailed}
+                Copy failed
+              {:else}
+                Copy JSON
+              {/if}
+            </button>
+          {/if}
+        {/if}
+      </div>
+      {#if recipeParams.length}
+        {#if showParamFilter}
+          <label
+            class="recipe-params-search"
+            aria-label="Filter recipe parameters"
+          >
+            <span class="search-icon">
+              <Search size={13} />
+            </span>
+            <input
+              type="search"
+              class="search-input"
+              placeholder="Filter parameters"
+              bind:value={paramFilter}
+            />
+          </label>
+        {/if}
+        {#if filteredRecipeParams.length}
+          <div class="recipe-params-list">
+            {#each filteredRecipeParams as row (row.key)}
+              <div class="kv">
+                <span class="kv-key" title={row.key}>{row.label}</span>
+                <span class="kv-value kv-value-mono" title={row.fullValue}>{row.displayValue}</span>
+              </div>
+            {/each}
           </div>
-        {/each}
+        {:else}
+          <div class="text-(--muted) text-[12px] leading-[16px]">No parameters match "{paramFilter.trim()}".</div>
+        {/if}
       {:else}
         <div class="text-(--muted) text-[12px] leading-[16px]">No recipe values found for this run.</div>
       {/if}

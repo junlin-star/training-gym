@@ -1,10 +1,12 @@
 <script>
+  import { onMount, tick } from "svelte";
   import { ArrowLeft, ChevronLeft, ChevronRight, Download, ExternalLink, Minimize2, X } from "lucide-svelte";
   import Tabs from "../components/Tabs.svelte";
   import RunSummary from "../components/RunSummary.svelte";
   import StepTimings from "../components/StepTimings.svelte";
   import StatusPill from "../components/StatusPill.svelte";
   import TimeAgo from "../components/TimeAgo.svelte";
+  import InferenceStats from "../components/InferenceStats.svelte";
   import SampleTimeline from "../components/SampleTimeline.svelte";
   import ConversationView from "../components/ConversationView.svelte";
   import AdvantageViolins from "../components/AdvantageViolins.svelte";
@@ -18,7 +20,33 @@
     fetchRollout,
     fetchRunAdvantages,
     fetchRunAdvantageStep,
+    fetchRunLogs,
   } from "../lib/api.js";
+
+  // Number of historical log lines requested per page.
+  const HIST_PAGE = 500;
+  // Maximum number of historical log lines retained in the browser.
+  const HIST_BUFFER_MAX = 2000;
+
+  /** @typedef {"summary" | "rollouts" | "logs"} TabId */
+  const DETAIL_TABS = new Set(["summary", "rollouts", "logs"]);
+  const DEFAULT_TAB = "summary";
+
+  function parseTabFromUrl() {
+    if (typeof window === "undefined") return DEFAULT_TAB;
+    const raw = new URLSearchParams(window.location.search).get("tab");
+    return DETAIL_TABS.has(raw) ? /** @type {TabId} */ (raw) : DEFAULT_TAB;
+  }
+
+  function urlForTab(tab) {
+    const url = new URL(window.location.href);
+    url.searchParams.set("tab", DETAIL_TABS.has(tab) ? tab : DEFAULT_TAB);
+    return `${url.pathname}${url.search}${url.hash}`;
+  }
+
+  function locationKey() {
+    return `${window.location.pathname}${window.location.search}${window.location.hash}`;
+  }
 
   let {
     runId,
@@ -60,9 +88,45 @@
         : [],
   );
 
-  // Active tab: "summary" | "rollouts" | "logs". Each tab loads only its own
-  // data — rollout summaries for summary/rollouts, the log stream for logs.
-  let activeTab = $state("summary");
+  // Active tab: "summary" | "rollouts" | "logs". One-way sync with the URL:
+  // init/popstate/runId read URL → activeTab; selectTab writes pushState.
+  let activeTab = $state(/** @type {TabId} */ (DEFAULT_TAB));
+
+  function selectTab(tab) {
+    const next = DETAIL_TABS.has(tab) ? /** @type {TabId} */ (tab) : DEFAULT_TAB;
+    activeTab = next;
+    if (embedded || typeof window === "undefined") return;
+    const target = urlForTab(next);
+    if (target !== locationKey()) {
+      history.pushState({}, "", target);
+    }
+  }
+
+  onMount(() => {
+    if (embedded) {
+      activeTab = DEFAULT_TAB;
+    } else {
+      const tab = parseTabFromUrl();
+      activeTab = tab;
+      const target = urlForTab(tab);
+      if (target !== locationKey()) {
+        history.replaceState({}, "", target);
+      }
+    }
+
+    const onPopState = () => {
+      if (embedded) return;
+      activeTab = parseTabFromUrl();
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  });
+
+  $effect(() => {
+    runId;
+    if (embedded || typeof window === "undefined") return;
+    activeTab = parseTabFromUrl();
+  });
 
   function formatMean(value) {
     if (typeof value !== "number" || !Number.isFinite(value)) return "—";
@@ -107,10 +171,10 @@
   let expandedRollout = $state(null);
   let expandedRolloutLoading = $state(false);
   const rolloutColumns = [
-    { key: "step", label: "Step", width: 160, minWidth: 96 },
-    { key: "mean", label: "Mean reward", width: 180, minWidth: 130 },
-    { key: "samples", label: "Samples", width: 120, minWidth: 96 },
-    { key: "when", label: "When", width: 160, minWidth: 110 },
+    { key: "step", label: "Step", width: 72, minWidth: 56 },
+    { key: "mean", label: "Mean reward", width: 118, minWidth: 96 },
+    { key: "samples", label: "Samples", width: 80, minWidth: 64 },
+    { key: "when", label: "When", width: 88, minWidth: 64 },
   ];
 
   // Per-step advantage distribution summaries (one row per step, each with the
@@ -256,10 +320,16 @@
   async function loadRollouts(signal) {
     if (!runId) return;
     try {
+      const wasEmpty = rolloutSummaries.length === 0;
       const rows = await fetchRunRollouts(runId, { signal });
       if (signal?.aborted) return;
       rolloutSummaries = rows;
       rolloutsError = "";
+
+      // Reveal the first rollout
+      if (wasEmpty && rolloutSummaries.length > 0 && expandedRolloutId === null) {
+        toggleRolloutDetail(rolloutSummaries[0].rollout_id);
+      }
     } catch (err) {
       if (signal?.aborted) return;
       // Keep the rollouts we already have on a transient poll failure — only
@@ -446,7 +516,7 @@
     logError = "";
     logDropped = 0;
     // Lazy load: only open the log stream while the Logs tab is active.
-    if (tab !== "logs" || !id || status !== "running" || paused) {
+    if (tab !== "logs" || !id || !status || status !== "running" || paused) {
       if (tab === "logs" && paused) logState = "paused";
       return;
     }
@@ -547,6 +617,379 @@
     logDropped = 0;
   }
 
+  // ── Historical logs ─────
+  let isRunning = $derived(runStatus === "running");
+
+  let histLines = $state([]), histNewerWindows = $state([]);
+  let histLoading = $state(false),
+    histLoadingOlder = $state(false),
+    histLoadingNewer = $state(false);
+  let histError = $state(""), histHasMore = $state(false);
+  let histNextUntil = $state(null), histTailEl = $state(null);
+  let histSeq = 0, histLastScrollTop = 0;
+  let histController = null, histRestoringScroll = false;
+
+  let histRangeInput = $state({ since: "", until: "" });
+  let histRange = $state({ since: "", until: "" });
+
+  function epochToLocalInput(epoch) {
+    if (!epoch) return "";
+    const d = new Date(Number(epoch) * 1000);
+    const p = (x) => String(x).padStart(2, "0");
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+  }
+  function localInputToEpoch(str) {
+    if (!str || !str.trim()) return null;
+    const ms = new Date(str.trim().replace(" ", "T")).getTime();
+    return Number.isNaN(ms) ? null : Math.floor(ms / 1000);
+  }
+
+  function histRangeFromText(sinceText, untilText) {
+    const since = localInputToEpoch(sinceText);
+    const until = localInputToEpoch(untilText);
+    return {
+      since: since != null ? String(since) : "",
+      // The picker has minute precision, so include the entire final minute.
+      until: until != null ? String(until + 59.999999999) : "",
+    };
+  }
+
+  $effect(() => {
+    const { since, until } = histRangeInput;
+    const handle = window.setTimeout(() => {
+      histRange = histRangeFromText(since, until);
+    }, 350);
+    return () => window.clearTimeout(handle);
+  });
+
+  // Seed the pickers with the run's lifetime the first time we view a finished
+  // run.
+  let histPrefilledFor = null;
+  $effect(() => {
+    const id = runId;
+    const running = isRunning;
+    if (!id || running || histPrefilledFor === id) return;
+
+    const startedAt = run?.started_at || run?.created_at || 0;
+    const endedAt = run?.ended_at || run?.completed_at || 0;
+    if (!startedAt && !endedAt) return;
+
+    histPrefilledFor = id;
+    const sinceText = epochToLocalInput(startedAt);
+    const untilText = epochToLocalInput(endedAt);
+    const range = histRangeFromText(sinceText, untilText);
+    histRangeInput = { since: sinceText, until: untilText };
+    histRange = range;
+  });
+
+  // Expand server entries into per-line rows (a single ClickHouse entry can
+  // carry an embedded newline), matching how the live stream splits lines.
+  function pushHistRows(target, entries) {
+    for (const entry of entries) {
+      const task_id = entry.task_id || "";
+      const ts = entry.ts || 0;
+      const ts_ns = entry.ts_ns || 0;
+      for (const part of String(entry.line ?? "").split(/\r?\n/)) {
+        if (!part.length) continue;
+        target.push({ id: histSeq++, task_id, line: part, ts, ts_ns });
+      }
+    }
+  }
+
+  function resetHist() {
+    histLines = [];
+    histError = "";
+    histHasMore = false;
+    histNewerWindows = [];
+    histNextUntil = null;
+    histLoading = false;
+    histLoadingOlder = false;
+    histLoadingNewer = false;
+    histLastScrollTop = 0;
+    histRestoringScroll = false;
+  }
+
+  function histRowTime(row) {
+    if (!row) return 0;
+    if (row.ts_ns) return Number(row.ts_ns) / 1_000_000_000;
+    return Number(row.ts) || 0;
+  }
+
+  function histCursorBefore(row) {
+    if (!row) return null;
+    if (row.ts_ns) return (Number(row.ts_ns) - 1) / 1_000_000_000;
+    const ts = Number(row.ts) || 0;
+    return ts > 0 ? ts - 0.000000001 : null;
+  }
+
+  // Capture a visible row and its exact viewport position. Restoring this
+  // after replacing the bounded window avoids any perceptible jump.
+  function captureHistAnchor() {
+    const el = histTailEl;
+    if (!el) return null;
+    const containerTop = el.getBoundingClientRect().top;
+    const rows = el.querySelectorAll("[data-hist-id]");
+    for (const node of rows) {
+      const rect = node.getBoundingClientRect();
+      if (rect.bottom >= containerTop) {
+        return {
+          id: node.dataset.histId,
+          top: rect.top,
+          scrollTop: el.scrollTop,
+        };
+      }
+    }
+    return null;
+  }
+
+  async function restoreHistAnchor(anchor) {
+    if (!histTailEl || !anchor) return;
+    histRestoringScroll = true;
+    await tick();
+    if (!histTailEl) {
+      histRestoringScroll = false;
+      return;
+    }
+    const node = histTailEl.querySelector(`[data-hist-id="${anchor.id}"]`);
+    if (node) {
+      histTailEl.scrollTop += node.getBoundingClientRect().top - anchor.top;
+    } else {
+      histTailEl.scrollTop = anchor.scrollTop;
+    }
+    histLastScrollTop = histTailEl.scrollTop;
+    requestAnimationFrame(() => {
+      if (histTailEl) histLastScrollTop = histTailEl.scrollTop;
+      histRestoringScroll = false;
+    });
+  }
+
+  function rememberTrimmedNewer(kept, dropped) {
+    if (!kept.length || !dropped.length) return;
+    const since = histRowTime(kept[kept.length - 1]);
+    const until = histRowTime(dropped[dropped.length - 1]);
+    if (since > 0 && until >= since) {
+      histNewerWindows = [...histNewerWindows, { since, until }];
+    }
+  }
+
+  function markTrimmedOlder(kept, dropped) {
+    if (!kept.length || !dropped.length) return;
+    histHasMore = true;
+    histNextUntil = histCursorBefore(kept[0]);
+  }
+
+  async function loadHistInitial(id, { search, since, until }, signal) {
+    histLoading = true;
+    histError = "";
+    try {
+      const data = await fetchRunLogs(id, {
+        maxLines: HIST_PAGE,
+        search,
+        since,
+        until,
+        signal,
+      });
+      if (signal?.aborted) return;
+      histNewerWindows = [];
+      const rows = [];
+      pushHistRows(rows, data.logs);
+      const droppedOlder =
+        rows.length > HIST_BUFFER_MAX
+          ? rows.slice(0, rows.length - HIST_BUFFER_MAX)
+          : [];
+      histLines =
+        rows.length > HIST_BUFFER_MAX
+          ? rows.slice(-HIST_BUFFER_MAX)
+          : rows;
+      if (droppedOlder.length) {
+        markTrimmedOlder(histLines, droppedOlder);
+      } else {
+        histHasMore = data.hasMore;
+        histNextUntil = data.nextUntil;
+      }
+      // Land on the newest line, like the live tail does.
+      queueMicrotask(() => {
+        if (histTailEl) {
+          histRestoringScroll = true;
+          histTailEl.scrollTop = histTailEl.scrollHeight;
+          histLastScrollTop = histTailEl.scrollTop;
+          requestAnimationFrame(() => {
+            histRestoringScroll = false;
+          });
+        }
+      });
+    } catch (err) {
+      if (signal?.aborted) return;
+      histError = String(err?.message || err);
+    } finally {
+      if (!signal?.aborted) histLoading = false;
+    }
+  }
+
+  async function loadHistPage(direction, { since, until }) {
+    const loadingOlder = direction === "older";
+    if (loadingOlder) {
+      histLoadingOlder = true;
+    } else {
+      histLoadingNewer = true;
+    }
+    histError = "";
+    const anchor = captureHistAnchor();
+    const signal = histController?.signal;
+    try {
+      const data = await fetchRunLogs(runId, {
+        since,
+        until,
+        maxLines: HIST_PAGE,
+        search: logSearch,
+        signal,
+      });
+      if (signal?.aborted) return;
+      const rows = [];
+      pushHistRows(rows, data.logs);
+      if (loadingOlder && !rows.length) {
+        histHasMore = false;
+        histNextUntil = null;
+        return;
+      }
+
+      const adjacent =
+        rows.length <= HIST_PAGE
+          ? rows
+          : loadingOlder
+            ? rows.slice(-HIST_PAGE)
+            : rows.slice(0, HIST_PAGE);
+      const merged = loadingOlder
+        ? adjacent.concat(histLines)
+        : histLines.concat(adjacent);
+
+      if (loadingOlder) {
+        const dropped = merged.slice(HIST_BUFFER_MAX);
+        histLines = merged.slice(0, HIST_BUFFER_MAX);
+        rememberTrimmedNewer(histLines, dropped);
+        if (rows.length > HIST_PAGE) {
+          histHasMore = true;
+          histNextUntil = histCursorBefore(adjacent[0]);
+        } else {
+          histHasMore = data.hasMore;
+          histNextUntil = data.nextUntil;
+        }
+      } else {
+        const dropped = merged.slice(
+          0,
+          Math.max(0, merged.length - HIST_BUFFER_MAX),
+        );
+        histLines = merged.slice(-HIST_BUFFER_MAX);
+        markTrimmedOlder(histLines, dropped);
+        histNewerWindows = histNewerWindows.slice(0, -1);
+      }
+
+      await restoreHistAnchor(anchor);
+    } catch (err) {
+      if (signal?.aborted) return;
+      histError = String(err?.message || err);
+    } finally {
+      if (!signal?.aborted) {
+        if (loadingOlder) {
+          histLoadingOlder = false;
+        } else {
+          histLoadingNewer = false;
+        }
+      }
+    }
+  }
+
+  function loadHistOlder() {
+    if (
+      !histHasMore ||
+      histNextUntil == null ||
+      histLoadingOlder ||
+      histLoadingNewer ||
+      histLoading
+    ) {
+      return;
+    }
+    return loadHistPage("older", {
+      since: histRange.since,
+      until: histNextUntil,
+    });
+  }
+
+  function loadHistNewer() {
+    if (
+      !histNewerWindows.length ||
+      histLoadingNewer ||
+      histLoadingOlder ||
+      histLoading
+    ) {
+      return;
+    }
+    const range = histNewerWindows[histNewerWindows.length - 1];
+    return loadHistPage("newer", range);
+  }
+
+  // Load only in the direction the user moved. Scroll restoration after a
+  // page swap is ignored, preventing older/newer fetches from ping-ponging.
+  function onHistScroll() {
+    const el = histTailEl;
+    if (!el || histRestoringScroll) return;
+    const top = el.scrollTop;
+    const delta = top - histLastScrollTop;
+    histLastScrollTop = top;
+    if (delta < 0 && top <= 40) {
+      void loadHistOlder();
+      return;
+    }
+    if (delta > 0) {
+      const distanceFromBottom = el.scrollHeight - top - el.clientHeight;
+      if (distanceFromBottom <= 40) void loadHistNewer();
+    }
+  }
+
+  function jumpHistToLatest() {
+    if (!runId || histLoading || histLoadingOlder || histLoadingNewer) return;
+    void loadHistInitial(
+      runId,
+      {
+        search: logSearch,
+        since: histRange.since,
+        until: histRange.until,
+      },
+      histController?.signal,
+    );
+  }
+
+  function resetHistRange() {
+    const startedAt = run?.started_at || run?.created_at || 0;
+    const endedAt = run?.ended_at || run?.completed_at || 0;
+    histRangeInput = {
+      since: epochToLocalInput(startedAt),
+      until: epochToLocalInput(endedAt),
+    };
+  }
+
+  // Load the newest page when the Logs tab opens on a finished run, and reload
+  // when the debounced search/since/until change.
+  $effect(() => {
+    const id = runId;
+    const tab = activeTab;
+    const status = runStatus;
+    const running = isRunning;
+    const search = logSearch;
+    const { since, until } = histRange;
+
+    resetHist();
+    if (tab !== "logs" || !id || !status || running) return;
+
+    const controller = new AbortController();
+    histController = controller;
+    void loadHistInitial(id, { search, since, until }, controller.signal);
+    return () => {
+      controller.abort();
+      if (histController === controller) histController = null;
+    };
+  });
+
   function _seriesStats(getY) {
     if (!rolloutSummaries.length) return null;
     const values = rolloutSummaries.map(getY);
@@ -565,6 +1008,34 @@
       rollout_id: Number(r.rollout_id) || 0,
     })),
   );
+
+  // Custom reward-function tags: any numeric sample.metadata key a reward fn
+  // sets (e.g. sample.metadata["step_K"] = k) gets aggregated per rollout on
+  // the backend (TrainingRolloutResult.tag_stats) and charted here the same
+  // way as the reward line above — one chart per discovered tag name.
+  let customTagNames = $derived(
+    Array.from(
+      new Set(rolloutSummaries.flatMap((r) => Object.keys(r.tag_stats || {}))),
+    ).sort(),
+  );
+
+  function tagChartData(tag) {
+    return rolloutSummaries
+      .filter((r) => r.tag_stats?.[tag])
+      .map((r) => ({
+        x: Number(r.rollout_id) || 0,
+        y: Number(r.tag_stats[tag].mean) || 0,
+        rollout_id: Number(r.rollout_id) || 0,
+      }));
+  }
+
+  function tagChartStats(tag) {
+    const values = rolloutSummaries
+      .filter((r) => r.tag_stats?.[tag])
+      .map((r) => Number(r.tag_stats[tag].mean) || 0);
+    if (!values.length) return null;
+    return { min: Math.min(...values), max: Math.max(...values), latest: values[values.length - 1] };
+  }
 
   // Score-distribution comparison: the first rollout (step 0) vs the most
   // recent one, to see how sample scores shifted over training.
@@ -720,50 +1191,48 @@
 
 <section class="detail" class:embedded>
   {#if !embedded}
-    <header class="flex items-center justify-between mb-[16px]">
-      <button class="inline-flex items-center gap-[6px] [background:none] [border:0] text-(--muted) cursor-pointer text-[13px] p-[4px_8px] rounded-[6px] hover:text-(--text) hover:bg-(--color-c-gray-10,#2f2f2f)" onclick={onBack}>
+    <header class="flex flex-wrap items-center gap-x-[10px] gap-y-[8px] p-[0_24px] mb-[16px] max-[900px]:p-[0_16px]">
+      <button type="button" class="inline-flex items-center gap-[6px] [background:none] [border:0] text-(--muted) cursor-pointer text-[13px] leading-[16px] min-h-[32px] p-[4px_8px] rounded-[6px] hover:text-(--text) hover:bg-(--color-c-gray-10,#2f2f2f) max-[900px]:basis-full" onclick={onBack}>
         <ArrowLeft size={14} strokeWidth={2.1} />
         <span>Back to runs</span>
       </button>
-      <div class="inline-flex items-center flex-wrap gap-[8px]">
-        {#if onCollapse}
-          <button class="inline-flex items-center gap-[6px] [border:1px_solid_var(--border,#2f2f2f)] rounded-[6px] [background:none] text-(--muted) cursor-pointer [font:inherit] text-[12px] font-medium p-[4px_8px] hover:text-(--text-bright) hover:border-(--border-strong,#4a4a4a)" onclick={onCollapse} title="Collapse to drawer">
-            <Minimize2 size={12} strokeWidth={2.1} />
-            <span>Collapse</span>
-          </button>
-        {/if}
-        {#each wandbLinks as link (link.url)}
-          <a
-            class="header-link wandb-link"
-            href={link.url}
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <span>{link.label}</span>
-            <ExternalLink size={12} strokeWidth={2.1} />
-          </a>
-        {/each}
-        {#if run?.modal_app_url}
-          <a
-            class="header-link"
-            href={run.modal_app_url}
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <span>Open in Modal</span>
-            <ExternalLink size={12} strokeWidth={2.1} />
-          </a>
-        {/if}
-      </div>
+      {#if onCollapse}
+        <button type="button" class="inline-flex items-center gap-[6px] [border:1px_solid_var(--border,#2f2f2f)] rounded-[6px] [background:none] text-(--muted) cursor-pointer [font:inherit] text-[12px] font-medium leading-[16px] min-h-[32px] p-[4px_8px] hover:text-(--text-bright) hover:border-(--border-strong,#4a4a4a)" onclick={onCollapse} title="Collapse to drawer">
+          <Minimize2 size={12} strokeWidth={2.1} />
+          <span>Collapse</span>
+        </button>
+      {/if}
+      {#each wandbLinks as link (link.url)}
+        <a
+          class="header-link wandb-link inline-flex items-center gap-[6px] min-h-[32px] leading-[16px]"
+          href={link.url}
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          <span>{link.label}</span>
+          <ExternalLink size={12} strokeWidth={2.1} />
+        </a>
+      {/each}
+      {#if run?.modal_app_url}
+        <a
+          class="header-link inline-flex items-center gap-[6px] min-h-[32px] leading-[16px]"
+          href={run.modal_app_url}
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          <span>Open in Modal</span>
+          <ExternalLink size={12} strokeWidth={2.1} />
+        </a>
+      {/if}
     </header>
   {/if}
 
   {#if !run}
-    <div class="detail-empty">Loading run {runId}…</div>
+    <div class="detail-empty px-[24px]">Loading run {runId}…</div>
   {:else}
     {#if !embedded}
-    <div class="flex items-center gap-[16px] mb-[16px]">
-      <h1 class="text-[22px] font-[600] text-(--text-bright) m-0 overflow-hidden text-ellipsis whitespace-nowrap" title={run.run_id}>{run.run_id}</h1>
+    <div class="flex items-center gap-[16px] p-[0_24px] mb-[16px] max-[900px]:p-[0_16px] min-w-0">
+      <h1 class="text-[22px] font-[600] text-(--text-bright) m-0 overflow-hidden text-ellipsis whitespace-nowrap min-w-0" title={run.run_id}>{run.run_id}</h1>
       <StatusPill status={getStatus(run)} />
       {#if resumeBadge(run)}
         <span class="[border:1px_solid_color-mix(in_srgb,var(--yellow,#fbbf24)_42%,transparent)] rounded-[999px] bg-[color-mix(in_srgb,var(--yellow,#fbbf24)_10%,transparent)] text-(--yellow,#fbbf24) text-[12px] leading-[16px] p-[2px_8px] whitespace-nowrap">{resumeBadge(run)}</span>
@@ -772,7 +1241,8 @@
     {/if}
 
     <Tabs
-      bind:active={activeTab}
+      active={activeTab}
+      onSelect={selectTab}
       tabs={[
         { value: "summary", label: "Summary" },
         { value: "rollouts", label: "Rollouts", count: rolloutSummaries.length || undefined },
@@ -792,12 +1262,14 @@
           {#if run.step_times || run.substep_times}
             <div class="rollout-chart">
               <div class="rollout-chart-title">Step &amp; substep timeline</div>
-              <StepTimings
-                stepTimes={run.step_times}
-                substepTimes={run.substep_times}
-                layout="timeline"
-                downloadName={`step_substep_times_${runId}.json`}
-              />
+              <div class="chart-scroll">
+                <StepTimings
+                  stepTimes={run.step_times}
+                  substepTimes={run.substep_times}
+                  layout="timeline"
+                  downloadName={`step_substep_times_${runId}.json`}
+                />
+              </div>
             </div>
           {/if}
           {#if rolloutsLoading && !rolloutSummaries.length}
@@ -824,15 +1296,17 @@
             <div class="detail-empty">No rollouts recorded yet.</div>
           {:else}
             <div class="rollout-chart">
-              <LineChart
-                title="Reward"
-                data={rewardChartData}
-                formatX={(row) => `rollout ${row.rollout_id}`}
-                formatY={(value) => formatMean(value)}
-                ariaLabel="Reward chart"
-              />
+              <div class="chart-scroll">
+                <LineChart
+                  title="Reward"
+                  data={rewardChartData}
+                  formatX={(row) => `rollout ${row.rollout_id}`}
+                  formatY={(value) => formatMean(value)}
+                  ariaLabel="Reward chart"
+                />
+              </div>
               {#if chartStats}
-                <div class="flex gap-[16px] mt-[6px] text-[11px] text-(--muted) [font-variant-numeric:tabular-nums]">
+                <div class="flex flex-wrap gap-[16px] mt-[6px] text-[11px] text-(--muted) [font-variant-numeric:tabular-nums]">
                   <span>min {formatMean(chartStats.min)}</span>
                   <span>latest {formatMean(chartStats.latest)}</span>
                   <span>max {formatMean(chartStats.max)}</span>
@@ -843,22 +1317,24 @@
             <!-- Score distribution: second graph, above the advantage graphs. -->
             <div class="rollout-chart">
               <div class="rollout-chart-title">Score distribution</div>
-              {#if scoreDist}
-                <ComparativeBarChart
-                  categories={distCategories(scoreDist)}
-                  series={distSeries(scoreDist)}
-                  height={120}
-                  showCategoryLabels={false}
-                  format={(v) => `${v}`}
-                />
-                <div class="dist-axis">
-                  <span>{formatMean(scoreDist.lo)}</span>
-                  <span class="dist-axis-label">reward</span>
-                  <span>{formatMean(scoreDist.hi)}</span>
-                </div>
-              {:else}
-                <ChartSkeleton variant="bars" height={120} />
-              {/if}
+              <div class="chart-scroll">
+                {#if scoreDist}
+                  <ComparativeBarChart
+                    categories={distCategories(scoreDist)}
+                    series={distSeries(scoreDist)}
+                    height={120}
+                    showCategoryLabels={false}
+                    format={(v) => `${v}`}
+                  />
+                  <div class="dist-axis">
+                    <span>{formatMean(scoreDist.lo)}</span>
+                    <span class="dist-axis-label">reward</span>
+                    <span>{formatMean(scoreDist.hi)}</span>
+                  </div>
+                {:else}
+                  <ChartSkeleton variant="bars" height={120} />
+                {/if}
+              </div>
             </div>
 
             {#if hasAdvantages}
@@ -892,6 +1368,29 @@
                 </div>
               </div>
             {/if}
+
+            {#if customTagNames.length}
+              <div class="chart-grid">
+                {#each customTagNames as tag (tag)}
+                  <div class="rollout-chart">
+                    <LineChart
+                      title={`${tag} (mean)`}
+                      data={tagChartData(tag)}
+                      formatX={(row) => `rollout ${row.rollout_id}`}
+                      formatY={(value) => formatMean(value)}
+                      ariaLabel={`${tag} chart`}
+                    />
+                    {#if tagChartStats(tag)}
+                      <div class="flex gap-[16px] mt-[6px] text-[11px] text-(--muted) [font-variant-numeric:tabular-nums]">
+                        <span>min {formatMean(tagChartStats(tag).min)}</span>
+                        <span>latest {formatMean(tagChartStats(tag).latest)}</span>
+                        <span>max {formatMean(tagChartStats(tag).max)}</span>
+                      </div>
+                    {/if}
+                  </div>
+                {/each}
+              </div>
+            {/if}
           {/if}
         </div>
         <aside class="summary-tab-side">
@@ -914,6 +1413,7 @@
       {:else if !rolloutSummaries.length}
         <div class="detail-empty">No rollouts recorded yet.</div>
       {:else}
+        <div class="table-wrap">
         <ResizableTable class="rollout-table" columns={rolloutColumns}>
           <tbody>
             {#each rolloutSummaries as r (r.rollout_id)}
@@ -949,11 +1449,13 @@
                       {#if stepTiming}
                         <div class="rollout-chart">
                           <div class="rollout-chart-title">Step timing</div>
-                          <StepTimings
-                            stepTimes={stepTiming.stepTimes}
-                            substepTimes={stepTiming.substepTimes}
-                            layout="rows"
-                          />
+                          <div class="chart-scroll">
+                            <StepTimings
+                              stepTimes={stepTiming.stepTimes}
+                              substepTimes={stepTiming.substepTimes}
+                              layout="rows"
+                            />
+                          </div>
                         </div>
                       {/if}
                       {#if expandedRollout.metrics && Object.keys(expandedRollout.metrics).length}
@@ -998,6 +1500,7 @@
                       <div class="mb-[16px]">
                         <div class="flex justify-end mb-[6px]">
                           <button
+                            type="button"
                             class="inline-flex items-center gap-[5px] [background:none] [border:1px_solid_var(--border,#2f2f2f)] rounded-[4px] text-(--muted) text-[11px] p-[3px_8px] cursor-pointer hover:text-(--text) hover:border-(--border-strong,#4a4a4a)"
                             onclick={downloadAllTrajectories}
                             title="Download all samples as JSON"
@@ -1006,36 +1509,39 @@
                             Download all ({sampleDist.total} samples)
                           </button>
                         </div>
-                        <div
-                          class="flex items-end gap-[2px] h-[120px] pt-[14px] [border-bottom:1px_solid_var(--border,#2f2f2f)]"
-                          role="group"
-                          aria-label="Sample score distribution"
-                        >
-                          {#each sampleDist.buckets as bucket, b (b)}
-                            <button
-                              class="dist-bar"
-                              class:detail-active={activeBucket === b}
-                              class:is-empty={!bucket.length}
-                              style:height={`${(bucket.length / sampleDist.maxCount) * 100}%`}
-                              disabled={!bucket.length}
-                              title={`${bucket.length} sample${bucket.length === 1 ? "" : "s"} · reward ${bucketRange(b)}`}
-                              onclick={() => openBucket(b)}
-                            >
-                              <span class="absolute top-[-14px] left-0 right-0 text-center text-[10px] text-(--muted) [font-variant-numeric:tabular-nums]">{bucket.length || ""}</span>
-                            </button>
-                          {/each}
-                        </div>
-                        <div class="dist-axis">
-                          <span>{formatMean(sampleDist.lo)}</span>
-                          <span class="dist-axis-label">reward · {sampleDist.total} samples</span>
-                          <span>{formatMean(sampleDist.hi)}</span>
+                        <div class="chart-scroll">
+                          <div
+                            class="flex items-end gap-[2px] h-[120px] pt-[14px] min-w-[280px] [border-bottom:1px_solid_var(--border,#2f2f2f)]"
+                            role="group"
+                            aria-label="Sample score distribution"
+                          >
+                            {#each sampleDist.buckets as bucket, b (b)}
+                              <button
+                                type="button"
+                                class="dist-bar"
+                                class:detail-active={activeBucket === b}
+                                class:is-empty={!bucket.length}
+                                style:height={`${(bucket.length / sampleDist.maxCount) * 100}%`}
+                                disabled={!bucket.length}
+                                title={`${bucket.length} sample${bucket.length === 1 ? "" : "s"} · reward ${bucketRange(b)}`}
+                                onclick={() => openBucket(b)}
+                              >
+                                <span class="absolute top-[-14px] left-0 right-0 text-center text-[10px] text-(--muted) [font-variant-numeric:tabular-nums]">{bucket.length || ""}</span>
+                              </button>
+                            {/each}
+                          </div>
+                          <div class="dist-axis">
+                            <span>{formatMean(sampleDist.lo)}</span>
+                            <span class="dist-axis-label">reward · {sampleDist.total} samples</span>
+                            <span>{formatMean(sampleDist.hi)}</span>
+                          </div>
                         </div>
                       </div>
 
                       {#if activeSample}
-                        <div class="[border-left:2px_solid_var(--accent)] p-[8px_12px] mb-[12px] bg-(--color-c-gray-10,#2f2f2f) rounded-[0_4px_4px_0] sample-viewer">
-                          <div class="flex items-center justify-between gap-[12px] mb-[6px]">
-                            <div class="inline-flex items-center gap-[8px]">
+                        <div class="sample-viewer">
+                          <div class="sample-viewer-header">
+                            <div class="sample-viewer-nav">
                               <button
                                 class="sample-nav-btn"
                                 onclick={() => stepSample(-1)}
@@ -1055,9 +1561,9 @@
                               >
                                 <ChevronRight size={14} />
                               </button>
-                              <span class="text-[11px] text-(--muted)">← / → to navigate</span>
+                              <span class="sample-viewer-hint">← / → to navigate</span>
                             </div>
-                            <div class="inline-flex items-center gap-[8px]">
+                            <div class="sample-viewer-actions">
                               <span class="text-(--text-bright) [font-variant-numeric:tabular-nums]">
                                 reward {formatMean(activeSample.sample.score)}
                               </span>
@@ -1078,6 +1584,10 @@
                               </button>
                             </div>
                           </div>
+                          {#if activeSample.sample.metadata?.inference}
+                            <div class="rollout-sample-label">inference</div>
+                            <InferenceStats inference={activeSample.sample.metadata.inference} />
+                          {/if}
                           {#if activeSample.sample.metadata?._metadata_type === "audio" || activeSample.sample.metadata?.audio}
                             <div class="rollout-sample-label">audio</div>
                             <audio
@@ -1127,9 +1637,40 @@
                             <div class="rollout-sample-label">failure reason</div>
                             <pre class="rollout-sample-text">{activeSample.sample.metadata.eval_detail}</pre>
                           {/if}
+                          <!-- Catch-all: any other tag a custom reward/rollout function set on
+                               sample.metadata (e.g. sample.metadata["guessing"] = {...}) that
+                               isn't one of the known keys rendered explicitly above. -->
+                          {#each Object.entries(activeSample.sample.metadata ?? {}).filter(
+                            ([key]) =>
+                              ![
+                                "inference",
+                                "_metadata_type",
+                                "audio",
+                                "image",
+                                "trajectory_messages",
+                                "eval_report",
+                                "reference",
+                                "metrics",
+                                "exit_status",
+                                "eval_detail",
+                                "response_length",
+                                "prompt_length",
+                                "rollout_id",
+                                "rollout_idx",
+                              ].includes(key),
+                          ) as [name, value] (name)}
+                            <div class="rollout-sample-label">{name}</div>
+                            {#if value !== null && typeof value === "object"}
+                              <pre class="rollout-sample-text">{JSON.stringify(value, null, 2)}</pre>
+                            {:else}
+                              <span class="rollout-sample-metric">{String(value)}</span>
+                            {/if}
+                          {/each}
                           {#if activeSample.sample.trace?.length}
                             <div class="rollout-sample-label">trajectory timeline</div>
-                            <SampleTimeline trace={activeSample.sample.trace} />
+                            <div class="chart-scroll">
+                              <SampleTimeline trace={activeSample.sample.trace} />
+                            </div>
                           {/if}
                         </div>
                       {:else}
@@ -1142,10 +1683,12 @@
             {/each}
           </tbody>
         </ResizableTable>
+        </div>
       {/if}
       </div>
     {:else if activeTab === "logs"}
       <div class="tab-panel">
+      {#if isRunning}
       <div class="flex justify-end mb-[8px]">
         <span class="inline-flex items-center gap-[6px] text-[11px] text-(--muted) uppercase tracking-[0.04em]">
           {#if logState === "streaming"}
@@ -1235,6 +1778,96 @@
             </span>
           {/if}
         </div>
+      {/if}
+      {:else}
+        <!-- Finished run: page through the durable copy on demand. -->
+        <div class="flex flex-col gap-[12px] mb-[12px] p-[12px_14px] rounded-[8px] bg-(--color-c-gray-08,#161616) [border:1px_solid_var(--border,#2f2f2f)]">
+          <div class="flex items-center gap-[12px]">
+            <input
+              class="flex-1 min-w-0 bg-(--color-c-gray-10,#1c1c1c) text-(--text) [border:1px_solid_var(--border,#3a3a3a)] rounded-[5px] p-[6px_10px] text-[12px] [font-family:inherit] focus:outline-none focus:[border-color:color-mix(in_srgb,var(--accent)_55%,transparent)]"
+              type="search"
+              placeholder="filter substring…"
+              bind:value={logSearchInput}
+              aria-label="Filter log lines"
+            />
+            <span class="inline-flex items-center gap-[6px] text-[11px] text-(--muted) uppercase tracking-[0.04em] shrink-0">
+              <span class="dot dot-dim"></span> stored logs
+            </span>
+          </div>
+          <div class="flex flex-wrap items-center gap-[10px]">
+            <span class="text-(--muted) text-[11px] uppercase tracking-[0.04em]">Time range</span>
+            <input
+              class="w-[160px] bg-(--color-c-gray-10,#1c1c1c) text-(--text) [border:1px_solid_var(--border,#3a3a3a)] rounded-[5px] p-[5px_8px] text-[12px] [font-family:inherit] [font-variant-numeric:tabular-nums] focus:outline-none focus:[border-color:color-mix(in_srgb,var(--accent)_55%,transparent)]"
+              type="text"
+              placeholder="YYYY-MM-DD HH:MM"
+              bind:value={histRangeInput.since}
+              aria-label="Show logs since"
+            />
+            <span class="text-(--muted-strong) text-[13px]">→</span>
+            <input
+              class="w-[160px] bg-(--color-c-gray-10,#1c1c1c) text-(--text) [border:1px_solid_var(--border,#3a3a3a)] rounded-[5px] p-[5px_8px] text-[12px] [font-family:inherit] [font-variant-numeric:tabular-nums] focus:outline-none focus:[border-color:color-mix(in_srgb,var(--accent)_55%,transparent)]"
+              type="text"
+              placeholder="YYYY-MM-DD HH:MM"
+              bind:value={histRangeInput.until}
+              aria-label="Show logs until"
+            />
+            <button
+              class="log-button text-[11px] px-[10px] py-[4px]"
+              onclick={resetHistRange}
+              title="Reset to the run's time range"
+            >
+              Reset
+            </button>
+          </div>
+        </div>
+
+        {#if histError}
+          <div class="detail-empty">Failed to load logs: {histError}</div>
+        {/if}
+
+        {#if histLoading && !histLines.length}
+          <div class="detail-empty">Loading logs…</div>
+        {:else if !histLines.length}
+          <div class="detail-empty">
+            {#if logSearch}
+              No log lines matching "{logSearch}".
+            {:else}
+              No logs recorded for this run.
+            {/if}
+          </div>
+        {:else}
+          <div class="bg-(--color-c-gray-08,#0e0e0e) rounded-[6px] p-[8px_12px] max-h-[420px] overflow-y-auto overflow-x-auto [overflow-anchor:none] [font-family:ui-monospace,SFMono-Regular,Menlo,monospace] text-[12px] leading-[1.45] text-(--text)" bind:this={histTailEl} onscroll={onHistScroll}>
+            {#if histHasMore}
+              <div class="text-center text-[10px] text-(--muted) pb-[6px]">
+                {histLoadingOlder ? "Loading older lines…" : "Scroll up for older lines"}
+              </div>
+            {/if}
+            {#each histLines as entry (entry.id)}
+              <div class="flex gap-[10px] whitespace-pre" data-hist-id={entry.id}>
+                <span class="shrink-0 text-(--muted) text-[10px] min-w-[64px] overflow-hidden text-ellipsis">{entry.task_id || ""}</span>
+                <span class="flex-1 whitespace-pre-wrap break-all">{entry.line}</span>
+              </div>
+            {/each}
+            {#if histNewerWindows.length}
+              <div class="text-center text-[10px] text-(--muted) pt-[6px]">
+                {histLoadingNewer ? "Loading newer lines…" : "Scroll down for newer lines"}
+              </div>
+            {/if}
+          </div>
+          <div class="mt-[6px] text-[11px] text-(--muted) [font-variant-numeric:tabular-nums] flex items-center gap-[8px]">
+            <span>Showing {histLines.length} line{histLines.length === 1 ? "" : "s"}</span>
+            {#if histNewerWindows.length}
+              <span class="h-[12px] w-px bg-(--border)"></span>
+              <button
+                type="button"
+                class="text-(--accent) underline-offset-2 hover:underline bg-transparent border-0 p-0 cursor-pointer text-[11px]"
+                onclick={jumpHistToLatest}
+              >
+                Jump to latest
+              </button>
+            {/if}
+          </div>
+        {/if}
       {/if}
       </div>
     {/if}

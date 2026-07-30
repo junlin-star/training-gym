@@ -288,7 +288,49 @@ class _TrainStatusDisplay:
 
 @dataclass(config=ConfigDict(extra="forbid", arbitrary_types_allowed=True))
 class TrainConfig:
-    """Compose dataset, model, and recipe into one training entrypoint."""
+    """Compose dataset, model, and recipe into one training entrypoint.
+
+    ## Fields
+
+    dataset : DatasetConfig
+        The training dataset. ``train()`` materializes it into the
+        framework's ``/data`` volume before training if it isn't already
+        present.
+    model : ModelConfig
+        The model to train. Carries model identity (``model_name``) and
+        weight-download logic; weights are downloaded into the shared
+        HuggingFace cache volume on first use and reused across runs.
+    recipe : BaseTrainRecipe
+        Framework recipe (``SlimeRecipe`` or ``MilesConfig``). Selects the
+        training framework and carries Modal infra settings (GPU type, node
+        count, image) plus framework CLI flags.
+    checkpoint : Checkpoint | None
+        Checkpoint to resume training from. When ``None``, training starts
+        from the base model weights. Default ``None``.
+    merge_model_recipe : bool
+        When ``True``, merges the known-model preset recipe (e.g.
+        ``Qwen3_4b_Recipe``) onto recipe fields you left unset. Set
+        ``False`` to run the recipe exactly as written, with no preset
+        defaults. Default ``True``.
+    detach : bool
+        Run the training app detached so it keeps running on Modal even if
+        the local client disconnects (terminal closed, laptop asleep). Set
+        ``False`` for an attached run that stops on Ctrl-C. Default
+        ``True``.
+    group_id : str | None
+        Shared sweep id. Set by ``TrainingGroup`` so every run in a sweep
+        carries the same id, letting the dashboard group variants together.
+        Not usually set by hand. Default ``None``.
+    group_overrides : dict[str, Any] | None
+        Per-variant parameter overrides applied by ``TrainingGroup``, keyed
+        by dotted field path (e.g. ``{"recipe.lr": 1e-5}``). Recorded in
+        run metadata so the dashboard can label each variant. Default
+        ``None``.
+    group_axes : list[str] | None
+        Names of the swept parameter paths in a ``TrainingGroup`` grid.
+        Recorded in run metadata for dashboard grouping; falls back to the
+        keys of ``group_overrides`` when unset. Default ``None``.
+    """
 
     # ── Composed configs (required) ─────────────────────────────────────────
     dataset: DatasetConfig
@@ -308,24 +350,21 @@ class TrainConfig:
     group_id: str | None = None
     group_overrides: dict[str, Any] | None = None
     group_axes: list[str] | None = None
-    _stable_id: str | None = _dc.field(default=None, init=False, repr=False)
 
-    # ── Public API ────────────────────────────────────────────────────────────
+    def _generate_training_run_id(self) -> str:
+        """Mint a new run id. ``launch()`` calls this once per invocation, so
+        each launch of the same config gets its own TrainingRun record."""
+        return create_hash(
+            self.model.model_name,
+            self.checkpoint.path if self.checkpoint is not None else "",
+            f"{type(self.recipe).__name__}:{self.recipe.recipe_type.value}",
+            self.dataset.dataset_id,
+            self.model.model_path or "",
+        )
 
-    @property
-    def training_run_id(self) -> str:
-        # Maintain same stable id, cannot change across calls on one TrainConfig.
-        if self._stable_id is None:
-            self._stable_id = create_hash(
-                self.model.model_name,
-                self.checkpoint.path if self.checkpoint is not None else "",
-                f"{type(self.recipe).__name__}:{self.recipe.recipe_type.value}",
-                self.dataset.dataset_id,
-                self.model.model_path or "",
-            )
-        return self._stable_id
-
-    def _build_app(self):
+    def _build_app(self, training_run_id: str | None = None):
+        if training_run_id is None:
+            training_run_id = self._generate_training_run_id()
         recipe_type = self.recipe.recipe_type
         if recipe_type == RecipeType.MILES:
             if not isinstance(self.recipe, MilesConfig):
@@ -333,12 +372,12 @@ class TrainConfig:
                     f"Recipe type {recipe_type} requires MilesConfig, got {type(self.recipe).__name__}"
                 )
             return build_miles_app(
-                training_run_id=self.training_run_id,
+                training_run_id=training_run_id,
                 miles=cast(MilesConfig, self.recipe),
                 model=self.model,
                 dataset=self.dataset,
                 checkpoint=self.checkpoint,
-                name=self.training_run_id,
+                name=training_run_id,
                 group_id=self.group_id,
             )
         if recipe_type == RecipeType.SLIME:
@@ -352,12 +391,12 @@ class TrainConfig:
                 merge_model_recipe=self.merge_model_recipe,
             )
             return build_slime_app(
-                training_run_id=self.training_run_id,
+                training_run_id=training_run_id,
                 slime=combined,
                 model=self.model,
                 dataset=self.dataset,
                 checkpoint=self.checkpoint,
-                name=self.training_run_id,
+                name=training_run_id,
                 group_id=self.group_id,
             )
         raise TrainingGymConfigError(f"Unknown recipe type: {recipe_type}")
@@ -383,7 +422,7 @@ class TrainConfig:
             f"Unknown recipe type: {type(self.recipe).__name__}"
         )
 
-    def _build_config_summary(self) -> dict[str, Any]:
+    def _build_config_summary(self, training_run_id: str) -> dict[str, Any]:
         """Framework-specific TrainingRun.config summary."""
         model = self.model
         dataset = self.dataset
@@ -397,7 +436,7 @@ class TrainConfig:
                     "project": wandb.project,
                     "entity": getattr(wandb, "entity", ""),
                     "group": wandb.group,
-                    "run_id": self.training_run_id[:8],
+                    "run_id": training_run_id[:8],
                 }
                 if wandb
                 else {}
@@ -484,6 +523,7 @@ class TrainConfig:
         return self.recipe
 
     def context_plan_line(self) -> str | None:
+        """One-line summary of the effective training context length and parallelism plan."""
         recipe = self._resolved_recipe_for_logging()
         max_tokens_per_gpu = getattr(recipe, "max_tokens_per_gpu", None)
         if max_tokens_per_gpu is None:
@@ -520,7 +560,7 @@ class TrainConfig:
         from modal_training_gym.common.status_reporter import enqueue_framework_status
         from modal_training_gym.cli.setup import ensure_dashboard_deployed
 
-        training_run_id = self.training_run_id
+        training_run_id = self._generate_training_run_id()
         ensure_dashboard_deployed()
         framework_status_url = get_framework_status_url() or ""
         framework_status_token = _secrets.token_urlsafe(32)
@@ -539,7 +579,7 @@ class TrainConfig:
             modal_app_id="",
             modal_app_url="",
             framework=self.framework,
-            config=self._build_config_summary(),
+            config=self._build_config_summary(training_run_id),
             framework_status=self._initializing_status(),
             created_at=created_at,
             started_at=created_at,
@@ -556,7 +596,7 @@ class TrainConfig:
             framework_status_token = ""
         print(f"TrainingRun recorded: {training_run_id}")
 
-        app = self._build_app()
+        app = self._build_app(training_run_id)
         output_context = modal.enable_output() if show_output else nullcontext()
         with output_context:
             with app.run(detach=True):
