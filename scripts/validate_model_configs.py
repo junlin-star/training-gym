@@ -372,7 +372,7 @@ def _format_secs_delta(
 
 def _training_run_link(training_run_id: str, dashboard_url: str | None) -> str:
     """Training run id in backticks, linked to the dashboard if a base URL is given."""
-    if dashboard_url is None:
+    if not dashboard_url:
         return f"`{training_run_id}`"
     base = dashboard_url.rstrip("/")
     return f"[`{training_run_id}`]({base}/training/{training_run_id})"
