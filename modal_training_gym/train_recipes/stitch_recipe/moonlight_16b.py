@@ -10,11 +10,7 @@ from modal_training_gym.train_recipes.stitch_recipe.recipe import StitchRecipe
 class Moonlight_16B_A3B_Stitch_Recipe(StitchRecipe):
     """Moonlight-16B-A3B disaggregated GRPO: 2×8×H200 trainer + Modal Flash pool.
 
-    Mirrors the stitch ``moonlight`` cookbook config — the cheap rung of the
-    Kimi-K2.6 ladder. Two things the Qwen3-4B recipe doesn't exercise: a
-    multi-node RDMA trainer with expert parallelism, and MoE routing replay
-    (arxiv 2510.11370), where the train forward reuses the rollout engine's
-    expert routing (``--enable-return-routed-experts`` on the served engine).
+    Mirrors the stitch ``moonlight`` cookbook config.
 
     Multi-latent attention keeps the KV cache small, so a rollout replica is
     still a single H200 even at 16B.
