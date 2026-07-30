@@ -65,6 +65,7 @@ from modal_training_gym.train_recipes.stitch_recipe.recipe import (
     StitchRecipe,
     fields_to_argv,
 )
+from modal_training_gym.train_recipes.stitch_recipe.train import SlimeStitchTrainRecipe
 
 MINUTES = 60
 SIDECAR_PORT = 8000
@@ -107,12 +108,14 @@ class _SlimeArgs:
         return fields_to_argv(fields)
 
 
-def _stitch_trainer_image(recipe: StitchRecipe) -> modal.Image:
+def _stitch_trainer_image(
+    train: SlimeStitchTrainRecipe, *, bulletin_root: str
+) -> modal.Image:
     """The slime-fork trainer image. The rollout pool serves on a different image
     (:func:`serving_image.build_serving_image`): it installs no trainer package, and
     it needs the SGLang fork that exposes ``/stage_weight_update``."""
     image = (
-        modal.Image.from_registry(recipe.slime_image_tag)
+        modal.Image.from_registry(train.slime_image_tag)
         .entrypoint([])
         # The base image bakes an HF cache; drop it so the mounted cache volume
         # at the same path isn't shadowed.
@@ -121,9 +124,9 @@ def _stitch_trainer_image(recipe: StitchRecipe) -> modal.Image:
         # endpoint + publish-only disk-delta hooks).
         .run_commands(
             f"rm -rf {SLIME_ROOT}"
-            f" && git clone --depth 1 {recipe.slime_repo_url} {SLIME_ROOT}"
+            f" && git clone --depth 1 {train.slime_repo_url} {SLIME_ROOT}"
             f" && cd {SLIME_ROOT}"
-            f" && git fetch --depth 1 origin {recipe.slime_repo_ref}"
+            f" && git fetch --depth 1 origin {train.slime_repo_ref}"
             f" && git checkout FETCH_HEAD"
             f" && python3 -m pip install --no-deps -e {SLIME_ROOT}"
         )
@@ -148,16 +151,16 @@ def _stitch_trainer_image(recipe: StitchRecipe) -> modal.Image:
                 "HF_HUB_ENABLE_HF_TRANSFER": "1",
                 # Fallbacks for the bulletin hooks when a value isn't threaded
                 # through the slime args namespace.
-                "DELTA_BULLETIN_ROOT": recipe.delta_bulletin_root,
+                "DELTA_BULLETIN_ROOT": bulletin_root,
             }
         )
     )
-    if recipe.image_run_commands:
-        image = image.run_commands(*recipe.image_run_commands)
-    if recipe.image_env:
-        image = image.env(recipe.image_env)
-    if recipe.image_overlay is not None:
-        image = recipe.image_overlay(image)
+    if train.image_run_commands:
+        image = image.run_commands(*train.image_run_commands)
+    if train.image_env:
+        image = image.env(train.image_env)
+    if train.image_overlay is not None:
+        image = train.image_overlay(image)
     # Mount the package so the trainer and the Ray workers can import the hooks.
     image = image.add_local_python_source("modal_training_gym", copy=True)
     return image
@@ -221,8 +224,8 @@ def _record_run_started(
             ),
             "recipe": config_fields,
             "wandb": wandb_block,
-            "lr": recipe.lr,
-            "global_batch_size": recipe.global_batch_size,
+            "lr": recipe.slime_train.lr,
+            "global_batch_size": recipe.slime_train.global_batch_size,
         }
         created_at = int(time.time())
         run_record = TrainingRun(
@@ -297,15 +300,23 @@ def build_stitch_app(
         cloudpickle.register_pickle_by_value(caller_module)
     register_modal_cloudpickle_reducers()
 
+    train_recipe, serve_recipe = recipe.train, recipe.serve
+    if not isinstance(train_recipe, SlimeStitchTrainRecipe):
+        raise NotImplementedError(
+            "build_stitch_app launches the slime trainer only; "
+            f"got {type(train_recipe).__name__}"
+        )
     app_name = recipe.name or name or f"stitch-{modal_tag_value(model.model_name)}"
     # Volumes are keyed by recipe (not by run) so runs of the same recipe reuse
     # the same dataset / checkpoints / bulletin board.
     volume_prefix = f"stitch-{modal_tag_value(type(recipe).__name__)}"
-    delta_volume_name = recipe.delta_volume_name or f"{volume_prefix}-delta-bulletin"
-    delta_bulletin_root = recipe.delta_bulletin_root
+    delta_volume_name = (
+        serve_recipe.delta_volume_name or f"{volume_prefix}-delta-bulletin"
+    )
+    delta_bulletin_root = serve_recipe.bulletin_root
     model_name = model.model_path or model.model_name
-    rollout_concurrency = recipe.sglang_server_concurrency
-    n_train_nodes = recipe.actor_num_nodes
+    rollout_concurrency = serve_recipe.concurrency
+    n_train_nodes = train_recipe.actor_num_nodes
 
     tags = {
         **COMMON_TRAINING_GYM_TAGS,
@@ -319,25 +330,14 @@ def build_stitch_app(
         if recipe.wandb.group:
             tags["wandb_group"] = modal_tag_value(recipe.wandb.group)
 
-    image = _stitch_trainer_image(recipe)
+    image = _stitch_trainer_image(train_recipe, bulletin_root=delta_bulletin_root)
     server_image = serving_image.build_serving_image(
         hf_cache_path=str(HF_CACHE_PATH),
         delta_volume_name=delta_volume_name,
         bulletin_root=delta_bulletin_root,
-        runtime=recipe.sglang_runtime,
+        runtime=serve_recipe.runtime,
     )
-
-    # Structural SGLang args (derived from the recipe) merged under the recipe's
-    # per-model tuning. Deltas are applied by the engine behind
-    # /stage_weight_update, so no engine-side delta server args are passed.
-    sglang_server_args = {
-        "--served-model-name": model_name,
-        "--dtype": "bfloat16",
-        "--cuda-graph-max-bs-decode": str(rollout_concurrency),
-        "--max-running-requests": str(rollout_concurrency),
-        "--trust-remote-code": "",
-        **dict(recipe.sglang_server_args),
-    }
+    sglang_server_args = serve_recipe.engine_args(model_name=model_name)
 
     hf_cache_volume = modal.Volume.from_name(
         "huggingface-cache", create_if_missing=True
@@ -372,14 +372,14 @@ def build_stitch_app(
     if recipe.wandb is not None:
         train_secrets.append(modal.Secret.from_name("wandb-secret"))
 
-    memory = recipe.memory
+    memory = train_recipe.memory
     app = modal.App(app_name, tags=tags)
 
     @app.cls(
         image=server_image,
-        gpu=f"{recipe.gpu_type}:{recipe.rollout_num_gpus_per_engine}",
-        cloud=recipe.cloud,
-        region=recipe.region,
+        gpu=f"{serve_recipe.gpu}:{serve_recipe.gpus_per_replica}",
+        cloud=train_recipe.cloud,
+        region=train_recipe.region,
         volumes={
             str(HF_CACHE_PATH): hf_cache_volume,
             serving_image.SGLANG_CACHE_PATH: sglang_cache_volume,
@@ -387,15 +387,15 @@ def build_stitch_app(
             ROLLOUT_LOG_PATH: rollout_log_volume,
         },
         secrets=[hf_secret],
-        min_containers=recipe.rollout_min_containers,
-        max_containers=recipe.rollout_max_containers,
+        min_containers=serve_recipe.min_containers,
+        max_containers=serve_recipe.max_containers,
         timeout=40 * MINUTES,
         scaledown_window=15 * MINUTES,
         serialized=True,
     )
     @modal.experimental.http_server(
         port=SIDECAR_PORT,
-        proxy_regions=recipe.proxy_regions,
+        proxy_regions=serve_recipe.proxy_regions,
         exit_grace_period=25,
         startup_timeout=SERVER_STARTUP_TIMEOUT,
     )
@@ -411,18 +411,18 @@ def build_stitch_app(
                 self,
                 model_name=model_name,
                 sglang_args=sglang_server_args,
-                disk_load_format=recipe.sidecar_disk_load_format,
-                tp=recipe.rollout_num_gpus_per_engine,
+                disk_load_format=serve_recipe.disk_load_format,
+                tp=serve_recipe.gpus_per_replica,
                 concurrency=rollout_concurrency,
                 sidecar_port=SIDECAR_PORT,
                 sglang_port=SGLANG_PORT,
                 bulletin_root=delta_bulletin_root,
                 local_checkpoint_dir=LOCAL_CHECKPOINT_PATH,
-                delta_update_mode=recipe.sglang_delta_update_mode,
+                delta_update_mode=serve_recipe.delta_update_mode,
                 volume_name=delta_volume_name,
-                commit_mode=recipe.sidecar_commit_mode,
-                flush_cache_on_commit=recipe.sidecar_flush_cache_on_commit,
-                debug_requests=recipe.sidecar_debug_requests,
+                commit_mode=serve_recipe.commit_mode,
+                flush_cache_on_commit=serve_recipe.flush_cache_on_commit,
+                debug_requests=serve_recipe.debug_requests,
                 log_dir=ROLLOUT_LOG_PATH,
                 startup_timeout=SERVER_STARTUP_TIMEOUT,
             )
@@ -435,10 +435,10 @@ def build_stitch_app(
 
     @app.function(
         image=image,
-        gpu=f"{recipe.gpu_type}:{recipe.actor_num_gpus_per_node}",
+        gpu=f"{train_recipe.gpu_type}:{train_recipe.actor_num_gpus_per_node}",
         memory=memory,
-        cloud=recipe.cloud,
-        region=recipe.region,
+        cloud=train_recipe.cloud,
+        region=train_recipe.region,
         volumes=train_volumes,
         secrets=train_secrets,
         timeout=24 * 60 * MINUTES,
@@ -447,7 +447,7 @@ def build_stitch_app(
         serialized=True,
         name="train",
     )
-    @clustered_if(True, n_train_nodes, gpu_type=recipe.gpu_type)
+    @clustered_if(True, n_train_nodes, gpu_type=train_recipe.gpu_type)
     def train(
         modal_app_id: str = "",
         modal_app_url: str = "",
@@ -478,7 +478,7 @@ def build_stitch_app(
                 "DELTA_APP_NAME": app_name,
                 "DELTA_SERVER_CLS_NAME": "Server",
                 "DELTA_BULLETIN_ROOT": delta_bulletin_root,
-                **{str(k): str(v) for k, v in recipe.environment.items()},
+                **{str(k): str(v) for k, v in train_recipe.environment.items()},
             }
         )
         if framework_status_url:
@@ -525,7 +525,10 @@ def build_stitch_app(
         # custom_config_path.
         custom_config = dict(getattr(cfg, "custom_config_path", None) or {})
         custom_config.update(
-            {field: getattr(recipe, field) for field in sorted(HOOK_CONFIG_FIELDS)}
+            {
+                field: getattr(train_recipe, field)
+                for field in sorted(HOOK_CONFIG_FIELDS)
+            }
         )
         custom_config.update(
             {
@@ -602,7 +605,7 @@ def build_stitch_app(
             app_name=app_name,
             framework=Framework.STITCH,
             training_run_id=record_id,
-            checkpoint_dir=str(recipe.save),
+            checkpoint_dir=str(train_recipe.save),
             checkpoints_volume_name=checkpoints_volume_name,
             checkpoints_mount_path=str(CHECKPOINTS_PATH),
             model_config=model,
@@ -703,6 +706,6 @@ def smoke_flash_pool(
         cls_name="Server",
         model_name=model.model_path or model.model_name,
         weight_version=weight_version,
-        expect_min_containers=recipe.rollout_min_containers,
+        expect_min_containers=recipe.serve.min_containers,
         timeout_seconds=timeout_seconds,
     )
