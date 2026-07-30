@@ -400,6 +400,7 @@ def build_stitch_app(
                 self,
                 model_name=model_name,
                 sglang_args=sglang_server_args,
+                disk_load_format=recipe.sidecar_disk_load_format,
                 tp=recipe.rollout_num_gpus_per_engine,
                 concurrency=rollout_concurrency,
                 sidecar_port=SIDECAR_PORT,

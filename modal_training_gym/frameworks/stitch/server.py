@@ -40,6 +40,7 @@ def serve_startup(
     *,
     model_name: str,
     sglang_args: dict,
+    disk_load_format: str,
     tp: int,
     concurrency: int,
     sidecar_port: int,
@@ -105,7 +106,8 @@ def serve_startup(
         base_checkpoint_dir=base_checkpoint_dir(model_name),
         local_checkpoint_dir=local_checkpoint_dir,
         delta_update_mode=delta_update_mode,
-        disk_load_format=str(sglang_args.get("--load-format", "auto")),
+        disk_load_format=disk_load_format
+        or str(sglang_args.get("--load-format", "auto")),
         volume_name=volume_name,
         commit_mode=commit_mode,
         flush_cache_on_commit=flush_cache_on_commit,

@@ -37,6 +37,11 @@ class Moonlight_16B_A3B_Stitch_Recipe(StitchRecipe):
     rollout_max_containers: int | None = 4
 
     # ── Model (arch comes from slime's model script, not ModelArchitecture) ─
+    # fastsafetensors is the fastest cold start, but its copier stages each shard
+    # block through a GPU buffer (800 MB at a time) — unaffordable beside a live
+    # engine, and pointless for a ~0.5 GB sparse delta.
+    sidecar_disk_load_format: str = "auto"
+
     slime_model_script: str = "scripts/models/moonlight.sh"
     hf_checkpoint: str = "moonshotai/Moonlight-16B-A3B-Instruct"
     ref_load: str = "moonshotai/Moonlight-16B-A3B-Instruct"
@@ -50,11 +55,13 @@ class Moonlight_16B_A3B_Stitch_Recipe(StitchRecipe):
             "--model-loader-extra-config": '{"enable_gds":false}',
             "--weight-loader-drop-cache-after-load": "",
             "--context-length": "8192",
-            # An in-place delta apply loads incoming shards alongside the live
-            # weights, so the static pool has to leave room for them: 0.85 (what
-            # stitch's own cookbook uses, with an engine it drains) fills the
-            # H200 to ~8MB free and the apply OOMs mid-flight.
-            "--mem-fraction-static": "0.72",
+            "--mem-fraction-static": "0.85",
+            # An in-place apply has to fit beside the live weights, and SGLang's
+            # KV pool otherwise autosizes into every spare byte (it left ~8 MB
+            # free on an H200 and the apply OOM'd mid-flight). Cap the pool at
+            # what full concurrency can actually address — 64 requests × 8k ctx —
+            # which is ~15 GB of MLA KV instead of ~59 GB.
+            "--max-total-tokens": "524288",
             # Routing replay: slime runs no local engine in publish-only mode, so
             # the served engine has to be told to return routed experts.
             "--enable-return-routed-experts": "",

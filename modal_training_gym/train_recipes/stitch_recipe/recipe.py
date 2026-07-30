@@ -90,6 +90,7 @@ _STITCH_SKIP = {
     "delta_bulletin_root",
     "sidecar_commit_mode",
     "sidecar_debug_requests",
+    "sidecar_disk_load_format",
     "sidecar_flush_cache_on_commit",
     "sglang_delta_update_mode",
     "sglang_runtime",
@@ -148,6 +149,12 @@ class StitchRecipe(BaseTrainRecipe):
     # "quiesce" drains in-flight requests before applying.
     sidecar_commit_mode: str = "in_place"
     sidecar_debug_requests: bool = False
+    # Loader the engine uses for a delta apply. Empty → whatever --load-format the
+    # server booted with. Worth overriding: "fastsafetensors" is the fastest cold
+    # start but its copier allocates a GPU staging buffer per shard *block*
+    # (hundreds of MB) on top of the live weights, which a full engine cannot
+    # afford; "auto" streams tensor by tensor.
+    sidecar_disk_load_format: str = ""
     # Drop the engine's KV cache when a version commits. Off by default: the
     # engine namespaces cached prefixes per version, so a flush only costs
     # recompute.
