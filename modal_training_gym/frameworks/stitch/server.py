@@ -14,6 +14,26 @@ from huggingface_hub import snapshot_download
 
 from modal_training_gym.frameworks.stitch import sidecar_process
 
+# What the engine needs to seed a delta from the base checkpoint: weights plus
+# the config/tokenizer files beside them. Restricting the resolve to these keeps
+# it from failing on a cache the SGLang server populated itself (it fetches no
+# README/figures, and a snapshot missing *any* file is "incomplete").
+_CHECKPOINT_PATTERNS = [
+    "*.safetensors",
+    "*.safetensors.index.json",
+    "*.json",
+    "*.txt",
+    "*.model",
+    "*.py",
+]
+
+
+def base_checkpoint_dir(model_name: str) -> str:
+    """The local snapshot directory the SGLang server loaded, from cache only."""
+    return snapshot_download(
+        model_name, local_files_only=True, allow_patterns=_CHECKPOINT_PATTERNS
+    )
+
 
 def serve_startup(
     replica: Any,
@@ -78,13 +98,11 @@ def serve_startup(
         request_timeout=120.0,
         max_attempts_per_request=3,
     )
-    # The engine seeds each delta from the base checkpoint on disk, so hand it the
-    # cached snapshot directory the SGLang server itself loaded, not the repo id.
     replica.sidecar = sidecar_process.start_sidecar(
         sidecar_port=sidecar_port,
         sglang_port=sglang_port,
         bulletin_root=bulletin_root,
-        base_checkpoint_dir=snapshot_download(model_name, local_files_only=True),
+        base_checkpoint_dir=base_checkpoint_dir(model_name),
         local_checkpoint_dir=local_checkpoint_dir,
         delta_update_mode=delta_update_mode,
         disk_load_format=str(sglang_args.get("--load-format", "auto")),
