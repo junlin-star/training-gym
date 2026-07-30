@@ -38,6 +38,39 @@ def _fmt_secs(seconds: float | int | None) -> str:
     return f"{n:.3f}s"
 
 
+def _substep_label(name: str) -> str:
+    _SUBSTEP_LABELS = {
+        "evaluate_rollouts": "Eval (before)",
+        "generate_rollouts": "Generate rollouts",
+        "offload_rollout": "Offload rollout",
+        "compute_log_probs": "Compute log probs",
+        "optimizer_step": "Optimizer step",
+        "checkpoint_save": "Checkpoint save",
+        "offload_train": "Offload train",
+        "weight_sync": "Weight sync",
+        "evaluate_rollouts_end": "Eval (after)",
+    }
+
+    return _SUBSTEP_LABELS.get(name, name.replace("_", " "))
+
+
+def _step_keys(result: "TutorialResult") -> list[str]:
+    keys = set(result.step_times or {}) | set(result.substep_times or {})
+    return sorted(keys, key=lambda k: int(k) if k.isdigit() else k)
+
+
+def _ordered_substeps(
+    subs: dict[str, dict[str, float | None]],
+) -> list[tuple[str, dict[str, float | None]]]:
+    return sorted(
+        subs.items(),
+        key=lambda item: (
+            item[1].get("start") is None,
+            item[1].get("start") or 0,
+        ),
+    )
+
+
 @dataclass
 class TutorialResult:
     base_model_name: str
@@ -61,28 +94,22 @@ class TutorialResult:
         print(f"Training run status: {self.training_run_status}")
         print(f"Total duration (s): {self.total_duration_s}")
 
-        step_keys = set(self.step_times or {})
-        sub_keys = set(self.substep_times or {})
-        keys = sorted(step_keys | sub_keys, key=lambda k: int(k) if k.isdigit() else k)
+        keys = _step_keys(self)
         if not keys:
             return
 
         print("Timings:")
         for key in keys:
-            step = (self.step_times or {}).get(key) or {}
+            step = (self.step_times or {}).get(key, {})
             duration = step.get("duration_s")
             print(f"Step {key} ({_fmt_secs(duration)})")
 
-            subs = (self.substep_times or {}).get(key, {})
-            ordered = sorted(
-                subs.items(),
-                key=lambda item: (
-                    item[1].get("start") is None,
-                    item[1].get("start") or 0,
-                ),
-            )
-            for name, entry in ordered:
-                print(f"    {name}: {_fmt_secs(entry.get('duration_s'))}")
+            for name, entry in _ordered_substeps(
+                (self.substep_times or {}).get(key, {})
+            ):
+                print(
+                    f"    {_substep_label(name)}: {_fmt_secs(entry.get('duration_s'))}"
+                )
 
     def to_dict(self) -> dict:
         data = asdict(self)
@@ -322,20 +349,59 @@ def run_base_training_on_slime(
     )
 
 
+def _status_label(result: TutorialResult) -> str:
+    if result.succeeded:
+        return "✅ completed"
+    return f"❌ {result.training_run_status.value}"
+
+
+def _format_result_details(result: TutorialResult) -> list[str]:
+    """Markdown <details> block with run status and a consolidated timing table."""
+    lines = [
+        "<details>",
+        f"<summary>{result.base_model_name}</summary>",
+        "",
+        f"`{result.training_run_id}` — {_status_label(result)}",
+        "",
+    ]
+
+    keys = _step_keys(result)
+    if not keys:
+        lines.extend(["_No step timing data._", "", "</details>", ""])
+        return lines
+
+    lines.extend(
+        [
+            "| Phase | Duration |",
+            "| --- | --- |",
+        ]
+    )
+    for key in keys:
+        step = (result.step_times or {}).get(key) or {}
+        for name, entry in _ordered_substeps(
+            (result.substep_times or {}).get(key) or {}
+        ):
+            lines.append(
+                f"| {_substep_label(name)} | {_fmt_secs(entry.get('duration_s'))} |"
+            )
+        lines.append(f"| Step {key} | {_fmt_secs(step.get('duration_s'))} |")
+    lines.append(f"| Total duration | {_fmt_secs(result.total_duration_s)} |")
+    lines.extend(["", "</details>", ""])
+    return lines
+
+
 def summarize_results(results_dir: str) -> str:
     rows = []
+    details: list[str] = []
     for path in sorted(Path(results_dir).glob("*.json")):
         result = TutorialResult.from_dict(json.loads(path.read_text()))
-        status = (
-            "✅ completed"
-            if result.succeeded
-            else f"❌ {result.training_run_status.value}"
-        )
+        status = _status_label(result)
         rows.append(
             f"| {result.base_model_name} | {status} "
             f"| {result.total_duration_s:.1f}s | {result.step_count} "
             f"| `{result.training_run_id}` |"
         )
+        details.extend(_format_result_details(result))
 
     lines = [
         "<!-- validate-models-comment -->",
@@ -345,7 +411,10 @@ def summarize_results(results_dir: str) -> str:
         "| --- | --- | --- | --- | --- |",
     ]
     lines.extend(rows or ["| _no results_ | | | | |"])
-    return "\n".join(lines)
+    if details:
+        lines.extend(["", "### Step timings", ""])
+        lines.extend(details)
+    return "\n".join(lines).rstrip() + "\n"
 
 
 def __main__():
