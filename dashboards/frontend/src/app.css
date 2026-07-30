@@ -1259,6 +1259,55 @@ table.resizable-table.sticky-first-column tr.row-selected td:first-child {
   line-height: 16px;
 }
 
+.recipe-params-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.recipe-params-title {
+  margin-bottom: 0;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.recipe-params-count {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 16px;
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+
+.recipe-params-copy {
+  border: 1px solid var(--color-c-gray-10, #2f2f2f);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--panel-alt) 74%, black);
+  color: var(--text);
+  font-size: 11px;
+  line-height: 14px;
+  padding: 3px 8px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.recipe-params-copy:hover {
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+.recipe-params-search {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--color-c-gray-10, #2f2f2f);
+  border-radius: 6px;
+  background: transparent;
+  width: 100%;
+  padding: 6px 8px;
+  margin-bottom: 8px;
+}
+
 /* ===== FrameworkSection.svelte ===== */
 .framework-section {
   background: var(--panel);
