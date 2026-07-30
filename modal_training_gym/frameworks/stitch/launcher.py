@@ -440,6 +440,7 @@ def build_stitch_app(
         modal_app_url: str = "",
         framework_status_url: str = "",
         framework_status_token: str = "",
+        rollout_endpoint_url: str = "",
     ) -> dict:
         """Bring up Ray, claim the rollout pool for this run, and drive slime."""
         del modal_app_url  # derived from modal_app_id in the run record
@@ -489,10 +490,12 @@ def build_stitch_app(
             async_mode=payload["async_mode"],
             slime_model_script=payload["slime_model_script"],
         )
-        # Reach the pool through its Flash gateway. The in-app class handle is
-        # hydrated in this container, so this resolves in an ephemeral run too
-        # (Flash lookups by app name only work once the app is deployed).
-        cfg.rollout_endpoint_url = trainer_helpers.flash_gateway_url(Server)
+        # The pool's Flash gateway, resolved by whoever launched this call (see
+        # _PoolAwareTrain). Falls back to a lookup by app name, which only works
+        # against a deployed pool.
+        cfg.rollout_endpoint_url = (
+            rollout_endpoint_url or trainer_helpers.deployed_gateway_url(app_name)
+        )
         # Flash holds requests through a cold-starting pool, but slime's first
         # rollout would otherwise meet engines that are still loading.
         trainer_helpers.await_gateway_ready(
@@ -614,8 +617,43 @@ def build_stitch_app(
     # other launchers do, so callers address them without the registry.
     for tag, fn in app.registered_functions.items():
         setattr(app, tag, fn)
+    app.train = _PoolAwareTrain(train, Server)  # pyright: ignore[reportAttributeAccessIssue]
 
     return app
+
+
+class _PoolAwareTrain:
+    """``app.train`` proxy that resolves the rollout pool's gateway client-side.
+
+    The trainer can't discover it itself: an ephemeral app can't be looked up by
+    name (``flash_get_containers`` / ``Cls.from_name`` need a deployed app), its
+    containers' app object exposes no sibling objects, and a ``Cls`` handle can't
+    be captured in the trainer's closure (Modal refuses to serialize unhydrated
+    objects). The launching client, inside ``app.run()``, does have the hydrated
+    handle — so it passes the gateway URL in as an argument.
+    """
+
+    def __init__(self, fn: modal.Function, server_cls: modal.Cls) -> None:
+        self._fn = fn
+        self._server_cls = server_cls
+
+    def _with_gateway(self, kwargs: dict) -> dict:
+        from modal_training_gym.frameworks.stitch import trainer_helpers
+
+        if not kwargs.get("rollout_endpoint_url"):
+            kwargs["rollout_endpoint_url"] = trainer_helpers.flash_gateway_url(
+                self._server_cls
+            )
+        return kwargs
+
+    def spawn(self, *args, **kwargs) -> modal.FunctionCall:
+        return self._fn.spawn(*args, **self._with_gateway(kwargs))
+
+    def remote(self, *args, **kwargs):
+        return self._fn.remote(*args, **self._with_gateway(kwargs))
+
+    def __getattr__(self, name: str):
+        return getattr(self._fn, name)
 
 
 def smoke_flash_pool(

@@ -110,6 +110,11 @@ def flash_gateway_url(server_cls: Any) -> str:
     return str(urls[0]).rstrip("/")
 
 
+def deployed_gateway_url(app_name: str, cls_name: str = "Server") -> str:
+    """The pool's Flash gateway URL looked up by app name — deployed pools only."""
+    return _FlashPool(app_name, cls_name).gateway_url()
+
+
 def await_gateway_ready(
     gateway: str,
     *,
