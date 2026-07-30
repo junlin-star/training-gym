@@ -430,6 +430,18 @@
     cursorTime = null;
   }
 
+  function nudgeZoom(factor) {
+    const range = effectiveViewEnd - viewStart;
+    const mid = viewStart + range / 2;
+    const newRange = Math.min(
+      domainMax * 1.1,
+      Math.max(range * factor, 0.001),
+    );
+    const newStart = Math.max(0, mid - newRange / 2);
+    viewStart = newStart;
+    viewEnd = newStart + newRange;
+  }
+
   // Tooltip content builder.
   function tooltipContent(item) {
     if (!item) return "";
@@ -464,8 +476,10 @@
         </span>
       {/each}
       <span class="ml-auto text-[10px] [color:var(--muted,#a3a3a3)] [font-variant-numeric:tabular-nums]">{spans.length} spans · {fmtDur(domainMax)}</span>
+      <button class="text-[10px] [color:var(--text,#d1d1d1)] [background:none] [border:1px_solid_var(--color-c-gray-15,#3b3b3b)] rounded-[4px] min-h-[28px] min-w-[28px] p-[1px_6px] cursor-pointer [font-family:inherit] hover:[background:var(--color-c-gray-10,#2f2f2f)]" onclick={() => nudgeZoom(1 / 1.15)} aria-label="Zoom in" title="Zoom in">+</button>
+      <button class="text-[10px] [color:var(--text,#d1d1d1)] [background:none] [border:1px_solid_var(--color-c-gray-15,#3b3b3b)] rounded-[4px] min-h-[28px] min-w-[28px] p-[1px_6px] cursor-pointer [font-family:inherit] hover:[background:var(--color-c-gray-10,#2f2f2f)]" onclick={() => nudgeZoom(1.15)} aria-label="Zoom out" title="Zoom out">−</button>
       {#if viewEnd != null}
-        <button class="text-[10px] [color:var(--accent,#7fee64)] [background:none] [border:1px_solid_var(--color-c-gray-15,#3b3b3b)] rounded-[4px] p-[1px_6px] cursor-pointer [font-family:inherit] hover:[background:var(--color-c-gray-10,#2f2f2f)]" onclick={resetZoom}>reset zoom</button>
+        <button class="text-[10px] [color:var(--accent,#7fee64)] [background:none] [border:1px_solid_var(--color-c-gray-15,#3b3b3b)] rounded-[4px] min-h-[28px] p-[1px_6px] cursor-pointer [font-family:inherit] hover:[background:var(--color-c-gray-10,#2f2f2f)]" onclick={resetZoom}>reset</button>
       {/if}
     </div>
 
@@ -496,7 +510,7 @@
 
     <!-- Footer hint -->
     <div class="p-[4px_10px_6px] text-[10px] [color:var(--muted-strong,#747474)]">
-      drag to pan · scroll to zoom · click to set cursor
+      drag to pan · scroll or +/− to zoom · click to set cursor
     </div>
   </div>
 {:else}
