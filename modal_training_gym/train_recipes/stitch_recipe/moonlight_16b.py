@@ -62,17 +62,20 @@ class Moonlight_16B_A3B_Stitch_Recipe(StitchRecipe):
     )
 
     # ── Rollout / algorithm ─────────────────────────────────────────────────
-    async_mode: bool = True
+    # Upstream stitch runs moonlight one-step-async with bounded-lag requests, but
+    # that regime needs the trainer to wake the pool on publish, and Flash wake is
+    # a deployed-app lookup: in the single-call ephemeral flow replicas only
+    # self-sync on their reconcile poll, so they fall behind the lag bound and
+    # rollout requests 409 until slime gives up. Publish synchronously instead —
+    # the trainer waits for the pool at each version, which is what this example
+    # is demonstrating anyway.
+    async_mode: bool = False
     update_weights_interval: int = 1
     num_rollout: int = 5
     rollout_batch_size: int = 32
     rollout_max_response_len: int = 4096
     n_samples_per_prompt: int = 8
     global_batch_size: int = 128
-    # Async mode publishes while rollouts are in flight, so a request pinned to
-    # the exact newest version would stall; allow one version of lag.
-    rollout_request_weight_version_mode: str = "min"
-    rollout_request_weight_version_lag: int = 1
     # R3: replay the rollout engine's expert routing in the train forward.
     use_rollout_routing_replay: bool = True
 

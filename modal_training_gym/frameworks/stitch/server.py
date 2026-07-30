@@ -8,6 +8,7 @@ SGLang server on ``sglang_port``.
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from huggingface_hub import snapshot_download
@@ -110,6 +111,7 @@ def serve_startup(
         commit_mode=commit_mode,
         flush_cache_on_commit=flush_cache_on_commit,
         debug_requests=debug_requests,
+        log_path=f"{bulletin_root}/logs/sidecar-{os.environ.get('MODAL_TASK_ID', 'local')}.log",
     )
     # Modal admits the container to Flash routing when @enter returns and never
     # re-polls /health, so blocking here (503 until the reconciler's first
