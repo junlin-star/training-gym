@@ -344,12 +344,14 @@
           </label>
         {/if}
         {#if filteredRecipeParams.length}
-          {#each filteredRecipeParams as row (row.key)}
-            <div class="kv">
-              <span class="kv-key" title={row.key}>{row.label}</span>
-              <span class="kv-value kv-value-mono" title={row.fullValue}>{row.displayValue}</span>
-            </div>
-          {/each}
+          <div class="recipe-params-list">
+            {#each filteredRecipeParams as row (row.key)}
+              <div class="kv">
+                <span class="kv-key" title={row.key}>{row.label}</span>
+                <span class="kv-value kv-value-mono" title={row.fullValue}>{row.displayValue}</span>
+              </div>
+            {/each}
+          </div>
         {:else}
           <div class="text-(--muted) text-[12px] leading-[16px]">No parameters match "{paramFilter.trim()}".</div>
         {/if}

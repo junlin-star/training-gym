@@ -1308,6 +1308,12 @@ table.resizable-table.sticky-first-column tr.row-selected td:first-child {
   margin-bottom: 8px;
 }
 
+.recipe-params-list {
+  max-height: 360px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
 /* ===== FrameworkSection.svelte ===== */
 .framework-section {
   background: var(--panel);
