@@ -8,7 +8,6 @@ and probe torch-distributed rank/barrier for the rank-gated publish hooks.
 from __future__ import annotations
 
 import os
-import shlex
 import signal
 import socket
 import subprocess
@@ -16,7 +15,6 @@ import threading
 import time
 import urllib.error
 import urllib.request
-from pathlib import Path
 
 SIDECAR_MODULE = "modal_training_gym.frameworks.stitch.sidecar"
 
@@ -34,7 +32,6 @@ def start_sidecar(
     commit_mode: str,
     flush_cache_on_commit: bool = False,
     debug_requests: bool = False,
-    log_path: str | None = None,
 ) -> subprocess.Popen:
     """Launch the versioned rollout proxy (the stitch sidecar) beside SGLang."""
     cmd = [
@@ -67,20 +64,11 @@ def start_sidecar(
     if debug_requests:
         cmd.append("--debug-requests")
     print("Starting sidecar:", " ".join(cmd))
-    if log_path is None:
-        return subprocess.Popen(cmd, start_new_session=True)
-    # Also persist to the bulletin volume: a replica's container log window only
-    # keeps the tail, which SGLang's per-batch logging overruns in seconds, so
-    # sync decisions are otherwise unreadable once the app is gone.
-    Path(log_path).parent.mkdir(parents=True, exist_ok=True)
-    return subprocess.Popen(
-        [
-            "bash",
-            "-lc",
-            f"set -o pipefail; {shlex.join(cmd)} 2>&1 | tee -a {shlex.quote(log_path)}",
-        ],
-        start_new_session=True,
-    )
+    # Note: do not tee this to the bulletin volume. An open file on a Modal Volume
+    # makes ``Volume.reload()`` fail with "there are open files preventing the
+    # operation", which is exactly the call the reconciler uses to see new
+    # versions — the replica would then never sync.
+    return subprocess.Popen(cmd, start_new_session=True)
 
 
 def wait_http(url: str, process: subprocess.Popen | None, timeout: int) -> None:
