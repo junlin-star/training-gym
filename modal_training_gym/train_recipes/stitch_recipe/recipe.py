@@ -149,11 +149,12 @@ class StitchRecipe(BaseTrainRecipe):
     # "quiesce" drains in-flight requests before applying.
     sidecar_commit_mode: str = "in_place"
     sidecar_debug_requests: bool = False
-    # Loader the engine uses for a delta apply. Empty → whatever --load-format the
-    # server booted with. Worth overriding: "fastsafetensors" is the fastest cold
-    # start but its copier allocates a GPU staging buffer per shard *block*
-    # (hundreds of MB) on top of the live weights, which a full engine cannot
-    # afford; "auto" streams tensor by tensor.
+    # Loader the engine uses for a delta apply, when it should differ from the
+    # boot loader ("fastsafetensors" is the fastest cold start, but its copier
+    # stages whole shard blocks through GPU memory). Empty → the server's
+    # --load-format. Note that SGLang keeps the server's
+    # --model-loader-extra-config for online updates too, so overriding this to a
+    # format that rejects those keys needs the extra config dropped as well.
     sidecar_disk_load_format: str = ""
     # Drop the engine's KV cache when a version commits. Off by default: the
     # engine namespaces cached prefixes per version, so a flush only costs

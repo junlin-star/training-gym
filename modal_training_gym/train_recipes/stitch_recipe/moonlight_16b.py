@@ -37,11 +37,6 @@ class Moonlight_16B_A3B_Stitch_Recipe(StitchRecipe):
     rollout_max_containers: int | None = 4
 
     # ── Model (arch comes from slime's model script, not ModelArchitecture) ─
-    # fastsafetensors is the fastest cold start, but its copier stages each shard
-    # block through a GPU buffer (800 MB at a time) — unaffordable beside a live
-    # engine, and pointless for a ~0.5 GB sparse delta.
-    sidecar_disk_load_format: str = "auto"
-
     slime_model_script: str = "scripts/models/moonlight.sh"
     hf_checkpoint: str = "moonshotai/Moonlight-16B-A3B-Instruct"
     ref_load: str = "moonshotai/Moonlight-16B-A3B-Instruct"
