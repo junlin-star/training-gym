@@ -28,7 +28,13 @@ class Moonlight_16B_A3B_Stitch_Recipe(StitchRecipe):
     actor_num_nodes: int = 2
     actor_num_gpus_per_node: int = 8
     rollout_num_gpus_per_engine: int = 1
-    rollout_min_containers: int = 3
+    # A rollout step issues ``rollout_batch_size * n_samples_per_prompt`` = 256
+    # concurrent requests, and a replica accepts ``sglang_server_concurrency``
+    # = 64. Keep the whole batch's worth of replicas warm: a 16B MoE takes ~4min
+    # to load, far longer than slime's own HTTP retry budget, so letting Flash
+    # cold-scale into the first rollout step 503s the run out.
+    rollout_min_containers: int = 4
+    rollout_max_containers: int | None = 4
 
     # ── Model (arch comes from slime's model script, not ModelArchitecture) ─
     slime_model_script: str = "scripts/models/moonlight.sh"
@@ -57,7 +63,7 @@ class Moonlight_16B_A3B_Stitch_Recipe(StitchRecipe):
     async_mode: bool = True
     update_weights_interval: int = 1
     num_rollout: int = 5
-    rollout_batch_size: int = 64
+    rollout_batch_size: int = 32
     rollout_max_response_len: int = 4096
     n_samples_per_prompt: int = 8
     global_batch_size: int = 128

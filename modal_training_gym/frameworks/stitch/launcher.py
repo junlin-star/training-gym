@@ -560,14 +560,27 @@ def build_stitch_app(
             os.environ["WANDB_RESUME"] = "allow"
             if recipe.wandb.entity:
                 os.environ["WANDB_ENTITY"] = recipe.wandb.entity
+        # Tee slime's output to the checkpoints volume: a container's log window
+        # only keeps the tail, so a failure whose traceback scrolled past (slime
+        # retries rollout requests loudly) is otherwise unreadable afterwards.
+        trainer_log = CHECKPOINTS_PATH / "logs" / f"{record_id}-trainer.log"
+        trainer_log.parent.mkdir(parents=True, exist_ok=True)
         status = TrainingRunStatus.COMPLETED
         try:
-            subprocess.run(["bash", "-lc", cmd], check=True)
+            subprocess.run(
+                [
+                    "bash",
+                    "-lc",
+                    f"set -o pipefail; ({cmd}) 2>&1 | tee -a {trainer_log}",
+                ],
+                check=True,
+            )
         except BaseException:
             status = TrainingRunStatus.FAILED
             raise
         finally:
             _record_run_finished(run_record, status)
+            checkpoints_volume.commit()
 
         result = TrainResult(
             app_name=app_name,
