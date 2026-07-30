@@ -488,8 +488,15 @@ def __main__():
         help="Disable W&B logging for this validator run.",
     )
 
-    subparsers.add_parser(
+    list_parser = subparsers.add_parser(
         "list", help="Print available model names as a JSON array and exit."
+    )
+    list_parser.add_argument(
+        "--skip",
+        nargs="+",
+        default=[],
+        metavar="MODEL",
+        help="Omit models with these names from the list.",
     )
 
     summarize_parser = subparsers.add_parser(
@@ -506,7 +513,12 @@ def __main__():
     args = parser.parse_args()
 
     if args.command == "list":
-        print(json.dumps(available_model_names()))
+        skipped_models = {name.rsplit("/", 1)[-1] for name in args.skip}
+        print(
+            json.dumps(
+                [name for name in available_model_names() if name not in skipped_models]
+            )
+        )
         return
 
     if args.command == "summarize":
