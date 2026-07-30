@@ -118,6 +118,8 @@ def test_runs_route_filters_and_sorts_by_last_update(
         "run-route-2",
         "run-route-1",
     ]
+
+
 def test_apple_touch_icon_is_served_as_png(monkeypatch, tmp_path):
     with _client(monkeypatch, tmp_path) as client:
         response = client.get("/apple-touch-icon.png")
