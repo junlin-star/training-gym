@@ -73,6 +73,8 @@ RAY_PORT = 6379
 SERVER_STARTUP_TIMEOUT = 35 * MINUTES
 # Ephemeral host-local full HF checkpoint the sidecar patches in place per delta.
 LOCAL_CHECKPOINT_PATH = "/local-checkpoint"
+# Where each replica tees its sidecar log (its own volume — see below).
+ROLLOUT_LOG_PATH = "/rollout-logs"
 
 
 class _SlimeArgs:
@@ -351,6 +353,13 @@ def build_stitch_app(
         delta_volume_name, create_if_missing=True, version=2
     )
     sglang_cache_volume = modal.Volume.from_name("sglang-cache", create_if_missing=True)
+    # Durable per-replica sidecar logs. Deliberately NOT the bulletin volume: an
+    # open file there makes the reconciler's Volume.reload() fail with "there are
+    # open files preventing the operation". v2 so writes are visible without an
+    # explicit commit from a replica that may be killed at any time.
+    rollout_log_volume = modal.Volume.from_name(
+        f"{volume_prefix}-rollout-logs", create_if_missing=True, version=2
+    )
     train_volumes: dict[str | PurePosixPath, modal.Volume | modal.CloudBucketMount] = {
         str(HF_CACHE_PATH): hf_cache_volume,
         str(DATA_PATH): data_volume,
@@ -375,6 +384,7 @@ def build_stitch_app(
             str(HF_CACHE_PATH): hf_cache_volume,
             serving_image.SGLANG_CACHE_PATH: sglang_cache_volume,
             delta_bulletin_root: delta_volume,
+            ROLLOUT_LOG_PATH: rollout_log_volume,
         },
         secrets=[hf_secret],
         min_containers=recipe.rollout_min_containers,
@@ -413,6 +423,7 @@ def build_stitch_app(
                 commit_mode=recipe.sidecar_commit_mode,
                 flush_cache_on_commit=recipe.sidecar_flush_cache_on_commit,
                 debug_requests=recipe.sidecar_debug_requests,
+                log_dir=ROLLOUT_LOG_PATH,
                 startup_timeout=SERVER_STARTUP_TIMEOUT,
             )
 
