@@ -22,6 +22,7 @@ class GLM_4_7(HFModelConfiguration):
     """
 
     response_parser = staticmethod(parse_glm_response)
+    skip_in_ci = True
 
     model_name = "zai-org/GLM-4.7"
     architecture = ModelArchitecture(

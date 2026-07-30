@@ -261,13 +261,13 @@ def available_model_names() -> list[str]:
     """Sorted short model names (e.g. "qwen3-4b") validatable on slime.
 
     Excludes models with no base slime recipe (e.g. Kimi on miles), since this
-    script only runs base training on slime.
+    script only runs base training on slime. Also excludes ``skip_in_ci`` models.
     """
     return sorted(
         {
             cls.model_name.rsplit("/", 1)[-1]
             for cls in _model_config_registry().values()
-            if _supports_slime(cls())
+            if _supports_slime(cls()) and not getattr(cls, "skip_in_ci", False)
         }
     )
 

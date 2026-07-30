@@ -180,6 +180,7 @@ class ModelConfig:
     model_path: str | None = None
     architecture: ModelArchitecture | None = None
     response_parser: ResponseParser | None = None
+    skip_in_ci: bool = False
 
     def __init__(self, **kwargs: Any) -> None:
         for k, v in kwargs.items():

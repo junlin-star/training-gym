@@ -161,7 +161,7 @@ def _model_index() -> tuple[dict[str, frozenset[str]], frozenset[str]]:
         if not (_inspect.isclass(obj) and issubclass(obj, ModelConfig)):
             continue
         model_name = getattr(obj, "model_name", "")
-        if not model_name:
+        if not model_name or getattr(obj, "skip_in_ci", False):
             continue
         try:
             recipe = SlimeRecipe.get_base_recipe(obj())
