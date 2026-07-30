@@ -102,10 +102,12 @@ def download_baseline_for_model(
         if not _is_from_merged_pr(repo, artifact, merged_sha_cache):
             continue
         with _fetch_artifact_zip(artifact, token) as archive:
-            result = json.loads(archive.read(f"{artifact_name}.json"))
+            result_name = f"{artifact_name}.json"
+            result_bytes = archive.read(result_name)
+            result = json.loads(result_bytes)
             if not result.get("succeeded"):
                 continue
-            archive.extractall(baseline_dir)
+            (baseline_dir / result_name).write_bytes(result_bytes)
             _write_baseline_meta(
                 repo, artifact, baseline_dir / f"{artifact_name}.meta.json"
             )
