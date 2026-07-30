@@ -106,7 +106,9 @@ def download_baseline_for_model(
             if not result.get("succeeded"):
                 continue
             archive.extractall(baseline_dir)
-            _write_baseline_meta(repo, artifact, baseline_dir / f"{artifact_name}.meta.json")
+            _write_baseline_meta(
+                repo, artifact, baseline_dir / f"{artifact_name}.meta.json"
+            )
         print(f"downloaded baseline {artifact_name!r} (artifact id {artifact.id})")
         return True
     print(
@@ -116,9 +118,7 @@ def download_baseline_for_model(
     return False
 
 
-def _write_baseline_meta(
-    repo: Repository, artifact: Artifact, meta_path: Path
-) -> None:
+def _write_baseline_meta(repo: Repository, artifact: Artifact, meta_path: Path) -> None:
     """Persist commit provenance next to the extracted baseline result JSON."""
     run = artifact.workflow_run
     sha = run.head_sha if run is not None else None
