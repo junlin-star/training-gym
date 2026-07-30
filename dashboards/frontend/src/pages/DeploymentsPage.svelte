@@ -312,7 +312,7 @@
 
 <svelte:window onclick={() => (statusMenuOpen = false)} />
 
-<section class="summary-sticky grid [grid-template-columns:repeat(3,minmax(0,1fr))] gap-[14px] p-[0_24px] mb-[24px] max-[1080px]:[grid-template-columns:repeat(2,minmax(0,1fr))] max-[760px]:[grid-template-columns:1fr]">
+<section class="summary-sticky grid [grid-template-columns:repeat(3,minmax(0,1fr))] gap-[14px] p-[0_24px] mb-[24px] max-[1080px]:[grid-template-columns:repeat(2,minmax(0,1fr))]">
   <article class="summary-card">
     <span class="summary-label">Total deployments</span>
     <strong>{allDeployments.length}</strong>
@@ -329,8 +329,8 @@
 
 <section class="[border:0] [background:transparent] grid [grid-template-columns:minmax(0,1fr)] min-h-[520px] p-[0_24px_16px] max-[900px]:pb-[24px]">
   <div class="min-w-0">
-    <div class="[border-bottom:0] p-[0_0_24px] flex items-center gap-[0.4rem] max-[760px]:flex-col max-[760px]:items-stretch">
-      <label class="inline-flex items-center gap-[8px] [border:1px_solid_var(--color-c-gray-10,#2f2f2f)] rounded-[6px] [background:transparent] w-[260px] p-[6px_8px] max-[760px]:w-full" aria-label="Search deployments">
+    <div class="[border-bottom:0] p-[0_0_24px] flex items-center gap-[0.4rem] max-[900px]:flex-col max-[900px]:items-stretch">
+      <label class="inline-flex items-center gap-[8px] [border:1px_solid_var(--color-c-gray-10,#2f2f2f)] rounded-[6px] [background:transparent] w-[260px] p-[6px_8px] max-[900px]:w-full" aria-label="Search deployments">
         <span class="search-icon"><Search size={13} /></span>
         <input
           type="search"
