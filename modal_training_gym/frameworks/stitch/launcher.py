@@ -60,6 +60,7 @@ from modal_training_gym.train_recipes.stitch_recipe.recipe import (
     CHECKPOINTS_PATH,
     DATA_PATH,
     HF_CACHE_PATH,
+    HOOK_CONFIG_FIELDS,
     YAML_CONFIG_FIELDS,
     StitchRecipe,
     fields_to_argv,
@@ -512,6 +513,9 @@ def build_stitch_app(
         # namespace; merge over any user extra_config already on
         # custom_config_path.
         custom_config = dict(getattr(cfg, "custom_config_path", None) or {})
+        custom_config.update(
+            {field: getattr(recipe, field) for field in sorted(HOOK_CONFIG_FIELDS)}
+        )
         custom_config.update(
             {
                 "update_weight_delta_volume_name": delta_volume_name,

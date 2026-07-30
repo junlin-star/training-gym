@@ -53,11 +53,27 @@ __all__ = [
     "DATA_PATH",
     "HF_CACHE_PATH",
     "SLIME_IMAGE_TAG",
+    "HOOK_CONFIG_FIELDS",
     "SLIME_REPO_REF",
     "SLIME_REPO_URL",
     "YAML_CONFIG_FIELDS",
     "StitchRecipe",
 ]
+
+# Fields only stitch's own hooks read, off the slime args namespace. slime defines
+# no such CLI flags, and its parser is parse_known_args — passing them as flags
+# drops them silently (the hooks then see their fallbacks, e.g. 60 request
+# retries instead of the configured budget). The launcher merges these into
+# ``custom_config_path`` instead, which slime setattrs onto args.
+HOOK_CONFIG_FIELDS = frozenset(
+    {
+        "rollout_request_weight_version_mode",
+        "rollout_request_weight_version_lag",
+        "rollout_request_retry_attempts",
+        "rollout_request_retry_sleep",
+        "rollout_session_affinity_header",
+    }
+)
 
 # Fields slime reads as YAML files at runtime. Recipes set them as inline dicts;
 # the launcher materializes them to temp YAML files before building the command.
@@ -99,7 +115,7 @@ _STITCH_SKIP = {
     "slime_image_tag",
     "slime_repo_url",
     "slime_repo_ref",
-}
+} | HOOK_CONFIG_FIELDS
 
 
 @dataclass(config=ConfigDict(extra="forbid", arbitrary_types_allowed=True))
