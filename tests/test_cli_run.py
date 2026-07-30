@@ -319,6 +319,7 @@ def test_run_logs_follow_streams_lines_until_done():
     FakeDashboardClient.streams["/api/runs/run-1/logs/stream"] = [
         ("message", '{"task_id":"task-1","line":"hello\\n","ts":100}'),
         ("dropped", '{"dropped":2}'),
+        ("reconnect", '{"reason":"temporary error"}'),
         ("message", '{"task_id":"task-1","line":"world\\n","ts":101}'),
         ("done", "{}"),
     ]
@@ -331,6 +332,7 @@ def test_run_logs_follow_streams_lines_until_done():
     assert result.exit_code == 0
     assert result.stdout == "hello\nworld\n"
     assert "[dropped 2 log lines]" in result.stderr
+    assert "[reconnecting log stream]" in result.stderr
     assert FakeDashboardClient.requests == [
         ("/api/runs/run-1/logs/stream", {"search": "worker"})
     ]

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+from types import SimpleNamespace
+
 from fastapi.testclient import TestClient
 
 from modal_training_gym import _dashboard
@@ -162,3 +165,70 @@ def test_runs_route_isolates_invalid_run_records(fake_volume, monkeypatch, tmp_p
 
     assert response.status_code == 200
     assert [run["training_run_id"] for run in response.json()] == ["run-route-1"]
+
+
+def test_run_log_stream_events_always_include_json_data(
+    fake_volume, monkeypatch, tmp_path
+):
+    _save_records()
+    monkeypatch.setenv("MODAL_TOKEN_ID", "test-token-id")
+    monkeypatch.setenv("MODAL_TOKEN_SECRET", "test-token-secret")
+
+    batch = SimpleNamespace(
+        entry_id="entry-1",
+        task_id="task-1",
+        items=[
+            SimpleNamespace(data="first\n", timestamp=100.0),
+            SimpleNamespace(data="second\n", timestamp=101.0),
+        ],
+        app_done=True,
+    )
+
+    class FakeAppGetLogs:
+        def __init__(self):
+            self.calls = 0
+
+        def unary_stream(self, _request):
+            self.calls += 1
+
+            async def stream():
+                if self.calls == 1:
+                    raise RuntimeError("temporary failure")
+                yield batch
+
+            return stream()
+
+    fake_rpc = FakeAppGetLogs()
+    fake_modal_client = SimpleNamespace(
+        stub=SimpleNamespace(AppGetLogs=fake_rpc),
+    )
+
+    async def from_credentials(*_args, **_kwargs):
+        return fake_modal_client
+
+    async def no_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr("modal.client._Client.from_credentials", from_credentials)
+    monkeypatch.setattr(_dashboard.asyncio, "sleep", no_sleep)
+
+    with _client(monkeypatch, tmp_path) as client:
+        response = client.get("/api/runs/run-route-1/logs/stream?max_lines_per_sec=1")
+
+    assert response.status_code == 200
+    blocks = [block for block in response.text.split("\n\n") if block]
+    assert [block.splitlines()[0] for block in blocks] == [
+        "event: reconnect",
+        'data: {"task_id": "task-1", "line": "first\\n", "ts": 100.0}',
+        "event: dropped",
+        "event: done",
+    ]
+    reconnect_data = blocks[0].splitlines()[1]
+    assert json.loads(reconnect_data.removeprefix("data: ")) == {
+        "reason": "temporary failure"
+    }
+    for block in blocks:
+        data_line = next(
+            line for line in block.splitlines() if line.startswith("data: ")
+        )
+        assert isinstance(json.loads(data_line.removeprefix("data: ")), dict)

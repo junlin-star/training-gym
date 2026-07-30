@@ -222,6 +222,8 @@ def test_iter_sse_parses_named_and_default_events(mock_transport):
                 'data: {"line":"hello"}\n\n'
                 "event: dropped\n"
                 'data: {"dropped":2}\n\n'
+                "event: reconnect\n"
+                'data: {"reason":"temporary error"}\n\n'
                 "event: done\n"
                 "data: {}\n\n"
             ),
@@ -234,6 +236,7 @@ def test_iter_sse_parses_named_and_default_events(mock_transport):
     assert events == [
         ("message", '{"line":"hello"}'),
         ("dropped", '{"dropped":2}'),
+        ("reconnect", '{"reason":"temporary error"}'),
         ("done", "{}"),
     ]
 
