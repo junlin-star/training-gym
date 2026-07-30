@@ -46,8 +46,14 @@ class Moonlight_16B_A3B_Stitch_Recipe(StitchRecipe):
     sglang_server_concurrency: int = 64
     sglang_server_args: dict[str, str] = field(
         default_factory=lambda: {
-            "--load-format": "fastsafetensors",
-            "--model-loader-extra-config": '{"enable_gds":false}',
+            # Boot on the default loader, not fastsafetensors: SGLang reuses the
+            # server's load format (and its --model-loader-extra-config) for
+            # online updates too, and the fastsafetensors copier stages each
+            # shard block through an 800 MB GPU buffer. A replica applying a
+            # delta while it serves has nowhere to put that — the engine's static
+            # pool plus in-flight decode leave ~200 MB free — so it OOMs, while
+            # an idle replica squeaks through. Streaming tensor by tensor costs a
+            # slower cold start and applies under load.
             "--weight-loader-drop-cache-after-load": "",
             "--context-length": "8192",
             # An in-place apply loads incoming shards beside the live weights, so
