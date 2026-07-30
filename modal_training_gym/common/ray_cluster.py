@@ -21,12 +21,6 @@ from modal.experimental import clustered
 RAY_PORT = 6379
 RAY_DASHBOARD_PORT = 8265
 
-# GCS health-check tolerance for the head node. Large distributed checkpoint
-# saves (e.g. sharded torch_dist optimizer state for big MoE models) can pin a
-# node's CPU/IO for minutes, during which its raylet cannot answer GCS health
-# pings and a healthy node is otherwise false-killed ("marked as dead by the
-# GCS ... overloaded"). Widening the failure window keeps such busy-but-alive
-# nodes in the cluster while still detecting genuinely dead nodes within ~10min.
 _GCS_HEALTH_CHECK_ENV = {
     "RAY_health_check_period_ms": "10000",
     "RAY_health_check_timeout_ms": "20000",
