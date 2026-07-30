@@ -56,5 +56,5 @@ class Qwen3_4b_Stitch_Recipe(StitchRecipe):
     max_tokens_per_gpu: int = 9216
     lr: float = 1e-6
 
-    rm_type: str = "math"
+    rm_type: str | None = "math"
     save_interval: int = 20

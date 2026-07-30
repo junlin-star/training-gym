@@ -47,6 +47,10 @@ _EXPORTS = {
         "Kimi_K2_6_LoRA_Recipe",
     ),
     "MilesConfig": ("modal_training_gym.train_recipes.miles_recipe", "MilesConfig"),
+    "Moonlight_16B_A3B": (
+        "modal_training_gym.common.models",
+        "Moonlight_16B_A3B",
+    ),
     "parse_qwen3_response": (
         "modal_training_gym.common.models",
         "parse_qwen3_response",
@@ -109,6 +113,7 @@ __all__ = [
     "MultimodalDataset",
     "list_checkpoints",
     "Kimi_K2_6",
+    "Moonlight_16B_A3B",
     "Kimi_K2_5",
     "METADATA_VOLUME_NAME",
     "MetadataStore",
