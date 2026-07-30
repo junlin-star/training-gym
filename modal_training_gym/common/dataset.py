@@ -201,7 +201,6 @@ class HuggingFaceDataset(DatasetConfig):
             if sys_prompt:
                 msgs.append({"role": "system", "content": sys_prompt})
             msgs.append({"role": "user", "content": user_content})
-            msgs.append({"role": "assistant", "content": row[out_col]})
             return {"messages": msgs, label_key: str(row[out_col])}
 
         return ds.map(_to_chat, remove_columns=ds.column_names)

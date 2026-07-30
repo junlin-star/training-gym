@@ -1140,6 +1140,12 @@ def fastapi_app():
     async def favicon():
         return FileResponse(f"{STATIC_DIR}/favicon.svg", media_type="image/svg+xml")
 
+    @web.get("/apple-touch-icon.png", include_in_schema=False)
+    async def apple_touch_icon():
+        return FileResponse(
+            f"{STATIC_DIR}/apple-touch-icon.png", media_type="image/png"
+        )
+
     # ── SPA fallback ─────────────────────────────────────────────────────
 
     @web.get("/{full_path:path}")

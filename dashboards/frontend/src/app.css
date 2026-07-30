@@ -248,6 +248,7 @@ body {
   background: var(--bg);
   color: var(--text);
   min-height: 100vh;
+  overflow-x: hidden;
   -moz-osx-font-smoothing: grayscale;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
@@ -421,8 +422,8 @@ input {
 /* ===== components/ResizableTable.svelte ===== */
 table.resizable-table {
   table-layout: fixed;
-  width: max(100%, var(--resizable-grid-width, 960px));
-  min-width: var(--resizable-grid-width, 960px);
+  width: max(100%, var(--resizable-grid-width, 100%));
+  min-width: var(--resizable-grid-width, 100%);
 }
 
 table.resizable-table th {
@@ -449,6 +450,27 @@ table.resizable-table th {
   padding: 0;
   background: transparent;
   cursor: col-resize;
+  touch-action: none;
+}
+
+@media (max-width: 900px) {
+  .column-resize-handle {
+    display: none;
+  }
+
+  table.resizable-table th {
+    padding-right: 16px;
+  }
+
+
+  table.training-runs-table.sticky-first-column colgroup col:first-child {
+    width: 128px !important;
+  }
+
+  table.training-runs-table.sticky-first-column th:first-child,
+  table.training-runs-table.sticky-first-column td:first-child {
+    max-width: 128px;
+  }
 }
 
 .column-resize-handle::after {
@@ -757,6 +779,7 @@ table.resizable-table.sticky-first-column tr.row-selected td:first-child {
   z-index: 20;
   width: max-content;
   min-width: 210px;
+  max-width: min(320px, calc(100vw - 2rem));
   max-height: 280px;
   overflow: auto;
   border: 1px solid var(--border);
@@ -1259,6 +1282,61 @@ table.resizable-table.sticky-first-column tr.row-selected td:first-child {
   line-height: 16px;
 }
 
+.recipe-params-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.recipe-params-title {
+  margin-bottom: 0;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.recipe-params-count {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 16px;
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+
+.recipe-params-copy {
+  border: 1px solid var(--color-c-gray-10, #2f2f2f);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--panel-alt) 74%, black);
+  color: var(--text);
+  font-size: 11px;
+  line-height: 14px;
+  padding: 3px 8px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.recipe-params-copy:hover {
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+.recipe-params-search {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--color-c-gray-10, #2f2f2f);
+  border-radius: 6px;
+  background: transparent;
+  width: 100%;
+  padding: 6px 8px;
+  margin-bottom: 8px;
+}
+
+.recipe-params-list {
+  max-height: 360px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
 /* ===== FrameworkSection.svelte ===== */
 .framework-section {
   background: var(--panel);
@@ -1396,7 +1474,9 @@ tr.framework-run-row:last-child td {
 }
 
 .table-wrap {
+  width: 100%;
   max-width: 100%;
+  min-width: 0;
   overflow: auto hidden;
   overscroll-behavior-x: contain;
   overscroll-behavior-y: auto;
@@ -1442,6 +1522,20 @@ tr.framework-run-row:last-child td {
   /* Stacked cards would eat most of a small viewport — let them scroll. */
   .summary-sticky {
     position: static;
+    gap: 10px;
+    padding: 0 16px;
+  }
+
+  .summary-card {
+    height: auto;
+    min-height: 64px;
+    padding: 10px;
+    gap: 4px;
+  }
+
+  .summary-card strong {
+    font-size: 18px;
+    line-height: 24px;
   }
 }
 
@@ -1629,7 +1723,6 @@ tr.framework-run-row:last-child td {
 /* ===== pages/TrainingPage.svelte ===== */
 table.training-runs-table {
   width: 100%;
-  min-width: 960px;
 }
 
 table.training-runs-table tr.row-selected td {
@@ -1750,8 +1843,7 @@ table.training-runs-table td.row-open-cell {
   color: var(--text);
   display: flex;
   flex-direction: column;
-  height: calc(100vh - 129px);
-  max-height: calc(100vh - 129px);
+  flex: 1 1 auto;
   min-height: 0;
   overflow: hidden;
 }
@@ -1771,6 +1863,7 @@ table.training-runs-table td.row-open-cell {
   gap: 6px;
   color: var(--muted);
   font-size: 12px;
+  line-height: 16px;
   text-decoration: none;
 }
 
@@ -1844,22 +1937,77 @@ table.training-runs-table td.row-open-cell {
 }
 
 @media (max-width: 900px) {
+  .detail:not(.embedded) {
+    height: auto;
+    max-height: none;
+    overflow: visible;
+  }
+
   .summary-tab {
-    grid-template-columns: 1fr;
-    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    flex: 0 0 auto;
+    overflow: visible;
+  }
+
+  .summary-tab-main,
+  .summary-tab-side {
+    flex: 0 0 auto;
+    max-height: none;
+    overflow: visible;
   }
 
   .summary-tab-main {
-    overflow-y: visible;
-    max-height: none;
+    padding: 16px;
     padding-bottom: 20px;
   }
 
   .summary-tab-side {
     border-left: 0;
     border-top: 1px solid var(--border, #2f2f2f);
-    max-height: none;
-    overflow-y: visible;
+    padding: 16px;
+  }
+
+  .tab-panel {
+    overflow: visible;
+    flex: 0 0 auto;
+    padding: 16px;
+  }
+
+  .chart-scroll {
+    overflow-x: auto;
+    overflow-y: hidden;
+    touch-action: pan-x;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-x: contain;
+  }
+
+  table.rollout-table.resizable-table {
+    width: 100%;
+    min-width: 0;
+  }
+
+  table.rollout-table {
+    font-size: 12px;
+  }
+
+  table.rollout-table th,
+  table.rollout-table td {
+    padding: 8px 8px;
+  }
+
+  .sample-viewer {
+    margin-inline: 2px;
+    padding: 8px 10px;
+  }
+
+  .sample-viewer-header {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .sample-viewer-hint {
+    display: none;
   }
 }
 
@@ -1929,6 +2077,13 @@ table.rollout-table td {
   font-variant-numeric: tabular-nums;
 }
 
+table.rollout-table td:nth-child(4),
+table.rollout-table th:nth-child(4) .column-label {
+  white-space: normal;
+  overflow-wrap: break-word;
+  line-height: 1.25;
+}
+
 /* ── Per-step sample score distribution ──────────────────────────────── */
 .dist {
   margin-bottom: 16px;
@@ -1977,6 +2132,38 @@ table.rollout-table td {
 }
 
 /* ── Single-sample viewer (bucket drill-in) ──────────────────────────── */
+.sample-viewer {
+  border-left: 2px solid var(--accent);
+  padding: 8px 12px;
+  margin-bottom: 12px;
+  background: var(--color-c-gray-10, #2f2f2f);
+  border-radius: 0 4px 4px 0;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.sample-viewer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 6px;
+  min-width: 0;
+}
+
+.sample-viewer-nav,
+.sample-viewer-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.sample-viewer-hint {
+  font-size: 11px;
+  color: var(--muted);
+}
+
 .sample-nav-btn {
   display: inline-flex;
   align-items: center;
@@ -2176,7 +2363,6 @@ table.rollout-table td {
 
   table.evals-runs-table {
     width: 100%;
-    min-width: 1180px;
   }
 
   .evals-mono {
