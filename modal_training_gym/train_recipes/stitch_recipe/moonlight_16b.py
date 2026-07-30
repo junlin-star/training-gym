@@ -50,12 +50,14 @@ class Moonlight_16B_A3B_Stitch_Recipe(StitchRecipe):
             "--model-loader-extra-config": '{"enable_gds":false}',
             "--weight-loader-drop-cache-after-load": "",
             "--context-length": "8192",
-            "--mem-fraction-static": "0.85",
-            # An in-place apply has to fit beside the live weights, and SGLang's
-            # KV pool otherwise autosizes into every spare byte (it left ~8 MB
-            # free on an H200 and the apply OOM'd mid-flight). Cap the pool at
-            # what full concurrency can actually address — 64 requests × 8k ctx —
-            # which is ~15 GB of MLA KV instead of ~59 GB.
+            # An in-place apply loads incoming shards beside the live weights, so
+            # the engine has to leave room: upstream's 0.85 (with an engine it
+            # drains) leaves ~200 MB free on an H200 and the apply OOMs. Both
+            # levers are needed — the fraction alone doesn't help, because the KV
+            # pool then autosizes into whatever the fraction freed. Capping it at
+            # what full concurrency can address (64 requests × 8k ctx, ~15 GB of
+            # MLA KV instead of ~59 GB) leaves ~64 GB for the apply.
+            "--mem-fraction-static": "0.72",
             "--max-total-tokens": "524288",
             # Routing replay: slime runs no local engine in publish-only mode, so
             # the served engine has to be told to return routed experts.
