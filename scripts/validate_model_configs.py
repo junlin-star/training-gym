@@ -378,6 +378,24 @@ def _training_run_link(training_run_id: str, dashboard_url: str | None) -> str:
     return f"[`{training_run_id}`]({base}/training/{training_run_id})"
 
 
+@dataclass
+class BaselineMeta:
+    commit_sha: str
+    commit_url: str
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "BaselineMeta | None":
+        sha = data.get("commit_sha")
+        url = data.get("commit_url")
+        if not sha or not url:
+            return None
+        return cls(commit_sha=str(sha), commit_url=str(url))
+
+    def commit_link(self) -> str:
+        short = self.commit_sha[:7]
+        return f"[`{short}`]({self.commit_url})"
+
+
 def _format_duration_delta(
     result: TutorialResult, baseline_path: Path, dashboard_url: str | None
 ) -> str:
@@ -402,9 +420,20 @@ def _load_baseline(baseline_path: Path | None) -> TutorialResult | None:
     return TutorialResult.from_dict(json.loads(baseline_path.read_text()))
 
 
+def _load_baseline_meta(baseline_path: Path | None) -> BaselineMeta | None:
+    """Load sidecar meta written by ``download_perf_baseline.py``."""
+    if baseline_path is None:
+        return None
+    meta_path = baseline_path.with_name(baseline_path.stem + ".meta.json")
+    if not meta_path.is_file():
+        return None
+    return BaselineMeta.from_dict(json.loads(meta_path.read_text()))
+
+
 def _format_result_details(
     result: TutorialResult,
     baseline: TutorialResult | None = None,
+    baseline_meta: BaselineMeta | None = None,
     dashboard_url: str | None = None,
 ) -> list[str]:
     """Markdown <details> block with run status and a consolidated timing table."""
@@ -413,8 +442,15 @@ def _format_result_details(
         f"<summary>{result.base_model_name}</summary>",
         "",
         f"{_training_run_link(result.training_run_id, dashboard_url)} — {_status_label(result)}",
-        "",
     ]
+    if baseline is not None:
+        baseline_bits = [
+            _training_run_link(baseline.training_run_id, dashboard_url),
+        ]
+        if baseline_meta is not None:
+            baseline_bits.append(f"on {baseline_meta.commit_link()}")
+        lines.append(f"Baseline: {' '.join(baseline_bits)}")
+    lines.append("")
 
     keys = _step_keys(result)
     if not keys:
@@ -500,7 +536,10 @@ def summarize_results(
         rows.append(row)
         details.extend(
             _format_result_details(
-                result, _load_baseline(baseline_path), dashboard_url
+                result,
+                _load_baseline(baseline_path),
+                _load_baseline_meta(baseline_path),
+                dashboard_url,
             )
         )
 

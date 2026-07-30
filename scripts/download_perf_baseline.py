@@ -6,6 +6,9 @@ that (a) came from a workflow run on a PR that was later merged and (b)
 recorded a successful validation, and unzip it into the baseline directory
 consumed by `validate_model_configs.py summarize --baseline-dir`.
 
+Also writes a `{artifact}.meta.json` sidecar with the commit SHA/URL the
+baseline ran on, so the CI comment can link to that commit.
+
 Missing or failing artifacts are skipped with a warning so a stale baseline
 never blocks the comment; the baseline directory is created regardless.
 """
@@ -80,6 +83,9 @@ def download_baseline_for_model(
     Walks the model's artifacts newest-first (``get_artifacts`` paginates
     transparently) and keeps the first candidate whose validation actually
     succeeded, so a bad run merged to main never poisons the baseline.
+
+    Alongside the result JSON, writes ``{artifact_name}.meta.json`` with the
+    commit SHA/URL the baseline ran on, so summarize can link to it.
     """
     artifact_name = artifact_name_for_model(model_name)
     inspected = 0
@@ -100,6 +106,7 @@ def download_baseline_for_model(
             if not result.get("succeeded"):
                 continue
             archive.extractall(baseline_dir)
+            _write_baseline_meta(repo, artifact, baseline_dir / f"{artifact_name}.meta.json")
         print(f"downloaded baseline {artifact_name!r} (artifact id {artifact.id})")
         return True
     print(
@@ -107,6 +114,23 @@ def download_baseline_for_model(
         f"merged PR; skipping baseline for {model_name}"
     )
     return False
+
+
+def _write_baseline_meta(
+    repo: Repository, artifact: Artifact, meta_path: Path
+) -> None:
+    """Persist commit provenance next to the extracted baseline result JSON."""
+    run = artifact.workflow_run
+    sha = run.head_sha if run is not None else None
+    if not sha:
+        print(f"warning: no head SHA on artifact {artifact.id}; skipping meta")
+        return
+    meta = {
+        "commit_sha": sha,
+        "commit_url": f"{repo.html_url}/commit/{sha}",
+        "artifact_id": artifact.id,
+    }
+    meta_path.write_text(json.dumps(meta, indent=2) + "\n")
 
 
 def download_baselines(baseline_dir: Path) -> None:
