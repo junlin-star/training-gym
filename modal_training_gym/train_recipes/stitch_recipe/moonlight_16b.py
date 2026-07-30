@@ -50,9 +50,11 @@ class Moonlight_16B_A3B_Stitch_Recipe(StitchRecipe):
             "--model-loader-extra-config": '{"enable_gds":false}',
             "--weight-loader-drop-cache-after-load": "",
             "--context-length": "8192",
-            # An in-place delta apply loads the incoming shard alongside the live
-            # weights; 16B-A3B leaves more room than 4B dense, hence 0.85.
-            "--mem-fraction-static": "0.85",
+            # An in-place delta apply loads incoming shards alongside the live
+            # weights, so the static pool has to leave room for them: 0.85 (what
+            # stitch's own cookbook uses, with an engine it drains) fills the
+            # H200 to ~8MB free and the apply OOMs mid-flight.
+            "--mem-fraction-static": "0.72",
             # Routing replay: slime runs no local engine in publish-only mode, so
             # the served engine has to be told to return routed experts.
             "--enable-return-routed-experts": "",
