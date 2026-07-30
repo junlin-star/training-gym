@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from enum import Enum
 from typing import Any, Literal
+import hashlib
 import json
 import random
 import shutil
@@ -72,6 +73,13 @@ class DatasetConfig:
     @property
     def name(self) -> str:
         return self.dataset_id
+
+    @property
+    def data_dir_name(self) -> str:
+        hf_repo = getattr(self, "hf_repo", "")
+        if hf_repo:
+            return hf_repo.replace("/", "_")
+        return type(self).__name__
 
     def prepare(self, path: str, eval_paths: dict[str, str] | None = None) -> None:
         """Materialize training data to ``path`` (and eval splits to ``eval_paths``)."""
@@ -628,3 +636,86 @@ class MultimodalDataset(DatasetConfig):
         if eval_paths:
             for eval_path in eval_paths.values():
                 self._write_jsonl(rows, eval_path)
+
+
+class LiveRolloutDataset(DatasetConfig):
+    """N prompt/label stub rows for live-rollout training (prompts from custom_generate)."""
+
+    input_key: str = "prompt"
+    label_key: str = "label"
+    apply_chat_template: bool = False
+    writes_eval_paths: bool = False
+    output_format: str = "jsonl"
+    auto_sized: bool = False
+    modality: Literal["image", "audio", "video"] | None = None
+    media_column: str = ""
+    multimodal_keys: dict[str, str] | None = None
+
+    def __init__(
+        self,
+        n_rows: int,
+        *,
+        prompt: str | None = None,
+        **kwargs: Any,
+    ) -> None:
+        if n_rows < 1:
+            raise TrainingGymConfigError(
+                f"LiveRolloutDataset requires n_rows >= 1, got {n_rows}"
+            )
+        for k, v in kwargs.items():
+            setattr(self, k, v)
+        self.n_rows = n_rows
+        self._prompt = (
+            prompt
+            if prompt is not None
+            else "Placeholder prompt; the live rollout supplies the real one."
+        )
+        if self.modality is not None:
+            if self.modality not in ("image", "audio", "video"):
+                raise TrainingGymConfigError(
+                    f"modality must be one of image/audio/video, got {self.modality!r}"
+                )
+            if not self.media_column:
+                self.media_column = f"{self.modality}s"
+            self.multimodal_keys = {self.modality: self.media_column}
+        else:
+            self.multimodal_keys = None
+        if not self.dataset_id:
+            self.dataset_id = f"live-rollout-{n_rows}"
+        self._validate()
+
+    @property
+    def data_dir_name(self) -> str:
+        # /data is shared by every run of a framework, so the digest keeps configs
+        # with different stub data from colliding on one path.
+        digest = hashlib.sha256(
+            json.dumps(
+                [
+                    self.n_rows,
+                    self.modality,
+                    self.media_column,
+                    self.input_key,
+                    self.label_key,
+                    self._prompt,
+                ]
+            ).encode()
+        ).hexdigest()[:8]
+        suffix = f"-{self.modality}" if self.modality else ""
+        return f"live-rollout-{self.n_rows}{suffix}-{digest}"
+
+    def load(self, split: Literal["all", "train", "eval"] = "all") -> list[DatasetRow]:
+        rows: list[DatasetRow] = []
+        for i in range(self.n_rows):
+            row: DatasetRow = {self.input_key: self._prompt, self.label_key: str(i)}
+            if self.modality is not None:
+                row[self.media_column] = []
+            rows.append(row)
+        return rows
+
+    def prepare(self, path: str, eval_paths: dict[str, str] | None = None) -> None:
+        rows = self.load()
+        for p in [path, *(eval_paths or {}).values()]:
+            Path(p).parent.mkdir(parents=True, exist_ok=True)
+            with open(p, "w") as f:
+                for row in rows:
+                    f.write(json.dumps(row) + "\n")

@@ -33,6 +33,7 @@ import secrets
 import traceback
 from typing import Any
 
+from modal_training_gym.common.dataset import LiveRolloutDataset
 from modal_training_gym.common.run import TrainingRun
 from modal_training_gym.common.train import TrainConfig
 from modal_training_gym.common.train_result import TrainResult
@@ -66,10 +67,23 @@ def _is_pydantic_model(obj: Any) -> bool:
     return hasattr(type(obj), "model_fields")
 
 
+def _settable_properties(obj: Any) -> set[str]:
+    return {
+        name
+        for klass in type(obj).__mro__
+        for name, attr in vars(klass).items()
+        if isinstance(attr, property)
+        and attr.fset is not None
+        and not name.startswith("_")
+    }
+
+
 def _valid_fields(obj: Any) -> set[str]:
     """Public, settable field names on ``obj``."""
     if _dc.is_dataclass(obj):
-        return {f.name for f in _dc.fields(obj) if not f.name.startswith("_")}
+        return {
+            f.name for f in _dc.fields(obj) if not f.name.startswith("_")
+        } | _settable_properties(obj)
 
     names: set[str] = set()
     if _is_pydantic_model(obj):
@@ -77,6 +91,7 @@ def _valid_fields(obj: Any) -> set[str]:
     for klass in type(obj).__mro__:
         names |= set(getattr(klass, "__annotations__", {}) or {})
     names |= set(vars(obj))
+    names |= _settable_properties(obj)
     return {n for n in names if not n.startswith("_")}
 
 
@@ -155,6 +170,21 @@ class TrainingGroup:
                     break
                 if i < len(segments) - 1:
                     obj = getattr(obj, seg)
+                    prefix = ".".join(segments[: i + 1])
+                    if obj is None:
+                        problems.append(
+                            f"  - '{path}': '{prefix}' is None on the base config; "
+                            f"set it explicitly to sweep its fields."
+                        )
+                        break
+                    if isinstance(obj, LiveRolloutDataset) and obj.auto_sized:
+                        problems.append(
+                            f"  - '{path}': '{prefix}' is a placeholder rebuilt from "
+                            f"recipe.rollout_batch_size, so overrides to it are "
+                            f"discarded; sweep 'recipe.rollout_batch_size' or pass an "
+                            f"explicit dataset=LiveRolloutDataset(...)."
+                        )
+                        break
         if problems:
             raise TrainingGroupError(
                 "TrainingGroup grid has invalid field paths:\n" + "\n".join(problems)

@@ -6,7 +6,7 @@ from contextlib import nullcontext
 from typing import Any
 from typing import cast
 
-from modal_training_gym.common.dataset import DatasetConfig
+from modal_training_gym.common.dataset import DatasetConfig, LiveRolloutDataset
 from modal_training_gym.common.errors import TrainingGymConfigError
 from modal_training_gym.common.framework import Framework
 from modal_training_gym.common.ids import create_hash
@@ -26,7 +26,7 @@ from modal_training_gym.frameworks.slime import build_slime_app
 from modal_training_gym.train_recipes.base import BaseTrainRecipe, RecipeType
 from modal_training_gym.train_recipes.miles_recipe import MilesConfig
 from modal_training_gym.train_recipes.slime_recipe import SlimeRecipe
-from pydantic import ConfigDict
+from pydantic import ConfigDict, Field
 from pydantic.dataclasses import dataclass
 
 
@@ -67,22 +67,35 @@ def _field_default(field: _dc.Field) -> Any:
     return _dc.MISSING
 
 
+def _clear_eval_without_paths(
+    recipe: SlimeRecipe, dataset: DatasetConfig | None
+) -> SlimeRecipe:
+    if (
+        not isinstance(dataset, LiveRolloutDataset)
+        or recipe.eval_interval is None
+        or dataset.writes_eval_paths
+    ):
+        return recipe
+    return _dc.replace(recipe, eval_interval=None)
+
+
 def _resolve_slime_recipe(
     model: ModelConfig,
     recipe: SlimeRecipe,
     *,
     merge_model_recipe: bool,
+    dataset: DatasetConfig | None = None,
 ) -> SlimeRecipe:
     if not merge_model_recipe:
         recipe.validate_model_parallelism(model)
-        return recipe
+        return _clear_eval_without_paths(recipe, dataset)
     base_recipe = SlimeRecipe.get_base_recipe(model)
     if base_recipe is None:
         recipe.validate_model_parallelism(model)
-        return recipe
+        return _clear_eval_without_paths(recipe, dataset)
     resolved = _merge_recipe(base_recipe, recipe)
     resolved.validate_model_parallelism(model)
-    return resolved
+    return _clear_eval_without_paths(resolved, dataset)
 
 
 _STAGE_LABELS: dict[str, str] = {
@@ -286,16 +299,16 @@ class _TrainStatusDisplay:
         self._poll_thread = None
 
 
-@dataclass(config=ConfigDict(extra="forbid", arbitrary_types_allowed=True))
+@dataclass(
+    config=ConfigDict(
+        extra="forbid", arbitrary_types_allowed=True, populate_by_name=True
+    )
+)
 class TrainConfig:
     """Compose dataset, model, and recipe into one training entrypoint.
 
     ## Fields
 
-    dataset : DatasetConfig
-        The training dataset. ``train()`` materializes it into the
-        framework's ``/data`` volume before training if it isn't already
-        present.
     model : ModelConfig
         The model to train. Carries model identity (``model_name``) and
         weight-download logic; weights are downloaded into the shared
@@ -304,6 +317,9 @@ class TrainConfig:
         Framework recipe (``SlimeRecipe`` or ``MilesConfig``). Selects the
         training framework and carries Modal infra settings (GPU type, node
         count, image) plus framework CLI flags.
+    dataset : DatasetConfig | None
+        Optional. Omit for live rollouts with ``custom_generate_function``;
+        reading/launch interpolates a sized ``LiveRolloutDataset``.
     checkpoint : Checkpoint | None
         Checkpoint to resume training from. When ``None``, training starts
         from the base model weights. Default ``None``.
@@ -332,10 +348,10 @@ class TrainConfig:
         keys of ``group_overrides`` when unset. Default ``None``.
     """
 
-    # ── Composed configs (required) ─────────────────────────────────────────
-    dataset: DatasetConfig
+    # ── Composed configs ────────────────────────────────────────────────────
     model: ModelConfig
     recipe: BaseTrainRecipe
+    _dataset: DatasetConfig | None = Field(default=None, alias="dataset")
     checkpoint: Checkpoint | None = None
     # Known-model recipes are presets by default; complete recipes can opt out.
     merge_model_recipe: bool = True
@@ -351,18 +367,84 @@ class TrainConfig:
     group_overrides: dict[str, Any] | None = None
     group_axes: list[str] | None = None
 
+    @property
+    def dataset(self) -> DatasetConfig | None:
+        existing = self._dataset
+        if existing is not None and not (
+            isinstance(existing, LiveRolloutDataset) and existing.auto_sized
+        ):
+            return existing
+
+        recipe = self._resolved_recipe_for_logging()
+        if (
+            not isinstance(recipe, SlimeRecipe)
+            or recipe.custom_generate_function is None
+        ):
+            return None
+
+        n = getattr(recipe, "rollout_batch_size", None)
+        if not isinstance(n, int) or n < 1:
+            return existing
+
+        modality = None
+        if getattr(self.model, "audio_placeholder", None):
+            modality = "audio"
+        elif getattr(self.model, "requires_bshd", False):
+            modality = "image"
+        if (
+            isinstance(existing, LiveRolloutDataset)
+            and existing.n_rows == n
+            and existing.modality == modality
+        ):
+            return existing
+
+        synthesized = LiveRolloutDataset(
+            n_rows=n,
+            auto_sized=True,
+            writes_eval_paths=False,
+            modality=modality,
+        )
+        object.__setattr__(self, "_dataset", synthesized)
+        return synthesized
+
+    @dataset.setter
+    def dataset(self, value: DatasetConfig | None) -> None:
+        object.__setattr__(self, "_dataset", value)
+
+    def _require_dataset(self) -> DatasetConfig:
+        ds = self.dataset
+        if ds is not None:
+            return ds
+        recipe = self._resolved_recipe_for_logging()
+        if (
+            not isinstance(recipe, SlimeRecipe)
+            or recipe.custom_generate_function is None
+        ):
+            raise TrainingGymConfigError(
+                "omit dataset only for SlimeRecipe live rollouts with "
+                "custom_generate_function set; pass dataset=... or set "
+                "recipe.custom_generate_function=..."
+            )
+        raise TrainingGymConfigError(
+            "live-rollout dataset omit/resize requires "
+            "recipe.rollout_batch_size to be a positive int on the "
+            "resolved recipe"
+        )
+
     def _generate_training_run_id(self) -> str:
         """Mint a new run id. ``launch()`` calls this once per invocation, so
         each launch of the same config gets its own TrainingRun record."""
+        dataset = self._require_dataset()
         return create_hash(
             self.model.model_name,
             self.checkpoint.path if self.checkpoint is not None else "",
             f"{type(self.recipe).__name__}:{self.recipe.recipe_type.value}",
-            self.dataset.dataset_id,
+            dataset.dataset_id,
             self.model.model_path or "",
         )
 
     def _build_app(self, training_run_id: str | None = None):
+        dataset = self._require_dataset()
         if training_run_id is None:
             training_run_id = self._generate_training_run_id()
         recipe_type = self.recipe.recipe_type
@@ -375,7 +457,7 @@ class TrainConfig:
                 training_run_id=training_run_id,
                 miles=cast(MilesConfig, self.recipe),
                 model=self.model,
-                dataset=self.dataset,
+                dataset=dataset,
                 checkpoint=self.checkpoint,
                 name=training_run_id,
                 group_id=self.group_id,
@@ -389,12 +471,13 @@ class TrainConfig:
                 self.model,
                 cast(SlimeRecipe, self.recipe),
                 merge_model_recipe=self.merge_model_recipe,
+                dataset=dataset,
             )
             return build_slime_app(
                 training_run_id=training_run_id,
                 slime=combined,
                 model=self.model,
-                dataset=self.dataset,
+                dataset=dataset,
                 checkpoint=self.checkpoint,
                 name=training_run_id,
                 group_id=self.group_id,
@@ -425,7 +508,7 @@ class TrainConfig:
     def _build_config_summary(self, training_run_id: str) -> dict[str, Any]:
         """Framework-specific TrainingRun.config summary."""
         model = self.model
-        dataset = self.dataset
+        dataset = self._require_dataset()
         recipe = self.recipe
 
         wandb = getattr(recipe, "wandb", None)
@@ -458,6 +541,7 @@ class TrainConfig:
                 model,
                 cast(SlimeRecipe, recipe),
                 merge_model_recipe=self.merge_model_recipe,
+                dataset=dataset,
             )
             summary["recipe"] = _serialize_slime_params(
                 combined, dataset=dataset, model=model
@@ -499,11 +583,8 @@ class TrainConfig:
         framework_status_url: str,
         config_path: Any,
     ) -> "_TrainStatusDisplay":
-        dataset_name = ""
-        if self.dataset:
-            dataset_name = (
-                getattr(self.dataset, "hf_repo", "") or type(self.dataset).__name__
-            )
+        dataset = self._require_dataset()
+        dataset_name = getattr(dataset, "hf_repo", "") or type(dataset).__name__
         return _TrainStatusDisplay(
             run_id=training_run_id,
             framework=self.framework.value,
@@ -519,6 +600,7 @@ class TrainConfig:
                 self.model,
                 cast(SlimeRecipe, self.recipe),
                 merge_model_recipe=self.merge_model_recipe,
+                dataset=self._dataset,
             )
         return self.recipe
 

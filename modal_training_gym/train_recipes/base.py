@@ -39,8 +39,7 @@ class BaseTrainRecipe(ABC):
         ds: "DatasetConfig",
     ) -> tuple[str, dict[str, str] | None]:
         """Derive on-volume file paths from a dataset's properties."""
-        hf_repo = getattr(ds, "hf_repo", "")
-        name = hf_repo.replace("/", "_") if hf_repo else type(ds).__name__
+        name = ds.data_dir_name
         fmt = getattr(ds, "output_format", "parquet")
         ext = "jsonl" if fmt == "jsonl" else "parquet"
         split = getattr(ds, "hf_split", "train")

@@ -23,6 +23,7 @@ _EXPORTS = {
     ),
     "HuggingFaceDataset": ("modal_training_gym.common.dataset", "HuggingFaceDataset"),
     "MultimodalDataset": ("modal_training_gym.common.dataset", "MultimodalDataset"),
+    "LiveRolloutDataset": ("modal_training_gym.common.dataset", "LiveRolloutDataset"),
     "list_checkpoints": ("modal_training_gym.common.checkpoint", "list_checkpoints"),
     "METADATA_VOLUME_NAME": (
         "modal_training_gym.utils.metadata",
@@ -107,6 +108,7 @@ __all__ = [
     "HFModelConfiguration",
     "HuggingFaceDataset",
     "MultimodalDataset",
+    "LiveRolloutDataset",
     "list_checkpoints",
     "Kimi_K2_6",
     "Kimi_K2_5",

@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, get_type_hints
 
 from api_reference_manifest import API_REFERENCE_MANIFEST, GROUPS
+from pydantic.fields import FieldInfo, PydanticUndefined
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUTPUT_DIR = ROOT / "docs-next" / "src" / "content" / "docs" / "reference"
@@ -39,13 +40,26 @@ def _get_class_attrs(cls: type) -> dict[str, tuple[type, Any]]:
     if _is_dataclass(cls):
         MISSING = dataclasses.MISSING
         for f in dataclass_fields(cls):
-            if f.default is not MISSING:
-                default = f.default
-            elif f.default_factory is not MISSING:
-                default = f.default_factory()
-            else:
-                default = inspect.Parameter.empty
-            attrs[f.name] = (hints.get(f.name, Any), default)
+            name = f.name
+            default = f.default
+            if isinstance(default, FieldInfo):
+                if default.alias:
+                    name = default.alias
+                elif name.startswith("_"):
+                    continue
+                default = (
+                    default.default
+                    if default.default is not PydanticUndefined
+                    else inspect.Parameter.empty
+                )
+            elif name.startswith("_"):
+                continue
+            elif default is MISSING:
+                if f.default_factory is not MISSING:
+                    default = f.default_factory()
+                else:
+                    default = inspect.Parameter.empty
+            attrs[name] = (hints.get(f.name, hints.get(name, Any)), default)
     else:
         init_defaults: dict[str, Any] = {}
         init_method = getattr(cls, "__init__", None)
