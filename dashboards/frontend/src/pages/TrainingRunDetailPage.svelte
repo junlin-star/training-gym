@@ -1,5 +1,5 @@
 <script>
-  import { tick } from "svelte";
+  import { onMount, tick } from "svelte";
   import { ArrowLeft, ChevronLeft, ChevronRight, Download, ExternalLink, Minimize2, X } from "lucide-svelte";
   import Tabs from "../components/Tabs.svelte";
   import RunSummary from "../components/RunSummary.svelte";
@@ -27,6 +27,26 @@
   const HIST_PAGE = 500;
   // Maximum number of historical log lines retained in the browser.
   const HIST_BUFFER_MAX = 2000;
+
+  /** @typedef {"summary" | "rollouts" | "logs"} TabId */
+  const DETAIL_TABS = new Set(["summary", "rollouts", "logs"]);
+  const DEFAULT_TAB = "summary";
+
+  function parseTabFromUrl() {
+    if (typeof window === "undefined") return DEFAULT_TAB;
+    const raw = new URLSearchParams(window.location.search).get("tab");
+    return DETAIL_TABS.has(raw) ? /** @type {TabId} */ (raw) : DEFAULT_TAB;
+  }
+
+  function urlForTab(tab) {
+    const url = new URL(window.location.href);
+    url.searchParams.set("tab", DETAIL_TABS.has(tab) ? tab : DEFAULT_TAB);
+    return `${url.pathname}${url.search}${url.hash}`;
+  }
+
+  function locationKey() {
+    return `${window.location.pathname}${window.location.search}${window.location.hash}`;
+  }
 
   let {
     runId,
@@ -68,9 +88,45 @@
         : [],
   );
 
-  // Active tab: "summary" | "rollouts" | "logs". Each tab loads only its own
-  // data — rollout summaries for summary/rollouts, the log stream for logs.
-  let activeTab = $state("summary");
+  // Active tab: "summary" | "rollouts" | "logs". One-way sync with the URL:
+  // init/popstate/runId read URL → activeTab; selectTab writes pushState.
+  let activeTab = $state(/** @type {TabId} */ (DEFAULT_TAB));
+
+  function selectTab(tab) {
+    const next = DETAIL_TABS.has(tab) ? /** @type {TabId} */ (tab) : DEFAULT_TAB;
+    activeTab = next;
+    if (embedded || typeof window === "undefined") return;
+    const target = urlForTab(next);
+    if (target !== locationKey()) {
+      history.pushState({}, "", target);
+    }
+  }
+
+  onMount(() => {
+    if (embedded) {
+      activeTab = DEFAULT_TAB;
+    } else {
+      const tab = parseTabFromUrl();
+      activeTab = tab;
+      const target = urlForTab(tab);
+      if (target !== locationKey()) {
+        history.replaceState({}, "", target);
+      }
+    }
+
+    const onPopState = () => {
+      if (embedded) return;
+      activeTab = parseTabFromUrl();
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  });
+
+  $effect(() => {
+    runId;
+    if (embedded || typeof window === "undefined") return;
+    activeTab = parseTabFromUrl();
+  });
 
   function formatMean(value) {
     if (typeof value !== "number" || !Number.isFinite(value)) return "—";
@@ -460,7 +516,7 @@
     logError = "";
     logDropped = 0;
     // Lazy load: only open the log stream while the Logs tab is active.
-    if (tab !== "logs" || !id || status !== "running" || paused) {
+    if (tab !== "logs" || !id || !status || status !== "running" || paused) {
       if (tab === "logs" && paused) logState = "paused";
       return;
     }
@@ -917,12 +973,13 @@
   $effect(() => {
     const id = runId;
     const tab = activeTab;
+    const status = runStatus;
     const running = isRunning;
     const search = logSearch;
     const { since, until } = histRange;
 
     resetHist();
-    if (tab !== "logs" || !id || running) return;
+    if (tab !== "logs" || !id || !status || running) return;
 
     const controller = new AbortController();
     histController = controller;
@@ -1186,7 +1243,8 @@
     {/if}
 
     <Tabs
-      bind:active={activeTab}
+      active={activeTab}
+      onSelect={selectTab}
       tabs={[
         { value: "summary", label: "Summary" },
         { value: "rollouts", label: "Rollouts", count: rolloutSummaries.length || undefined },
