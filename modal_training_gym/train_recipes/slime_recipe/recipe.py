@@ -624,6 +624,7 @@ class SlimeRecipe(BaseTrainRecipe):
     sglang_enable_dp_lm_head: bool = False
     sglang_disable_custom_all_reduce: bool = False
     sglang_cuda_graph_bs: list[int] | None = None
+    sglang_cuda_graph_backend_prefill: str | None = None
     sglang_max_running_requests: int | None = None
     sglang_tool_call_parser: str | None = None
     sglang_reasoning_parser: str | None = None
@@ -818,6 +819,15 @@ class SlimeRecipe(BaseTrainRecipe):
         fields: dict[str, Any] = {}
         for f in _dc.fields(self):
             fields[f.name] = getattr(self, f.name)
+        if (
+            self.colocate
+            and fields["sglang_cuda_graph_backend_prefill"] is None
+            and not (
+                isinstance(fields.get("extra_config"), dict)
+                and "sglang_cuda_graph_backend_prefill" in fields["extra_config"]
+            )
+        ):
+            fields["sglang_cuda_graph_backend_prefill"] = "disabled"
         if dataset is not None:
             fields.update(self._dataset_to_fields(dataset))
         if model is not None:

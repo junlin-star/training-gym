@@ -21,6 +21,12 @@ from modal.experimental import clustered
 RAY_PORT = 6379
 RAY_DASHBOARD_PORT = 8265
 
+_GCS_HEALTH_CHECK_ENV = {
+    "RAY_health_check_period_ms": "10000",
+    "RAY_health_check_timeout_ms": "20000",
+    "RAY_health_check_failure_threshold": "60",
+}
+
 # GPU families with an RDMA/EFA fabric; other types don't support it and would fail
 # if it were forced on.
 _RDMA_GPU_TYPES = frozenset({"H100", "H200", "B200", "B300", "GB200"})
@@ -74,7 +80,8 @@ def start_ray_head(
     ]
     if extra_start_args:
         cmd.extend(extra_start_args)
-    subprocess.Popen(cmd)
+    head_env = {**os.environ, **_GCS_HEALTH_CHECK_ENV}
+    subprocess.Popen(cmd, env=head_env)
 
     for _ in range(init_retries):
         try:
