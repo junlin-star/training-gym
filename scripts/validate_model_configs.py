@@ -54,6 +54,19 @@ def _substep_label(name: str) -> str:
     return _SUBSTEP_LABELS.get(name, name.replace("_", " "))
 
 
+def _sum_step_durations(
+    step_times: dict[str, dict[str, int | None]] | None,
+) -> float:
+    """Training time as the sum of per-step durations.
+
+    Excludes queue, model download and checkpoint conversion time, which depend
+    on compute availability rather than gym performance.
+    """
+    return float(
+        sum(step.get("duration_s") or 0 for step in (step_times or {}).values())
+    )
+
+
 def _step_keys(result: "TutorialResult") -> list[str]:
     keys = set(result.step_times or {}) | set(result.substep_times or {})
     return sorted(keys, key=lambda k: int(k) if k.isdigit() else k)
@@ -92,7 +105,7 @@ class TutorialResult:
         print(f"Step count: {self.step_count}")
         print("Result:")
         print(f"Training run status: {self.training_run_status}")
-        print(f"Total duration (s): {self.total_duration_s}")
+        print(f"Total step time (s): {self.total_duration_s}")
 
         keys = _step_keys(self)
         if not keys:
@@ -343,7 +356,7 @@ def run_base_training_on_slime(
         step_count=step_count,
         training_run_id=train_result.training_run_id,
         training_run_status=training_run.status,
-        total_duration_s=float(training_run.duration_seconds or 0.0),
+        total_duration_s=_sum_step_durations(training_run.step_times),
         step_times=training_run.step_times,
         substep_times=training_run.substep_times,
     )
@@ -385,7 +398,7 @@ def _format_result_details(result: TutorialResult) -> list[str]:
                 f"| {_substep_label(name)} | {_fmt_secs(entry.get('duration_s'))} |"
             )
         lines.append(f"| Step {key} | {_fmt_secs(step.get('duration_s'))} |")
-    lines.append(f"| Total duration | {_fmt_secs(result.total_duration_s)} |")
+    lines.append(f"| Total step time | {_fmt_secs(result.total_duration_s)} |")
     lines.extend(["", "</details>", ""])
     return lines
 
@@ -407,7 +420,7 @@ def summarize_results(results_dir: str) -> str:
         "<!-- validate-models-comment -->",
         "## Model Validation Results",
         "",
-        "| Model | Status | Duration | Steps | Run |",
+        "| Model | Status | Step time | Steps | Run |",
         "| --- | --- | --- | --- | --- |",
     ]
     lines.extend(rows or ["| _no results_ | | | | |"])
