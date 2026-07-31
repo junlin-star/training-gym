@@ -29,6 +29,9 @@ _MAX_DIAGNOSTIC_RESOURCE_FIELDS = 256
 _MAX_DIAGNOSTIC_NODE_TEXT = 4_000
 _MAX_DIAGNOSTIC_STATUS_TEXT = 12_000
 _RAY_API_DIAGNOSTIC_TIMEOUT_SECONDS = 5.0
+_RAY_STOP_TIMEOUT_SECONDS = 30.0
+_WORKER_HEAD_FAILURE_THRESHOLD = 3
+_WORKER_HEAD_POLL_SECONDS = 1.0
 MODAL_CLUSTER_MEMBER_EVENT = "TRAINING_GYM_MODAL_CLUSTER_MEMBER"
 
 # GPU families with an RDMA/EFA fabric; other types don't support it and would fail
@@ -374,8 +377,10 @@ class ModalRayCluster:
         Return a ``modal.forward`` context manager for the Ray dashboard.
     submit_and_tail(entrypoint, runtime_env=None)
         Async: submit a Ray job, stream logs, return final status.
-    wait_forever(poll_seconds=10)
-        Async: keep a worker container alive until termination.
+    stop_ray(timeout_seconds=30)
+        Stop this container's Ray processes after diagnostics are captured.
+    wait_forever(poll_seconds=1, head_failure_threshold=3)
+        Async: keep a worker alive until the head's Ray process stops.
     """
 
     def __init__(self) -> None:
@@ -486,7 +491,9 @@ class ModalRayCluster:
         if not task_id:
             raise RuntimeError("Modal did not provide MODAL_TASK_ID")
         if not training_run_id:
-            raise RuntimeError("training run ID is required for cluster-member identity")
+            raise RuntimeError(
+                "training run ID is required for cluster-member identity"
+            )
         value = {
             "schema_version": 1,
             "training_run_id": training_run_id,
@@ -640,7 +647,60 @@ class ModalRayCluster:
             job_id=job_id,
         )
 
-    async def wait_forever(self, poll_seconds: float = 10) -> None:
-        """Keep a worker container alive until the head terminates the cluster."""
+    def stop_ray(self, timeout_seconds: float = _RAY_STOP_TIMEOUT_SECONDS) -> None:
+        """Stop local Ray processes without silently swallowing cleanup failures."""
+        if timeout_seconds <= 0:
+            raise ValueError("timeout_seconds must be positive")
+        if not self._started:
+            return
+        try:
+            completed = subprocess.run(
+                ["ray", "stop", "--force"],
+                capture_output=True,
+                check=False,
+                text=True,
+                timeout=timeout_seconds,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError(
+                f"ray stop timed out after {exc.timeout} seconds"
+            ) from exc
+        if completed.returncode != 0:
+            output = ((completed.stdout or "") + (completed.stderr or ""))[-2_000:]
+            raise RuntimeError(
+                f"ray stop exited with code {completed.returncode}: {output}"
+            )
+        self._started = False
+
+    async def wait_forever(
+        self,
+        poll_seconds: float = _WORKER_HEAD_POLL_SECONDS,
+        head_failure_threshold: int = _WORKER_HEAD_FAILURE_THRESHOLD,
+    ) -> None:
+        """Keep a worker alive until the head's Ray process is consistently unreachable."""
+        if poll_seconds <= 0:
+            raise ValueError("poll_seconds must be positive")
+        if head_failure_threshold < 1:
+            raise ValueError("head_failure_threshold must be positive")
+        if self.is_head:
+            raise RuntimeError("wait_forever is valid only on worker nodes")
+
+        consecutive_failures = 0
         while True:
             await asyncio.sleep(poll_seconds)
+            try:
+                connection = socket.create_connection(
+                    (self.head_addr, RAY_PORT),
+                    timeout=min(poll_seconds, 1.0),
+                )
+                connection.close()
+            except OSError:
+                consecutive_failures += 1
+                if consecutive_failures >= head_failure_threshold:
+                    print(
+                        "Ray head is no longer reachable; exiting worker container",
+                        flush=True,
+                    )
+                    return
+            else:
+                consecutive_failures = 0

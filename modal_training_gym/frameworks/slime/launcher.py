@@ -1300,9 +1300,7 @@ def build_slime_app(
             initialized_cluster = ModalRayCluster()
             initialized_cluster.discover_cluster(slime.total_nodes)
             setup_rank_is_head = initialized_cluster.is_head
-            initialized_cluster.emit_member_identity(
-                training_run_id=training_run_id
-            )
+            initialized_cluster.emit_member_identity(training_run_id=training_run_id)
 
             await asyncio.gather(
                 hf_cache_volume.reload.aio(),
@@ -1974,6 +1972,17 @@ def build_slime_app(
                 raise RuntimeError(primary_error) from exc
             raise
         finally:
+            try:
+                # Diagnostics and the causal failure event are captured above.
+                # Stop the head now so worker ranks can observe liveness loss
+                # and return instead of idling until Modal tears down the app.
+                cluster.stop_ray()
+            except Exception as exc:  # noqa: BLE001 - never mask the training result
+                print(
+                    "Failed to stop Ray while preserving the training result: "
+                    f"{type(exc).__name__}: {exc}",
+                    flush=True,
+                )
             latest_run_record = await build_terminal_run_record(
                 run_record, training_run_id
             )

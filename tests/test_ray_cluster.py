@@ -100,9 +100,7 @@ def test_cluster_identity_requires_discovery():
         ModalRayCluster().identity_snapshot()
 
 
-def test_cluster_member_identity_binds_rank_ip_and_modal_task(
-    monkeypatch, capsys
-):
+def test_cluster_member_identity_binds_rank_ip_and_modal_task(monkeypatch, capsys):
     import modal.experimental
 
     monkeypatch.setattr(
@@ -286,6 +284,70 @@ def test_ray_worker_cleans_partial_state_after_start_timeout(monkeypatch):
             60,
         ),
     ]
+
+
+def test_stop_ray_is_bounded_and_marks_cluster_stopped(monkeypatch):
+    calls = []
+
+    def _run(command, **kwargs):
+        calls.append((command, kwargs))
+        return SimpleNamespace(returncode=0, stdout="stopped", stderr="")
+
+    monkeypatch.setattr(ray_cluster.subprocess, "run", _run)
+    cluster = ModalRayCluster()
+    cluster._started = True
+
+    cluster.stop_ray(timeout_seconds=7)
+
+    assert calls == [
+        (
+            ["ray", "stop", "--force"],
+            {
+                "capture_output": True,
+                "check": False,
+                "text": True,
+                "timeout": 7,
+            },
+        )
+    ]
+    assert cluster._started is False
+
+
+def test_worker_exits_after_consecutive_head_liveness_failures(monkeypatch, capsys):
+    import modal.experimental
+
+    monkeypatch.setattr(
+        modal.experimental,
+        "get_cluster_info",
+        lambda: SimpleNamespace(
+            rank=1,
+            cluster_id="cluster-abc",
+            container_ipv4_ips=["10.0.0.1", "10.0.0.2"],
+        ),
+    )
+    checks = iter([OSError("transient"), object(), OSError("down"), OSError("down")])
+
+    class _Connection:
+        def close(self):
+            return None
+
+    def _connect(*_args, **_kwargs):
+        result = next(checks)
+        if isinstance(result, OSError):
+            raise result
+        return _Connection()
+
+    async def _no_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr(ray_cluster.socket, "create_connection", _connect)
+    monkeypatch.setattr(ray_cluster.asyncio, "sleep", _no_sleep)
+    cluster = ModalRayCluster()
+    cluster.discover_cluster(2)
+
+    asyncio.run(cluster.wait_forever(poll_seconds=0.25, head_failure_threshold=2))
+
+    assert "Ray head is no longer reachable" in capsys.readouterr().out
 
 
 def test_failure_diagnostics_preserve_dead_node_reason(monkeypatch):
