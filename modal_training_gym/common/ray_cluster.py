@@ -30,8 +30,10 @@ _MAX_DIAGNOSTIC_NODE_TEXT = 4_000
 _MAX_DIAGNOSTIC_STATUS_TEXT = 12_000
 _RAY_API_DIAGNOSTIC_TIMEOUT_SECONDS = 5.0
 _RAY_STOP_TIMEOUT_SECONDS = 30.0
-_WORKER_HEAD_FAILURE_THRESHOLD = 3
-_WORKER_HEAD_POLL_SECONDS = 1.0
+_CLUSTER_LIVENESS_POLL_SECONDS = 1.0
+_CLUSTER_NODE_QUERY_TIMEOUT_SECONDS = 5.0
+_HEAD_WORKER_LOSS_GRACE_SECONDS = 60.0
+_WORKER_HEAD_FAILURE_GRACE_SECONDS = 60.0
 MODAL_CLUSTER_MEMBER_EVENT = "TRAINING_GYM_MODAL_CLUSTER_MEMBER"
 
 # GPU families with an RDMA/EFA fabric; other types don't support it and would fail
@@ -219,6 +221,26 @@ class ModalRayJobResult:
     job_id: str | None = None
 
 
+@dataclass
+class _SustainedFailure:
+    """Recognize one continuously failing interval without counting blips."""
+
+    grace_seconds: float
+    started_at: float | None = None
+
+    def __post_init__(self) -> None:
+        if self.grace_seconds <= 0:
+            raise ValueError("failure grace must be positive")
+
+    def observe(self, *, failed: bool, now: float) -> bool:
+        if not failed:
+            self.started_at = None
+            return False
+        if self.started_at is None:
+            self.started_at = now
+        return now - self.started_at >= self.grace_seconds
+
+
 def _bounded_resource_map(resources: Any) -> dict[str, Any]:
     if not isinstance(resources, dict):
         return {}
@@ -379,8 +401,8 @@ class ModalRayCluster:
         Async: submit a Ray job, stream logs, return final status.
     stop_ray(timeout_seconds=30)
         Stop this container's Ray processes after diagnostics are captured.
-    wait_forever(poll_seconds=1, head_failure_threshold=3)
-        Async: keep a worker alive until the head's Ray process stops.
+    wait_forever(poll_seconds=1, head_failure_grace_seconds=60)
+        Async: keep a worker alive until sustained loss of the Ray head.
     """
 
     def __init__(self) -> None:
@@ -403,6 +425,9 @@ class ModalRayCluster:
     def worker_extra_start_args(self) -> list[str]:
         """Override to append flags to `ray start` on worker ranks."""
         return []
+
+    def _monotonic(self) -> float:
+        return time.monotonic()
 
     @property
     def is_head(self) -> bool:
@@ -571,6 +596,109 @@ class ModalRayCluster:
             raise RuntimeError("forward_dashboard is only valid on the head node")
         return modal.forward(RAY_DASHBOARD_PORT)
 
+    async def _tail_job_until_terminal(self, job_id: str, *, max_retries: int) -> str:
+        assert self._client is not None
+        terminal_statuses = {"SUCCEEDED", "FAILED", "STOPPED"}
+        retry_count = 0
+
+        while retry_count < max_retries:
+            log_stream = self._client.tail_job_logs(job_id)
+            if inspect.isawaitable(log_stream):
+                log_stream = await log_stream
+            if hasattr(log_stream, "__aiter__"):
+                async for line in log_stream:
+                    print(line, end="", flush=True)
+            else:
+                for line in log_stream:
+                    print(line, end="", flush=True)
+
+            status = self._client.get_job_status(job_id).value
+            if status in terminal_statuses:
+                return status
+            retry_count += 1
+            print(
+                f"\n[ray] Log stream ended but job {job_id} is still {status}; "
+                f"reconnecting in 2s... (retry {retry_count}/{max_retries})"
+            )
+            await asyncio.sleep(2)
+        raise RuntimeError(
+            f"Ray job {job_id} log stream disconnected {max_retries} times "
+            f"without reaching terminal status (current: {status})"
+        )
+
+    async def _wait_for_sustained_worker_loss(
+        self,
+        *,
+        poll_seconds: float = _CLUSTER_LIVENESS_POLL_SECONDS,
+        failure_grace_seconds: float = _HEAD_WORKER_LOSS_GRACE_SECONDS,
+    ) -> str:
+        """Return a causal failure after Ray reports a sustained node deficit."""
+        if poll_seconds <= 0:
+            raise ValueError("poll_seconds must be positive")
+        if self.n_nodes <= 1:
+            raise RuntimeError("worker-loss monitoring requires a multi-node cluster")
+
+        tracker = _SustainedFailure(failure_grace_seconds)
+        while True:
+            await asyncio.sleep(poll_seconds)
+            try:
+                nodes = await self._ray_nodes_snapshot()
+            except Exception as exc:  # noqa: BLE001 - inconclusive is not node loss
+                if tracker.started_at is not None:
+                    tracker.observe(failed=False, now=self._monotonic())
+                    reset_note = "; resetting the node-loss grace period"
+                else:
+                    reset_note = ""
+                print(
+                    "[ray] Cluster liveness query was inconclusive; preserving "
+                    f"the running job{reset_note}: {type(exc).__name__}: {exc}",
+                    flush=True,
+                )
+                continue
+
+            alive_nodes = sum(bool(node.get("Alive")) for node in nodes)
+            missing_workers = alive_nodes < self.n_nodes
+            was_missing = tracker.started_at is not None
+            sustained = tracker.observe(failed=missing_workers, now=self._monotonic())
+            if missing_workers and not was_missing:
+                print(
+                    "[ray] Cluster node deficit observed; starting "
+                    f"{failure_grace_seconds:g}s grace period "
+                    f"({alive_nodes}/{self.n_nodes} alive)",
+                    flush=True,
+                )
+            elif not missing_workers and was_missing:
+                print(
+                    f"[ray] Cluster node count recovered ({alive_nodes}/{self.n_nodes} alive)",
+                    flush=True,
+                )
+            if sustained:
+                return (
+                    "Ray cluster lost worker nodes for at least "
+                    f"{failure_grace_seconds:g}s: {alive_nodes}/{self.n_nodes} alive"
+                )
+
+    async def _ray_nodes_snapshot(self) -> list[dict[str, Any]]:
+        import ray
+
+        return await asyncio.wait_for(
+            asyncio.to_thread(lambda: list(ray.nodes())),
+            timeout=_CLUSTER_NODE_QUERY_TIMEOUT_SECONDS,
+        )
+
+    async def _stop_submitted_job_best_effort(self, job_id: str) -> None:
+        assert self._client is not None
+        try:
+            stopped = self._client.stop_job(job_id)
+            if inspect.isawaitable(stopped):
+                await stopped
+        except Exception as exc:  # noqa: BLE001 - preserve the causal worker loss
+            print(
+                f"[ray] Failed to stop job {job_id} after worker loss: "
+                f"{type(exc).__name__}: {exc}",
+                flush=True,
+            )
+
     async def submit_and_tail(
         self,
         entrypoint: str,
@@ -589,34 +717,48 @@ class ModalRayCluster:
         self.last_submitted_job_id = job_id
         print(f"Submitted Ray job: {job_id}")
 
-        _TERMINAL = {"SUCCEEDED", "FAILED", "STOPPED"}
-        retry_count = 0
-
-        while retry_count < max_retries:
-            log_stream = self._client.tail_job_logs(job_id)
-            if inspect.isawaitable(log_stream):
-                log_stream = await log_stream
-            if hasattr(log_stream, "__aiter__"):
-                async for line in log_stream:
-                    print(line, end="", flush=True)
-            else:
-                for line in log_stream:
-                    print(line, end="", flush=True)
-
-            status = self._client.get_job_status(job_id).value
-            if status in _TERMINAL:
-                break
-            retry_count += 1
-            print(
-                f"\n[ray] Log stream ended but job {job_id} is still {status}; "
-                f"reconnecting in 2s... (retry {retry_count}/{max_retries})"
-            )
-            await asyncio.sleep(2)
+        tail_task = asyncio.create_task(
+            self._tail_job_until_terminal(job_id, max_retries=max_retries)
+        )
+        monitor_task = (
+            asyncio.create_task(self._wait_for_sustained_worker_loss())
+            if self.n_nodes > 1
+            else None
+        )
+        if monitor_task is None:
+            status = await tail_task
         else:
-            raise RuntimeError(
-                f"Ray job {job_id} log stream disconnected {max_retries} times "
-                f"without reaching terminal status (current: {status})"
-            )
+            try:
+                done, _ = await asyncio.wait(
+                    {tail_task, monitor_task},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if tail_task in done:
+                    status = tail_task.result()
+                else:
+                    worker_loss = monitor_task.result()
+                    tail_task.cancel()
+                    await asyncio.gather(tail_task, return_exceptions=True)
+                    await self._stop_submitted_job_best_effort(job_id)
+                    diagnostics = capture_ray_cluster_diagnostics()
+                    print(f"Ray job {job_id} aborted: {worker_loss}", flush=True)
+                    return ModalRayJobResult(
+                        status="FAILED",
+                        is_success=False,
+                        message=worker_loss,
+                        diagnostics=diagnostics,
+                        job_id=job_id,
+                    )
+            finally:
+                if not tail_task.done():
+                    tail_task.cancel()
+                if not monitor_task.done():
+                    monitor_task.cancel()
+                await asyncio.gather(
+                    tail_task,
+                    monitor_task,
+                    return_exceptions=True,
+                )
 
         print(f"\nFinal Ray job status: {status}")
         if status != "SUCCEEDED":
@@ -674,18 +816,16 @@ class ModalRayCluster:
 
     async def wait_forever(
         self,
-        poll_seconds: float = _WORKER_HEAD_POLL_SECONDS,
-        head_failure_threshold: int = _WORKER_HEAD_FAILURE_THRESHOLD,
+        poll_seconds: float = _CLUSTER_LIVENESS_POLL_SECONDS,
+        head_failure_grace_seconds: float = _WORKER_HEAD_FAILURE_GRACE_SECONDS,
     ) -> None:
-        """Keep a worker alive until the head's Ray process is consistently unreachable."""
+        """Keep a worker alive until loss of the head persists through a grace period."""
         if poll_seconds <= 0:
             raise ValueError("poll_seconds must be positive")
-        if head_failure_threshold < 1:
-            raise ValueError("head_failure_threshold must be positive")
         if self.is_head:
             raise RuntimeError("wait_forever is valid only on worker nodes")
 
-        consecutive_failures = 0
+        tracker = _SustainedFailure(head_failure_grace_seconds)
         while True:
             await asyncio.sleep(poll_seconds)
             try:
@@ -695,12 +835,22 @@ class ModalRayCluster:
                 )
                 connection.close()
             except OSError:
-                consecutive_failures += 1
-                if consecutive_failures >= head_failure_threshold:
+                first_failure = tracker.started_at is None
+                sustained = tracker.observe(failed=True, now=self._monotonic())
+                if first_failure:
                     print(
-                        "Ray head is no longer reachable; exiting worker container",
+                        "Ray head liveness probe failed; starting "
+                        f"{head_failure_grace_seconds:g}s grace period",
+                        flush=True,
+                    )
+                if sustained:
+                    print(
+                        "Ray head remained unreachable through the grace period; "
+                        "exiting worker container",
                         flush=True,
                     )
                     return
             else:
-                consecutive_failures = 0
+                if tracker.started_at is not None:
+                    print("Ray head liveness recovered", flush=True)
+                tracker.observe(failed=False, now=self._monotonic())

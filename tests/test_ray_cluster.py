@@ -313,7 +313,19 @@ def test_stop_ray_is_bounded_and_marks_cluster_stopped(monkeypatch):
     assert cluster._started is False
 
 
-def test_worker_exits_after_consecutive_head_liveness_failures(monkeypatch, capsys):
+def test_sustained_failure_requires_one_continuous_interval():
+    tracker = ray_cluster._SustainedFailure(grace_seconds=60)
+
+    assert tracker.observe(failed=True, now=10) is False
+    assert tracker.observe(failed=True, now=69) is False
+    assert tracker.observe(failed=False, now=70) is False
+    assert tracker.observe(failed=True, now=100) is False
+    assert tracker.observe(failed=True, now=160) is True
+
+
+def test_worker_tolerates_transient_head_loss_then_exits_after_grace(
+    monkeypatch, capsys
+):
     import modal.experimental
 
     monkeypatch.setattr(
@@ -344,10 +356,59 @@ def test_worker_exits_after_consecutive_head_liveness_failures(monkeypatch, caps
     monkeypatch.setattr(ray_cluster.asyncio, "sleep", _no_sleep)
     cluster = ModalRayCluster()
     cluster.discover_cluster(2)
+    clock = iter((0.0, 0.25, 10.0, 11.0))
+    monkeypatch.setattr(cluster, "_monotonic", lambda: next(clock))
 
-    asyncio.run(cluster.wait_forever(poll_seconds=0.25, head_failure_threshold=2))
+    asyncio.run(
+        cluster.wait_forever(
+            poll_seconds=0.25,
+            head_failure_grace_seconds=1.0,
+        )
+    )
 
-    assert "Ray head is no longer reachable" in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert "Ray head liveness recovered" in output
+    assert "remained unreachable through the grace period" in output
+
+
+def test_head_reports_only_sustained_worker_loss(monkeypatch):
+    import modal.experimental
+
+    monkeypatch.setattr(
+        modal.experimental,
+        "get_cluster_info",
+        lambda: SimpleNamespace(
+            rank=0,
+            cluster_id="cluster-abc",
+            container_ipv4_ips=["10.0.0.1", "10.0.0.2"],
+        ),
+    )
+    snapshots = iter(
+        (
+            [{"Alive": True}, {"Alive": False}],
+            [{"Alive": True}, {"Alive": True}],
+            [{"Alive": True}, {"Alive": False}],
+            [{"Alive": True}, {"Alive": False}],
+        )
+    )
+    cluster = ModalRayCluster()
+    cluster.discover_cluster(2)
+    clock = iter((0.0, 1.0, 10.0, 70.0))
+    monkeypatch.setattr(cluster, "_monotonic", lambda: next(clock))
+
+    async def _nodes_snapshot():
+        return next(snapshots)
+
+    monkeypatch.setattr(cluster, "_ray_nodes_snapshot", _nodes_snapshot)
+
+    message = asyncio.run(
+        cluster._wait_for_sustained_worker_loss(
+            poll_seconds=0.001,
+            failure_grace_seconds=60.0,
+        )
+    )
+
+    assert message == "Ray cluster lost worker nodes for at least 60s: 1/2 alive"
 
 
 def test_failure_diagnostics_preserve_dead_node_reason(monkeypatch):
@@ -405,6 +466,47 @@ def test_submitted_job_id_survives_log_stream_failure():
         asyncio.run(cluster.submit_and_tail("python train.py"))
 
     assert cluster.last_submitted_job_id == "ray-job-before-stream-failure"
+
+
+def test_submit_aborts_and_records_diagnostics_after_sustained_worker_loss(
+    monkeypatch,
+):
+    stopped_jobs = []
+
+    class _Client:
+        def submit_job(self, **_kwargs):
+            return "ray-job-worker-loss"
+
+        async def tail_job_logs(self, _job_id):
+            await asyncio.Event().wait()
+
+        def stop_job(self, job_id):
+            stopped_jobs.append(job_id)
+
+    async def _worker_loss():
+        return "Ray cluster lost worker nodes for at least 60s: 1/3 alive"
+
+    cluster = ModalRayCluster()
+    cluster.n_nodes = 3
+    cluster.rank = 0
+    cluster._discovered = True
+    cluster._client = _Client()
+    monkeypatch.setattr(cluster, "_wait_for_sustained_worker_loss", _worker_loss)
+    monkeypatch.setattr(
+        ray_cluster,
+        "capture_ray_cluster_diagnostics",
+        lambda: {"nodes": [{"Alive": True}, {"Alive": False}]},
+    )
+
+    result = asyncio.run(cluster.submit_and_tail("python train.py"))
+
+    assert result.status == "FAILED"
+    assert result.is_success is False
+    assert result.message == (
+        "Ray cluster lost worker nodes for at least 60s: 1/3 alive"
+    )
+    assert result.diagnostics == {"nodes": [{"Alive": True}, {"Alive": False}]}
+    assert stopped_jobs == ["ray-job-worker-loss"]
 
 
 def test_failure_diagnostic_payload_is_bounded(monkeypatch):
