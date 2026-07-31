@@ -48,8 +48,9 @@ def _parse_epoch(text: str, _now: float) -> float | None:
 
 
 def _parse_iso(text: str, _now: float) -> float | None:
+    normalized = text[:-1] + "+00:00" if text.endswith(("Z", "z")) else text
     try:
-        parsed = datetime.fromisoformat(text)
+        parsed = datetime.fromisoformat(normalized)
     except ValueError:
         return None
     if parsed.tzinfo is None:

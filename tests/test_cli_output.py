@@ -28,6 +28,24 @@ def test_print_error_uses_stderr(capsys):
     assert captured.err == "problem\n"
 
 
+def test_print_table_treats_plain_strings_as_literal_text(capsys):
+    output.print_table(
+        ["Parameter", "Value"],
+        [
+            ["flags", "[true, false]"],
+            ["missing", "[null]"],
+            ["literal", "[/]"],
+        ],
+        title="Recipe [example]",
+    )
+
+    rendered = capsys.readouterr().out
+    assert "[true, false]" in rendered
+    assert "[null]" in rendered
+    assert "[/]" in rendered
+    assert "Recipe [example]" in rendered
+
+
 def test_json_option_uses_non_shadowing_parameter_name():
     @click.command()
     @options.json_option

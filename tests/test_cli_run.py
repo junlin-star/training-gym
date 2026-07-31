@@ -206,6 +206,48 @@ def test_run_get_missing_run_returns_not_found_without_fetching_rollouts():
     assert FakeDashboardClient.requests == [("/api/runs/missing", None)]
 
 
+def test_run_params_prints_raw_recipe_as_json():
+    params = {
+        "gpu_type": "H200",
+        "num_rollout": 4,
+        "sequence_parallel": False,
+        "eval_prompt_data": ["eval", "/data/eval.jsonl"],
+        "sglang_config": {"attention_backend": "flashinfer"},
+        "load": "",
+        "critic_num_nodes": None,
+    }
+    FakeDashboardClient.payload = _summary(
+        framework="slime",
+        config={"recipe": params},
+    )
+
+    result = CliRunner().invoke(
+        cli_module.entrypoint_cli,
+        ["run", "params", "run-1", "-j"],
+    )
+
+    assert result.exit_code == 0
+    assert FakeDashboardClient.requests == [("/api/runs/run-1", None)]
+    assert json.loads(result.stdout) == params
+
+
+def test_run_params_supports_non_slime_frameworks():
+    params = {"gpu_type": "H100", "num_nodes": 2}
+    FakeDashboardClient.payload = _summary(
+        framework="miles",
+        config={"recipe": params},
+    )
+
+    result = CliRunner().invoke(
+        cli_module.entrypoint_cli,
+        ["run", "params", "run-1", "-j"],
+    )
+
+    assert result.exit_code == 0
+    assert json.loads(result.stdout) == params
+    assert FakeDashboardClient.requests == [("/api/runs/run-1", None)]
+
+
 @pytest.mark.parametrize(
     ("flag", "value", "backend_field"),
     [

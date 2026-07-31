@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -342,6 +343,62 @@ def get_run(*, run_id: str, verbose: bool, json_output: bool) -> None:
     print_renderable(_reward_panel(rollouts))
 
 
+def show_run_params(*, run_id: str, json_output: bool) -> None:
+    """Fetch and render the framework recipe parameters for one run."""
+    encoded_run_id = quote(run_id, safe="")
+    not_found_error = CLIError(
+        f"Training run {run_id!r} was not found.",
+        error="run_not_found",
+        exit_code=ExitCode.NOT_FOUND,
+        run_id=run_id,
+        hint="training-gym run list",
+    )
+    with DashboardClient() as client:
+        summary = _validate_run_summary(
+            client.get_json(
+                f"/api/runs/{encoded_run_id}",
+                params=None,
+                not_found_error=not_found_error,
+            )
+        )
+
+    config = summary.config
+    params = config.get("recipe") or config.get("preset") or {}
+    if not isinstance(params, dict):
+        raise CLIError(
+            "Dashboard returned invalid framework parameters.",
+            error="invalid_dashboard_response",
+            exit_code=ExitCode.BACKEND,
+            run_id=run_id,
+        )
+
+    if json_output:
+        print_json(params)
+        return
+
+    configured_params = {
+        name: value
+        for name, value in params.items()
+        if value is not None and value != ""
+    }
+    print_table(
+        ["Parameter", "Value"],
+        [
+            [
+                name,
+                (
+                    value
+                    if isinstance(value, str)
+                    else json.dumps(value, ensure_ascii=False)
+                ),
+            ]
+            for name, value in configured_params.items()
+        ],
+        title=f"Training recipe for {run_id}",
+        show_header=False,
+    )
+
+
 def list_runs(
     *,
     since: str | None,
@@ -369,14 +426,7 @@ def list_runs(
             error="invalid_dashboard_response",
             exit_code=ExitCode.BACKEND,
         )
-    try:
-        summaries = [RunSummary.model_validate(item) for item in payload]
-    except ValidationError as exc:
-        raise CLIError(
-            "Dashboard returned an invalid run summary.",
-            error="invalid_dashboard_response",
-            exit_code=ExitCode.BACKEND,
-        ) from exc
+    summaries = [_validate_run_summary(item) for item in payload]
     fields = run_list_field_metadata()
     if json_output:
         print_json(
@@ -424,6 +474,22 @@ def run_group() -> None:
 def get_command(*, run_id: str, verbose: bool, json_output: bool) -> None:
     """Show status and top-level metadata for a single run."""
     get_run(run_id=run_id, verbose=verbose, json_output=json_output)
+
+
+@run_group.command(
+    "params",
+    help=("Show the framework training recipe for a single run."),
+    epilog=(
+        "Examples:\n"
+        "  training-gym run params brave-falcon-3fa8\n"
+        "  training-gym run params brave-falcon-3fa8 --json"
+    ),
+)
+@click.argument("run_id")
+@json_option
+def params_command(*, run_id: str, json_output: bool) -> None:
+    """Show the framework training recipe for a single run."""
+    show_run_params(run_id=run_id, json_output=json_output)
 
 
 @run_group.command(
