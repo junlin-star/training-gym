@@ -54,16 +54,15 @@ def _substep_label(name: str) -> str:
     return _SUBSTEP_LABELS.get(name, name.replace("_", " "))
 
 
-def _sum_step_durations(
-    step_times: dict[str, dict[str, int | None]] | None,
-) -> float:
-    """Training time as the sum of per-step durations.
+def _total_step_time_s(result: "TutorialResult") -> float:
+    """Sum of per-step durations.
 
-    Excludes queue, model download and checkpoint conversion time, which depend
-    on compute availability rather than gym performance.
+    Reported instead of wall clock, which also covers queue, model download and
+    checkpoint conversion time — variable with compute availability rather than
+    gym performance.
     """
     return float(
-        sum(step.get("duration_s") or 0 for step in (step_times or {}).values())
+        sum(step.get("duration_s") or 0 for step in (result.step_times or {}).values())
     )
 
 
@@ -105,7 +104,8 @@ class TutorialResult:
         print(f"Step count: {self.step_count}")
         print("Result:")
         print(f"Training run status: {self.training_run_status}")
-        print(f"Total step time (s): {self.total_duration_s}")
+        print(f"Total step time (s): {_total_step_time_s(self)}")
+        print(f"Total duration (s): {self.total_duration_s}")
 
         keys = _step_keys(self)
         if not keys:
@@ -356,7 +356,7 @@ def run_base_training_on_slime(
         step_count=step_count,
         training_run_id=train_result.training_run_id,
         training_run_status=training_run.status,
-        total_duration_s=_sum_step_durations(training_run.step_times),
+        total_duration_s=float(training_run.duration_seconds or 0.0),
         step_times=training_run.step_times,
         substep_times=training_run.substep_times,
     )
@@ -398,7 +398,8 @@ def _format_result_details(result: TutorialResult) -> list[str]:
                 f"| {_substep_label(name)} | {_fmt_secs(entry.get('duration_s'))} |"
             )
         lines.append(f"| Step {key} | {_fmt_secs(step.get('duration_s'))} |")
-    lines.append(f"| Total step time | {_fmt_secs(result.total_duration_s)} |")
+    if len(keys) > 1:
+        lines.append(f"| Total step time | {_fmt_secs(_total_step_time_s(result))} |")
     lines.extend(["", "</details>", ""])
     return lines
 
@@ -411,7 +412,7 @@ def summarize_results(results_dir: str) -> str:
         status = _status_label(result)
         rows.append(
             f"| {result.base_model_name} | {status} "
-            f"| {result.total_duration_s:.1f}s | {result.step_count} "
+            f"| {_total_step_time_s(result):.1f}s | {result.step_count} "
             f"| `{result.training_run_id}` |"
         )
         details.extend(_format_result_details(result))
