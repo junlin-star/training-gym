@@ -70,11 +70,21 @@
   let runLoading = $state(false);
   let runError = $state("");
 
-  async function loadRun(id, signal) {
+  async function loadRun(id, parentSignal) {
+    if (parentSignal.aborted) return;
+    const controller = new AbortController();
+    let timedOut = false;
+    const abortRequest = () => controller.abort();
+    parentSignal.addEventListener("abort", abortRequest, { once: true });
+    const timeout = window.setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, 30000);
+
     runLoading = true;
     try {
-      const nextRun = await fetchRun(id, { signal });
-      if (signal.aborted) return;
+      const nextRun = await fetchRun(id, { signal: controller.signal });
+      if (parentSignal.aborted) return;
       if (nextRun === null) {
         run = null;
         runError = `Training run "${id}" was not found.`;
@@ -83,10 +93,16 @@
       run = nextRun;
       runError = "";
     } catch (err) {
-      if (signal.aborted) return;
-      if (!run) runError = String(err?.message || err);
+      if (parentSignal.aborted) return;
+      if (!run) {
+        runError = timedOut
+          ? "Run request timed out after 30 seconds."
+          : String(err?.message || err);
+      }
     } finally {
-      if (!signal.aborted) runLoading = false;
+      window.clearTimeout(timeout);
+      parentSignal.removeEventListener("abort", abortRequest);
+      if (!parentSignal.aborted) runLoading = false;
     }
   }
 

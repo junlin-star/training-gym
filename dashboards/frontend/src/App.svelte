@@ -43,6 +43,7 @@
   let refreshing = $state(false);
   let runsRequestId = 0;
   let hasLoadedRuns = false;
+  let initialRunsLoadStarted = false;
   let evalsRequestId = 0;
   let deploymentsRequestId = 0;
   let hasLoadedEvals = $state(false);
@@ -350,7 +351,12 @@
   }
 
   $effect(() => {
-    if (!activeTrainingRunId && !hasLoadedRuns) {
+    if (
+      !activeTrainingRunId &&
+      !hasLoadedRuns &&
+      !initialRunsLoadStarted
+    ) {
+      initialRunsLoadStarted = true;
       void loadRuns();
     } else if (activeTrainingRunId && !hasLoadedRuns) {
       loading = false;
