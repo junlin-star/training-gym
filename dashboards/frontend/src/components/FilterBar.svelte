@@ -101,7 +101,7 @@
                 <Check size={11} />
               {/if}
             </span>
-            <span class="item-label">{st}</span>
+            <span class="item-label capitalize">{st}</span>
             <span class="item-count">{statusCounts[st] || 0}</span>
           </button>
         {/each}

@@ -21,7 +21,9 @@ def test_root_help_lists_existing_commands_by_panel(runner):
     assert result.exit_code == 0
     assert "Configuration:" in result.stdout
     assert "Utilities:" in result.stdout
+    assert "Training runs:" in result.stdout
     for command in (
+        "run",
         "setup",
         "open",
         "set-password",

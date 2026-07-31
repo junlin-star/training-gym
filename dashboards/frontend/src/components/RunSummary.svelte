@@ -4,11 +4,13 @@
   import StatusPill from "./StatusPill.svelte";
   import FrameworkStageProgress from "./FrameworkStageProgress.svelte";
   import TimeAgo from "./TimeAgo.svelte";
-  import { formatTagValue, getGroupTags, smoothedStageLabel } from "../lib/format.js";
+  import { formatTagValue, getGroupTags } from "../lib/format.js";
 
-  // Shared by the list drawer and the detail page Summary tab.
-  let { run, getStatus, showFrameworkStatus, getFrameworkStatus, modelName, fmtDuration } =
-    $props();
+  // The run-summary block shared by the list drawer and the detail page's
+  // Summary tab, so both render identical metadata: status, stage, model,
+  // dataset, recipe, timing, the full Slime parameter dump, and the tuned
+  // recipe fields.
+  let { run, getStatus, showFrameworkStatus, modelName, fmtDuration } = $props();
 
   let recipe = $derived.by(() => run?.config?.recipe || run?.config?.preset || {});
   let recipeEntries = $derived.by(() =>
@@ -100,10 +102,6 @@
     };
   }
 
-  function frameworkStatusLabel() {
-    return smoothedStageLabel(getFrameworkStatus?.(run), run?.framework_progress);
-  }
-
   function progressLabel(progress) {
     if (!progress) return "";
     const unit = String(progress.unit || "step");
@@ -150,14 +148,14 @@
         <span class="kv-key">Status</span>
         <StatusPill status={getStatus(run)} />
       </div>
-      {#if showFrameworkStatus(run) && frameworkStatusLabel()}
+      {#if showFrameworkStatus(run) && run.display_stage}
         {@const progress = frameworkProgress()}
         <div class="kv">
           <span class="kv-key">Stage</span>
           <FrameworkStageProgress
             {progress}
             progressLabel={progressLabel(progress)}
-            stageLabel={frameworkStatusLabel()}
+            stageLabel={run.display_stage}
             active={getStatus(run).toLowerCase() === "pending"}
           />
         </div>
