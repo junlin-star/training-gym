@@ -732,6 +732,7 @@
   );
 
   let statusText = $derived.by(() => {
+    if (activePage === "training" && activeTrainingRunId) return "run details";
     if (activePage === "training" && loading) return "loading...";
     if (activePage === "evals" && loadingEvals) return "loading...";
     if (activePage === "deployments" && loadingDeployments) return "loading...";
