@@ -88,20 +88,20 @@ def _imports():
 @markdown
 def _serve_base_intro():
     """
-    ## Serve the base model
+    ## Set up, serve, and evaluate the base model
 
-    So, how does Qwen3-4B currently fare at writing haikus? We can
-    serve the base model and find out.
+    So, how does Qwen3-4B currently fare at writing haikus? We can serve the base model and find out.
 
-    The training gym has several config classes so you can define deployment, training, and evaluation configurations,
-    and reuse them across different runs for parameter sweeps.
+    The training gym has several config classes so you can define deployment, training, and evaluation configurations, and
+    reuse them across different runs for parameter sweeps.
 
-    Let's start by initializing a `DeploymentConfig`.
+    Let's start by creating a [`ModelConfig`](https://gym.modal.dev/reference/core/modelconfig) to define the base model. 
+    You can set one up yourself by subclassing `ModelConfig` or `HFModelConfiguration`, but we also provide pre-configured
+    ones for common models like `Qwen3_4B`.
 
-    Calling `DeploymentConfig.serve()` builds and deploys an SGLang app, then
-    returns a `ModelDeployment` with the endpoint URL. Pass
-    `unauthenticated=True` so the endpoint is reachable without Modal
-    proxy-auth tokens.
+    Then, we can initialize a `DeploymentConfig` to serve our model. Calling `DeploymentConfig.serve()` builds and deploys an
+    SGLang app, then returns a `ModelDeployment` with the endpoint URL. For this tutorial, we pass `unauthenticated=True` so
+    the endpoint is reachable without proxy-auth tokens.
     """
 
 
@@ -134,18 +134,17 @@ def _qualitative_eval_of_base_model_code():
 @markdown
 def _scoring_intro():
     """
-    Let's now cover the evaluation part of the tutorial.
+    Chances are what it wrote was not, in fact, a haiku. But how can we determine this at scale? For that, we need a scoring
+    function.
 
     A good eval takes a particular outcome and assigns a score to it. It can be binary (pass/fail) or continuous (0-100),
     deterministic or subjective, and cheap or expensive to compute.
 
-    In our case, we want our model to be good at writing haiku poems, so how do we evaluate if an llm response was a good haiku or not?
-    
-    Well, a haiku must follow the 5-7-5 syllable format, so we can count syllables using NLTK's CMU Pronouncing Dictionary
-    (with a regex fallback for words not in the dictionary)
-    and score how close each line is to its target syllable count.
+    In our case, we want our model to be good at writing haiku poems. A haiku must follow the 5-7-5 syllable format, so we can
+    count syllables using NLTK's CMU Pronouncing Dictionary (with a regex fallback for words not in the dictionary) and score how
+    close each line is to its target syllable count.
 
-    We can give it score 0 if it doesn't follow the 5-7-5 syllable format, and 1 if it does. But that's not very informative.
+    We could give it score 0 if it doesn't follow the 5-7-5 syllable format, and 1 if it does. But that's not very informative.
     Instead, we can score it based on how close it is to the target syllable count for each line.
     """
 @code
@@ -197,13 +196,14 @@ def _score_haiku_demo():
 @markdown
 def _define_dataset():
     """
-    Let's also define a Haiku dataset.
-    Here, we use the statworx/haiku dataset from HuggingFace.
-    Each row has a `keywords` topic and a reference `text` haiku.
-    We can use this dataset to train our model.
+    Let's also define a dataset. Like models, you can subclass `DatasetConfig` to create a custom dataset, or `HuggingFaceDataset` to
+    automatically download one from Hugging Face.
 
-    Datasets for training models can take many form factors, and huggingface dataset is just one of them.
-    If you're curious about other options, check out the [DatasetConfig](https://gym.modal.dev/reference/core/datasetconfig/) documentation.
+    Here, we use the statworx/haiku dataset from HuggingFace. Each row has a `keywords` topic and a reference `text` haiku. We can use
+    this dataset to train our model.
+
+    Datasets for training models can take many form factors; this is just one of them. If you're curious about other options, check
+    out the [DatasetConfig](https://gym.modal.dev/reference/core/datasetconfig/) documentation.
     """
 
 @code
@@ -228,8 +228,7 @@ def _define_dataset_code():
 @markdown
 def _eval_dataset_head():
     """
-    Let's take a look at the eval set. Each row has a `keywords`
-    topic and a reference `text` haiku.
+    Let's take a quick peek into the eval set:
     """
 
 @notebook_only
@@ -242,27 +241,16 @@ def _eval_dataset_head_code():
 @markdown
 def _grade_haiku_into_eval():
     """
-    Seems straightforward enough, right? How do we run an eval on our base model with this dataset?
-    We can transform our scoring function above into an Eval Configuration.
+    Seems straightforward enough, right? How do we run an eval on our base model with this dataset? We can transform our scoring
+    function above into an [`EvalConfig`](https://gym.modal.dev/reference/evaluation/evalconfig).
 
-    First, to explain, an Eval Configuration is a class that owns the model-calling loop.
-    The task-specific part is a scoring function passed to `.evaluate(...)`, which must
-    return `EvalRowResult`.
-
-    The very simple form of an eval is given a dataset, and the corresponding model response, return its score. That can be configured using
-    `EvalConfig.eval_response_fn`.
-
-    For more complex evals (e.g. multi-turn), you can also define a custom `EvalConfig.eval_fn` that takes a `ModelDeployment` and a dataset row and returns a score.
-    """
-
-
-
-@notebook_only
-@markdown
-def _eval_base_intro():
-    """
-    ## Evaluate the base model
-
+    An EvalConfig is a class that owns the model-calling loop. To specify the task, you pass in a dataset and one of two things:
+    1. An `eval_response_fn`. EvalConfig will generate a response for each row in the dataset and pass it to your function. You
+       then calculate a score and return it in an `EvalRowResult`.
+    2. For more complex evals (e.g. multi-turn), you can define a custom `EvalConfig.eval_fn` that takes a `ModelDeployment` and
+       a dataset row and returns a score.
+    
+    Once set up, you can call `.evaluate(...)` with your deployed model to run the eval. Let's see how our base model fares:
     """
 
 @code
@@ -286,10 +274,14 @@ def _train_intro():
     ## Train with slime
 
     Now, let's actually train the model to write good haikus.
-    Here, we use the slime framework (https://github.com/THUDM/slime) on Modal.
+    Here, we use the [slime](https://github.com/THUDM/slime) framework on Modal.
 
-    All flags that are native to slime can be passed to the `TrainConfig` object.
-    You can also add patches to slime using the `image_overlay` argument.
+    To train a model on the gym, you create a [`TrainConfig`](https://gym.modal.dev/reference/training/trainconfig/) object,
+    which takes a model, dataset, and *recipe*. A recipe lets you configure the training loop, including the reward function,
+    how many rollouts to run, GPU configuration, and more.
+
+    All flags that are native to slime can be passed to the [`SlimeRecipe`](https://gym.modal.dev/reference/training/slimerecipe/)
+    object. You can also customize the training environment or add patches to slime using the `image_overlay` argument.
     """
 
 @code
@@ -329,10 +321,11 @@ def _define_training_run():
 @markdown
 def _train_section():
     """
-    ## Train
+    Once we have a `TrainConfig`, all that's left to do is call `.train()`! This will build a Modal app, print out a dashboard
+    URL, and run training. All results will be stored in a Modal volume for later use.
 
-    `TrainConfig.train()` builds the Modal app, runs training, and
-    returns a `TrainResult` with the run ID and checkpoint path.
+    This will take some time, but while it's running, you can open the dashboard URL in your browser to see progress and even
+    samples from each of the rollouts. For more details, check out the [observability dashboard docs](https://gym.modal.dev/tutorials/tools/000_observability_dashboard).
     """
 
 
@@ -348,10 +341,8 @@ def _trained_eval_intro():
     """
     ## Serve and evaluate the trained checkpoint
 
-    The returned `TrainResult` has the checkpoint path and volume
-    metadata attached. You can pass an explicit `checkpoint=` to
-    `DeploymentConfig` to pin a specific checkpoint, or omit it to use
-    the model's default path.
+    The returned `TrainResult` has the checkpoint path and volume metadata attached. To serve our trained model, we can pass
+    this checkpoint to a new `DeploymentConfig`:
     """
 
 
@@ -373,8 +364,6 @@ def _serve_and_eval_trained():
 @markdown
 def _trained_eval_section():
     """
-    ## Evaluate the first checkpoint
-
     Now let's run the same eval on the trained model and compare.
     """
 
@@ -390,11 +379,12 @@ def _eval_trained():
 def _continue_to_train_off_of_a_checkpoint():
     """
     ## Train off of a checkpoint
-    Hmm, looks like the trained model is not doing very well.
+    Hmm, looks like the trained model could still do better.
     Maybe it's because it only trained for 10 iterations.
 
     What happens if we train it for more?
     We want to train it off of the latest checkpoint, not from scratch.
+    To do this, we make a new `TrainConfig`, this time with our checkpoint:
     """
 
 @code
@@ -455,8 +445,6 @@ def _trained_eval_off_of_a_checkpoint_code():
 @markdown
 def _trained_eval_off_of_a_checkpoint_results():
     """
-    ## Compare second-run results
-
     Now let's compare the results of the newly trained model and the base model.
     """
 
@@ -470,8 +458,6 @@ def _trained_eval_off_of_a_checkpoint_results_code():
 @markdown
 def _compare_results():
     """
-    ## Compare all runs
-
     Now let's compare the results across all three checkpoints.
     """
 
@@ -480,3 +466,23 @@ def _compare_results_code():
     print(f"Base model haiku score: {base_eval.mean:.1f}")
     print(f"Trained model haiku score: {trained_eval.mean:.1f}")
     print(f"Trained model (new) haiku score: {new_eval.mean:.1f}")
+
+@markdown
+def _conclusion():
+    """
+    ## Conclusion
+
+    We've seen how to use the gym to serve a base model, define a scoring function, evaluate it, train a model, and serve the
+    trained model. Hopefully, you got some good haikus out of it too!
+
+    This is a simple example, but it demonstrates the core concepts of RL post-training. There are still many more things you
+    can do with the gym, like:
+
+    * [Code execution in your reward function using Modal Sandboxes](https://gym.modal.dev/tutorials/rl/001_sandboxes/)
+    * [Multi-turn RL](https://gym.modal.dev/tutorials/rl/002_multiturn/)
+    * [On-policy distillation](https://gym.modal.dev/tutorials/rl/003_on_policy_distillation/)
+    * [DAPO for complex reasoning tasks](https://gym.modal.dev/tutorials/rl/005_dapo/)
+    * [Audio](https://gym.modal.dev/tutorials/rl/006_audio_asr/) and [computer use](https://gym.modal.dev/tutorials/rl/008_computer_use/) models
+    * [Parameter sweeps to easily tune hyperparameters](https://gym.modal.dev/tutorials/rl/007_param_sweep/)
+    * [Cross-tokenizer distillation for training across model families](https://gym.modal.dev/tutorials/rl/009_cross_tokenizer_distillation/)
+    """
