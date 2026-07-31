@@ -46,9 +46,9 @@ def _run_filter_options(function: Callable[..., Any]) -> Callable[..., Any]:
     return function
 
 
-def _format_timestamp(value: object) -> str:
+def _format_timestamp(value: object) -> str | None:
     if not isinstance(value, (int, float)) or not value:
-        return "—"
+        return None
     return (
         datetime.fromtimestamp(value, tz=UTC)
         .isoformat(timespec="seconds")
