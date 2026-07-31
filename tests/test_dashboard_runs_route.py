@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
+import pytest
 from fastapi.testclient import TestClient
 
 from modal_training_gym import _dashboard
@@ -244,3 +245,19 @@ def test_run_log_stream_events_always_include_json_data(
             line for line in block.splitlines() if line.startswith("data: ")
         )
         assert isinstance(json.loads(data_line.removeprefix("data: ")), dict)
+
+
+@pytest.mark.parametrize("bound", ["since", "until"])
+def test_run_logs_rejects_invalid_time_bound(bound, fake_volume, monkeypatch, tmp_path):
+    _save_records()
+
+    with _client(monkeypatch, tmp_path) as client:
+        response = client.get(
+            "/api/runs/run-route-1/logs",
+            params={bound: "yesterday-ish"},
+        )
+
+    assert response.status_code == 400
+    assert response.json()["detail"].startswith(
+        f"{bound} must be epoch seconds, ISO 8601, or a relative time"
+    )

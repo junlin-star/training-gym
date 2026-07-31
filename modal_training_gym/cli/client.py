@@ -100,7 +100,7 @@ class DashboardClient:
         if response.status_code == 404 and not_found_error is not None:
             raise not_found_error
 
-        self._raise_for_status(response.status_code)
+        self._raise_for_status(response)
         try:
             return response.json()
         except (ValueError, UnicodeDecodeError) as exc:
@@ -110,7 +110,7 @@ class DashboardClient:
                 exit_code=ExitCode.BACKEND,
             ) from exc
 
-    def iter_sse(
+    def iter_event_stream(
         self,
         path: str,
         *,
@@ -135,11 +135,11 @@ class DashboardClient:
                 "GET",
                 path.lstrip("/"),
                 params=query,
-                timeout=None,
+                timeout=httpx.Timeout(DEFAULT_TIMEOUT_SECONDS, read=None),
             ) as response:
                 if response.status_code == 404 and not_found_error is not None:
                     raise not_found_error
-                self._raise_for_status(response.status_code)
+                self._raise_for_status(response)
 
                 event = "message"
                 data_lines: list[str] = []
@@ -164,17 +164,19 @@ class DashboardClient:
                 "Dashboard log stream timed out.",
                 error="dashboard_timeout",
                 exit_code=ExitCode.BACKEND,
+                hint="Re-run the command to retry.",
             ) from exc
         except httpx.RequestError as exc:
             raise CLIError(
                 "Dashboard log stream disconnected.",
                 error="dashboard_unreachable",
                 exit_code=ExitCode.BACKEND,
-                hint="training-gym run logs RUN_ID --follow",
+                hint="Re-run the command to reconnect.",
             ) from exc
 
     @staticmethod
-    def _raise_for_status(status_code: int) -> None:
+    def _raise_for_status(response: httpx.Response) -> None:
+        status_code = response.status_code
         if status_code in {401, 403}:
             raise CLIError(
                 "Dashboard authentication was rejected.",
@@ -197,8 +199,17 @@ class DashboardClient:
                 status_code=status_code,
             )
         if status_code >= 400:
+            try:
+                payload = response.json()
+                detail = payload.get("detail") if isinstance(payload, dict) else None
+            except (ValueError, UnicodeDecodeError, httpx.ResponseNotRead):
+                detail = None
             raise CLIError(
-                f"Dashboard returned HTTP {status_code}.",
+                (
+                    detail
+                    if isinstance(detail, str)
+                    else f"Dashboard returned HTTP {status_code}."
+                ),
                 error="dashboard_request_failed",
                 exit_code=ExitCode.BACKEND,
                 status_code=status_code,

@@ -455,7 +455,7 @@ def show_run_logs(
     search: str | None,
     json_output: bool,
 ) -> None:
-    """Fetch historical logs or follow the live dashboard log stream."""
+    """Show historical logs or follow the live dashboard log stream."""
     if follow and (since or until or tail is not None):
         raise click.UsageError(
             "--since, --until, and --tail apply only when fetching logs "
@@ -491,7 +491,7 @@ def show_run_logs(
                 _print_log_line(str(entry["line"]))
             return
 
-        for event, data in client.iter_sse(
+        for event, data in client.iter_event_stream(
             f"/api/runs/{encoded_run_id}/logs/stream",
             params={"search": search},
             not_found_error=not_found_error,
@@ -622,9 +622,9 @@ def params_command(*, run_id: str, json_output: bool) -> None:
 @run_group.command(
     "logs",
     help=(
-        "Fetch or stream Modal app logs for a run.\n\n"
-        "By default, fetches the most recent entries and exits; pass --follow "
-        "to live-stream instead."
+        "Show logs for a training run.\n\n"
+        f"By default, shows the latest {DEFAULT_LOG_TAIL} logs. "
+        "Use --follow to stream new logs."
     ),
     epilog=(
         "Examples:\n"
@@ -638,19 +638,19 @@ def params_command(*, run_id: str, json_output: bool) -> None:
     "--follow",
     is_flag=True,
     default=False,
-    help="Stream new log output until interrupted or the app stops.",
+    help="Keep streaming new logs until interrupted or the run stops.",
 )
 @click.option(
     "--since",
     default=None,
     metavar="START",
-    help="Only entries at/after START (ISO 8601 or relative: 30m, 2h, 1d).",
+    help="Show logs since a timestamp or relative time (e.g. 30m, 2h).",
 )
 @click.option(
     "--until",
     default=None,
     metavar="END",
-    help="Only entries at/before END (ISO 8601 or relative: 30m, 2h, 1d).",
+    help="Show logs up to a timestamp or relative time (e.g. 30m, 2h).",
 )
 @click.option(
     "-n",
@@ -658,7 +658,7 @@ def params_command(*, run_id: str, json_output: bool) -> None:
     type=click.IntRange(min=1, max=MAX_LOG_TAIL),
     default=None,
     metavar="N",
-    help=f"Show only the last N entries (default: {DEFAULT_LOG_TAIL}).",
+    help=f"Show the last N logs (default: {DEFAULT_LOG_TAIL}).",
 )
 @click.option(
     "--search",
@@ -677,7 +677,7 @@ def logs_command(
     search: str | None,
     json_output: bool,
 ) -> None:
-    """Fetch or stream Modal app logs for a run."""
+    """Show logs for a training run."""
     show_run_logs(
         run_id=run_id,
         follow=follow,

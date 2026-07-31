@@ -28,7 +28,7 @@ class FakeDashboardClient:
             raise not_found_error
         return self.payloads.get(path, self.payload)
 
-    def iter_sse(self, path, *, params=None, not_found_error=None):
+    def iter_event_stream(self, path, *, params=None, not_found_error=None):
         self.requests.append((path, params))
         if path in self.not_found_paths and not_found_error is not None:
             raise not_found_error
@@ -260,7 +260,7 @@ def test_run_logs_help_documents_modes_and_filters():
     result = CliRunner().invoke(cli_module.entrypoint_cli, ["run", "logs", "--help"])
 
     assert result.exit_code == 0
-    assert "Fetch or stream Modal app logs for a run." in result.stdout
+    assert "Show logs for a training run." in result.stdout
     for flag in ("--follow", "--since", "--until", "--tail", "--search", "--json"):
         assert flag in result.stdout
     assert "RUN_ID" in result.stdout

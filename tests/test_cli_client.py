@@ -134,6 +134,29 @@ def test_maps_http_errors(status_code, error, exit_code, mock_transport):
     assert exc_info.value.exit_code == exit_code
 
 
+def test_surfaces_dashboard_detail_for_bad_request(mock_transport):
+    mock_transport(
+        lambda _request: httpx.Response(
+            400,
+            json={
+                "detail": (
+                    "since must be epoch seconds, ISO 8601, "
+                    "or a relative time such as 24h"
+                )
+            },
+        )
+    )
+
+    with DashboardClient() as client:
+        with pytest.raises(CLIError) as exc_info:
+            client.get_json("/api/runs/run-1/logs")
+
+    assert str(exc_info.value) == (
+        "since must be epoch seconds, ISO 8601, or a relative time such as 24h"
+    )
+    assert exc_info.value.error == "dashboard_request_failed"
+
+
 def test_uses_command_specific_not_found_error(mock_transport):
     mock_transport(lambda _request: httpx.Response(404, text="ignored"))
     not_found = CLIError(
@@ -212,7 +235,7 @@ def test_rejects_absolute_request_path():
     assert exc_info.value.exit_code == ExitCode.ERROR
 
 
-def test_iter_sse_parses_named_and_default_events(mock_transport):
+def test_iter_event_stream_parses_named_and_default_events(mock_transport):
     mock_transport(
         lambda _request: httpx.Response(
             200,
@@ -231,7 +254,7 @@ def test_iter_sse_parses_named_and_default_events(mock_transport):
     )
 
     with DashboardClient() as client:
-        events = list(client.iter_sse("/api/logs/stream"))
+        events = list(client.iter_event_stream("/api/logs/stream"))
 
     assert events == [
         ("message", '{"line":"hello"}'),
@@ -241,7 +264,7 @@ def test_iter_sse_parses_named_and_default_events(mock_transport):
     ]
 
 
-def test_iter_sse_disables_read_timeout(mock_transport):
+def test_iter_event_stream_disables_read_timeout(mock_transport):
     seen = []
 
     def respond(request: httpx.Request) -> httpx.Response:
@@ -250,6 +273,12 @@ def test_iter_sse_disables_read_timeout(mock_transport):
 
     mock_transport(respond)
     with DashboardClient() as client:
-        assert list(client.iter_sse("/api/logs/stream")) == [("done", "{}")]
+        assert list(client.iter_event_stream("/api/logs/stream")) == [("done", "{}")]
 
-    assert seen[0].extensions["timeout"]["read"] is None
+    timeout = seen[0].extensions["timeout"]
+    assert timeout == {
+        "connect": DEFAULT_TIMEOUT_SECONDS,
+        "read": None,
+        "write": DEFAULT_TIMEOUT_SECONDS,
+        "pool": DEFAULT_TIMEOUT_SECONDS,
+    }
