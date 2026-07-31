@@ -261,6 +261,13 @@ def generate_starlight(output_dir: Path) -> None:
             "/",
             "/tutorials/",
         ),
+        (
+            "tutorials/index.md",
+            ROOT / "tutorials" / "README.md",
+            PurePosixPath("tutorials"),
+            "/",
+            "/tutorials/",
+        ),
     )
 
     for destination, source, source_dir, home_link, tutorials_link in pages:
