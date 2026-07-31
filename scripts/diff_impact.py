@@ -41,6 +41,7 @@ MODEL_VALIDATION_HARNESS_PATHS = frozenset(
     {
         REPO_ROOT / "scripts" / "validate_model_configs.py",
         REPO_ROOT / "scripts" / "diff_impact.py",
+        REPO_ROOT / "modal_training_gym" / "common" / "models" / "validation.py",
         REPO_ROOT / "modal_training_gym" / "frameworks" / "slime" / "launcher.py",
         REPO_ROOT / "modal_training_gym" / "common" / "train.py",
         REPO_ROOT / "modal_training_gym" / "common" / "train_result.py",
@@ -149,28 +150,16 @@ def _model_index() -> tuple[dict[str, frozenset[str]], frozenset[str]]:
     Only models with a base slime recipe are tracked — validation runs base
     training on slime, so models without one (e.g. Kimi on miles) are skipped.
     """
-    import inspect as _inspect
-
-    import modal_training_gym.common.models as _models
-    from modal_training_gym.common.models import ModelConfig
+    from modal_training_gym.common.models.validation import VALIDATABLE_MODELS
     from modal_training_gym.train_recipes.slime_recipe import SlimeRecipe
 
     class_to_models: dict[str, set[str]] = defaultdict(set)
     all_models: set[str] = set()
-    for obj in vars(_models).values():
-        if not (_inspect.isclass(obj) and issubclass(obj, ModelConfig)):
-            continue
-        model_name = getattr(obj, "model_name", "")
-        if not model_name:
-            continue
-        try:
-            recipe = SlimeRecipe.get_base_recipe(obj())
-        except Exception:
-            continue
-        short = model_name.rsplit("/", 1)[-1]
-        all_models.add(short)
-        class_to_models[obj.__name__].add(short)
-        class_to_models[type(recipe).__name__].add(short)
+    for model_name, model_config in VALIDATABLE_MODELS:
+        recipe = SlimeRecipe.get_base_recipe(model_config())
+        all_models.add(model_name)
+        class_to_models[model_config.__name__].add(model_name)
+        class_to_models[type(recipe).__name__].add(model_name)
 
     return (
         {name: frozenset(models) for name, models in class_to_models.items()},
@@ -178,28 +167,17 @@ def _model_index() -> tuple[dict[str, frozenset[str]], frozenset[str]]:
     )
 
 
-def affected_models(
-    diff_text: str,
-    skip_harness_validation_models: Iterable[str] = (),
-) -> tuple[str, ...]:
+def affected_models(diff_text: str) -> tuple[str, ...]:
     """Model names (validate ``--model`` args) impacted by a diff.
 
     Importing ``modal_training_gym`` is deferred to here so the tutorial-only
     paths through ``analyze_diff`` stay import-free.
-
-    ``skip_harness_validation_models`` only applies when shared validation
-    harness changes would otherwise select every model. Models selected by
-    their own config or recipe class changes remain unaffected.
     """
     changed_paths = _paths_from_diff(diff_text)
     class_to_models, all_models = _model_index()
 
     if any(path in MODEL_VALIDATION_HARNESS_PATHS for path in changed_paths):
-        skipped_models = {
-            model_name.rsplit("/", 1)[-1]
-            for model_name in skip_harness_validation_models
-        }
-        return tuple(sorted(all_models - skipped_models))
+        return tuple(sorted(all_models))
 
     report = analyze_diff(diff_text)
     models: set[str] = set()
@@ -423,14 +401,6 @@ def main(argv: Iterable[str] | None = None) -> int:
         help="Emit a JSON array of model names affected by the diff, "
         "compatible with scripts/validate_model_configs.py check --model.",
     )
-    parser.add_argument(
-        "--skip-harness-validation-models",
-        nargs="+",
-        default=[],
-        metavar="MODEL",
-        help="Omit these models when harness changes trigger validation of all "
-        "models. Model-specific changes still select them.",
-    )
     args = parser.parse_args(list(argv) if argv is not None else None)
 
     if args.diff_file is not None:
@@ -439,11 +409,7 @@ def main(argv: Iterable[str] | None = None) -> int:
         diff_text = sys.stdin.read()
 
     if args.models:
-        models = affected_models(
-            diff_text,
-            skip_harness_validation_models=args.skip_harness_validation_models,
-        )
-        print(json.dumps(list(models)))
+        print(json.dumps(list(affected_models(diff_text))))
         return 0
 
     report = analyze_diff(diff_text)

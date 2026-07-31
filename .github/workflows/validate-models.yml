@@ -27,7 +27,6 @@ jobs:
       models: ${{ steps.list.outputs.models }}
     env:
       UV_CACHE_DIR: /tmp/uv-cache
-      HARNESS_VALIDATION_SKIP_MODELS: zai-org/GLM-4.7
     steps:
       - uses: actions/checkout@v4
         with:
@@ -49,14 +48,12 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             models=$(git diff "${{ github.event.pull_request.base.sha }}...HEAD" \
-              | uv run python scripts/diff_impact.py --models \
-                  --skip-harness-validation-models $HARNESS_VALIDATION_SKIP_MODELS)
+              | uv run python scripts/diff_impact.py --models)
           elif [ -n "$MODELS_INPUT" ]; then
             models=$(printf '%s' "$MODELS_INPUT" \
               | uv run python -c "import json,sys; print(json.dumps([m.strip() for m in sys.stdin.read().split(',') if m.strip()]))")
           else
-            models=$(uv run python scripts/validate_model_configs.py list \
-              --skip $HARNESS_VALIDATION_SKIP_MODELS)
+            models=$(uv run python scripts/validate_model_configs.py list)
           fi
           echo "Selected models: $models"
           echo "models=$models" >> "$GITHUB_OUTPUT"

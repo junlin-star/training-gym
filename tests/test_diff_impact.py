@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import scripts.diff_impact as diff_impact
 from scripts.diff_impact import analyze_diff
 
 
@@ -40,38 +39,3 @@ def test_generated_tutorial_diff_maps_back_to_source() -> None:
     assert "rl/003_on_policy_distillation" in {
         slug for slug, _, _ in report.affected_tutorials
     }
-
-
-def test_harness_skip_does_not_affect_model_specific_selection(monkeypatch) -> None:
-    monkeypatch.setattr(
-        diff_impact,
-        "_model_index",
-        lambda: (
-            {"SkippedClass": frozenset({"Skipped"})},
-            frozenset({"Skipped", "Validated"}),
-        ),
-    )
-
-    harness_diff = (
-        "diff --git a/scripts/diff_impact.py b/scripts/diff_impact.py\n"
-        "--- a/scripts/diff_impact.py\n"
-        "+++ b/scripts/diff_impact.py\n"
-    )
-    assert diff_impact.affected_models(
-        harness_diff,
-        skip_harness_validation_models=["org/Skipped"],
-    ) == ("Validated",)
-
-    monkeypatch.setattr(
-        diff_impact,
-        "analyze_diff",
-        lambda _diff: diff_impact.ImpactReport(
-            affected_classes=("SkippedClass",),
-            affected_tutorials=(),
-        ),
-    )
-    model_diff = "diff --git a/model.py b/model.py\n--- a/model.py\n+++ b/model.py\n"
-    assert diff_impact.affected_models(
-        model_diff,
-        skip_harness_validation_models=["org/Skipped"],
-    ) == ("Skipped",)

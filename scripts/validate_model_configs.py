@@ -7,17 +7,17 @@ Optional args:
 """
 
 import argparse
-import inspect
 import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-import modal_training_gym.common.models as models
 from modal_training_gym.common.dataset import (
     DatasetConfig,
     HuggingFaceDataset,
     MultimodalDataset,
 )
+from modal_training_gym.common.models.qwen3_asr_1_7b import Qwen3_ASR_1_7B
+from modal_training_gym.common.models.validation import VALIDATABLE_MODELS
 from modal_training_gym.common.run import TrainingRun, TrainingRunStatus
 from modal_training_gym.common.wandb import WandbConfig
 from modal_training_gym.model import ModelConfig
@@ -220,7 +220,7 @@ def pick_dataset(model_config: ModelConfig) -> DatasetConfig:
     Audio models (Qwen3-ASR) need speech clips, so they get LibriSpeech;
     everything else defaults to gsm8k.
     """
-    if isinstance(model_config, models.Qwen3_ASR_1_7B):
+    if isinstance(model_config, Qwen3_ASR_1_7B):
         return LibriSpeechASRDataset(n_rows=8)
     return Gsm8kDataset(n_rows=10)
 
@@ -232,44 +232,19 @@ def _model_config_registry() -> dict[str, type[ModelConfig]]:
     repo name ("qwen3-4b"), all lowercased.
     """
     registry: dict[str, type[ModelConfig]] = {}
-    for obj in vars(models).values():
-        if (
-            inspect.isclass(obj)
-            and issubclass(obj, ModelConfig)
-            and getattr(obj, "model_name", "")
-        ):
-            full = obj.model_name.lower()
-            registry[full] = obj
-            registry[full.rsplit("/", 1)[-1]] = obj
+    for name, model_config in VALIDATABLE_MODELS:
+        registry[name.lower()] = model_config
+        registry[model_config.model_name.lower()] = model_config
     return registry
-
-
-def _supports_slime(model_config: ModelConfig) -> bool:
-    """Whether a model has a base slime recipe, the only thing this script runs.
-
-    Derived by attempting ``SlimeRecipe.get_base_recipe`` rather than encoding
-    framework support on the model — the recipe registry is the source of truth.
-    """
-    try:
-        SlimeRecipe.get_base_recipe(model_config)
-    except Exception:
-        return False
-    return True
 
 
 def available_model_names() -> list[str]:
     """Sorted short model names (e.g. "qwen3-4b") validatable on slime.
 
-    Excludes models with no base slime recipe (e.g. Kimi on miles), since this
-    script only runs base training on slime.
+    The shared registry excludes models with no base slime recipe (e.g. Kimi on
+    miles), since this script only runs base training on slime.
     """
-    return sorted(
-        {
-            cls.model_name.rsplit("/", 1)[-1]
-            for cls in _model_config_registry().values()
-            if _supports_slime(cls())
-        }
-    )
+    return sorted(name for name, _ in VALIDATABLE_MODELS)
 
 
 def get_model_config_from_model_name(model_name: str) -> ModelConfig:
@@ -294,11 +269,6 @@ def run_base_training_on_slime(
     colocate: bool | None = None,
 ) -> TutorialResult:
     model_config = get_model_config_from_model_name(model_name)
-    if not _supports_slime(model_config):
-        raise ValueError(
-            f"model {model_config.model_name!r} has no base slime recipe; "
-            f"validatable models: {', '.join(available_model_names())}"
-        )
     dataset = pick_dataset(model_config)
     dataset_name = getattr(dataset, "hf_repo", type(dataset).__name__).rsplit("/", 1)[
         -1
@@ -488,15 +458,8 @@ def __main__():
         help="Disable W&B logging for this validator run.",
     )
 
-    list_parser = subparsers.add_parser(
+    subparsers.add_parser(
         "list", help="Print available model names as a JSON array and exit."
-    )
-    list_parser.add_argument(
-        "--skip",
-        nargs="+",
-        default=[],
-        metavar="MODEL",
-        help="Omit models with these names from the list.",
     )
 
     summarize_parser = subparsers.add_parser(
@@ -513,12 +476,7 @@ def __main__():
     args = parser.parse_args()
 
     if args.command == "list":
-        skipped_models = {name.rsplit("/", 1)[-1] for name in args.skip}
-        print(
-            json.dumps(
-                [name for name in available_model_names() if name not in skipped_models]
-            )
-        )
+        print(json.dumps(available_model_names()))
         return
 
     if args.command == "summarize":
