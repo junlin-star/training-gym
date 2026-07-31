@@ -92,24 +92,380 @@ _HOOK_WRAPPER_PATHS = {
 class SlimeRecipe(BaseTrainRecipe):
     """Recipe dataclass for configuring slime GRPO training on Modal.
 
-    Don't see the configuration flags that you need? You can pass them in the `extra_config` field.
+    Fields fall into two categories:
+
+    1. **Launcher instructions** — consumed by the Modal launcher (image
+       build, cluster topology, W&B, checkpoint conversion, callable
+       shipping) and never forwarded to slime. These are exactly the names
+       listed in ``_SLIME_SKIP``.
+    2. **slime CLI flags** — every other field is emitted to slime's
+       ``train.py`` as ``--<field-name-with-dashes> <value>`` by
+       ``BaseTrainRecipe.cli_args``: ``None``/``False``/``""`` omit the flag
+       entirely, ``True`` emits a bare flag, lists become space-separated
+       values, dicts in ``YAML_CONFIG_FIELDS`` are materialized to temp YAML
+       files on the container and passed as paths, and dicts in
+       ``JSON_CONFIG_FIELDS`` are passed as inline JSON. ``sglang_*``-prefixed
+       fields configure the rollout engines rather than Megatron: slime
+       registers every sglang ``ServerArgs`` option under a ``--sglang-``
+       prefix and forwards it.
+
+    **Passing a flag that has no field here.** ``extra="forbid"`` rejects
+    unknown constructor kwargs, but you never need to edit this class to pass
+    a new slime or sglang flag:
+
+    - **Declare it as a field on a subclass.** Emission is purely name-based,
+      so any slime flag maps 1:1 (``--use-tis`` → a ``use_tis: bool = True``
+      field) and any sglang server arg maps via the prefix
+      (``--sglang-moe-dense-tp-size`` → ``sglang_moe_dense_tp_size: int = 1``);
+      see ``glm_4_7.py`` for a recipe that does both. This works even for
+      flags newer than this package — if the slime/sglang version baked into
+      ``SLIME_IMAGE`` understands the flag, it just works.
+    - **Or put it in ``extra_config``.** The launcher writes the dict to YAML
+      and passes ``--custom-config-path``; slime sets each key as an attribute
+      on its parsed args. Keys there always win over same-named top-level
+      fields (the field's CLI flag is dropped so the YAML value stands), and
+      this is the only route for keys that aren't argparse flags at all, e.g.
+      settings a custom generate function reads via ``args.<key>``.
+
+    When adding a *launcher-only* field to this class or a subclass, also add
+    its name to ``_SLIME_SKIP`` — otherwise it leaks onto the slime command
+    line and argparse aborts with "unrecognized arguments".
+
+    ## App Identity
+
+    recipe_type : RecipeType
+        Discriminator marking this recipe as slime; never override.
+    name : str
+        Modal app title; when empty the launcher derives one from the recipe
+        class.
+    app_tags : dict
+        Extra tags merged into the Modal app metadata for dashboard
+        auto-discovery.
+
+    ## Modal Launcher
+
+    environment : dict
+        Env vars set in the training containers (defaults include
+        ``PYTHONPATH`` for Megatron and NCCL tuning).
+    async_mode : bool
+        Run slime's ``train_async.py`` so rollout generation and training
+        overlap (one-step off-policy) instead of alternating.
+    wandb : WandbConfig | None
+        W&B settings; expands to slime's ``--use-wandb``/``--wandb-project``/
+        ``--wandb-group`` flags.
+    image_overlay : Callable | None
+        Callable that customizes the Modal image (e.g.
+        ``lambda img: img.pip_install("pkg")``).
+    local_slime : str | None
+        Path to a local slime checkout mounted over the image's copy — dev
+        overlay for testing slime changes without an image rebuild.
+    memory : int | tuple[int, int] | None
+        Modal Function memory request/limit in MiB.
+    cloud : str | None
+        Modal cloud provider to pin the cluster to.
+    region : str | None
+        Modal region to pin the cluster to.
+    slime_model_script : str
+        Script path relative to the slime repo, sourced before ``train.py``
+        to provide ``MODEL_ARGS``; when set, model-architecture flags are not
+        emitted from the attached ``ModelConfig``.
+    source_hf_checkpoint : str | None
+        HF repo fetched as the source checkpoint when it differs from the
+        model's own (used by some recipes).
+    megatron_conversion_hf_checkpoint : str | None
+        HF checkpoint used for the HF→Megatron conversion step instead of the
+        training model's own weights.
+    patch_files : list[str]
+        Local patch scripts copied into the image at build time (applied to
+        slime/Megatron sources).
+    image_run_commands : list[str]
+        Extra shell commands run while building the image.
+    image_env : dict
+        Extra env vars baked into the image.
+    train_function_kwargs : dict
+        Extra Modal Function options for the train function; supported keys:
+        ``secrets``, ``experimental_options``, ``ephemeral_disk``.
+    capture_trace : bool
+        Attach slime's per-sample execution trace (generate/reward/tool-call
+        timeline) to recorded rollouts for the dashboard.
+    trace_sample_limit : int
+        With ``capture_trace``, number of samples per rollout that get a
+        trace attached (sampling keeps the added data volume small).
+
+    ## Cluster and Parallelism
+
+    gpu_type : str
+        Modal GPU type for every node, e.g. ``"H100"`` or ``"B200"``.
+    colocate : bool
+        Trainer and rollout engines share the same GPUs, shifting memory
+        between phases; ``False`` gives each its own GPUs (disaggregated).
+    actor_num_nodes : int
+        Number of nodes for the Megatron actor (trainer).
+    actor_num_gpus_per_node : int
+        GPUs per actor node.
+    rollout_num_gpus : int | None
+        Total GPUs for rollout engines when disaggregated; ``None`` lets the
+        allocation resolver size it.
+    rollout_num_gpus_per_engine : int
+        GPUs per sglang engine — its tensor-parallel size.
+    tensor_model_parallel_size : int
+        Megatron tensor-parallel size for the actor.
+    sequence_parallel : bool
+        Megatron sequence parallelism (requires TP > 1).
+    use_critic : bool
+        Train a separate critic model (PPO-style; GRPO runs without one).
+    critic_num_nodes : int | None
+        Nodes for the critic when ``use_critic`` is set.
+    critic_num_gpus_per_node : int | None
+        GPUs per critic node.
+
+    ## Rollout and Sampling
+
+    num_rollout : int
+        Total rollout steps (= training steps) for the run.
+    rollout_batch_size : int
+        Prompts sampled per rollout step; each prompt is expanded into a
+        group of sampled responses.
+    rollout_max_response_len : int
+        Max generated tokens per sample.
+    rollout_temperature : float
+        Sampling temperature for rollout generation.
+    rollout_shuffle : bool
+        Shuffle the prompt dataset between epochs.
+    rollout_top_p : float
+        Nucleus-sampling top-p for rollout generation.
+    rollout_stop_token_ids : list[int] | None
+        Extra token ids that terminate generation.
+
+    ## Checkpointing
+
+    save : str
+        Checkpoint output directory (the mounted ``/checkpoints`` volume).
+    save_interval : int
+        Save a checkpoint every N rollout steps.
+    load : str
+        Checkpoint directory to resume from; empty starts from the converted
+        HF weights.
+    no_save_optim : bool
+        Omit optim state from checkpoints (smaller, but no exact resume).
+    megatron_to_hf_mode : str
+        Mode used to export saved Megatron checkpoints back to HF format;
+        empty disables the export step.
+    use_fault_tolerance : bool
+        Enable slime's fault tolerance so the run can recover from worker
+        failures.
+    freeze_params_name_list : list[str] | None
+        Regex patterns (matched with ``re.search``) of parameter names to
+        freeze, e.g. a VL model's vision tower so RL only updates the
+        language backbone.
+
+    ## RL Algorithm
+
+    advantage_estimator : str
+        Advantage estimator, e.g. ``"grpo"``.
+    n_samples_per_prompt : int
+        Responses sampled per prompt (the GRPO group size).
+    eps_clip : float
+        PPO clip lower bound.
+    eps_clip_high : float
+        PPO clip upper bound (asymmetric DAPO-style clipping).
+    use_kl_loss : bool
+        Add a per-token KL loss term against the reference model.
+    kl_loss_type : str
+        KL formulation, e.g. ``"low_var_kl"``.
+    kl_loss_coef : float
+        Coefficient of the KL loss term.
+    kl_coef : float
+        KL penalty coefficient applied in the reward.
+    entropy_coef : float
+        Entropy bonus coefficient.
+    calculate_per_token_loss : bool
+        Average the loss over tokens instead of over samples.
+    ref_load : str
+        Checkpoint path the reference model is read from (for KL terms).
+
+    ## Dynamic Sampling
+
+    over_sampling_batch_size : int | None
+        Prompts sampled beyond ``rollout_batch_size`` so groups rejected by
+        the filter can be replaced (DAPO).
+    dynamic_sampling_filter_path : str
+        Import path of the predicate deciding which sample groups to keep,
+        e.g. dropping all-equal-reward groups.
+    balance_data : bool
+        Rebalance kept samples across data-parallel ranks.
+
+    ## Training and Optimizer
+
+    global_batch_size : int
+        Training samples per optim step.
+    lr : float
+        Learning rate.
+    lr_decay_style : str
+        Schedule, e.g. ``"constant"`` or ``"cosine"``.
+    weight_decay : float
+        Weight decay.
+    adam_beta1 : float
+        Adam beta1.
+    adam_beta2 : float
+        Adam beta2.
+    optimizer : str
+        Optimizer name, e.g. ``"adam"``.
+
+    ## Memory and Precision
+
+    attention_dropout : float
+        Attention dropout probability.
+    hidden_dropout : float
+        Hidden-layer dropout probability.
+    attention_softmax_in_fp32 : bool
+        Compute attention softmax in fp32.
+    accumulate_allreduce_grads_in_fp32 : bool
+        Accumulate and all-reduce gradients in fp32.
+    use_distributed_optimizer : bool
+        Shard optim state across data-parallel ranks (Megatron distributed
+        optimizer).
+    recompute_granularity : str
+        Activation recomputation granularity (``"full"`` or ``"selective"``).
+    recompute_method : str
+        Recomputation method (``"uniform"`` or ``"block"``).
+    recompute_num_layers : int
+        Layers per recomputation chunk.
+    qkv_format : str
+        QKV layout for the Megatron backend (``"thd"`` or ``"bshd"``),
+        emitted as ``--qkv-format``.
+
+    ## Dynamic Batching
+
+    use_dynamic_batch_size : bool
+        Pack variable-length samples into micro-batches up to
+        ``max_tokens_per_gpu`` instead of a fixed micro batch size.
+    max_tokens_per_gpu : int
+        Token budget per GPU per micro-batch when dynamic batching is on.
+
+    ## Eval
+
+    eval_interval : int | None
+        Run eval every N rollout steps; ``None`` disables eval.
+    n_samples_per_eval_prompt : int
+        Responses sampled per eval prompt.
+    eval_max_response_len : int
+        Max generated tokens per eval sample.
+    eval_top_p : float
+        Nucleus-sampling top-p for eval generation.
+    eval_config : dict | None
+        Inline dict materialized to a YAML file and passed as
+        ``--eval-config``; holds eval defaults and the eval dataset list.
+
+    ## Weight Sync
+
+    update_weight_mode : str
+        ``"full"`` rebroadcasts all weights each sync; ``"delta"``
+        pin-snapshots the last broadcast on CPU and ships only byte-level
+        changes (~5-10x faster for large MoE models whose weights barely move
+        per rollout).
+    update_weight_transport : str
+        ``"nccl"`` or ``"disk"``; disk requires trainer and rollout engines
+        to share a filesystem.
+    update_weight_encoding : str
+        Encoding for delta payloads, e.g. ``"indices"``.
+    update_weight_disk_dir : str
+        Shared directory used by the disk transport.
+
+    ## Reward Model
+
+    rm_type : str | None
+        Name of a slime built-in reward function (e.g. ``"deepscaler"``);
+        leave ``None`` when shipping a reward callable instead.
+
+    ## Custom Functions and Hooks
+
+    custom_rm_function : Callable | None
+        Reward callable shipped by value to the containers and registered as
+        slime's ``--custom-rm-path``.
+    custom_generate_function : Callable | None
+        Callable replacing slime's generate step; shipped by value and
+        registered via its resolved import path.
+    custom_reward_post_process_function : Callable | None
+        Callable applied to rewards after generation. Prefer this over
+        setting a raw dotted path yourself: functions defined in a
+        ``__main__`` tutorial script have no reliably importable module name,
+        so slime's own ``importlib.import_module`` on that path fails inside
+        the Ray actor.
+    rollout_function : Callable | str | None
+        Replaces slime's entire rollout loop (``--rollout-function-path``).
+    custom_rollout_log_function : Callable | str | None
+        Called with each rollout's data for logging; the gym wraps it so
+        phase reporting and dashboard capture still run.
+    custom_eval_rollout_log_function : Callable | str | None
+        Same as above, for eval rollouts.
+    custom_megatron_before_log_prob_hook : Callable | str | None
+        Hook run in the Megatron trainer before log-prob computation.
+    custom_megatron_before_train_step_hook : Callable | str | None
+        Hook run in the Megatron trainer before each train step.
+
+    ## Config Overrides
+
+    extra_config : dict | None
+        The primary escape hatch: dict written to YAML and passed as
+        ``--custom-config-path``. Keys become attributes on slime's parsed
+        args and always override same-named recipe fields.
+    sglang_config : dict | None
+        Dict written to YAML and passed as ``--sglang-config`` — structured
+        sglang engine config that isn't a flat flag (e.g. PD-disaggregation
+        ``server_groups``).
+    sglang_request_params : dict | None
+        Extra request parameters injected into sglang generate calls (shipped
+        via ``extra_config``, read as ``args.sglang_request_params`` by
+        generate paths such as on-policy distillation).
+    apply_chat_template_kwargs : dict | str
+        Kwargs forwarded to the tokenizer's ``apply_chat_template``, passed
+        as inline JSON.
+    train_env_vars : dict | str | None
+        Env vars for the training processes, passed as inline JSON.
+    multimodal_keys : dict | str | None
+        Dataset columns holding multimodal inputs, passed as inline JSON;
+        auto-filled from the attached ``DatasetConfig``.
+
+    ## SGLang Rollout Engine
+
+    sglang_mem_fraction_static : float
+        Fraction of GPU memory sglang reserves for weights + KV cache.
+    sglang_enable_dp_attention : bool
+        Enable data-parallel attention across engine ranks.
+    sglang_dp_size : int | None
+        Data-parallel size for the engines.
+    sglang_ep_size : int | None
+        Expert-parallel size for MoE models.
+    sglang_enable_dp_lm_head : bool
+        Data-parallel LM head (pairs with DP attention).
+    sglang_disable_custom_all_reduce : bool
+        Fall back to NCCL all-reduce instead of sglang's custom kernel.
+    sglang_cuda_graph_bs : list[int] | None
+        Batch sizes to capture CUDA graphs for.
+    sglang_max_running_requests : int | None
+        Cap on concurrent in-flight requests per engine.
+    sglang_tool_call_parser : str | None
+        Parser for tool-call output, e.g. ``"qwen25"``.
+    sglang_reasoning_parser : str | None
+        Parser for reasoning/thinking output.
     """
 
     # ── Required: cluster and parallelism ──────────────────────────────────
-    gpu_type: str
-    colocate: bool
-    tensor_model_parallel_size: int
-    sequence_parallel: bool
-    rollout_num_gpus_per_engine: int
+    gpu_type: str  # Modal GPU type for every node, e.g. "H100" or "B200"
+    colocate: bool  # trainer + rollout engines share GPUs (vs. disaggregated)
+    tensor_model_parallel_size: int  # Megatron TP size for the actor
+    sequence_parallel: bool  # Megatron sequence parallelism (requires TP > 1)
+    rollout_num_gpus_per_engine: int  # GPUs per sglang engine (its TP size)
 
     # ── Required: rollout ──────────────────────────────────────────────────
-    num_rollout: int
-    rollout_batch_size: int  # This is rollout_tp_size
-    rollout_max_response_len: int
-    rollout_temperature: float
+    num_rollout: int  # total rollout (= training) steps for the run
+    rollout_batch_size: int  # prompts sampled per rollout step
+    rollout_max_response_len: int  # max generated tokens per sample
+    rollout_temperature: float  # sampling temperature for generation
 
     # ── Required: checkpointing ────────────────────────────────────────────
-    save_interval: int
+    save_interval: int  # save a checkpoint every N rollout steps
 
     # ── App identity ─────────────────────────────────────────────────────────
     recipe_type: RecipeType = RecipeType.SLIME
@@ -268,6 +624,7 @@ class SlimeRecipe(BaseTrainRecipe):
     sglang_enable_dp_lm_head: bool = False
     sglang_disable_custom_all_reduce: bool = False
     sglang_cuda_graph_bs: list[int] | None = None
+    sglang_cuda_graph_backend_prefill: str | None = None
     sglang_max_running_requests: int | None = None
     sglang_tool_call_parser: str | None = None
     sglang_reasoning_parser: str | None = None
@@ -462,6 +819,15 @@ class SlimeRecipe(BaseTrainRecipe):
         fields: dict[str, Any] = {}
         for f in _dc.fields(self):
             fields[f.name] = getattr(self, f.name)
+        if (
+            self.colocate
+            and fields["sglang_cuda_graph_backend_prefill"] is None
+            and not (
+                isinstance(fields.get("extra_config"), dict)
+                and "sglang_cuda_graph_backend_prefill" in fields["extra_config"]
+            )
+        ):
+            fields["sglang_cuda_graph_backend_prefill"] = "disabled"
         if dataset is not None:
             fields.update(self._dataset_to_fields(dataset))
         if model is not None:

@@ -45,14 +45,18 @@ def print_table(
     title: str = "",
     show_header: bool = True,
 ) -> None:
+    safe_columns = [
+        Column(header=Text(column)) if isinstance(column, str) else column
+        for column in columns
+    ]
     table = Table(
-        *columns,
-        title=title or None,
+        *safe_columns,
+        title=Text(title) if title else None,
         show_header=show_header,
     )
     for row in rows:
         cells = [
-            cell if cell is None or isinstance(cell, (str, Text)) else str(cell)
+            cell if cell is None or isinstance(cell, Text) else Text(str(cell))
             for cell in row
         ]
         table.add_row(*cells)

@@ -48,8 +48,8 @@
 
 <svelte:window onclick={() => (openMenu = null)} />
 
-<nav class="p-0 flex items-center gap-[0.5rem] relative flex-wrap">
-  <label class="inline-flex items-center gap-[8px] [border:1px_solid_var(--color-c-gray-10,#2f2f2f)] rounded-[6px] [background:transparent] w-[260px] p-[6px_8px]" aria-label="Search training runs by name">
+<nav class="p-0 flex items-center gap-[0.5rem] relative flex-wrap max-[900px]:[align-items:stretch]">
+  <label class="inline-flex items-center gap-[8px] [border:1px_solid_var(--color-c-gray-10,#2f2f2f)] rounded-[6px] [background:transparent] w-[260px] p-[6px_8px] max-[900px]:w-full" aria-label="Search training runs by name">
     <span class="search-icon">
       <Search size={13} />
     </span>

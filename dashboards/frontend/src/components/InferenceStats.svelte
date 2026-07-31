@@ -34,7 +34,7 @@
 
 {#if stats.length}
   <div
-    class="grid grid-cols-[repeat(auto-fit,minmax(110px,1fr))] gap-[6px] mb-[10px]"
+    class="grid grid-cols-[repeat(auto-fit,minmax(110px,1fr))] max-[900px]:grid-cols-1 gap-[6px] mb-[10px]"
     aria-label="Inference statistics"
   >
     {#each stats as stat (stat.label)}
