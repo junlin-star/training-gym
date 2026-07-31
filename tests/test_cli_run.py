@@ -309,12 +309,12 @@ def test_run_logs_fetches_recent_filtered_entries():
     ]
 
 
-def test_run_logs_json_returns_raw_log_entries():
+def test_run_logs_json_preserves_entries_and_pagination():
     logs = [{"task_id": "task-1", "line": "hello", "fd": 1, "ts": 100.0}]
     FakeDashboardClient.payload = {
         "logs": logs,
-        "has_more": False,
-        "next_until": None,
+        "has_more": True,
+        "next_until": 99.5,
     }
 
     result = CliRunner().invoke(
@@ -323,8 +323,30 @@ def test_run_logs_json_returns_raw_log_entries():
     )
 
     assert result.exit_code == 0
-    assert json.loads(result.stdout) == logs
+    assert json.loads(result.stdout) == {
+        "logs": logs,
+        "has_more": True,
+        "next_until": 99.5,
+    }
+    assert "older logs are available with --until 99.5" in result.stderr
     assert FakeDashboardClient.requests[0][1]["max_lines"] == 100
+
+
+def test_run_logs_warns_when_human_output_is_truncated():
+    FakeDashboardClient.payload = {
+        "logs": [{"task_id": "task-1", "line": "hello"}],
+        "has_more": True,
+        "next_until": None,
+    }
+
+    result = CliRunner().invoke(
+        cli_module.entrypoint_cli,
+        ["run", "logs", "run-1"],
+    )
+
+    assert result.exit_code == 0
+    assert result.stdout == "hello\n"
+    assert "showing the newest 1 logs; older logs are available" in result.stderr
 
 
 def test_run_logs_follow_streams_lines_until_done():

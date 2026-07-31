@@ -401,7 +401,9 @@ def show_run_params(*, run_id: str, json_output: bool) -> None:
     )
 
 
-def _validate_log_payload(payload: object) -> list[dict[str, object]]:
+def _validate_log_payload(
+    payload: object,
+) -> tuple[list[dict[str, object]], bool, int | float | None]:
     if not isinstance(payload, dict) or not isinstance(payload.get("logs"), list):
         raise CLIError(
             "Dashboard returned invalid log data.",
@@ -418,7 +420,19 @@ def _validate_log_payload(payload: object) -> list[dict[str, object]]:
                 exit_code=ExitCode.BACKEND,
             )
         logs.append(entry)
-    return logs
+
+    has_more = payload.get("has_more", False)
+    next_until = payload.get("next_until")
+    if not isinstance(has_more, bool) or (
+        next_until is not None
+        and (not isinstance(next_until, (int, float)) or isinstance(next_until, bool))
+    ):
+        raise CLIError(
+            "Dashboard returned invalid log pagination data.",
+            error="invalid_dashboard_response",
+            exit_code=ExitCode.BACKEND,
+        )
+    return logs, has_more, next_until
 
 
 def _print_log_line(line: str) -> None:
@@ -483,9 +497,22 @@ def show_run_logs(
                 },
                 not_found_error=not_found_error,
             )
-            logs = _validate_log_payload(payload)
+            logs, has_more, next_until = _validate_log_payload(payload)
+            if has_more:
+                message = (
+                    f"[showing the newest {len(logs)} logs; older logs are available"
+                )
+                if next_until is not None:
+                    message += f" with --until {next_until}"
+                click.echo(f"{message}]", err=True)
             if json_output:
-                print_json(logs)
+                print_json(
+                    {
+                        "logs": logs,
+                        "has_more": has_more,
+                        "next_until": next_until,
+                    }
+                )
                 return
             for entry in logs:
                 _print_log_line(str(entry["line"]))
@@ -658,7 +685,10 @@ def params_command(*, run_id: str, json_output: bool) -> None:
     type=click.IntRange(min=1, max=MAX_LOG_TAIL),
     default=None,
     metavar="N",
-    help=f"Show the last N logs (default: {DEFAULT_LOG_TAIL}).",
+    help=(
+        f"Show at most the newest N logs within the requested window "
+        f"(default: {DEFAULT_LOG_TAIL}; max: {MAX_LOG_TAIL})."
+    ),
 )
 @click.option(
     "--search",
