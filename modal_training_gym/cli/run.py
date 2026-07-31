@@ -551,6 +551,13 @@ def show_run_logs(
                 )
             elif event == "reconnect":
                 click.echo("[reconnecting log stream]", err=True)
+        raise CLIError(
+            "Dashboard log stream ended unexpectedly.",
+            error="log_stream_disconnected",
+            exit_code=ExitCode.BACKEND,
+            run_id=run_id,
+            hint="Re-run the command to reconnect.",
+        )
 
 
 def list_runs(

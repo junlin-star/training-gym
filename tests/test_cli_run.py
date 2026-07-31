@@ -372,6 +372,22 @@ def test_run_logs_follow_streams_lines_until_done():
     ]
 
 
+def test_run_logs_follow_fails_when_stream_ends_without_done():
+    FakeDashboardClient.streams["/api/runs/run-1/logs/stream"] = [
+        ("message", '{"task_id":"task-1","line":"hello\\n","ts":100}'),
+    ]
+
+    result = CliRunner().invoke(
+        cli_module.entrypoint_cli,
+        ["run", "logs", "run-1", "--follow"],
+    )
+
+    assert result.exit_code == 5
+    assert result.stdout == "hello\n"
+    assert "Dashboard log stream ended unexpectedly." in result.stderr
+    assert "Re-run the command to reconnect." in result.stderr
+
+
 def test_run_logs_follow_json_uses_newline_delimited_events():
     FakeDashboardClient.streams["/api/runs/run-1/logs/stream"] = [
         ("message", '{"task_id":"task-1","line":"first","ts":100}'),
