@@ -73,10 +73,6 @@ _MILES_PATCHES = Path(__file__).parent / "modal_helpers" / "patches"
 _PATCH_SGLANG_ABORT_B64 = encode_patch("patch_sglang_abort", _MILES_PATCHES)
 
 
-def _checkpoint_conversion_cache_hit(save_path: str) -> bool:
-    return has_torch_dist_checkpoint(save_path)
-
-
 def _build_miles_base_image(miles: MilesConfig) -> Image:
     image = (
         Image.from_registry(miles.docker_image)
@@ -295,7 +291,7 @@ def build_miles_app(
         checkpoints_volume.reload()
 
         save_path = str(miles.ref_load)
-        if _checkpoint_conversion_cache_hit(save_path):
+        if has_torch_dist_checkpoint(save_path):
             print(
                 f"Found existing torch_dist checkpoint at {save_path}; "
                 "skipping conversion."
