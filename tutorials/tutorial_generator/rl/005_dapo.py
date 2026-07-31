@@ -4,7 +4,7 @@
 TUTORIAL_METADATA = {
     "framework": "`slime`",
     "cluster_shape": "1 × 8×H100",
-    "summary": "DAPO on math with Qwen3-4B",
+    "summary": "DAPO on math",
     "difficulty": "Advanced",
     "order": 35,
     "api_classes": [
@@ -60,7 +60,7 @@ def _run_instructions():
     ```
     cd training-gym
     uv sync
-    uv run python tutorials/rl/005_dapo/005_dapo.py
+    uv run tutorials/rl/005_dapo/005_dapo.py
     ```
 
     To detach and watch it from the Modal dashboard instead:

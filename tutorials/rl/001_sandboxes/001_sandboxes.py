@@ -17,7 +17,7 @@
 # 4. Train and compare base vs. trained behavior.
 # Run with:
 # ```
-# uv run python tutorials/rl/001_sandboxes/001_sandboxes.py
+# uv run tutorials/rl/001_sandboxes/001_sandboxes.py
 # ```
 # ## Prerequisites
 #

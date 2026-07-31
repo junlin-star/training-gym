@@ -28,7 +28,7 @@
 # ```
 # cd training-gym
 # uv sync
-# uv run python tutorials/rl/005_dapo/005_dapo.py
+# uv run tutorials/rl/005_dapo/005_dapo.py
 # ```
 #
 # To detach and watch it from the Modal dashboard instead:

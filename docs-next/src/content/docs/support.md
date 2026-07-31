@@ -1,6 +1,5 @@
 ---
 title: Support
-description: Contact points for questions about Training Gym, tutorials, and access to Modal multi-node training.
 tableOfContents: false
 prev: false
 next: false
@@ -12,6 +11,6 @@ out on [Slack](https://modal.com/slack).
 
 When reporting an issue with a tutorial or the SDK itself, please include:
 
-- the training framework (e.g. `slime`)
-- the cluster shape (e.g. `2 × 8×H100`)
-- a link to the tutorial you were running, or a minimal `TrainConfig` repro
+- Training framework (e.g. `slime`).
+- Cluster shape (e.g. `2 × 8×H100`).
+- Link to the tutorial you were running, or a minimal `TrainConfig` repro (see the [quickstart example](../../../../examples/quickstart.py)).

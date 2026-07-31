@@ -21,25 +21,25 @@ uv run ruff format --check modal_training_gym/
 uv run pyright modal_training_gym/    # if pyright is available
 
 # Compile check (no GPU needed)
-uv run python -m compileall modal_training_gym/
+uv run -m compileall modal_training_gym/
 
 # Tutorials — NEVER edit generated files directly
-uv run python tutorials/generate_tutorial.py              # regenerate all .py + .ipynb
-uv run python tutorials/generate_tutorial.py path/to/src  # regenerate one
+uv run tutorials/generate_tutorial.py              # regenerate all .py + .ipynb
+uv run tutorials/generate_tutorial.py path/to/src  # regenerate one
 
 # Docs (Astro/Starlight site at docs-next/)
-uv run python scripts/generate_all.py --skip-build   # regen API reference + tutorial pages
+uv run scripts/generate_all.py --skip-build   # regen API reference + tutorial pages
 cd docs-next && npm ci && npm run dev                 # local dev server
-uv run python scripts/generate_all.py                 # full regen + build
+uv run scripts/generate_all.py                 # full regen + build
 
 # Deploy
 uv run modal deploy docs-next/docs_next_app.py        # docs site → gym.modal.dev
 uv run modal deploy dashboards/app.py                  # observability dashboard
 
 # Validate model configs / map a diff to affected tutorials
-uv run python scripts/validate_model_configs.py list
-uv run python scripts/validate_model_configs.py check -m qwen3-4b
-git diff | uv run python scripts/diff_impact.py
+uv run scripts/validate_model_configs.py list
+uv run scripts/validate_model_configs.py check -m qwen3-4b
+git diff | uv run scripts/diff_impact.py
 ```
 
 ## Architecture

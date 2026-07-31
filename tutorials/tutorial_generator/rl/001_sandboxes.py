@@ -4,7 +4,7 @@
 TUTORIAL_METADATA = {
     "framework": "`slime`",
     "cluster_shape": "1 × 1×H100",
-    "summary": "Code RL with Harbor hello-world and sandboxed verification",
+    "summary": "Code RL with Harbor sandboxed evals",
     "difficulty": "Intermediate",
     "order": 20,
     "api_classes": [
@@ -49,7 +49,7 @@ def _run_instructions():
     """
     Run with:
     ```
-    uv run python tutorials/rl/001_sandboxes/001_sandboxes.py
+    uv run tutorials/rl/001_sandboxes/001_sandboxes.py
     ```
     """
 

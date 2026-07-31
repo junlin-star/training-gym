@@ -4,9 +4,9 @@
 TUTORIAL_METADATA = {
     "framework": "`slime`",
     "cluster_shape": "1 × 2×H100",
-    "summary": "Audio GRPO on Qwen3-ASR-1.7B — transcribe LibriSpeech, reward −WER",
+    "summary": "Audio GRPO for transcribing LibriSpeech",
     "difficulty": "Intermediate",
-    "order": 40,
+    "order": 39,
     "api_classes": [
         "Qwen3_ASR_1_7B",
         "Qwen3_ASR_1_7b_Recipe",

@@ -62,10 +62,10 @@ jobs:
         run: uv sync --group docs
 
       - name: Generate and build docs
-        run: uv run python scripts/generate_all.py
+        run: uv run scripts/generate_all.py
 
       - name: Validate docs_next_app.py
-        run: uv run python -m py_compile docs-next/docs_next_app.py
+        run: uv run -m py_compile docs-next/docs_next_app.py
 
       - name: Archive docs dist
         if: github.event_name == 'pull_request'
@@ -165,7 +165,7 @@ jobs:
         run: uv sync --group docs
 
       - name: Generate and build docs
-        run: uv run python scripts/generate_all.py
+        run: uv run scripts/generate_all.py
 
       - name: Deploy docs to Modal
         run: uv run modal deploy docs-next/docs_next_app.py
