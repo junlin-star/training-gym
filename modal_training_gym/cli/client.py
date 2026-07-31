@@ -140,8 +140,6 @@ class DashboardClient:
                 if response.status_code == 404 and not_found_error is not None:
                     raise not_found_error
                 if response.status_code >= 400:
-                    # Streaming responses are unread here. Buffer finite error
-                    # bodies so _raise_for_status can surface FastAPI's detail.
                     response.read()
                 self._raise_for_status(response)
 
