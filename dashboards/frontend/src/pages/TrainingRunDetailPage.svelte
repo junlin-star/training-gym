@@ -16,6 +16,7 @@
   import LineChart from "../components/LineChart.svelte";
   import ResizableTable from "../components/ResizableTable.svelte";
   import {
+    fetchRun,
     fetchRunRollouts,
     fetchRollout,
     fetchRunAdvantages,
@@ -50,7 +51,7 @@
 
   let {
     runId,
-    allRuns,
+    initialRun = null,
     modelName,
     getStatus,
     getFrameworkStatus,
@@ -65,9 +66,45 @@
     embedded = false,
   } = $props();
 
-  let run = $derived.by(() =>
-    (allRuns || []).find((r) => r.run_id === runId) || null
-  );
+  let run = $state(null);
+  let runLoading = $state(false);
+  let runError = $state("");
+
+  async function loadRun(id, parentSignal) {
+    if (parentSignal.aborted) return;
+    const controller = new AbortController();
+    let timedOut = false;
+    const abortRequest = () => controller.abort();
+    parentSignal.addEventListener("abort", abortRequest, { once: true });
+    const timeout = window.setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, 30000);
+
+    runLoading = true;
+    try {
+      const nextRun = await fetchRun(id, { signal: controller.signal });
+      if (parentSignal.aborted) return;
+      if (nextRun === null) {
+        run = null;
+        runError = `Training run "${id}" was not found.`;
+        return;
+      }
+      run = nextRun;
+      runError = "";
+    } catch (err) {
+      if (parentSignal.aborted) return;
+      if (!run) {
+        runError = timedOut
+          ? "Run request timed out after 30 seconds."
+          : String(err?.message || err);
+      }
+    } finally {
+      window.clearTimeout(timeout);
+      parentSignal.removeEventListener("abort", abortRequest);
+      if (!parentSignal.aborted) runLoading = false;
+    }
+  }
 
   // Status as a primitive so effects depending on it don't re-run every time
   // the auto-refresh hands us a new `run` object with the same status (which
@@ -87,6 +124,28 @@
         ? [{ label: "Open in W&B", url: wandbUrl }]
         : [],
   );
+
+  $effect(() => {
+    const id = runId;
+    run = initialRun?.run_id === id ? initialRun : null;
+    runError = "";
+    if (!id) {
+      runLoading = false;
+      return;
+    }
+
+    const controller = new AbortController();
+    void loadRun(id, controller.signal);
+    const interval = window.setInterval(() => {
+      if (runLoading || (runStatus && runStatus !== "running")) return;
+      void loadRun(id, controller.signal);
+    }, 5000);
+
+    return () => {
+      controller.abort();
+      window.clearInterval(interval);
+    };
+  });
 
   // Active tab: "summary" | "rollouts" | "logs". One-way sync with the URL:
   // init/popstate/runId read URL → activeTab; selectTab writes pushState.
@@ -1228,7 +1287,13 @@
   {/if}
 
   {#if !run}
-    <div class="detail-empty px-[24px]">Loading run {runId}…</div>
+    <div class="detail-empty px-[24px]">
+      {#if runError}
+        Failed to load run: {runError}
+      {:else}
+        Loading run {runId}…
+      {/if}
+    </div>
   {:else}
     {#if !embedded}
     <div class="flex items-center gap-[16px] p-[0_24px] mb-[16px] max-[900px]:p-[0_16px] min-w-0">

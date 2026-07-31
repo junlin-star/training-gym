@@ -134,6 +134,24 @@ def test_maps_http_errors(status_code, error, exit_code, mock_transport):
     assert exc_info.value.exit_code == exit_code
 
 
+def test_uses_command_specific_not_found_error(mock_transport):
+    mock_transport(lambda _request: httpx.Response(404, text="ignored"))
+    not_found = CLIError(
+        "Run not found.",
+        error="run_not_found",
+        exit_code=ExitCode.NOT_FOUND,
+        run_id="run-1",
+    )
+
+    with DashboardClient() as client:
+        with pytest.raises(CLIError) as exc_info:
+            client.get_json("/api/runs/run-1", not_found_error=not_found)
+
+    assert exc_info.value is not_found
+    assert exc_info.value.error == "run_not_found"
+    assert exc_info.value.exit_code == ExitCode.NOT_FOUND
+
+
 def test_maps_timeout_without_leaking_transport_details(mock_transport):
     def timeout(request: httpx.Request) -> httpx.Response:
         raise httpx.ReadTimeout("secret transport detail", request=request)

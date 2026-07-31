@@ -66,6 +66,7 @@ class DashboardClient:
         path: str,
         *,
         params: QueryParams | None = None,
+        not_found_error: CLIError | None = None,
     ) -> Any:
         """GET a dashboard-relative path and decode its JSON response."""
         parsed_path = urlsplit(path)
@@ -95,6 +96,9 @@ class DashboardClient:
                 exit_code=ExitCode.BACKEND,
                 hint="training-gym setup",
             ) from exc
+
+        if response.status_code == 404 and not_found_error is not None:
+            raise not_found_error
 
         self._raise_for_status(response.status_code)
         try:

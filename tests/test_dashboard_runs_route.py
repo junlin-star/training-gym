@@ -69,6 +69,33 @@ def test_runs_route_returns_typed_joined_summaries(fake_volume, monkeypatch, tmp
     assert summary["train_result"]["checkpoint_dir"] == ("/checkpoints/run-route-1")
 
 
+def test_get_run_route_returns_one_typed_summary(fake_volume, monkeypatch, tmp_path):
+    _save_records()
+
+    def fail_summary_scan(_store):
+        raise AssertionError("single-run route must not scan summary stores")
+
+    monkeypatch.setattr(metadata, "vol_get_summary_items_healed", fail_summary_scan)
+
+    with _client(monkeypatch, tmp_path) as client:
+        response = client.get("/api/runs/run-route-1")
+
+    assert response.status_code == 200
+    summary = response.json()
+    assert summary["training_run_id"] == "run-route-1"
+    assert summary["model"] == "Qwen/Qwen3-4B"
+    assert summary["display_status"] == "completed"
+    assert summary["train_result"]["checkpoint_dir"] == "/checkpoints/run-route-1"
+
+
+def test_get_run_route_returns_404_for_unknown_run(fake_volume, monkeypatch, tmp_path):
+    with _client(monkeypatch, tmp_path) as client:
+        response = client.get("/api/runs/missing")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Training run 'missing' not found"
+
+
 def test_runs_route_keeps_runs_when_train_result_store_fails(
     fake_volume, monkeypatch, tmp_path
 ):
