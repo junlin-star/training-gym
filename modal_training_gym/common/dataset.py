@@ -144,9 +144,12 @@ class HuggingFaceDataset(DatasetConfig):
     """Dataset backed by a HuggingFace ``datasets`` repo.
 
     Subclass and set ``hf_repo`` plus column mappings. When
-    ``input_column`` and ``output_column`` are set, ``prepare()``
-    auto-wraps rows into chat-message format
-    (``{"messages": [{"role": "user", ...}, {"role": "assistant", ...}]}``).
+    ``input_column`` and ``output_column`` are set, ``prepare()`` wraps
+    each row into a prompt-only chat message list plus a separate label
+    field: ``{"messages": [{"role": "user", ...}], <label_key>: ...}``.
+    A leading ``{"role": "system", ...}`` message is included when
+    ``system_prompt`` is set. No assistant turn is emitted — the target
+    from ``output_column`` is stored under ``label_key``.
     """
 
     _type: DatasetType = DatasetType.HUGGING_FACE
