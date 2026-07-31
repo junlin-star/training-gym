@@ -508,7 +508,7 @@
   }}
 />
 
-<section class="summary-sticky grid [grid-template-columns:repeat(3,minmax(0,1fr))] gap-[14px] p-[0_24px] mb-[24px] max-[1080px]:[grid-template-columns:repeat(2,minmax(0,1fr))] max-[900px]:[grid-template-columns:1fr]">
+<section class="summary-sticky grid [grid-template-columns:repeat(3,minmax(0,1fr))] gap-[14px] p-[0_24px] mb-[24px] max-[1080px]:[grid-template-columns:repeat(2,minmax(0,1fr))]">
   <article class="summary-card">
     <span class="summary-label">Total runs</span>
     <strong>{allEvals.length}</strong>
@@ -762,7 +762,7 @@
 </section>
 
 {#if selectedEval && drawerMeta}
-  <Drawer open={!!selectedEval} onclose={closeEvalDrawer} width="720px">
+  <Drawer open={!!selectedEval} onclose={closeEvalDrawer} width="min(720px, 100vw)">
     <div class="h-full flex flex-col">
       <div class="p-[24px_24px_16px] flex justify-between [align-items:flex-start] gap-[12px]">
         <div class="min-w-0">

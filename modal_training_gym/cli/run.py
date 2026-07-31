@@ -53,9 +53,9 @@ def _run_filter_options(function: Callable[..., Any]) -> Callable[..., Any]:
     return function
 
 
-def _format_timestamp(value: object) -> str:
+def _format_timestamp(value: object) -> str | None:
     if not isinstance(value, (int, float)) or not value:
-        return "—"
+        return None
     return (
         datetime.fromtimestamp(value, tz=UTC)
         .isoformat(timespec="seconds")
@@ -369,7 +369,14 @@ def list_runs(
             error="invalid_dashboard_response",
             exit_code=ExitCode.BACKEND,
         )
-    summaries = [_validate_run_summary(item) for item in payload]
+    try:
+        summaries = [RunSummary.model_validate(item) for item in payload]
+    except ValidationError as exc:
+        raise CLIError(
+            "Dashboard returned an invalid run summary.",
+            error="invalid_dashboard_response",
+            exit_code=ExitCode.BACKEND,
+        ) from exc
     fields = run_list_field_metadata()
     if json_output:
         print_json(

@@ -76,7 +76,7 @@
   {...restProps}
   class={`resizable-table ${stickyFirstColumn ? "sticky-first-column" : ""} ${classOverride}`.trim()}
   onwheel={stopFrozenColumnHorizontalScroll}
-  style={`--resizable-grid-width: ${tableWidth}px; width: max(100%, var(--resizable-grid-width)); min-width: var(--resizable-grid-width); ${styleOverride}`.trim()}
+  style={`--resizable-grid-width: ${tableWidth}px; ${styleOverride}`.trim()}
 >
   <colgroup>
     {#each columns as column (column.key)}

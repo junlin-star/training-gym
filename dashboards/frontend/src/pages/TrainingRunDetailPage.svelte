@@ -1,5 +1,5 @@
 <script>
-  import { tick } from "svelte";
+  import { onMount, tick } from "svelte";
   import { ArrowLeft, ChevronLeft, ChevronRight, Download, ExternalLink, Minimize2, X } from "lucide-svelte";
   import Tabs from "../components/Tabs.svelte";
   import RunSummary from "../components/RunSummary.svelte";
@@ -28,6 +28,26 @@
   const HIST_PAGE = 500;
   // Maximum number of historical log lines retained in the browser.
   const HIST_BUFFER_MAX = 2000;
+
+  /** @typedef {"summary" | "rollouts" | "logs"} TabId */
+  const DETAIL_TABS = new Set(["summary", "rollouts", "logs"]);
+  const DEFAULT_TAB = "summary";
+
+  function parseTabFromUrl() {
+    if (typeof window === "undefined") return DEFAULT_TAB;
+    const raw = new URLSearchParams(window.location.search).get("tab");
+    return DETAIL_TABS.has(raw) ? /** @type {TabId} */ (raw) : DEFAULT_TAB;
+  }
+
+  function urlForTab(tab) {
+    const url = new URL(window.location.href);
+    url.searchParams.set("tab", DETAIL_TABS.has(tab) ? tab : DEFAULT_TAB);
+    return `${url.pathname}${url.search}${url.hash}`;
+  }
+
+  function locationKey() {
+    return `${window.location.pathname}${window.location.search}${window.location.hash}`;
+  }
 
   let {
     runId,
@@ -119,9 +139,45 @@
     };
   });
 
-  // Active tab: "summary" | "rollouts" | "logs". Each tab loads only its own
-  // data — rollout summaries for summary/rollouts, the log stream for logs.
-  let activeTab = $state("summary");
+  // Active tab: "summary" | "rollouts" | "logs". One-way sync with the URL:
+  // init/popstate/runId read URL → activeTab; selectTab writes pushState.
+  let activeTab = $state(/** @type {TabId} */ (DEFAULT_TAB));
+
+  function selectTab(tab) {
+    const next = DETAIL_TABS.has(tab) ? /** @type {TabId} */ (tab) : DEFAULT_TAB;
+    activeTab = next;
+    if (embedded || typeof window === "undefined") return;
+    const target = urlForTab(next);
+    if (target !== locationKey()) {
+      history.pushState({}, "", target);
+    }
+  }
+
+  onMount(() => {
+    if (embedded) {
+      activeTab = DEFAULT_TAB;
+    } else {
+      const tab = parseTabFromUrl();
+      activeTab = tab;
+      const target = urlForTab(tab);
+      if (target !== locationKey()) {
+        history.replaceState({}, "", target);
+      }
+    }
+
+    const onPopState = () => {
+      if (embedded) return;
+      activeTab = parseTabFromUrl();
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  });
+
+  $effect(() => {
+    runId;
+    if (embedded || typeof window === "undefined") return;
+    activeTab = parseTabFromUrl();
+  });
 
   function formatMean(value) {
     if (typeof value !== "number" || !Number.isFinite(value)) return "—";
@@ -166,10 +222,10 @@
   let expandedRollout = $state(null);
   let expandedRolloutLoading = $state(false);
   const rolloutColumns = [
-    { key: "step", label: "Step", width: 160, minWidth: 96 },
-    { key: "mean", label: "Mean reward", width: 180, minWidth: 130 },
-    { key: "samples", label: "Samples", width: 120, minWidth: 96 },
-    { key: "when", label: "When", width: 160, minWidth: 110 },
+    { key: "step", label: "Step", width: 72, minWidth: 56 },
+    { key: "mean", label: "Mean reward", width: 118, minWidth: 96 },
+    { key: "samples", label: "Samples", width: 80, minWidth: 64 },
+    { key: "when", label: "When", width: 88, minWidth: 64 },
   ];
 
   // Per-step advantage distribution summaries (one row per step, each with the
@@ -511,7 +567,7 @@
     logError = "";
     logDropped = 0;
     // Lazy load: only open the log stream while the Logs tab is active.
-    if (tab !== "logs" || !id || status !== "running" || paused) {
+    if (tab !== "logs" || !id || !status || status !== "running" || paused) {
       if (tab === "logs" && paused) logState = "paused";
       return;
     }
@@ -968,12 +1024,13 @@
   $effect(() => {
     const id = runId;
     const tab = activeTab;
+    const status = runStatus;
     const running = isRunning;
     const search = logSearch;
     const { since, until } = histRange;
 
     resetHist();
-    if (tab !== "logs" || !id || running) return;
+    if (tab !== "logs" || !id || !status || running) return;
 
     const controller = new AbortController();
     histController = controller;
@@ -1185,41 +1242,39 @@
 
 <section class="detail" class:embedded>
   {#if !embedded}
-    <header class="flex items-center justify-between p-[0_24px] mb-[16px]">
-      <button class="inline-flex items-center gap-[6px] [background:none] [border:0] text-(--muted) cursor-pointer text-[13px] p-[4px_8px] rounded-[6px] hover:text-(--text) hover:bg-(--color-c-gray-10,#2f2f2f)" onclick={onBack}>
+    <header class="flex flex-wrap items-center gap-x-[10px] gap-y-[8px] p-[0_24px] mb-[16px] max-[900px]:p-[0_16px]">
+      <button type="button" class="inline-flex items-center gap-[6px] [background:none] [border:0] text-(--muted) cursor-pointer text-[13px] leading-[16px] min-h-[32px] p-[4px_8px] rounded-[6px] hover:text-(--text) hover:bg-(--color-c-gray-10,#2f2f2f) max-[900px]:basis-full" onclick={onBack}>
         <ArrowLeft size={14} strokeWidth={2.1} />
         <span>Back to runs</span>
       </button>
-      <div class="inline-flex items-center flex-wrap gap-[8px]">
-        {#if onCollapse}
-          <button class="inline-flex items-center gap-[6px] [border:1px_solid_var(--border,#2f2f2f)] rounded-[6px] [background:none] text-(--muted) cursor-pointer [font:inherit] text-[12px] font-medium p-[4px_8px] hover:text-(--text-bright) hover:border-(--border-strong,#4a4a4a)" onclick={onCollapse} title="Collapse to drawer">
-            <Minimize2 size={12} strokeWidth={2.1} />
-            <span>Collapse</span>
-          </button>
-        {/if}
-        {#each wandbLinks as link (link.url)}
-          <a
-            class="header-link wandb-link"
-            href={link.url}
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <span>{link.label}</span>
-            <ExternalLink size={12} strokeWidth={2.1} />
-          </a>
-        {/each}
-        {#if run?.modal_app_url}
-          <a
-            class="header-link"
-            href={run.modal_app_url}
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <span>Open in Modal</span>
-            <ExternalLink size={12} strokeWidth={2.1} />
-          </a>
-        {/if}
-      </div>
+      {#if onCollapse}
+        <button type="button" class="inline-flex items-center gap-[6px] [border:1px_solid_var(--border,#2f2f2f)] rounded-[6px] [background:none] text-(--muted) cursor-pointer [font:inherit] text-[12px] font-medium leading-[16px] min-h-[32px] p-[4px_8px] hover:text-(--text-bright) hover:border-(--border-strong,#4a4a4a)" onclick={onCollapse} title="Collapse to drawer">
+          <Minimize2 size={12} strokeWidth={2.1} />
+          <span>Collapse</span>
+        </button>
+      {/if}
+      {#each wandbLinks as link (link.url)}
+        <a
+          class="header-link wandb-link inline-flex items-center gap-[6px] min-h-[32px] leading-[16px]"
+          href={link.url}
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          <span>{link.label}</span>
+          <ExternalLink size={12} strokeWidth={2.1} />
+        </a>
+      {/each}
+      {#if run?.modal_app_url}
+        <a
+          class="header-link inline-flex items-center gap-[6px] min-h-[32px] leading-[16px]"
+          href={run.modal_app_url}
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          <span>Open in Modal</span>
+          <ExternalLink size={12} strokeWidth={2.1} />
+        </a>
+      {/if}
     </header>
   {/if}
 
@@ -1233,8 +1288,8 @@
     </div>
   {:else}
     {#if !embedded}
-    <div class="flex items-center gap-[16px] p-[0_24px] mb-[16px]">
-      <h1 class="text-[22px] font-[600] text-(--text-bright) m-0 overflow-hidden text-ellipsis whitespace-nowrap" title={run.run_id}>{run.run_id}</h1>
+    <div class="flex items-center gap-[16px] p-[0_24px] mb-[16px] max-[900px]:p-[0_16px] min-w-0">
+      <h1 class="text-[22px] font-[600] text-(--text-bright) m-0 overflow-hidden text-ellipsis whitespace-nowrap min-w-0" title={run.run_id}>{run.run_id}</h1>
       <StatusPill status={getStatus(run)} />
       {#if resumeBadge(run)}
         <span class="[border:1px_solid_color-mix(in_srgb,var(--yellow,#fbbf24)_42%,transparent)] rounded-[999px] bg-[color-mix(in_srgb,var(--yellow,#fbbf24)_10%,transparent)] text-(--yellow,#fbbf24) text-[12px] leading-[16px] p-[2px_8px] whitespace-nowrap">{resumeBadge(run)}</span>
@@ -1243,7 +1298,8 @@
     {/if}
 
     <Tabs
-      bind:active={activeTab}
+      active={activeTab}
+      onSelect={selectTab}
       tabs={[
         { value: "summary", label: "Summary" },
         { value: "rollouts", label: "Rollouts", count: rolloutSummaries.length || undefined },
@@ -1263,12 +1319,14 @@
           {#if run.step_times || run.substep_times}
             <div class="rollout-chart">
               <div class="rollout-chart-title">Step &amp; substep timeline</div>
-              <StepTimings
-                stepTimes={run.step_times}
-                substepTimes={run.substep_times}
-                layout="timeline"
-                downloadName={`step_substep_times_${runId}.json`}
-              />
+              <div class="chart-scroll">
+                <StepTimings
+                  stepTimes={run.step_times}
+                  substepTimes={run.substep_times}
+                  layout="timeline"
+                  downloadName={`step_substep_times_${runId}.json`}
+                />
+              </div>
             </div>
           {/if}
           {#if rolloutsLoading && !rolloutSummaries.length}
@@ -1295,15 +1353,17 @@
             <div class="detail-empty">No rollouts recorded yet.</div>
           {:else}
             <div class="rollout-chart">
-              <LineChart
-                title="Reward"
-                data={rewardChartData}
-                formatX={(row) => `rollout ${row.rollout_id}`}
-                formatY={(value) => formatMean(value)}
-                ariaLabel="Reward chart"
-              />
+              <div class="chart-scroll">
+                <LineChart
+                  title="Reward"
+                  data={rewardChartData}
+                  formatX={(row) => `rollout ${row.rollout_id}`}
+                  formatY={(value) => formatMean(value)}
+                  ariaLabel="Reward chart"
+                />
+              </div>
               {#if chartStats}
-                <div class="flex gap-[16px] mt-[6px] text-[11px] text-(--muted) [font-variant-numeric:tabular-nums]">
+                <div class="flex flex-wrap gap-[16px] mt-[6px] text-[11px] text-(--muted) [font-variant-numeric:tabular-nums]">
                   <span>min {formatMean(chartStats.min)}</span>
                   <span>latest {formatMean(chartStats.latest)}</span>
                   <span>max {formatMean(chartStats.max)}</span>
@@ -1314,22 +1374,24 @@
             <!-- Score distribution: second graph, above the advantage graphs. -->
             <div class="rollout-chart">
               <div class="rollout-chart-title">Score distribution</div>
-              {#if scoreDist}
-                <ComparativeBarChart
-                  categories={distCategories(scoreDist)}
-                  series={distSeries(scoreDist)}
-                  height={120}
-                  showCategoryLabels={false}
-                  format={(v) => `${v}`}
-                />
-                <div class="dist-axis">
-                  <span>{formatMean(scoreDist.lo)}</span>
-                  <span class="dist-axis-label">reward</span>
-                  <span>{formatMean(scoreDist.hi)}</span>
-                </div>
-              {:else}
-                <ChartSkeleton variant="bars" height={120} />
-              {/if}
+              <div class="chart-scroll">
+                {#if scoreDist}
+                  <ComparativeBarChart
+                    categories={distCategories(scoreDist)}
+                    series={distSeries(scoreDist)}
+                    height={120}
+                    showCategoryLabels={false}
+                    format={(v) => `${v}`}
+                  />
+                  <div class="dist-axis">
+                    <span>{formatMean(scoreDist.lo)}</span>
+                    <span class="dist-axis-label">reward</span>
+                    <span>{formatMean(scoreDist.hi)}</span>
+                  </div>
+                {:else}
+                  <ChartSkeleton variant="bars" height={120} />
+                {/if}
+              </div>
             </div>
 
             {#if hasAdvantages}
@@ -1408,6 +1470,7 @@
       {:else if !rolloutSummaries.length}
         <div class="detail-empty">No rollouts recorded yet.</div>
       {:else}
+        <div class="table-wrap">
         <ResizableTable class="rollout-table" columns={rolloutColumns}>
           <tbody>
             {#each rolloutSummaries as r (r.rollout_id)}
@@ -1443,11 +1506,13 @@
                       {#if stepTiming}
                         <div class="rollout-chart">
                           <div class="rollout-chart-title">Step timing</div>
-                          <StepTimings
-                            stepTimes={stepTiming.stepTimes}
-                            substepTimes={stepTiming.substepTimes}
-                            layout="rows"
-                          />
+                          <div class="chart-scroll">
+                            <StepTimings
+                              stepTimes={stepTiming.stepTimes}
+                              substepTimes={stepTiming.substepTimes}
+                              layout="rows"
+                            />
+                          </div>
                         </div>
                       {/if}
                       {#if expandedRollout.metrics && Object.keys(expandedRollout.metrics).length}
@@ -1492,6 +1557,7 @@
                       <div class="mb-[16px]">
                         <div class="flex justify-end mb-[6px]">
                           <button
+                            type="button"
                             class="inline-flex items-center gap-[5px] [background:none] [border:1px_solid_var(--border,#2f2f2f)] rounded-[4px] text-(--muted) text-[11px] p-[3px_8px] cursor-pointer hover:text-(--text) hover:border-(--border-strong,#4a4a4a)"
                             onclick={downloadAllTrajectories}
                             title="Download all samples as JSON"
@@ -1500,36 +1566,39 @@
                             Download all ({sampleDist.total} samples)
                           </button>
                         </div>
-                        <div
-                          class="flex items-end gap-[2px] h-[120px] pt-[14px] [border-bottom:1px_solid_var(--border,#2f2f2f)]"
-                          role="group"
-                          aria-label="Sample score distribution"
-                        >
-                          {#each sampleDist.buckets as bucket, b (b)}
-                            <button
-                              class="dist-bar"
-                              class:detail-active={activeBucket === b}
-                              class:is-empty={!bucket.length}
-                              style:height={`${(bucket.length / sampleDist.maxCount) * 100}%`}
-                              disabled={!bucket.length}
-                              title={`${bucket.length} sample${bucket.length === 1 ? "" : "s"} · reward ${bucketRange(b)}`}
-                              onclick={() => openBucket(b)}
-                            >
-                              <span class="absolute top-[-14px] left-0 right-0 text-center text-[10px] text-(--muted) [font-variant-numeric:tabular-nums]">{bucket.length || ""}</span>
-                            </button>
-                          {/each}
-                        </div>
-                        <div class="dist-axis">
-                          <span>{formatMean(sampleDist.lo)}</span>
-                          <span class="dist-axis-label">reward · {sampleDist.total} samples</span>
-                          <span>{formatMean(sampleDist.hi)}</span>
+                        <div class="chart-scroll">
+                          <div
+                            class="flex items-end gap-[2px] h-[120px] pt-[14px] min-w-[280px] [border-bottom:1px_solid_var(--border,#2f2f2f)]"
+                            role="group"
+                            aria-label="Sample score distribution"
+                          >
+                            {#each sampleDist.buckets as bucket, b (b)}
+                              <button
+                                type="button"
+                                class="dist-bar"
+                                class:detail-active={activeBucket === b}
+                                class:is-empty={!bucket.length}
+                                style:height={`${(bucket.length / sampleDist.maxCount) * 100}%`}
+                                disabled={!bucket.length}
+                                title={`${bucket.length} sample${bucket.length === 1 ? "" : "s"} · reward ${bucketRange(b)}`}
+                                onclick={() => openBucket(b)}
+                              >
+                                <span class="absolute top-[-14px] left-0 right-0 text-center text-[10px] text-(--muted) [font-variant-numeric:tabular-nums]">{bucket.length || ""}</span>
+                              </button>
+                            {/each}
+                          </div>
+                          <div class="dist-axis">
+                            <span>{formatMean(sampleDist.lo)}</span>
+                            <span class="dist-axis-label">reward · {sampleDist.total} samples</span>
+                            <span>{formatMean(sampleDist.hi)}</span>
+                          </div>
                         </div>
                       </div>
 
                       {#if activeSample}
-                        <div class="[border-left:2px_solid_var(--accent)] p-[8px_12px] mb-[12px] bg-(--color-c-gray-10,#2f2f2f) rounded-[0_4px_4px_0] sample-viewer">
-                          <div class="flex items-center justify-between gap-[12px] mb-[6px]">
-                            <div class="inline-flex items-center gap-[8px]">
+                        <div class="sample-viewer">
+                          <div class="sample-viewer-header">
+                            <div class="sample-viewer-nav">
                               <button
                                 class="sample-nav-btn"
                                 onclick={() => stepSample(-1)}
@@ -1549,9 +1618,9 @@
                               >
                                 <ChevronRight size={14} />
                               </button>
-                              <span class="text-[11px] text-(--muted)">← / → to navigate</span>
+                              <span class="sample-viewer-hint">← / → to navigate</span>
                             </div>
-                            <div class="inline-flex items-center gap-[8px]">
+                            <div class="sample-viewer-actions">
                               <span class="text-(--text-bright) [font-variant-numeric:tabular-nums]">
                                 reward {formatMean(activeSample.sample.score)}
                               </span>
@@ -1656,7 +1725,9 @@
                           {/each}
                           {#if activeSample.sample.trace?.length}
                             <div class="rollout-sample-label">trajectory timeline</div>
-                            <SampleTimeline trace={activeSample.sample.trace} />
+                            <div class="chart-scroll">
+                              <SampleTimeline trace={activeSample.sample.trace} />
+                            </div>
                           {/if}
                         </div>
                       {:else}
@@ -1669,6 +1740,7 @@
             {/each}
           </tbody>
         </ResizableTable>
+        </div>
       {/if}
       </div>
     {:else if activeTab === "logs"}
