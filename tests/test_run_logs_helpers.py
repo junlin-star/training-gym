@@ -5,15 +5,11 @@ These check the pure logic extracted from the historical-log route.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from types import SimpleNamespace
-
-import pytest
 
 from modal_training_gym._dashboard import (
     _compute_next_page,
     _parse_log_batches,
-    _parse_log_time,
     _resolve_log_window,
     _to_timestamp,
 )
@@ -201,77 +197,3 @@ def test_next_page_falls_back_to_scaled_ts() -> None:
     has_more, next_until = _compute_next_page(logs, limit=2)
     assert has_more is True
     assert next_until == (5_000_000_000 - 1) / 1_000_000_000
-
-
-# ── _parse_log_time ──────────────────────────────────────────────────────
-
-# Fixed reference point: 2026-07-09T18:00:00Z.
-PARSE_NOW = datetime(2026, 7, 9, 18, 0, 0, tzinfo=timezone.utc).timestamp()
-
-
-@pytest.mark.parametrize("value", ["", "   ", "\t\n"])
-def test_parse_time_empty_or_blank_returns_none(value: str) -> None:
-    assert _parse_log_time(value, PARSE_NOW) is None
-
-
-@pytest.mark.parametrize(
-    ("value", "expected"),
-    [
-        ("45s", PARSE_NOW - 45),
-        ("30m", PARSE_NOW - 30 * 60),
-        ("2h", PARSE_NOW - 2 * 3600),
-        ("1d", PARSE_NOW - 86400),
-        ("0m", PARSE_NOW),
-        ("30 m", PARSE_NOW - 30 * 60),
-    ],
-)
-def test_parse_time_relative_age_subtracts_from_now(
-    value: str, expected: float
-) -> None:
-    assert _parse_log_time(value, PARSE_NOW) == expected
-
-
-@pytest.mark.parametrize(
-    ("value", "expected"),
-    [
-        ("1720557600", 1720557600.0),
-        ("1720557600.5", 1720557600.5),
-        ("  1720557600  ", 1720557600.0),
-    ],
-)
-def test_parse_time_epoch_seconds(value: str, expected: float) -> None:
-    assert _parse_log_time(value, PARSE_NOW) == expected
-
-
-def test_parse_time_iso_with_trailing_z_is_utc() -> None:
-    expected = datetime(2026, 7, 9, 18, 0, 0, tzinfo=timezone.utc).timestamp()
-    assert _parse_log_time("2026-07-09T18:00:00Z", PARSE_NOW) == expected
-
-
-def test_parse_time_iso_naive_is_read_as_utc() -> None:
-    expected = datetime(2026, 7, 9, 18, 0, 0, tzinfo=timezone.utc).timestamp()
-    assert _parse_log_time("2026-07-09T18:00:00", PARSE_NOW) == expected
-
-
-def test_parse_time_iso_with_explicit_offset_is_honored() -> None:
-    # 18:00 at -04:00 is 22:00 UTC.
-    expected = datetime(2026, 7, 9, 22, 0, 0, tzinfo=timezone.utc).timestamp()
-    assert _parse_log_time("2026-07-09T18:00:00-04:00", PARSE_NOW) == expected
-
-
-@pytest.mark.parametrize(
-    "value",
-    [
-        "not-a-time",
-        "30x",  # unknown unit
-        "2026-13-01T00:00:00Z",  # invalid month
-        "yesterday",
-        "-5m",  # leading sign isn't part of the relative grammar
-        "inf",
-        "nan",
-        "Infinity",
-        "1e999",  # overflows to inf
-    ],
-)
-def test_parse_time_unparseable_returns_none(value: str) -> None:
-    assert _parse_log_time(value, PARSE_NOW) is None

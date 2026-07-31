@@ -54,9 +54,9 @@ def _run_filter_options(function: Callable[..., Any]) -> Callable[..., Any]:
     return function
 
 
-def _format_timestamp(value: object) -> str:
+def _format_timestamp(value: object) -> str | None:
     if not isinstance(value, (int, float)) or not value:
-        return "—"
+        return None
     return (
         datetime.fromtimestamp(value, tz=UTC)
         .isoformat(timespec="seconds")
@@ -67,14 +67,14 @@ def _format_timestamp(value: object) -> str:
 def _format_table_timestamp(value: object, *, now: float | None = None) -> str:
     if not isinstance(value, (int, float)) or not value:
         return "—"
-    age = (time.time() if now is None else now) - value
-    if 0 <= age < 60:
+    age = max(0, (time.time() if now is None else now) - value)
+    if age < 60:
         return "now"
-    if 0 <= age < 3_600:
+    if age < 3_600:
         return f"{int(age // 60)}m ago"
-    if 0 <= age < 86_400:
+    if age < 86_400:
         return f"{int(age // 3_600)}h ago"
-    if 0 <= age < 2_592_000:
+    if age < 2_592_000:
         return f"{int(age // 86_400)}d ago"
     return datetime.fromtimestamp(value, tz=UTC).strftime("%Y-%m-%d")
 
@@ -459,8 +459,8 @@ def run_group() -> None:
     help="Show status and top-level metadata for a single run.",
     epilog=(
         "Examples:\n"
-        "  training-gym run get run_8f2a\n"
-        "  training-gym run get run_8f2a --verbose"
+        "  training-gym run get brave-falcon-3fa8\n"
+        "  training-gym run get brave-falcon-3fa8 --verbose"
     ),
 )
 @click.argument("run_id")

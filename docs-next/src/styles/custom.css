@@ -469,11 +469,6 @@ body::before {
   background: transparent;
 }
 
-.tg-copy-button.is-copied {
-  border-color: color-mix(in srgb, var(--sl-color-accent) 56%, var(--tg-border-strong));
-  color: var(--sl-color-white);
-}
-
 .tg-header {
   display: flex;
   align-items: center;

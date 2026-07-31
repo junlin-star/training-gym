@@ -15,6 +15,9 @@ def _client(monkeypatch, tmp_path) -> TestClient:
     (static / "assets").mkdir(parents=True)
     (static / "index.html").write_text("ok")
     (static / "favicon.svg").write_text("<svg/>")
+    (static / "apple-touch-icon.png").write_bytes(
+        b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"
+    )
     monkeypatch.setattr(_dashboard, "STATIC_DIR", str(static))
     monkeypatch.delenv("DASHBOARD_PASSWORD", raising=False)
     return TestClient(_dashboard.fastapi_app.local())
@@ -142,6 +145,15 @@ def test_runs_route_filters_and_sorts_by_last_update(
         "run-route-2",
         "run-route-1",
     ]
+
+
+def test_apple_touch_icon_is_served_as_png(monkeypatch, tmp_path):
+    with _client(monkeypatch, tmp_path) as client:
+        response = client.get("/apple-touch-icon.png")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("image/png")
+    assert response.content.startswith(b"\x89PNG")
 
 
 def test_runs_route_isolates_invalid_run_records(fake_volume, monkeypatch, tmp_path):
