@@ -54,6 +54,18 @@ def _substep_label(name: str) -> str:
     return _SUBSTEP_LABELS.get(name, name.replace("_", " "))
 
 
+def _total_step_time_s(result: "TutorialResult") -> float:
+    """Sum of per-step durations.
+
+    Reported instead of wall clock, which also covers queue, model download and
+    checkpoint conversion time — variable with compute availability rather than
+    gym performance.
+    """
+    return float(
+        sum(step.get("duration_s") or 0 for step in (result.step_times or {}).values())
+    )
+
+
 def _step_keys(result: "TutorialResult") -> list[str]:
     keys = set(result.step_times or {}) | set(result.substep_times or {})
     return sorted(keys, key=lambda k: int(k) if k.isdigit() else k)
@@ -92,6 +104,7 @@ class TutorialResult:
         print(f"Step count: {self.step_count}")
         print("Result:")
         print(f"Training run status: {self.training_run_status}")
+        print(f"Total step time (s): {_total_step_time_s(self)}")
         print(f"Total duration (s): {self.total_duration_s}")
 
         keys = _step_keys(self)
@@ -355,7 +368,8 @@ def _format_result_details(result: TutorialResult) -> list[str]:
                 f"| {_substep_label(name)} | {_fmt_secs(entry.get('duration_s'))} |"
             )
         lines.append(f"| Step {key} | {_fmt_secs(step.get('duration_s'))} |")
-    lines.append(f"| Total duration | {_fmt_secs(result.total_duration_s)} |")
+    if len(keys) > 1:
+        lines.append(f"| Total step time | {_fmt_secs(_total_step_time_s(result))} |")
     lines.extend(["", "</details>", ""])
     return lines
 
@@ -368,7 +382,7 @@ def summarize_results(results_dir: str) -> str:
         status = _status_label(result)
         rows.append(
             f"| {result.base_model_name} | {status} "
-            f"| {result.total_duration_s:.1f}s | {result.step_count} "
+            f"| {_total_step_time_s(result):.1f}s | {result.step_count} "
             f"| `{result.training_run_id}` |"
         )
         details.extend(_format_result_details(result))
@@ -377,7 +391,7 @@ def summarize_results(results_dir: str) -> str:
         "<!-- validate-models-comment -->",
         "## Model Validation Results",
         "",
-        "| Model | Status | Duration | Steps | Run |",
+        "| Model | Status | Step time | Steps | Run |",
         "| --- | --- | --- | --- | --- |",
     ]
     lines.extend(rows or ["| _no results_ | | | | |"])
