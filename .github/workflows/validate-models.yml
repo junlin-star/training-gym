@@ -51,7 +51,7 @@ jobs:
               | uv run scripts/diff_impact.py --models)
           elif [ -n "$MODELS_INPUT" ]; then
             models=$(printf '%s' "$MODELS_INPUT" \
-              | uv run -c "import json,sys; print(json.dumps([m.strip() for m in sys.stdin.read().split(',') if m.strip()]))")
+              | uv run python -c "import json,sys; print(json.dumps([m.strip() for m in sys.stdin.read().split(',') if m.strip()]))")
           else
             models=$(uv run scripts/validate_model_configs.py list)
           fi
