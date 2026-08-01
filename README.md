@@ -133,5 +133,4 @@ Difficulty is a rough signal for where to start:
 ## Multi-node access
 
 > [!IMPORTANT]
-
 > Single-node training is open to everyone. Multi-node clusters — required for larger models — are still in Beta. [**Contact us on Slack**](https://modal.com/slack) for access.
