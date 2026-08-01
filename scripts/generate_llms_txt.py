@@ -166,7 +166,11 @@ def main() -> None:
     out_path.write_text(text)
 
     n_api = len(API_REFERENCE_MANIFEST)
-    print(f"Wrote {out_path.relative_to(ROOT)}")
+    try:
+        display_path = out_path.relative_to(ROOT)
+    except ValueError:
+        display_path = out_path
+    print(f"Wrote {display_path}")
     print(f"  tutorials: {len(tutorials)}")
     print(f"  api classes: {n_api}")
 
