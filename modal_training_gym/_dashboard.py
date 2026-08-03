@@ -808,10 +808,11 @@ def fastapi_app():
             TrainingRolloutResult.list_summaries_for_run, training_run_id
         )
 
-    async def _load_run_rollout(training_run_id: str, rollout_id: int):
+    @web.get("/api/runs/{training_run_id}/rollouts/{rollout_id}")
+    async def get_run_rollout(training_run_id: str, rollout_id: int):
         key = f"{training_run_id}__{int(rollout_id):08d}"
         try:
-            return await run_in_threadpool(
+            data = await run_in_threadpool(
                 vol_get, MetadataStore.TRAINING_ROLLOUTS, key
             )
         except KeyError:
@@ -820,16 +821,8 @@ def fastapi_app():
                 detail=f"Rollout {rollout_id} for run {training_run_id!r} not found",
             ) from None
 
-    @web.get("/api/runs/{training_run_id}/rollouts/{rollout_id}")
-    async def get_run_rollout(training_run_id: str, rollout_id: int):
-        data = await _load_run_rollout(training_run_id, rollout_id)
         if isinstance(data, dict):
             _apply_parsed(data.get("samples"))
-        return JSONResponse(data)
-
-    @web.get("/api/runs/{training_run_id}/rollouts/{rollout_id}/export")
-    async def export_run_rollout(training_run_id: str, rollout_id: int):
-        data = await _load_run_rollout(training_run_id, rollout_id)
         return JSONResponse(data)
 
     # ── Per-group advantage distributions ────────────────────────────────

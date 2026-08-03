@@ -19,7 +19,6 @@
     fetchRun,
     fetchRunRollouts,
     fetchRollout,
-    fetchRolloutExport,
     fetchRunAdvantages,
     fetchRunAdvantageStep,
     fetchRunLogs,
@@ -230,8 +229,6 @@
   let expandedRolloutId = $state(null);
   let expandedRollout = $state(null);
   let expandedRolloutLoading = $state(false);
-  let downloadError = $state("");
-  let downloadPending = $state(false);
   const rolloutColumns = [
     { key: "step", label: "Step", width: 72, minWidth: 56 },
     { key: "mean", label: "Mean reward", width: 118, minWidth: 96 },
@@ -345,38 +342,17 @@
     URL.revokeObjectURL(url);
   }
 
-  async function fetchDownloadPayload(rollout) {
-    downloadError = "";
-    downloadPending = true;
-    try {
-      return await fetchRolloutExport(runId, rollout);
-    } catch (err) {
-      downloadError = String(err?.message || err);
-      return null;
-    } finally {
-      downloadPending = false;
-    }
-  }
-
-  async function downloadSampleTrajectory() {
+  function downloadSampleTrajectory() {
     if (!activeSample) return;
     const rollout = expandedRolloutId ?? 0;
     const sampleIndex = activeSample.index;
-    const payload = await fetchDownloadPayload(rollout);
-    const sample = payload?.samples?.[sampleIndex];
-    if (!sample) {
-      if (payload) downloadError = `Sample ${sampleIndex} was not found in the export`;
-      return;
-    }
-    downloadJson(sample, `trajectory_r${rollout}_s${sampleIndex}.json`);
+    downloadJson(activeSample.sample, `trajectory_r${rollout}_s${sampleIndex}.json`);
   }
 
-  async function downloadAllTrajectories() {
+  function downloadAllTrajectories() {
     if (!expandedRollout?.samples?.length) return;
     const rollout = expandedRolloutId ?? 0;
-    const payload = await fetchDownloadPayload(rollout);
-    if (!payload) return;
-    downloadJson(payload, `rollout_${runId}_r${rollout}.json`);
+    downloadJson(expandedRollout, `rollout_${runId}_r${rollout}.json`);
   }
 
   async function loadRollouts(signal) {
@@ -473,7 +449,6 @@
 
   async function toggleRolloutDetail(rolloutId) {
     if (!runId) return;
-    downloadError = "";
     if (expandedRolloutId === rolloutId) {
       expandedRolloutId = null;
       expandedRollout = null;
@@ -1572,18 +1547,12 @@
                             type="button"
                             class="inline-flex items-center gap-[5px] [background:none] [border:1px_solid_var(--border,#2f2f2f)] rounded-[4px] text-(--muted) text-[11px] p-[3px_8px] cursor-pointer hover:text-(--text) hover:border-(--border-strong,#4a4a4a)"
                             onclick={downloadAllTrajectories}
-                            disabled={downloadPending}
                             title="Download all samples as JSON"
                           >
                             <Download size={13} />
-                            {downloadPending ? "Downloading…" : `Download all (${sampleDist.total} samples)`}
+                            Download all ({sampleDist.total} samples)
                           </button>
                         </div>
-                        {#if downloadError}
-                          <div class="text-(--red,#f87171) text-[11px] text-right mb-[6px]">
-                            Download failed: {downloadError}
-                          </div>
-                        {/if}
                         <div class="chart-scroll">
                           <div
                             class="flex items-end gap-[2px] h-[120px] pt-[14px] min-w-[280px] [border-bottom:1px_solid_var(--border,#2f2f2f)]"
@@ -1645,7 +1614,6 @@
                               <button
                                 class="sample-nav-btn"
                                 onclick={downloadSampleTrajectory}
-                                disabled={downloadPending}
                                 aria-label="Download trajectory JSON"
                                 title="Download trajectory"
                               >

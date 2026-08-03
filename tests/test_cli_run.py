@@ -581,14 +581,16 @@ def test_run_trace_downloads_steps_and_writes_manifest(tmp_path):
     FakeDashboardClient.payloads = {
         "/api/runs/run-1": _summary(),
         "/api/runs/run-1/rollouts": summaries,
-        "/api/runs/run-1/rollouts/0/export": {
+        "/api/runs/run-1/rollouts/0": {
             "training_run_id": "run-1",
             "rollout_id": 0,
             "samples": [
                 {
                     "score": 0.25,
-                    "prompt": "<|im_start|>user\noriginal question<|im_end|>",
-                    "response": "<think>hidden</think>original answer",
+                    "prompt": "original question",
+                    "response": "original answer",
+                    "raw_prompt": "<|im_start|>user\noriginal question<|im_end|>",
+                    "raw_response": "<think>hidden</think>original answer",
                     "parsed_response": {
                         "content": "original answer",
                         "thinking": "hidden",
@@ -597,7 +599,7 @@ def test_run_trace_downloads_steps_and_writes_manifest(tmp_path):
                 }
             ],
         },
-        "/api/runs/run-1/rollouts/2/export": {
+        "/api/runs/run-1/rollouts/2": {
             "training_run_id": "run-1",
             "rollout_id": 2,
             "samples": [
@@ -648,10 +650,12 @@ def test_run_trace_downloads_steps_and_writes_manifest(tmp_path):
     }
     step_zero = json.loads((output_path / "step_0000.json").read_text())
     assert step_zero["samples"][0]["trace"][0]["name"] == "generate"
-    assert step_zero["samples"][0]["prompt"] == (
+    assert step_zero["samples"][0]["prompt"] == "original question"
+    assert step_zero["samples"][0]["response"] == "original answer"
+    assert step_zero["samples"][0]["raw_prompt"] == (
         "<|im_start|>user\noriginal question<|im_end|>"
     )
-    assert step_zero["samples"][0]["response"] == (
+    assert step_zero["samples"][0]["raw_response"] == (
         "<think>hidden</think>original answer"
     )
     assert step_zero["samples"][0]["parsed_response"] == {
@@ -673,7 +677,7 @@ def test_run_trace_downloads_steps_and_writes_manifest(tmp_path):
     assert [
         timeout
         for path, timeout in FakeDashboardClient.timeouts
-        if path.endswith("/export")
+        if timeout == run_module.TRACE_DOWNLOAD_TIMEOUT_SECONDS
     ] == [
         run_module.TRACE_DOWNLOAD_TIMEOUT_SECONDS,
         run_module.TRACE_DOWNLOAD_TIMEOUT_SECONDS,

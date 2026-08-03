@@ -230,7 +230,7 @@ def _download_trace_step(
 ) -> tuple[dict[str, object], int]:
     rollout_id = summary.rollout_id
     payload = client.get_json(
-        f"/api/runs/{encoded_run_id}/rollouts/{rollout_id}/export",
+        f"/api/runs/{encoded_run_id}/rollouts/{rollout_id}",
         params=None,
         not_found_error=CLIError(
             f"Step {rollout_id} for run {run_id!r} was not found.",

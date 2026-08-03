@@ -101,7 +101,7 @@ def test_get_run_route_returns_404_for_unknown_run(fake_volume, monkeypatch, tmp
     assert response.json()["detail"] == "Training run 'missing' not found"
 
 
-def test_rollout_export_preserves_raw_text_while_display_route_cleans_it(
+def test_rollout_route_preserves_raw_text_and_adds_cleaned_text(
     fake_volume, monkeypatch, tmp_path
 ):
     raw_prompt = "<|im_start|>user\nraw prompt<|im_end|>"
@@ -124,7 +124,6 @@ def test_rollout_export_preserves_raw_text_while_display_route_cleans_it(
 
     with _client(monkeypatch, tmp_path) as client:
         display = client.get("/api/runs/run-route-1/rollouts/3")
-        exported = client.get("/api/runs/run-route-1/rollouts/3/export")
 
     assert display.status_code == 200
     display_sample = display.json()["samples"][0]
@@ -132,14 +131,7 @@ def test_rollout_export_preserves_raw_text_while_display_route_cleans_it(
     assert display_sample["response"] == "raw answer"
     assert display_sample["raw_prompt"] == raw_prompt
     assert display_sample["raw_response"] == raw_response
-
-    assert exported.status_code == 200
-    exported_sample = exported.json()["samples"][0]
-    assert exported_sample["prompt"] == raw_prompt
-    assert exported_sample["response"] == raw_response
-    assert "raw_prompt" not in exported_sample
-    assert "raw_response" not in exported_sample
-    assert exported_sample["parsed_response"]["thinking"] == "secret"
+    assert display_sample["parsed_response"]["thinking"] == "secret"
 
 
 def test_runs_route_keeps_runs_when_train_result_store_fails(
