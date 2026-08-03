@@ -26,7 +26,7 @@ class Gemma4_26B_A4B(HFModelConfiguration):
         vocab_size=262144,
         normalization="RMSNorm",
         norm_epsilon=1e-6,
-        swiglu=True,
+        swiglu=False,  # GeGLU, set by megatron_spec; see ModelArchitecture.swiglu
         disable_bias_linear=True,
         qk_layernorm=True,
         untie_embeddings_and_output_weights=False,

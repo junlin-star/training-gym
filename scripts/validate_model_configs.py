@@ -165,6 +165,10 @@ def _model_config_registry() -> dict[str, type[ModelConfig]]:
 
     Keys cover both the full HF repo id ("qwen/qwen3-4b") and the short
     repo name ("qwen3-4b"), all lowercased.
+
+    A config that sets ``catalog_name`` is keyed by that instead, which is how
+    variants sharing one HF repo id (Gemma-4 text vs VL) stay distinguishable
+    rather than one overwriting the other.
     """
     registry: dict[str, type[ModelConfig]] = {}
     for obj in vars(models).values():
@@ -173,7 +177,7 @@ def _model_config_registry() -> dict[str, type[ModelConfig]]:
             and issubclass(obj, ModelConfig)
             and getattr(obj, "model_name", "")
         ):
-            full = obj.model_name.lower()
+            full = (getattr(obj, "catalog_name", None) or obj.model_name).lower()
             registry[full] = obj
             registry[full.rsplit("/", 1)[-1]] = obj
     return registry
@@ -200,7 +204,7 @@ def available_model_names() -> list[str]:
     """
     return sorted(
         {
-            cls.model_name.rsplit("/", 1)[-1]
+            (getattr(cls, "catalog_name", None) or cls.model_name).rsplit("/", 1)[-1]
             for cls in _model_config_registry().values()
             if _supports_slime(cls())
         }

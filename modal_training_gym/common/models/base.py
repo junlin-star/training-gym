@@ -44,7 +44,10 @@ class ModelArchitecture:
     norm_epsilon : float
         Normalization epsilon. Default ``1e-6``.
     swiglu : bool
-        Use SwiGLU activation in FFN. Default ``True``.
+        Emit Megatron's ``--swiglu`` (gated FFN with SiLU). Default ``True``.
+        Megatron has no flag for other gated activations, so a GeGLU model like
+        Gemma leaves this ``False`` and sets its activation through
+        ``megatron_spec`` or bridge mode instead.
     disable_bias_linear : bool
         Disable bias in linear layers. Default ``True``.
     qk_layernorm : bool
@@ -176,6 +179,9 @@ class ModelConfig:
     model_path: str | None = None
     architecture: ModelArchitecture | None = None
     response_parser: ResponseParser | None = None
+    # Catalog key for configs sharing one HF repo id (Gemma-4 text vs VL), so tooling
+    # that indexes by name keeps both. Unset when model_name is already unique.
+    catalog_name: str | None = None
 
     def __init__(self, **kwargs: Any) -> None:
         for k, v in kwargs.items():
@@ -484,7 +490,7 @@ def parse_kimi_k2_response(text: str) -> ParsedResponse:
 
 # ── Gemma family (Gemma 4) ─────────────────────────────────────────────
 
-# Gemma 4 mirrors its delimiters (``<|x>`` … ``<x|>``) and wraps tool-call 
+# Gemma 4 mirrors its delimiters (``<|x>`` … ``<x|>``) and wraps tool-call
 # strings in ``<|"|>``:
 #
 #   <|turn>model

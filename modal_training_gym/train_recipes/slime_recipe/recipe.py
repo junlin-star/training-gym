@@ -504,6 +504,9 @@ class SlimeRecipe(BaseTrainRecipe):
         from modal_training_gym.train_recipes.slime_recipe.gemma4_26b_a4b import (
             Gemma4_26B_A4B_Recipe,
         )
+        from modal_training_gym.train_recipes.slime_recipe.gemma4_26b_a4b_vl import (
+            Gemma4_26B_A4B_VL_Recipe,
+        )
         from modal_training_gym.train_recipes.slime_recipe.glm_4_7 import (
             GLM_4_7_Recipe,
         )
@@ -530,6 +533,13 @@ class SlimeRecipe(BaseTrainRecipe):
             Qwen3_VL_8b_Recipe,
         )
 
+        # Gemma-4 VL shares the text-only config's HF repo id, so match it on class
+        # before the model_name checks. Falling through would hand it the text
+        # recipe's model script and build a GPTModel that ignores every image.
+        from modal_training_gym.common.models import Gemma4_26B_A4B_VL
+
+        if isinstance(model_config, Gemma4_26B_A4B_VL):
+            return Gemma4_26B_A4B_VL_Recipe()
         if model_config.model_name == "google/gemma-4-26B-A4B-it":
             return Gemma4_26B_A4B_Recipe()
         if model_config.model_name == "Qwen/Qwen3-VL-8B-Instruct":
