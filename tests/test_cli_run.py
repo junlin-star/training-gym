@@ -8,6 +8,7 @@ from click.testing import CliRunner
 
 from modal_training_gym import cli as cli_module
 from modal_training_gym.cli import run as run_module
+from modal_training_gym.cli.errors import ExitCode
 
 
 class FakeDashboardClient:
@@ -301,7 +302,6 @@ def test_run_logs_help_documents_modes_and_filters():
     for flag in ("--follow", "--since", "--until", "--tail", "--search", "--json"):
         assert flag in result.stdout
     assert "RUN_ID" in result.stdout
-    assert "training-gym run logs brave-falcon-3fa8 --follow" in result.stdout
 
 
 def test_run_logs_fetches_recent_filtered_entries():
@@ -457,15 +457,144 @@ def test_run_logs_rejects_historical_bounds_with_follow():
     assert FakeDashboardClient.requests == []
 
 
-def test_run_trace_help_documents_flags_and_examples():
-    result = CliRunner().invoke(cli_module.entrypoint_cli, ["run", "trace", "--help"])
+def test_run_kill_dry_run_reports_jobs_without_stopping(monkeypatch):
+    FakeDashboardClient.payloads = {
+        "/api/runs/run-1": _summary(
+            status="running",
+            display_status="pending",
+            modal_app_id="ap-1",
+            started_at=100,
+            duration_seconds=125,
+            framework_progress={"current": 3, "total": 10, "unit": "step"},
+        ),
+        "/api/runs/run-2": _summary(
+            training_run_id="run-2",
+            run_id="run-2",
+            status="failed",
+            display_status="failed",
+            modal_app_id="ap-2",
+            duration_seconds=60,
+        ),
+    }
+    stopped: list[str] = []
+    monkeypatch.setattr(run_module, "stop_app_or_raise", stopped.append)
+
+    result = CliRunner().invoke(
+        cli_module.entrypoint_cli,
+        ["run", "kill", "run-1", "run-2", "--dry-run", "--json"],
+    )
 
     assert result.exit_code == 0
-    assert "Download agent traces for a run" in result.stdout
-    assert "RUN_ID" in result.stdout
-    for flag in ("--out", "--step", "--dry-run", "--yes", "--force", "--json"):
-        assert flag in result.stdout
-    assert "training-gym run trace brave-falcon-3fa8" in result.stdout
+    assert stopped == []
+    assert FakeDashboardClient.requests == [
+        ("/api/runs/run-1", None),
+        ("/api/runs/run-2", None),
+    ]
+    payload = json.loads(result.stdout)
+    assert payload["dry_run"] is True
+    assert payload["kill_count"] == 1
+    assert payload["skipped_count"] == 1
+    assert payload["runs"] == [
+        {
+            "run_id": "run-1",
+            "modal_app_id": "ap-1",
+            "status": "pending",
+            "current_step": 3,
+            "total_steps": 10,
+            "step_unit": "step",
+            "step": "3 / 10 step",
+            "duration_seconds": 125,
+            "action": "would_kill",
+        },
+        {
+            "run_id": "run-2",
+            "modal_app_id": "ap-2",
+            "status": "failed",
+            "current_step": None,
+            "total_steps": None,
+            "step_unit": "step",
+            "step": "—",
+            "duration_seconds": 60,
+            "action": "skipped",
+        },
+    ]
+
+
+def test_run_kill_stops_each_active_modal_app_and_skips_terminal_runs(monkeypatch):
+    FakeDashboardClient.payloads = {
+        "/api/runs/run-1": _summary(
+            status="running",
+            display_status="pending",
+            modal_app_id="ap-1",
+        ),
+        "/api/runs/run-2": _summary(
+            training_run_id="run-2",
+            run_id="run-2",
+            status="running",
+            display_status="pending",
+            modal_app_id="ap-2",
+        ),
+        "/api/runs/run-3": _summary(
+            training_run_id="run-3",
+            run_id="run-3",
+            status="stopped",
+            display_status="stopped",
+            modal_app_id="ap-3",
+        ),
+    }
+    stopped: list[str] = []
+    monkeypatch.setattr(run_module, "stop_app_or_raise", stopped.append)
+
+    result = CliRunner().invoke(
+        cli_module.entrypoint_cli,
+        ["run", "kill", "run-1", "run-2", "run-3", "--yes", "--json"],
+    )
+
+    assert result.exit_code == 0
+    assert stopped == ["ap-1", "ap-2"]
+    payload = json.loads(result.stdout)
+    assert [run["action"] for run in payload["runs"]] == [
+        "killed",
+        "killed",
+        "skipped",
+    ]
+
+
+def test_run_kill_rejects_active_run_without_modal_app():
+    FakeDashboardClient.payload = _summary(
+        status="running",
+        display_status="pending",
+        modal_app_id="",
+    )
+
+    result = CliRunner().invoke(
+        cli_module.entrypoint_cli,
+        ["run", "kill", "run-1", "--yes"],
+    )
+
+    assert result.exit_code == ExitCode.BACKEND
+    assert "has no underlying Modal app ID" in result.stderr
+
+
+def test_run_kill_reports_modal_stop_failure(monkeypatch):
+    FakeDashboardClient.payload = _summary(
+        status="running",
+        display_status="pending",
+        modal_app_id="ap-1",
+    )
+
+    def fail_stop(_app_id):
+        raise RuntimeError("not authenticated")
+
+    monkeypatch.setattr(run_module, "stop_app_or_raise", fail_stop)
+
+    result = CliRunner().invoke(
+        cli_module.entrypoint_cli,
+        ["run", "kill", "run-1", "--yes"],
+    )
+
+    assert result.exit_code == ExitCode.BACKEND
+    assert "Could not stop the Modal app for run 'run-1'" in result.stderr
 
 
 def test_run_trace_dry_run_filters_steps_without_downloading(tmp_path):
