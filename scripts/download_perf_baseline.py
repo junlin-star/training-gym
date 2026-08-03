@@ -90,8 +90,6 @@ def download_baseline_for_model(
     artifact_name = artifact_name_for_model(model_name)
     inspected = 0
     for artifact in repo.get_artifacts(name=artifact_name):
-        if artifact.expired:
-            continue
         if inspected >= MAX_CANDIDATES_PER_MODEL:
             print(
                 f"warning: gave up after inspecting {inspected} "
@@ -99,6 +97,8 @@ def download_baseline_for_model(
             )
             break
         inspected += 1
+        if artifact.expired:
+            continue
         if not _is_from_merged_pr(repo, artifact, merged_sha_cache):
             continue
         with _fetch_artifact_zip(artifact, token) as archive:
