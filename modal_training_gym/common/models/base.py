@@ -46,8 +46,8 @@ class ModelArchitecture:
     swiglu : bool
         Emit Megatron's ``--swiglu`` (gated FFN with SiLU). Default ``True``.
         Megatron has no flag for other gated activations, so a GeGLU model like
-        Gemma leaves this ``False`` and sets its activation through
-        ``megatron_spec`` or bridge mode instead.
+        Gemma leaves this ``False`` and sets its activation through its layer
+        spec (``megatron_spec``, a slime model script, or bridge mode) instead.
     disable_bias_linear : bool
         Disable bias in linear layers. Default ``True``.
     qk_layernorm : bool
@@ -179,10 +179,6 @@ class ModelConfig:
     model_path: str | None = None
     architecture: ModelArchitecture | None = None
     response_parser: ResponseParser | None = None
-    # Catalog key for a config that shares one HF repo id with another (e.g. Gemma-4's
-    # vision mode vs text-only), so tooling that indexes by name keeps both. Unset when
-    # model_name is already unique.
-    catalog_name: str | None = None
 
     def __init__(self, **kwargs: Any) -> None:
         for k, v in kwargs.items():

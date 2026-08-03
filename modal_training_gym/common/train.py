@@ -70,17 +70,15 @@ def _field_default(field: _dc.Field) -> Any:
 def _resolve_slime_recipe(
     model: ModelConfig,
     recipe: SlimeRecipe,
+    dataset: DatasetConfig | None,
     *,
     merge_model_recipe: bool,
 ) -> SlimeRecipe:
-    if not merge_model_recipe:
-        recipe.validate_model_parallelism(model)
-        return recipe
-    base_recipe = SlimeRecipe.get_base_recipe(model)
-    if base_recipe is None:
-        recipe.validate_model_parallelism(model)
-        return recipe
-    resolved = _merge_recipe(base_recipe, recipe)
+    if merge_model_recipe:
+        recipe = _merge_recipe(SlimeRecipe.get_base_recipe(model), recipe)
+    # Presets whose config depends on the data's modality (Gemma-4's text-only vs
+    # vision-language mode) finish resolving here, once the dataset is known.
+    resolved = recipe._for_dataset(dataset)
     resolved.validate_model_parallelism(model)
     return resolved
 
@@ -346,6 +344,7 @@ class TrainConfig:
             combined = _resolve_slime_recipe(
                 self.model,
                 cast(SlimeRecipe, self.recipe),
+                self.dataset,
                 merge_model_recipe=self.merge_model_recipe,
             )
             return build_slime_app(
@@ -415,6 +414,7 @@ class TrainConfig:
             combined = _resolve_slime_recipe(
                 model,
                 cast(SlimeRecipe, recipe),
+                dataset,
                 merge_model_recipe=self.merge_model_recipe,
             )
             summary["recipe"] = _serialize_slime_params(
@@ -471,17 +471,18 @@ class TrainConfig:
             config_path=str(config_path),
         )
 
-    def _resolved_recipe_for_logging(self) -> BaseTrainRecipe:
+    def _resolved_recipe(self) -> BaseTrainRecipe:
         if isinstance(self.recipe, SlimeRecipe):
             return _resolve_slime_recipe(
                 self.model,
                 cast(SlimeRecipe, self.recipe),
+                self.dataset,
                 merge_model_recipe=self.merge_model_recipe,
             )
         return self.recipe
 
     def context_plan_line(self) -> str | None:
-        recipe = self._resolved_recipe_for_logging()
+        recipe = self._resolved_recipe()
         max_tokens_per_gpu = getattr(recipe, "max_tokens_per_gpu", None)
         if max_tokens_per_gpu is None:
             return None
@@ -582,7 +583,10 @@ class TrainConfig:
                         is_active=is_active,
                     )
 
-                megatron_to_hf_mode = getattr(self.recipe, "megatron_to_hf_mode", "")
+                # Resolved, not self.recipe: the preset decides bridge mode, which loads
+                # the HF weights directly and needs no torch_dist conversion.
+                resolved = self._resolved_recipe()
+                megatron_to_hf_mode = getattr(resolved, "megatron_to_hf_mode", "")
                 needs_conversion = megatron_to_hf_mode != "bridge"
                 if prepare_inputs:
                     if isinstance(self.recipe, SlimeRecipe):

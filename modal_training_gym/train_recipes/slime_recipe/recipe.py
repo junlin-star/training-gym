@@ -452,6 +452,15 @@ class SlimeRecipe(BaseTrainRecipe):
 
     # ── Internal ──────────────────────────────────────────────────────────────
 
+    def _for_dataset(self, dataset: "DatasetConfig | None") -> "SlimeRecipe":
+        """This recipe with its dataset-dependent fields filled in.
+
+        A preset for a model whose config depends on the data's modality (Gemma-4 is
+        one checkpoint with a text-only and a vision-language mode) overrides this.
+        Every other recipe is already complete and returns itself.
+        """
+        return self
+
     def _fields(
         self,
         dataset: "DatasetConfig | None" = None,
@@ -531,10 +540,7 @@ class SlimeRecipe(BaseTrainRecipe):
         )
 
         if model_config.model_name == "google/gemma-4-26B-A4B-it":
-            # One HF repo, two modes: the recipe has to carry the model's own vision
-            # flag, or a VL model would get the text-only model script and build a
-            # GPTModel that ignores every image.
-            return Gemma4_26B_A4B_Recipe(vision=getattr(model_config, "vision", False))
+            return Gemma4_26B_A4B_Recipe()
         if model_config.model_name == "Qwen/Qwen3-VL-8B-Instruct":
             return Qwen3_VL_8b_Recipe()
         if model_config.model_name == "Qwen/Qwen3-ASR-1.7B":

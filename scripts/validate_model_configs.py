@@ -9,7 +9,6 @@ Optional args:
 import argparse
 import inspect
 import json
-from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -161,36 +160,22 @@ def pick_dataset(model_config: ModelConfig) -> DatasetConfig:
     return Gsm8kDataset(n_rows=10)
 
 
-# Configs reachable only through a constructor argument, so class introspection alone
-# can't find them. Keyed by the variant's ``catalog_name``.
-_MODEL_VARIANTS: dict[str, Callable[[], ModelConfig]] = {
-    "google/gemma-4-26b-a4b-it-vl": lambda: models.Gemma4_26B_A4B(vision=True),
-}
-
-
-def _model_config_registry() -> dict[str, Callable[[], ModelConfig]]:
-    """Map normalized model names to a factory for their ModelConfig.
+def _model_config_registry() -> dict[str, type[ModelConfig]]:
+    """Map normalized model names to their ModelConfig subclass.
 
     Keys cover both the full HF repo id ("qwen/qwen3-4b") and the short
     repo name ("qwen3-4b"), all lowercased.
-
-    A variant sharing an HF repo id with its base config (Gemma-4 text vs VL) is keyed
-    by its ``catalog_name`` from ``_MODEL_VARIANTS``, so both stay distinguishable
-    rather than one overwriting the other.
     """
-    registry: dict[str, Callable[[], ModelConfig]] = {}
+    registry: dict[str, type[ModelConfig]] = {}
     for obj in vars(models).values():
         if (
             inspect.isclass(obj)
             and issubclass(obj, ModelConfig)
             and getattr(obj, "model_name", "")
         ):
-            full = (getattr(obj, "catalog_name", None) or obj.model_name).lower()
+            full = obj.model_name.lower()
             registry[full] = obj
             registry[full.rsplit("/", 1)[-1]] = obj
-    for full, factory in _MODEL_VARIANTS.items():
-        registry[full] = factory
-        registry[full.rsplit("/", 1)[-1]] = factory
     return registry
 
 
@@ -213,27 +198,24 @@ def available_model_names() -> list[str]:
     Excludes models with no base slime recipe (e.g. Kimi on miles), since this
     script only runs base training on slime.
     """
-    names = set()
-    for factory in _model_config_registry().values():
-        config = factory()
-        if _supports_slime(config):
-            names.add(
-                (getattr(config, "catalog_name", None) or config.model_name).rsplit(
-                    "/", 1
-                )[-1]
-            )
-    return sorted(names)
+    return sorted(
+        {
+            cls.model_name.rsplit("/", 1)[-1]
+            for cls in _model_config_registry().values()
+            if _supports_slime(cls())
+        }
+    )
 
 
 def get_model_config_from_model_name(model_name: str) -> ModelConfig:
     registry = _model_config_registry()
-    factory = registry.get(model_name.lower())
-    if factory is None:
+    config_cls = registry.get(model_name.lower())
+    if config_cls is None:
+        available = sorted({cls.model_name for cls in registry.values()})
         raise ValueError(
-            f"unknown model {model_name!r}; available: "
-            f"{', '.join(available_model_names())}"
+            f"unknown model {model_name!r}; available: {', '.join(available)}"
         )
-    return factory()
+    return config_cls()
 
 
 def run_base_training_on_slime(

@@ -1,6 +1,6 @@
 """Gemma-4-26B-A4B GRPO recipe (1x8xH100), text-only or vision-language."""
 
-from dataclasses import MISSING, field
+from dataclasses import MISSING, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -15,8 +15,10 @@ if TYPE_CHECKING:
     from modal_training_gym.common.dataset import DatasetConfig
     from modal_training_gym.common.models import ModelConfig
 
-# Build-time shims for upstream gaps that block a bridge-mode VL model on slime. Each
-# patch's docstring has the traceback it fixes; report upstream and drop once fixed.
+# Build-time shims for upstream gaps that block a bridge-mode VL model on slime: THD
+# packing vs the VL attention mask, an unset pg_collection, the forward's tuple return,
+# and a weight sync that withholds registered buffers. Each patch's docstring has the
+# traceback it fixes; report upstream and drop once fixed.
 _VL_PATCH_DIR = (
     Path(__file__).resolve().parents[2]
     / "frameworks"
@@ -41,6 +43,10 @@ def _vl_image_run_commands() -> list[str]:
     ]
 
 
+def _has_images(dataset: "DatasetConfig | None") -> bool:
+    return "image" in (getattr(dataset, "multimodal_keys", None) or {})
+
+
 def _declared_default(cls: type, name: str) -> Any:
     """The dataclass default for ``name``, i.e. the value that means "unset"."""
     f = cls.__dataclass_fields__[name]
@@ -49,31 +55,14 @@ def _declared_default(cls: type, name: str) -> Any:
     return f.default
 
 
-# Per-mode values, applied by __post_init__ to the fields left at their default.
-# Callables are resolved there so the VL patches are only encoded when needed.
-_TEXT_MODE: dict[str, Any] = {
-    "slime_model_script": "scripts/models/gemma4-26B-A4B.sh",
-    "megatron_to_hf_mode": "raw",
-    "pipeline_model_parallel_size": 2,
-    "attention_backend": "flash",
-    "use_dynamic_batch_size": True,
-    "num_rollout": 2,
-    "rollout_batch_size": 4,
-    "n_samples_per_prompt": 4,
-    "rollout_max_response_len": 512,
-    "rollout_temperature": 0.8,
-    "rollout_top_p": 1.0,
-    "global_batch_size": 16,
-    "save_interval": 20,
-    "sglang_cuda_graph_max_bs": 1,
-    "sglang_max_running_requests": 4,
-    "rollout_stop_token_ids": [1, 106],
-}
-
-# No slime_model_script and no attention_backend; see the class docstring.
+# Applied over the text-only defaults below on an image dataset, to the fields the
+# caller left alone. Callables are resolved at apply time so the VL patches are only
+# encoded when they're used.
 _VISION_MODE: dict[str, Any] = {
+    "slime_model_script": "",
     "megatron_to_hf_mode": "bridge",
     "pipeline_model_parallel_size": 1,
+    "attention_backend": None,
     "use_dynamic_batch_size": False,
     "extra_config": {"qkv_format": "bshd", "micro_batch_size": 1},
     "freeze_params_name_list": ["vision_tower", "embed_vision"],
@@ -90,6 +79,7 @@ _VISION_MODE: dict[str, Any] = {
     "save_interval": 10,
     "sglang_cuda_graph_max_bs": 8,
     "sglang_max_running_requests": 8,
+    # generation_config.json's eos_token_id: <eos>, <turn|>, <|tool_response>.
     "rollout_stop_token_ids": [1, 106, 50],
 }
 
@@ -98,20 +88,24 @@ _VISION_MODE: dict[str, Any] = {
 class Gemma4_26B_A4B_Recipe(SlimeRecipe):
     """Gemma-4-26B-A4B (26B-A4B MoE) on 1×8×H100 with TP2/CP1/EP2, colocated GRPO.
 
-    ``vision=True`` (matching ``Gemma4_26B_A4B(vision=True)``) trains the vision-language
-    model instead of the text-only decoder. Fields the two modes disagree on default to
-    ``None`` here and are filled from ``_TEXT_MODE`` / ``_VISION_MODE``, so anything set
-    explicitly wins — including across ``_merge_recipe``, which reconstructs the recipe.
+    One checkpoint, two modes. The fields below train the MoE text decoder through
+    slime's model script; an image dataset (``MultimodalDataset(modality="image")``)
+    trains the whole vision-language model through megatron-bridge instead —
+    ``_for_dataset`` swaps in the vision-mode values for every field the caller left at
+    its default. Nothing has to be passed by hand, and explicit values still win.
 
     What vision mode changes and why:
 
-    * ``megatron_to_hf_mode="bridge"`` with ``slime_model_script`` left unset — slime
-      checks ``--custom-model-provider-path`` before the bridge branch, so a model script
-      would build the text-only ``GPTModel`` and train while ignoring every image.
-    * ``use_dynamic_batch_size=False`` + ``qkv_format="bshd"`` + ``micro_batch_size=1`` —
-      ``Gemma4VLModel.forward`` builds a dense mask that is only valid on one sequence,
-      and image-token counts vary with aspect ratio. The launcher enforces this
-      (``model.requires_bshd``).
+    * ``megatron_to_hf_mode="bridge"`` with ``slime_model_script`` cleared — slime
+      checks ``--custom-model-provider-path`` before the bridge branch, so a model
+      script would build the text-only ``GPTModel`` and train while ignoring every
+      image. The bridge resolves the checkpoint to a ``Gemma4VLModel`` (vision tower
+      + projector + language model) and exports through ``bridge.save_hf_pretrained``
+      so the ViT survives the round trip.
+    * ``use_dynamic_batch_size=False`` + ``qkv_format="bshd"`` + ``micro_batch_size=1``
+      — ``Gemma4VLModel.forward`` builds a dense mask that is only valid on one
+      sequence, and image-token counts vary with aspect ratio, so a ragged
+      micro-batch cannot be reconciled.
     * no ``attention_backend`` (text mode pins ``"flash"``) — flash cannot honour that
       mask, so pinning it makes TE reject every backend.
     * ``pipeline_model_parallel_size=1`` — keeps the vision tower and embedding on one
@@ -120,12 +114,10 @@ class Gemma4_26B_A4B_Recipe(SlimeRecipe):
       re.search-ed against the Megatron parameter names the bridge assigns.
     """
 
-    # Must match the attached model's own flag; not a slime CLI flag.
-    vision: bool = False
-
     gpu_type: str = "H100"
     colocate: bool = True
     hf_checkpoint: str = "google/gemma-4-26B-A4B-it"
+    slime_model_script: str = "scripts/models/gemma4-26B-A4B.sh"
     # Model overflows container disk, so reserve 1 TiB.
     train_function_kwargs: dict[str, int] = field(
         default_factory=lambda: {"ephemeral_disk": 1_048_576}
@@ -135,25 +127,26 @@ class Gemma4_26B_A4B_Recipe(SlimeRecipe):
 
     tensor_model_parallel_size: int = 2
     sequence_parallel: bool = True
-    pipeline_model_parallel_size: int | None = None
+    pipeline_model_parallel_size: int = 2
     context_parallel_size: int = 1
     expert_model_parallel_size: int = 2
     expert_tensor_parallel_size: int = 1
-    attention_backend: str | None = None
+    attention_backend: str | None = "flash"
 
-    num_rollout: int | None = None
-    rollout_batch_size: int | None = None
-    rollout_max_response_len: int | None = None
-    rollout_temperature: float | None = None
-    rollout_top_p: float | None = None
+    num_rollout: int = 2
+    rollout_batch_size: int = 4
+    rollout_max_response_len: int = 512
+    rollout_temperature: float = 0.8
     rollout_top_k: int | None = None
+    rollout_stop_token_ids: list[int] | None = field(default_factory=lambda: [1, 106])
     # Colocated 26B MoE (plus the ViT in vision mode): leave the actor room.
     sglang_mem_fraction_static: float = 0.20
-    sglang_cuda_graph_max_bs: int | None = None
+    sglang_cuda_graph_max_bs: int = 1
+    sglang_max_running_requests: int | None = 4
 
-    n_samples_per_prompt: int | None = None
-    global_batch_size: int | None = None
-    use_dynamic_batch_size: bool | None = None
+    n_samples_per_prompt: int = 4
+    global_batch_size: int = 16
+    use_dynamic_batch_size: bool = True
     max_tokens_per_gpu: int = 2048
     num_steps_per_rollout: int = 1
     balance_data: bool = True
@@ -165,31 +158,36 @@ class Gemma4_26B_A4B_Recipe(SlimeRecipe):
     overlap_cpu_optimizer_d2h_h2d: bool = True
     use_precision_aware_optimizer: bool = True
 
-    save_interval: int | None = None
+    megatron_to_hf_mode: str = "raw"
+    save_interval: int = 20
 
-    def __post_init__(self) -> None:
-        for name, value in (_VISION_MODE if self.vision else _TEXT_MODE).items():
-            if getattr(self, name) != _declared_default(type(self), name):
-                continue
-            object.__setattr__(self, name, value() if callable(value) else value)
+    def _for_dataset(self, dataset: "DatasetConfig | None") -> SlimeRecipe:
+        if not _has_images(dataset):
+            return self
+        cls = type(self)
+        vision = {
+            name: value() if callable(value) else value
+            for name, value in _VISION_MODE.items()
+            if name != "extra_config"
+            and getattr(self, name) == _declared_default(cls, name)
+        }
+        # extra_config may already hold hook paths resolved at construction, so merge
+        # into it (keys the caller set win) instead of replacing it wholesale.
+        vision["extra_config"] = {
+            **_VISION_MODE["extra_config"],
+            **(self.extra_config or {}),
+        }
+        return replace(self, **vision)
 
     def validate_model_parallelism(self, model: "ModelConfig") -> None:
         super().validate_model_parallelism(model)
-        model_vision = getattr(model, "vision", False)
-        if model_vision != self.vision:
+        if (
+            self.megatron_to_hf_mode == "bridge"
+            and self.pipeline_model_parallel_size != 1
+        ):
             raise TrainingGymConfigError(
-                f"{type(self).__name__}(vision={self.vision}) is attached to "
-                f"{type(model).__name__}(vision={model_vision}). The two must agree: "
-                "vision mode trains the VL model through megatron-bridge, text mode "
-                "hands the same checkpoint to slime's text-only model script. Pass the "
-                "same vision= to both."
+                f"{type(self).__name__} needs pipeline_model_parallel_size=1 in vision "
+                "mode: the bridge keeps the vision tower and embedding on one pipeline "
+                f"stage, so a split only fails once Megatron builds the model. Got "
+                f"{self.pipeline_model_parallel_size}."
             )
-
-    def _fields(
-        self,
-        dataset: "DatasetConfig | None" = None,
-        model: "ModelConfig | None" = None,
-    ) -> dict[str, Any]:
-        fields = super()._fields(dataset=dataset, model=model)
-        fields.pop("vision", None)
-        return fields

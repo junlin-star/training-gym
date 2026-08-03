@@ -9,10 +9,10 @@ hands it to the language model together with those packed params, which TE canno
 honour at once.
 
 Dropping ``packed_seq_params`` in the VL forward processes the stream as one contiguous
-sequence and lets the dense mask govern attention. Sound only because the recipe pins
-``micro_batch_size=1`` (``Gemma4_26B_A4B(vision=True)`` sets ``requires_bshd``), so the
-stream really does hold one sample. Keeping the dense mask preserves bidirectional image
-attention, and with it parity against the SGLang rollouts. Report upstream.
+sequence and lets the dense mask govern attention. Sound only because vision mode pins
+``micro_batch_size=1`` (see ``Gemma4_26B_A4B_Recipe``), so the stream really does hold
+one sample. Keeping the dense mask preserves bidirectional image attention, and with it
+parity against the SGLang rollouts. Report upstream.
 
 Idempotent. Run at image build:  python patch_gemma4_vl_packed_seq.py
 """
