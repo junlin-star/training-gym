@@ -338,63 +338,212 @@ def _status_label(result: TutorialResult) -> str:
     return f"❌ {result.training_run_status.value}"
 
 
-def _format_result_details(result: TutorialResult) -> list[str]:
+def _format_secs_delta(
+    current: float | int | None, baseline: float | int | None
+) -> str | None:
+    """Compact delta vs baseline, or None when either timing is missing."""
+    if current is None or baseline is None:
+        return None
+    current_f = float(current)
+    baseline_f = float(baseline)
+    delta_s = current_f - baseline_f
+    if baseline_f <= 0:
+        return f"{delta_s:+.3f}s"
+    percent = delta_s / baseline_f * 100
+    return f"{delta_s:+.3f}s ({percent:+.0f}%)"
+
+
+def _training_run_link(training_run_id: str, dashboard_url: str | None) -> str:
+    """Training run id in backticks, linked to the dashboard if a base URL is given."""
+    if not dashboard_url:
+        return f"`{training_run_id}`"
+    base = dashboard_url.rstrip("/")
+    return f"[`{training_run_id}`]({base}/training/{training_run_id})"
+
+
+@dataclass
+class BaselineMeta:
+    commit_sha: str
+    commit_url: str
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "BaselineMeta | None":
+        sha = data.get("commit_sha")
+        url = data.get("commit_url")
+        if not sha or not url:
+            return None
+        return cls(commit_sha=str(sha), commit_url=str(url))
+
+    def commit_link(self) -> str:
+        short = self.commit_sha[:7]
+        return f"[`{short}`]({self.commit_url})"
+
+
+def _format_duration_delta(
+    result: TutorialResult, baseline_path: Path, dashboard_url: str | None
+) -> str:
+    """Format the duration change vs a baseline result, naming the baseline
+    run, e.g. "+500.0s (+33%) from [`run-id`](https://…/training/run-id)".
+    """
+    if not baseline_path.is_file():
+        return "—"
+    baseline = TutorialResult.from_dict(json.loads(baseline_path.read_text()))
+    delta = (
+        _format_secs_delta(
+            _total_step_time_s(result),
+            _total_step_time_s(baseline),
+        )
+        or "—"
+    )
+    return f"{delta} from {_training_run_link(baseline.training_run_id, dashboard_url)}"
+
+
+def _load_baseline(baseline_path: Path | None) -> TutorialResult | None:
+    if baseline_path is None or not baseline_path.is_file():
+        return None
+    return TutorialResult.from_dict(json.loads(baseline_path.read_text()))
+
+
+def _load_baseline_meta(baseline_path: Path | None) -> BaselineMeta | None:
+    """Load sidecar meta written by ``download_perf_baseline.py``."""
+    if baseline_path is None:
+        return None
+    meta_path = baseline_path.with_name(baseline_path.stem + ".meta.json")
+    if not meta_path.is_file():
+        return None
+    return BaselineMeta.from_dict(json.loads(meta_path.read_text()))
+
+
+def _format_result_details(
+    result: TutorialResult,
+    baseline: TutorialResult | None = None,
+    baseline_meta: BaselineMeta | None = None,
+    dashboard_url: str | None = None,
+) -> list[str]:
     """Markdown <details> block with run status and a consolidated timing table."""
     lines = [
         "<details>",
         f"<summary>{result.base_model_name}</summary>",
         "",
-        f"`{result.training_run_id}` — {_status_label(result)}",
-        "",
+        f"{_training_run_link(result.training_run_id, dashboard_url)} — {_status_label(result)}",
     ]
+    if baseline is not None:
+        baseline_bits = [
+            _training_run_link(baseline.training_run_id, dashboard_url),
+        ]
+        if baseline_meta is not None:
+            baseline_bits.append(f"on {baseline_meta.commit_link()}")
+        lines.append(f"Baseline: {' '.join(baseline_bits)}")
+    lines.append("")
 
     keys = _step_keys(result)
     if not keys:
         lines.extend(["_No step timing data._", "", "</details>", ""])
         return lines
 
-    lines.extend(
-        [
-            "| Phase | Duration |",
-            "| --- | --- |",
-        ]
-    )
+    if baseline is not None:
+        lines.extend(
+            [
+                "| Phase | Duration | Delta |",
+                "| --- | --- | --- |",
+            ]
+        )
+    else:
+        lines.extend(
+            [
+                "| Phase | Duration |",
+                "| --- | --- |",
+            ]
+        )
+
+    def _row(phase: str, duration: float | int | None, base: float | int | None) -> str:
+        if baseline is None:
+            return f"| {phase} | {_fmt_secs(duration)} |"
+        delta = _format_secs_delta(duration, base) or "—"
+        return f"| {phase} | {_fmt_secs(duration)} | {delta} |"
+
     for key in keys:
         step = (result.step_times or {}).get(key) or {}
+        baseline_step = ((baseline.step_times or {}).get(key) or {}) if baseline else {}
+        baseline_subs = (
+            ((baseline.substep_times or {}).get(key) or {}) if baseline else {}
+        )
         for name, entry in _ordered_substeps(
             (result.substep_times or {}).get(key) or {}
         ):
+            base_entry = baseline_subs.get(name) or {}
             lines.append(
-                f"| {_substep_label(name)} | {_fmt_secs(entry.get('duration_s'))} |"
+                _row(
+                    _substep_label(name),
+                    entry.get("duration_s"),
+                    base_entry.get("duration_s"),
+                )
             )
-        lines.append(f"| Step {key} | {_fmt_secs(step.get('duration_s'))} |")
+        lines.append(
+            _row(
+                f"Step {key}",
+                step.get("duration_s"),
+                baseline_step.get("duration_s"),
+            )
+        )
     if len(keys) > 1:
-        lines.append(f"| Total step time | {_fmt_secs(_total_step_time_s(result))} |")
+        lines.append(
+            _row(
+                "Total step time",
+                _total_step_time_s(result),
+                _total_step_time_s(baseline) if baseline else None,
+            )
+        )
     lines.extend(["", "</details>", ""])
     return lines
 
 
-def summarize_results(results_dir: str) -> str:
+def summarize_results(
+    results_dir: str, baseline_dir: str | None, dashboard_url: str | None = None
+) -> str:
     rows = []
     details: list[str] = []
     for path in sorted(Path(results_dir).glob("*.json")):
         result = TutorialResult.from_dict(json.loads(path.read_text()))
         status = _status_label(result)
-        rows.append(
+        row = (
             f"| {result.base_model_name} | {status} "
             f"| {_total_step_time_s(result):.1f}s | {result.step_count} "
-            f"| `{result.training_run_id}` |"
+            f"| {_training_run_link(result.training_run_id, dashboard_url)} |"
         )
-        details.extend(_format_result_details(result))
+        baseline_path = (
+            Path(baseline_dir) / path.name if baseline_dir is not None else None
+        )
+        if baseline_dir is not None:
+            assert baseline_path is not None
+            delta = _format_duration_delta(result, baseline_path, dashboard_url)
+            row += f" {delta} |"
+        rows.append(row)
+        details.extend(
+            _format_result_details(
+                result,
+                _load_baseline(baseline_path),
+                _load_baseline_meta(baseline_path),
+                dashboard_url,
+            )
+        )
+
+    header = "| Model | Status | Step time | Steps | Run |"
+    divider = "| --- | --- | --- | --- | --- |"
+    empty = "| _no results_ | | | | |"
+    if baseline_dir is not None:
+        header += " Delta |"
+        divider += " --- |"
+        empty += " |"
 
     lines = [
         "<!-- validate-models-comment -->",
         "## Model Validation Results",
         "",
-        "| Model | Status | Step time | Steps | Run |",
-        "| --- | --- | --- | --- | --- |",
+        header,
+        divider,
     ]
-    lines.extend(rows or ["| _no results_ | | | | |"])
+    lines.extend(rows or [empty])
     if details:
         lines.extend(["", "### Step timings", ""])
         lines.extend(details)
@@ -486,6 +635,15 @@ def __main__():
         required=True,
         help="Directory containing result JSON files written by `check --output`.",
     )
+    summarize_parser.add_argument(
+        "-b",
+        "--baseline-dir",
+        help="Directory containing baseline result JSON files to compare against",
+    )
+    summarize_parser.add_argument(
+        "--dashboard-url",
+        help="Base URL of the training dashboard. If omitted, run ids are not linked.",
+    )
 
     args = parser.parse_args()
 
@@ -494,7 +652,9 @@ def __main__():
         return
 
     if args.command == "summarize":
-        print(summarize_results(args.results_dir))
+        print(
+            summarize_results(args.results_dir, args.baseline_dir, args.dashboard_url)
+        )
         return
 
     tutorial_result = run_base_training_on_slime(
