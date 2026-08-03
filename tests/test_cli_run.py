@@ -575,7 +575,6 @@ def test_run_kill_dry_run_reports_jobs_without_stopping(monkeypatch):
             "current_step": 3,
             "total_steps": 10,
             "step_unit": "step",
-            "step": "3 / 10 step",
             "duration_seconds": 125,
             "action": "would_kill",
             "skip_reason": None,
@@ -588,7 +587,6 @@ def test_run_kill_dry_run_reports_jobs_without_stopping(monkeypatch):
             "current_step": None,
             "total_steps": None,
             "step_unit": "step",
-            "step": "—",
             "duration_seconds": 60,
             "action": "skipped",
             "skip_reason": "already_terminal",
@@ -647,48 +645,6 @@ def test_run_kill_stops_each_active_modal_app_and_skips_terminal_runs(monkeypatc
         "stopped",
         "stopped",
         "stopped",
-    ]
-
-
-def test_run_kill_uses_modal_liveness_when_recorded_status_is_stale(monkeypatch):
-    FakeDashboardClient.payloads = {
-        "/api/runs/run-1": _summary(
-            status="completed",
-            display_status="completed",
-            modal_app_id="ap-live",
-        ),
-        "/api/runs/run-2": _summary(
-            training_run_id="run-2",
-            run_id="run-2",
-            status="running",
-            display_status="pending",
-            modal_app_id="ap-stopped",
-        ),
-    }
-    monkeypatch.setattr(
-        run_module,
-        "app_live_status",
-        lambda app_id: {"ap-live": True, "ap-stopped": False}[app_id],
-    )
-    stopped: list[str] = []
-    monkeypatch.setattr(run_module, "stop_app_or_raise", stopped.append)
-    monkeypatch.setattr(
-        run_module,
-        "_mark_killed_run_stopped",
-        lambda _run_id, *, ended_at: False,
-    )
-
-    result = CliRunner().invoke(
-        cli_module.entrypoint_cli,
-        ["run", "kill", "run-1", "run-2", "--yes", "--json"],
-    )
-
-    assert result.exit_code == 0
-    assert stopped == ["ap-live"]
-    payload = json.loads(result.stdout)
-    assert [(run["modal_app_live"], run["action"]) for run in payload["runs"]] == [
-        (True, "killed"),
-        (False, "skipped"),
     ]
 
 

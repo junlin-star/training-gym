@@ -96,8 +96,7 @@ def _stop_app(app_id: str) -> None:
             )
         )
 
-    blocking_stop = synchronizer.create_blocking(_stop)
-    blocking_stop()  # type: ignore[reportCallIssue]
+    synchronizer.create_blocking(_stop)()
 
 
 def stop_app_or_raise(app_id: str) -> None:

@@ -59,7 +59,6 @@ class _KillRunReport(TypedDict):
     current_step: int | None
     total_steps: int | None
     step_unit: str
-    step: str
     duration_seconds: int | None
     action: Literal["would_kill", "skipped", "killed"]
     skip_reason: str | None
@@ -447,8 +446,7 @@ def download_run_traces(
         click.echo(str(output_path))
 
 
-def _format_step(summary: RunSummary) -> str:
-    current, total, unit = _current_step(summary)
+def _format_step(current: int | None, total: int | None, unit: str) -> str:
     if current is None:
         return "—"
     value = f"{current} / {total}" if total is not None else str(current)
@@ -470,7 +468,11 @@ def _print_kill_report(runs: list[_KillRunReport]) -> None:
                 row["run_id"],
                 row["modal_app_id"] or "—",
                 row["status"],
-                row["step"],
+                _format_step(
+                    row["current_step"],
+                    row["total_steps"],
+                    row["step_unit"],
+                ),
                 (
                     str(timedelta(seconds=row["duration_seconds"]))
                     if row["duration_seconds"] is not None
@@ -494,16 +496,12 @@ def _build_kill_run_report(
     modal_app_live: bool | None,
 ) -> _KillRunReport:
     status = (summary.display_status or summary.status or "pending").lower()
-    terminal = (
-        status in TERMINAL_RUN_STATUSES
-        or summary.status.lower() in TERMINAL_RUN_STATUSES
-    )
-    if not summary.modal_app_id and not terminal:
+    if not summary.modal_app_id and status not in TERMINAL_RUN_STATUSES:
         should_kill = False
         skip_reason = "missing_modal_app_id"
     else:
         should_kill = modal_app_live is True or (
-            modal_app_live is None and not terminal
+            modal_app_live is None and status not in TERMINAL_RUN_STATUSES
         )
         if should_kill:
             skip_reason = None
@@ -526,7 +524,6 @@ def _build_kill_run_report(
         "current_step": current_step,
         "total_steps": total_steps,
         "step_unit": step_unit,
-        "step": _format_step(summary),
         "duration_seconds": duration_seconds,
         "action": "would_kill" if should_kill else "skipped",
         "skip_reason": skip_reason,
@@ -692,7 +689,10 @@ def _run_summary_panel(summary: RunSummary) -> Panel:
     reward = summary.latest_rollout.mean if summary.latest_rollout is not None else None
     metrics = Table.grid(padding=(0, 4))
     metrics.add_row(
-        Text.assemble(("Step  ", "dim"), (_format_step(summary), "bold")),
+        Text.assemble(
+            ("Step  ", "dim"),
+            (_format_step(*_current_step(summary)), "bold"),
+        ),
         Text.assemble(("Reward  ", "dim"), (_format_reward(reward), "bold")),
     )
 
