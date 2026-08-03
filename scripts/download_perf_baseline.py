@@ -71,6 +71,8 @@ def _fetch_artifact_zip(artifact: Artifact, token: str) -> zipfile.ZipFile:
     return zipfile.ZipFile(io.BytesIO(response.content))
 
 
+# TODO(anthony): Use synmon model runs as a baseline instead of searching CI
+#                once synmon is set up
 def download_baseline_for_model(
     repo: Repository,
     token: str,
