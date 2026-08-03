@@ -83,14 +83,11 @@ class DashboardClient:
             else None
         )
         try:
-            if timeout is None:
-                response = self._client.get(path.lstrip("/"), params=query)
-            else:
-                response = self._client.get(
-                    path.lstrip("/"),
-                    params=query,
-                    timeout=timeout,
-                )
+            response = self._client.get(
+                path.lstrip("/"),
+                params=query,
+                timeout=DEFAULT_TIMEOUT_SECONDS if timeout is None else timeout,
+            )
         except httpx.TimeoutException as exc:
             raise CLIError(
                 "Dashboard request timed out.",
