@@ -189,6 +189,23 @@
     activeSamplePos = Math.max(0, Math.min(list.length - 1, activeSamplePos + delta));
   }
 
+  // Samples in a prompt group share one screenshot: its bytes sit on the first of
+  // them as `image` and the rest carry only `image_ref`.
+  let rolloutImages = $derived.by(() => {
+    const byRef = {};
+    for (const s of expandedRollout?.samples ?? []) {
+      const meta = s?.metadata;
+      if (meta?.image_ref && meta.image) byRef[meta.image_ref] = meta.image;
+    }
+    return byRef;
+  });
+
+  function sampleImage(sample) {
+    const meta = sample?.metadata;
+    if (!meta) return null;
+    return meta.image ?? (meta.image_ref ? rolloutImages[meta.image_ref] : null) ?? null;
+  }
+
   // The sample currently shown in the viewer (or null when no bucket is open).
   let activeSample = $derived.by(() => {
     const d = sampleDist;
@@ -196,8 +213,10 @@
     const list = d.buckets[activeBucket] || [];
     const idx = list[activeSamplePos];
     if (idx == null) return null;
+    const sample = expandedRollout.samples[idx];
     return {
-      sample: expandedRollout.samples[idx],
+      sample,
+      image: sampleImage(sample),
       pos: activeSamplePos,
       count: list.length,
     };
@@ -216,7 +235,12 @@
     }
   }
 
-  function sampleToPayload(s) {
+  function sampleToPayload(s, { inlineImage = false } = {}) {
+    let metadata = s.metadata || null;
+    if (inlineImage && metadata?.image_ref && !metadata.image) {
+      const { image_ref, ...rest } = metadata;
+      metadata = { ...rest, image: sampleImage(s) };
+    }
     return {
       score: s.score,
       prompt: s.prompt || null,
@@ -225,13 +249,13 @@
       raw_response: s.raw_response || null,
       raw_prompt: s.raw_prompt || null,
       trace: s.trace || null,
-      metadata: s.metadata || null,
+      metadata,
     };
   }
 
   function downloadSampleTrajectory() {
     if (!activeSample) return;
-    const payload = sampleToPayload(activeSample.sample);
+    const payload = sampleToPayload(activeSample.sample, { inlineImage: true });
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -250,7 +274,7 @@
       rollout_id: rollout,
       total: expandedRollout.samples.length,
       mean: expandedRollout.samples.reduce((a, s) => a + (s.score || 0), 0) / expandedRollout.samples.length,
-      samples: expandedRollout.samples.map(sampleToPayload),
+      samples: expandedRollout.samples.map((s) => sampleToPayload(s)),
     };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
@@ -1528,11 +1552,11 @@
                               src={activeSample.sample.metadata.audio}
                             ></audio>
                           {/if}
-                          {#if activeSample.sample.metadata?._metadata_type === "image" || activeSample.sample.metadata?.image}
+                          {#if activeSample.image}
                             <div class="rollout-sample-label">image</div>
                             <img
                               class="block w-full max-w-[400px] h-auto m-[4px_0_8px] rounded-[4px] [border:1px_solid_var(--border)]"
-                              src={activeSample.sample.metadata.image}
+                              src={activeSample.image}
                               alt="rollout input"
                               loading="lazy"
                             />
@@ -1578,6 +1602,7 @@
                                 "_metadata_type",
                                 "audio",
                                 "image",
+                                "image_ref",
                                 "trajectory_messages",
                                 "eval_report",
                                 "reference",
