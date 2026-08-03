@@ -77,6 +77,7 @@ Repo: https://github.com/modal-projects/training-gym
 - [Qwen3-8B](https://gym.modal.dev/reference/models/qwen3_8b/): `Qwen3_8B`
 - [Qwen3-30B-A3B](https://gym.modal.dev/reference/models/qwen3_30b/): `Qwen3_30B`
 - [Qwen3.6-35B-A3B](https://gym.modal.dev/reference/models/qwen3_6_35b/): `Qwen3_6_35B`
+- [Qwen3.6-27B](https://gym.modal.dev/reference/models/qwen3_6_27b/): `Qwen3_6_27B`
 
 ### Training
 
@@ -84,6 +85,7 @@ Repo: https://github.com/modal-projects/training-gym
 - [TrainingGroup](https://gym.modal.dev/reference/training/traininggroup/): `TrainingGroup`
 - [SlimeRecipe](https://gym.modal.dev/reference/training/slimerecipe/): `SlimeRecipe`
 - [Qwen3_6_35b_Recipe](https://gym.modal.dev/reference/training/qwen3_6_35b_recipe/): `Qwen3_6_35b_Recipe`
+- [Qwen3_6_27b_Recipe](https://gym.modal.dev/reference/training/qwen3_6_27b_recipe/): `Qwen3_6_27b_Recipe`
 
 ### Deployment
 
