@@ -303,6 +303,7 @@ def test_run_logs_help_documents_modes_and_filters():
     for flag in ("--follow", "--since", "--until", "--tail", "--search", "--json"):
         assert flag in result.stdout
     assert "RUN_ID" in result.stdout
+    assert "training-gym run logs brave-falcon-3fa8 --follow" in result.stdout
 
 
 def test_run_logs_fetches_recent_filtered_entries():
@@ -456,6 +457,17 @@ def test_run_logs_rejects_historical_bounds_with_follow():
     assert result.exit_code == 2
     assert "apply only when fetching logs without --follow" in result.stderr
     assert FakeDashboardClient.requests == []
+
+
+def test_run_trace_help_documents_flags_and_examples():
+    result = CliRunner().invoke(cli_module.entrypoint_cli, ["run", "trace", "--help"])
+
+    assert result.exit_code == 0
+    assert "Download agent traces for a run" in result.stdout
+    assert "RUN_ID" in result.stdout
+    for flag in ("--out", "--step", "--dry-run", "--yes", "--force", "--json"):
+        assert flag in result.stdout
+    assert "training-gym run trace brave-falcon-3fa8" in result.stdout
 
 
 def test_mark_killed_run_stopped_updates_running_record(monkeypatch):
