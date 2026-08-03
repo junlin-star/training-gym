@@ -27,7 +27,7 @@ def test_missing_patch_target_is_skipped(tmp_path, capsys):
     assert "not found, skipping rollout-status patch" in capsys.readouterr().out
 
 
-def test_patch_matches_golden(slime_inputs, tmp_path, request):
+def test_patch_matches_golden(slime_inputs, tmp_path, request, capsys):
     rewrite_goldens = request.config.getoption("--rewrite")
     for name, source in slime_inputs.items():
         golden_path = TESTDATA / f"{name}.output"
@@ -35,6 +35,7 @@ def test_patch_matches_golden(slime_inputs, tmp_path, request):
         work.write_text(source)
         patcher._patch_file(work)
         actual = work.read_text()
+        assert "WARNING: Could not patch" not in capsys.readouterr().out
 
         if rewrite_goldens:
             golden_path.write_text(actual)

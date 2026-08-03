@@ -7,17 +7,17 @@ Optional args:
 """
 
 import argparse
-import inspect
 import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-import modal_training_gym.common.models as models
 from modal_training_gym.common.dataset import (
     DatasetConfig,
     HuggingFaceDataset,
     MultimodalDataset,
 )
+from modal_training_gym.common.models.qwen3_asr_1_7b import Qwen3_ASR_1_7B
+from modal_training_gym.common.models.validation import VALIDATABLE_MODELS
 from modal_training_gym.common.run import TrainingRun, TrainingRunStatus
 from modal_training_gym.common.wandb import WandbConfig
 from modal_training_gym.model import ModelConfig
@@ -52,6 +52,18 @@ def _substep_label(name: str) -> str:
     }
 
     return _SUBSTEP_LABELS.get(name, name.replace("_", " "))
+
+
+def _total_step_time_s(result: "TutorialResult") -> float:
+    """Sum of per-step durations.
+
+    Reported instead of wall clock, which also covers queue, model download and
+    checkpoint conversion time — variable with compute availability rather than
+    gym performance.
+    """
+    return float(
+        sum(step.get("duration_s") or 0 for step in (result.step_times or {}).values())
+    )
 
 
 def _step_keys(result: "TutorialResult") -> list[str]:
@@ -92,6 +104,7 @@ class TutorialResult:
         print(f"Step count: {self.step_count}")
         print("Result:")
         print(f"Training run status: {self.training_run_status}")
+        print(f"Total step time (s): {_total_step_time_s(self)}")
         print(f"Total duration (s): {self.total_duration_s}")
 
         keys = _step_keys(self)
@@ -220,7 +233,7 @@ def pick_dataset(model_config: ModelConfig) -> DatasetConfig:
     Audio models (Qwen3-ASR) need speech clips, so they get LibriSpeech;
     everything else defaults to gsm8k.
     """
-    if isinstance(model_config, models.Qwen3_ASR_1_7B):
+    if isinstance(model_config, Qwen3_ASR_1_7B):
         return LibriSpeechASRDataset(n_rows=8)
     return Gsm8kDataset(n_rows=10)
 
@@ -232,44 +245,19 @@ def _model_config_registry() -> dict[str, type[ModelConfig]]:
     repo name ("qwen3-4b"), all lowercased.
     """
     registry: dict[str, type[ModelConfig]] = {}
-    for obj in vars(models).values():
-        if (
-            inspect.isclass(obj)
-            and issubclass(obj, ModelConfig)
-            and getattr(obj, "model_name", "")
-        ):
-            full = obj.model_name.lower()
-            registry[full] = obj
-            registry[full.rsplit("/", 1)[-1]] = obj
+    for name, model_config in VALIDATABLE_MODELS:
+        registry[name.lower()] = model_config
+        registry[model_config.model_name.lower()] = model_config
     return registry
-
-
-def _supports_slime(model_config: ModelConfig) -> bool:
-    """Whether a model has a base slime recipe, the only thing this script runs.
-
-    Derived by attempting ``SlimeRecipe.get_base_recipe`` rather than encoding
-    framework support on the model — the recipe registry is the source of truth.
-    """
-    try:
-        SlimeRecipe.get_base_recipe(model_config)
-    except Exception:
-        return False
-    return True
 
 
 def available_model_names() -> list[str]:
     """Sorted short model names (e.g. "qwen3-4b") validatable on slime.
 
-    Excludes models with no base slime recipe (e.g. Kimi on miles), since this
-    script only runs base training on slime.
+    The shared registry excludes models with no base slime recipe (e.g. Kimi on
+    miles), since this script only runs base training on slime.
     """
-    return sorted(
-        {
-            cls.model_name.rsplit("/", 1)[-1]
-            for cls in _model_config_registry().values()
-            if _supports_slime(cls())
-        }
-    )
+    return sorted(name for name, _ in VALIDATABLE_MODELS)
 
 
 def get_model_config_from_model_name(model_name: str) -> ModelConfig:
@@ -294,11 +282,6 @@ def run_base_training_on_slime(
     colocate: bool | None = None,
 ) -> TutorialResult:
     model_config = get_model_config_from_model_name(model_name)
-    if not _supports_slime(model_config):
-        raise ValueError(
-            f"model {model_config.model_name!r} has no base slime recipe; "
-            f"validatable models: {', '.join(available_model_names())}"
-        )
     dataset = pick_dataset(model_config)
     dataset_name = getattr(dataset, "hf_repo", type(dataset).__name__).rsplit("/", 1)[
         -1
@@ -405,12 +388,13 @@ def _format_duration_delta(
     if not baseline_path.is_file():
         return "—"
     baseline = TutorialResult.from_dict(json.loads(baseline_path.read_text()))
-    delta_s = result.total_duration_s - baseline.total_duration_s
-    if baseline.total_duration_s <= 0:
-        delta = f"{delta_s:+.1f}s"
-    else:
-        percent = delta_s / baseline.total_duration_s * 100
-        delta = f"{delta_s:+.1f}s ({percent:+.0f}%)"
+    delta = (
+        _format_secs_delta(
+            _total_step_time_s(result),
+            _total_step_time_s(baseline),
+        )
+        or "—"
+    )
     return f"{delta} from {_training_run_link(baseline.training_run_id, dashboard_url)}"
 
 
@@ -502,13 +486,14 @@ def _format_result_details(
                 baseline_step.get("duration_s"),
             )
         )
-    lines.append(
-        _row(
-            "Total duration",
-            result.total_duration_s,
-            baseline.total_duration_s if baseline else None,
+    if len(keys) > 1:
+        lines.append(
+            _row(
+                "Total step time",
+                _total_step_time_s(result),
+                _total_step_time_s(baseline) if baseline else None,
+            )
         )
-    )
     lines.extend(["", "</details>", ""])
     return lines
 
@@ -523,7 +508,7 @@ def summarize_results(
         status = _status_label(result)
         row = (
             f"| {result.base_model_name} | {status} "
-            f"| {result.total_duration_s:.1f}s | {result.step_count} "
+            f"| {_total_step_time_s(result):.1f}s | {result.step_count} "
             f"| {_training_run_link(result.training_run_id, dashboard_url)} |"
         )
         baseline_path = (
@@ -543,7 +528,7 @@ def summarize_results(
             )
         )
 
-    header = "| Model | Status | Duration | Steps | Run |"
+    header = "| Model | Status | Step time | Steps | Run |"
     divider = "| --- | --- | --- | --- | --- |"
     empty = "| _no results_ | | | | |"
     if baseline_dir is not None:

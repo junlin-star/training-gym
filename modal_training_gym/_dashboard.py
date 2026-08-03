@@ -9,14 +9,12 @@ from __future__ import annotations
 
 import ast
 import asyncio
-import math
 import os
 import re
 import secrets as _secrets
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Awaitable, Callable, Iterable, TypedDict
-from datetime import datetime, timezone
 
 import modal
 
@@ -38,12 +36,21 @@ from starlette.requests import Request
 # must resolve from this module's globals.
 from modal_training_gym.common.advantage_distribution import AdvantageDistribution
 from modal_training_gym.common.run import FrameworkStatusUpdate, TrainingRun
+from modal_training_gym.common.run_list import (
+    filter_run_summaries,
+    run_list_field_metadata,
+)
 from modal_training_gym.common.run_summary import (
     JsonDict,
     RunSummary,
+    build_run_summary,
     build_run_summaries,
 )
-from modal_training_gym.common.training_rollout import TrainingRolloutResult
+from modal_training_gym.common.time import parse_time as _parse_log_time
+from modal_training_gym.common.training_rollout import (
+    TrainingRolloutResult,
+    TrainingRolloutSummary,
+)
 
 SummaryLoader = Callable[[], Awaitable[list[JsonDict]]]
 
@@ -125,46 +132,6 @@ PASSWORD_EXEMPT_PATHS = frozenset(
 def _is_local() -> bool:
     """True when we're not running inside a Modal container."""
     return not os.environ.get("MODAL_IS_REMOTE")
-
-
-def _parse_log_time(value: str, now: float) -> float | None:
-    """Parse a log time bound into epoch seconds, or ``None`` if unset.
-
-    It accepts the following formats:
-
-      - empty string → ``None`` (caller supplies a default)
-      - a relative age like ``30m`` / ``2h`` / ``1d`` / ``45s`` → ``now`` minus
-        that duration (i.e. "N ago")
-      - epoch seconds, e.g. ``1720557600`` or ``1720557600.5``
-      - ISO 8601, e.g. ``2026-07-09T18:00:00Z`` (naive values are read as UTC)
-
-    Returns ``None`` for anything unparseable so the caller falls back to its
-    default rather than 400-ing on a slightly-off timestamp.
-    """
-    text = (value or "").strip()
-    if not text:
-        return None
-
-    relative = re.fullmatch(r"(\d+)\s*([smhd])", text)
-    if relative:
-        amount = int(relative.group(1))
-        unit_secs = {"s": 1, "m": 60, "h": 3600, "d": 86400}[relative.group(2)]
-        return now - amount * unit_secs
-
-    try:
-        parsed = float(text)
-        return parsed if math.isfinite(parsed) else None
-    except ValueError:
-        pass
-
-    iso = text[:-1] + "+00:00" if text.endswith("Z") else text
-    try:
-        parsed = datetime.fromisoformat(iso)
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed.timestamp()
 
 
 def _resolve_log_window(
@@ -746,14 +713,51 @@ def fastapi_app():
     # ── Training runs ────────────────────────────────────────────────────
 
     @web.get("/api/runs", response_model=list[RunSummary])
-    async def runs():
+    async def runs(
+        request: Request,
+        since: int | None = None,
+        limit: int | None = None,
+    ):
+        if limit is not None and limit < 1:
+            raise HTTPException(status_code=400, detail="Limit must be positive")
         try:
             data = await get_cached_list("runs", load_runs)
         except Exception:
             data = []
-        return [
+        summaries = [
             RunSummary.model_validate(item) for item in data if isinstance(item, dict)
         ]
+        filters = {
+            name: request.query_params.get(name, "")
+            for name, metadata in run_list_field_metadata().items()
+            if metadata.get("filterable")
+        }
+        filtered = filter_run_summaries(
+            summaries,
+            filters=filters,
+            since=since,
+            limit=limit,
+        )
+        return filtered
+
+    @web.get("/api/runs/{training_run_id}", response_model=RunSummary)
+    async def get_run(training_run_id: str):
+        try:
+            run = await TrainingRun.from_id(training_run_id, is_async=True)
+        except KeyError:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Training run {training_run_id!r} not found",
+            )
+        try:
+            result = await vol_get(
+                MetadataStore.TRAIN_RESULTS,
+                training_run_id,
+                is_async=True,
+            )
+        except KeyError:
+            result = None
+        return build_run_summary(run.model_dump(mode="json"), result)
 
     @web.post("/api/framework-status")
     async def framework_status(
@@ -795,12 +799,14 @@ def fastapi_app():
             {"status": "ok", "rollout_id": result.rollout_id, "mean": result.mean}
         )
 
-    @web.get("/api/runs/{training_run_id}/rollouts")
+    @web.get(
+        "/api/runs/{training_run_id}/rollouts",
+        response_model=list[TrainingRolloutSummary],
+    )
     async def list_run_rollouts(training_run_id: str):
-        summaries = await run_in_threadpool(
+        return await run_in_threadpool(
             TrainingRolloutResult.list_summaries_for_run, training_run_id
         )
-        return JSONResponse(summaries)
 
     @web.get("/api/runs/{training_run_id}/rollouts/{rollout_id}")
     async def get_run_rollout(training_run_id: str, rollout_id: int):
@@ -1058,9 +1064,23 @@ def fastapi_app():
             )
 
         now = time.time()
+        since_ts = _parse_log_time(since, now)
+        until_ts = _parse_log_time(until, now)
+        for value, parsed, name in (
+            (since, since_ts, "since"),
+            (until, until_ts, "until"),
+        ):
+            if value and parsed is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"{name} must be epoch seconds, ISO 8601, "
+                        "or a relative time such as 24h"
+                    ),
+                )
         since_ts, until_ts = _resolve_log_window(
-            _parse_log_time(since, now),
-            _parse_log_time(until, now),
+            since_ts,
+            until_ts,
             default_since=run.started_at or run.created_at or 0,
             default_until=run.ended_at or run.completed_at or 0,
             now=now,

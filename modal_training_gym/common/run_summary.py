@@ -8,6 +8,7 @@ from typing import Any, cast
 from urllib.parse import quote
 
 from pydantic import BaseModel, Field, ValidationError
+from pydantic.fields import FieldInfo
 
 from modal_training_gym.common.modal_urls import modal_app_dashboard_url
 
@@ -26,6 +27,66 @@ class FrameworkProgress(BaseModel):
     rollout_id: int | None = None
     step_id: int | None = None
     updated_at: int = 0
+
+
+_STAGE_LABELS = {
+    "initializing": "Initializing",
+    "download_model": "Downloading model",
+    "convert_model": "Converting model",
+    "prepare_dataset": "Preparing dataset",
+    "initialize_rollouts": "Initializing rollouts",
+    "generate_rollouts": "Generating rollouts",
+    "evaluate_rollouts": "Evaluating rollouts",
+    "compute_log_probs": "Computing log probs",
+    "optimizer_step": "Optimizer step",
+    "weight_sync": "Weight sync",
+    "offload_rollout": "Offload rollout",
+    "offload_train": "Offload train",
+    "checkpoint_save": "Saving checkpoint",
+    "training": "Training",
+}
+_QUEUEABLE_STAGES = {"download_model", "convert_model"}
+
+
+def _display_status(status: str, *, has_train_result: bool) -> str:
+    normalized = status.strip().lower()
+    if has_train_result or normalized == "completed":
+        return "completed"
+    if normalized in {"cancelled", "stopped", "failed"}:
+        return normalized
+    return "pending"
+
+
+def _display_stage(status: str, progress: FrameworkProgress | None) -> str:
+    normalized = status.strip().lower()
+    if not normalized:
+        return ""
+    label = _STAGE_LABELS.get(normalized, normalized.replace("_", " ").title())
+    if (
+        normalized in _QUEUEABLE_STAGES
+        and progress is not None
+        and progress.is_active is False
+    ):
+        return f"Queuing for GPU — {label}"
+    return label
+
+
+def _run_list_field(
+    title: str,
+    *,
+    default: object = ...,
+    filterable: bool = False,
+    timestamp: bool = False,
+) -> FieldInfo:
+    return Field(
+        default,
+        title=title,
+        json_schema_extra={
+            "list": True,
+            "filterable": filterable,
+            "timestamp": timestamp,
+        },
+    )
 
 
 class LatestRollout(BaseModel):
@@ -97,24 +158,41 @@ class GroupTags(BaseModel):
 
 class RunSummary(BaseModel):
     training_run_id: str
-    run_id: str
+    run_id: str = _run_list_field("Run")
     status: str = "running"
+    display_status: str = _run_list_field(
+        "Status",
+        default="",
+        filterable=True,
+    )
+    display_stage: str = _run_list_field(
+        "Stage",
+        default="",
+    )
     framework: str = ""
     framework_status: str = ""
     framework_progress: FrameworkProgress | None = None
     latest_rollout: LatestRollout | None = None
-    model: str = ""
-    dataset: str = ""
-    recipe: str = ""
-    group_id: str = ""
+    model: str = _run_list_field("Model", default="", filterable=True)
+    dataset: str = _run_list_field("Dataset", default="", filterable=True)
+    recipe: str = _run_list_field("Recipe", default="", filterable=True)
+    group_id: str = _run_list_field(
+        "Group",
+        default="",
+        filterable=True,
+    )
     group_tags: GroupTags | None = None
     modal_app_id: str = ""
     modal_app_url: str | None = None
     dataset_id: str = ""
     deployment_id: str = ""
-    created_at: int = 0
+    created_at: int = _run_list_field("Created", default=0, timestamp=True)
     started_at: int = 0
-    updated_at: int = 0
+    updated_at: int = _run_list_field(
+        "Last updated",
+        default=0,
+        timestamp=True,
+    )
     ended_at: int | None = None
     completed_at: int | None = None
     duration_seconds: int | None = None
@@ -466,13 +544,20 @@ def build_run_summary(
     )
     model = (result_summary.model_name if result_summary else "") or config_model
     framework = _text(run.get("framework")) or "(untagged)"
+    framework_status = _text(run.get("framework_status"))
+    framework_progress = _framework_progress(metadata)
     return RunSummary(
         training_run_id=training_run_id,
         run_id=training_run_id,
         status=status,
+        display_status=_display_status(
+            status,
+            has_train_result=result_summary is not None,
+        ),
+        display_stage=_display_stage(framework_status, framework_progress),
         framework=framework,
-        framework_status=_text(run.get("framework_status")),
-        framework_progress=_framework_progress(metadata),
+        framework_status=framework_status,
+        framework_progress=framework_progress,
         latest_rollout=_latest_rollout(metadata),
         model=model,
         dataset=config_dataset,

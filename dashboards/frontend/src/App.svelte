@@ -43,6 +43,7 @@
   let refreshing = $state(false);
   let runsRequestId = 0;
   let hasLoadedRuns = false;
+  let initialRunsLoadStarted = false;
   let evalsRequestId = 0;
   let deploymentsRequestId = 0;
   let hasLoadedEvals = $state(false);
@@ -98,12 +99,15 @@
     }
 
     window.addEventListener("popstate", syncPageWithPath);
-    void loadRuns();
 
     // Auto-refresh the active page's data every 5s so running training runs,
     // their status/stage and rollouts stay live. Current data stays on screen
-    // (no skeleton) and only the refresh button spins while fetching.
-    const refresh = window.setInterval(load, 5000);
+    // (no skeleton) and only the refresh button spins while fetching. A run
+    // detail page refreshes its own run, so skip the full list there.
+    const refresh = window.setInterval(() => {
+      if (activePage === "training" && activeTrainingRunId) return;
+      void load();
+    }, 5000);
 
     return () => {
       window.removeEventListener("popstate", syncPageWithPath);
@@ -112,7 +116,7 @@
   });
 
   function getRecipe(run) {
-    return run.framework || "(untagged)";
+    return run.recipe || run.framework || "(untagged)";
   }
 
   const NO_GROUP = "(no group)";
@@ -122,14 +126,7 @@
   }
 
   function getStatus(run) {
-    const rawStatus = safeText(run.status).toLowerCase();
-    if (run.train_result || rawStatus === "completed") return "Completed";
-    if (rawStatus === "cancelled") return "Cancelled";
-    if (rawStatus === "stopped") return "Stopped";
-    if (rawStatus === "failed") return "Failed";
-    if (rawStatus === "running") return "Pending";
-    if (rawStatus === "pending") return "Pending";
-    return rawStatus ? rawStatus[0].toUpperCase() + rawStatus.slice(1) : "Pending";
+    return safeText(run.display_status) || "pending";
   }
 
   function getTrainingRunStatus(run) {
@@ -354,6 +351,16 @@
   }
 
   $effect(() => {
+    if (
+      !activeTrainingRunId &&
+      !hasLoadedRuns &&
+      !initialRunsLoadStarted
+    ) {
+      initialRunsLoadStarted = true;
+      void loadRuns();
+    } else if (activeTrainingRunId && !hasLoadedRuns) {
+      loading = false;
+    }
     if (activePage === "evals" && !hasLoadedEvals) {
       void loadEvals();
     }
@@ -454,10 +461,10 @@
     }));
   });
 
-  let completedTotal = $derived(allRuns.filter((run) => run.train_result).length);
-  let cancelledTotal = $derived(allRuns.filter((run) => getStatus(run) === "Cancelled").length);
-  let stoppedTotal = $derived(allRuns.filter((run) => getStatus(run) === "Stopped").length);
-  let failedTotal = $derived(allRuns.filter((run) => getStatus(run) === "Failed").length);
+  let completedTotal = $derived(allRuns.filter((run) => getStatus(run) === "completed").length);
+  let cancelledTotal = $derived(allRuns.filter((run) => getStatus(run) === "cancelled").length);
+  let stoppedTotal = $derived(allRuns.filter((run) => getStatus(run) === "stopped").length);
+  let failedTotal = $derived(allRuns.filter((run) => getStatus(run) === "failed").length);
   let runningTotal = $derived(
     allRuns.length - completedTotal - cancelledTotal - stoppedTotal - failedTotal,
   );
@@ -720,8 +727,12 @@
   let evalFailedTotal = $derived(
     allEvals.filter((ev) => getEvalStatus(ev) === "Failed").length,
   );
+  let activeTrainingRun = $derived(
+    allRuns.find((run) => run.run_id === activeTrainingRunId) || null,
+  );
 
   let statusText = $derived.by(() => {
+    if (activePage === "training" && activeTrainingRunId) return "run details";
     if (activePage === "training" && loading) return "loading...";
     if (activePage === "evals" && loadingEvals) return "loading...";
     if (activePage === "deployments" && loadingDeployments) return "loading...";
@@ -877,7 +888,7 @@
     {#if activePage === "training" && activeTrainingRunId}
       <TrainingRunDetailPage
         runId={activeTrainingRunId}
-        {allRuns}
+        initialRun={activeTrainingRun}
         {modelName}
         {getStatus}
         {getFrameworkStatus}
@@ -909,7 +920,6 @@
         {error}
         {modelName}
         {getStatus}
-        {getFrameworkStatus}
         {showFrameworkStatus}
         {fmtDuration}
         bind:search

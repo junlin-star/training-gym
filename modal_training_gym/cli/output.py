@@ -8,7 +8,7 @@ import sys
 from collections.abc import Sequence
 from typing import Any
 
-from rich.console import Console
+from rich.console import Console, RenderableType
 from rich.panel import Panel
 from rich.table import Column, Table
 from rich.text import Text
@@ -43,18 +43,29 @@ def print_table(
     rows: Sequence[Sequence[object]],
     *,
     title: str = "",
+    show_header: bool = True,
 ) -> None:
+    safe_columns = [
+        Column(header=Text(column)) if isinstance(column, str) else column
+        for column in columns
+    ]
     table = Table(
-        *columns,
-        title=title or None,
+        *safe_columns,
+        title=Text(title) if title else None,
+        show_header=show_header,
     )
     for row in rows:
         cells = [
-            cell if cell is None or isinstance(cell, (str, Text)) else str(cell)
+            cell if cell is None or isinstance(cell, Text) else Text(str(cell))
             for cell in row
         ]
         table.add_row(*cells)
     _console().print(table)
+
+
+def print_renderable(renderable: RenderableType) -> None:
+    """Render a Rich object to stdout using the shared terminal settings."""
+    _console().print(renderable)
 
 
 def print_error(message: str) -> None:

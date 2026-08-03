@@ -9,7 +9,7 @@
   import RunSummary from "../components/RunSummary.svelte";
   import StatusPill from "../components/StatusPill.svelte";
   import TimeAgo from "../components/TimeAgo.svelte";
-  import { formatTagValue, getGroupTags, smoothedStageLabel } from "../lib/format.js";
+  import { formatTagValue, getGroupTags } from "../lib/format.js";
   import { toggleInSet } from "../lib/set.js";
 
   let {
@@ -35,7 +35,6 @@
     error,
     modelName,
     getStatus,
-    getFrameworkStatus,
     showFrameworkStatus,
     fmtDuration,
     search = $bindable(),
@@ -121,12 +120,6 @@
     };
   }
 
-  function frameworkStatusLabel(run) {
-    // Pass the raw `framework_progress` so smoothedStageLabel sees is_active
-    // even for stages that don't have step counters yet (download/convert).
-    return smoothedStageLabel(getFrameworkStatus(run), run?.framework_progress);
-  }
-
   function progressLabel(progress) {
     if (!progress) return "";
     const unit = String(progress.unit || "step");
@@ -150,7 +143,11 @@
   }
 
   $effect(() => {
-    if (drawerRunId && !allRuns.some((run) => run.run_id === drawerRunId)) {
+    if (
+      !loading &&
+      drawerRunId &&
+      !allRuns.some((run) => run.run_id === drawerRunId)
+    ) {
       onCloseDrawer();
     }
   });
@@ -244,7 +241,7 @@
               {#each runs as run, runIndex (`${run.run_id || "run"}-${run.created_at || 0}-${runIndex}`)}
                 {@const runName = run.run_id || "—"}
                 {@const status = getStatus(run)}
-                {@const stageLabel = frameworkStatusLabel(run)}
+                {@const stageLabel = run.display_stage}
                 {@const progress = frameworkProgress(run)}
                 {@const groupTags = getGroupTags(run)}
                 <tr class="run-row" class:row-selected={drawerRunId === run.run_id}>
@@ -305,8 +302,8 @@
                   </td>
                   <td class="group-cell row-open-cell" title={groupTags?.group_id || run.group_id || ""}>
                     <a href={trainingRunDetailPath(run.run_id)} class="cell-open-button" onclick={(event) => selectRun(run.run_id, event)}>
-                      {#if groupTags?.group_id}
-                        <span class="inline-block max-w-full whitespace-normal [overflow-wrap:anywhere] align-bottom p-[2px_8px] rounded-[999px] text-[0.72rem] [font-variant-numeric:tabular-nums] text-(--muted) [border:1px_solid_var(--border,#2f2f2f)] bg-[color-mix(in_srgb,var(--panel-alt)_70%,transparent)]">{groupTags.group_id}</span>
+                      {#if groupTags?.group_id || run.group_id}
+                        <span class="inline-block max-w-full whitespace-normal [overflow-wrap:anywhere] align-bottom p-[2px_8px] rounded-[999px] text-[0.72rem] [font-variant-numeric:tabular-nums] text-(--muted) [border:1px_solid_var(--border,#2f2f2f)] bg-[color-mix(in_srgb,var(--panel-alt)_70%,transparent)]">{groupTags?.group_id || run.group_id}</span>
                       {:else}
                         <span class="group-empty">—</span>
                       {/if}
@@ -333,7 +330,7 @@
                   </td>
                   <td class="whitespace-nowrap row-open-cell">
                     <a href={trainingRunDetailPath(run.run_id)} class="cell-open-button" onclick={(event) => selectRun(run.run_id, event)}>
-                      <TimeAgo timestamp={run.started_at || run.created_at} showJustNow falsyRepresentation="—" />
+                      <TimeAgo timestamp={run.created_at} showJustNow falsyRepresentation="—" />
                     </a>
                   </td>
                   <td class="whitespace-nowrap row-open-cell">
@@ -462,7 +459,6 @@
           run={selectedRun}
           {getStatus}
           {showFrameworkStatus}
-          {getFrameworkStatus}
           {modelName}
           {fmtDuration}
         />

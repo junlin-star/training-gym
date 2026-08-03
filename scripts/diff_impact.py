@@ -41,6 +41,7 @@ MODEL_VALIDATION_HARNESS_PATHS = frozenset(
     {
         REPO_ROOT / "scripts" / "validate_model_configs.py",
         REPO_ROOT / "scripts" / "diff_impact.py",
+        REPO_ROOT / "modal_training_gym" / "common" / "models" / "validation.py",
         REPO_ROOT / "modal_training_gym" / "frameworks" / "slime" / "launcher.py",
         REPO_ROOT / "modal_training_gym" / "common" / "train.py",
         REPO_ROOT / "modal_training_gym" / "common" / "train_result.py",
@@ -149,28 +150,16 @@ def _model_index() -> tuple[dict[str, frozenset[str]], frozenset[str]]:
     Only models with a base slime recipe are tracked — validation runs base
     training on slime, so models without one (e.g. Kimi on miles) are skipped.
     """
-    import inspect as _inspect
-
-    import modal_training_gym.common.models as _models
-    from modal_training_gym.common.models import ModelConfig
+    from modal_training_gym.common.models.validation import VALIDATABLE_MODELS
     from modal_training_gym.train_recipes.slime_recipe import SlimeRecipe
 
     class_to_models: dict[str, set[str]] = defaultdict(set)
     all_models: set[str] = set()
-    for obj in vars(_models).values():
-        if not (_inspect.isclass(obj) and issubclass(obj, ModelConfig)):
-            continue
-        model_name = getattr(obj, "model_name", "")
-        if not model_name:
-            continue
-        try:
-            recipe = SlimeRecipe.get_base_recipe(obj())
-        except Exception:
-            continue
-        short = model_name.rsplit("/", 1)[-1]
-        all_models.add(short)
-        class_to_models[obj.__name__].add(short)
-        class_to_models[type(recipe).__name__].add(short)
+    for model_name, model_config in VALIDATABLE_MODELS:
+        recipe = SlimeRecipe.get_base_recipe(model_config())
+        all_models.add(model_name)
+        class_to_models[model_config.__name__].add(model_name)
+        class_to_models[type(recipe).__name__].add(model_name)
 
     return (
         {name: frozenset(models) for name, models in class_to_models.items()},
