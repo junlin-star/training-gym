@@ -61,6 +61,25 @@ def test_uses_configured_url_and_encodes_query(monkeypatch, mock_transport):
     assert seen[0].extensions["timeout"]["read"] == DEFAULT_TIMEOUT_SECONDS
 
 
+def test_get_json_supports_per_request_timeout(mock_transport):
+    seen = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={"ok": True})
+
+    mock_transport(respond)
+    with DashboardClient() as client:
+        assert client.get_json("/api/items", timeout=120.0) == {"ok": True}
+
+    assert seen[0].extensions["timeout"] == {
+        "connect": 120.0,
+        "read": 120.0,
+        "write": 120.0,
+        "pool": 120.0,
+    }
+
+
 def test_sends_basic_auth_when_password_exists(monkeypatch, mock_transport):
     monkeypatch.setenv("TRAINING_GYM_DASHBOARD_PASSWORD", "secret")
     requests = []

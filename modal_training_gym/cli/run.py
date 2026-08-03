@@ -39,6 +39,7 @@ from .output import print_json, print_renderable, print_table
 DEFAULT_RUN_LIMIT = 50
 DEFAULT_LOG_TAIL = 100
 MAX_LOG_TAIL = 20_000
+TRACE_DOWNLOAD_TIMEOUT_SECONDS = 300.0
 CLI_FIELD_NAMES = {
     "display_status": "status",
     "display_stage": "stage",
@@ -318,7 +319,7 @@ def download_run_traces(
             estimated_size_text = "unknown size"
         else:
             estimated_size_text = format_filesize(estimated_size)
-        
+
         if dry_run:
             if json_output:
                 print_json(report)
@@ -350,7 +351,7 @@ def download_run_traces(
             for rollout_summary in selected_summaries:
                 rollout_id = rollout_summary.rollout_id
                 payload = client.get_json(
-                    f"/api/runs/{encoded_run_id}/rollouts/{rollout_id}",
+                    f"/api/runs/{encoded_run_id}/rollouts/{rollout_id}/export",
                     params=None,
                     not_found_error=CLIError(
                         f"Step {rollout_id} for run {run_id!r} was not found.",
@@ -359,6 +360,7 @@ def download_run_traces(
                         run_id=run_id,
                         step=rollout_id,
                     ),
+                    timeout=TRACE_DOWNLOAD_TIMEOUT_SECONDS,
                 )
                 try:
                     rollout = TrainingRolloutResult.model_validate(payload)
@@ -371,7 +373,7 @@ def download_run_traces(
                 file_name = f"step_{rollout_id:04d}.json"
                 data = (
                     json.dumps(
-                        rollout.model_dump(mode="json"),
+                        payload,
                         ensure_ascii=False,
                         indent=2,
                     )

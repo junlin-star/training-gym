@@ -19,6 +19,7 @@
     fetchRun,
     fetchRunRollouts,
     fetchRollout,
+    fetchRolloutExport,
     fetchRunAdvantages,
     fetchRunAdvantageStep,
     fetchRunLogs,
@@ -314,6 +315,7 @@
     return {
       sample: expandedRollout.samples[idx],
       pos: activeSamplePos,
+      index: idx,
       count: list.length,
     };
   });
@@ -331,49 +333,32 @@
     }
   }
 
-  function sampleToPayload(s) {
-    return {
-      score: s.score,
-      prompt: s.prompt || null,
-      response: s.response || null,
-      thinking: s.thinking || null,
-      raw_response: s.raw_response || null,
-      raw_prompt: s.raw_prompt || null,
-      trace: s.trace || null,
-      metadata: s.metadata || null,
-    };
-  }
-
-  function downloadSampleTrajectory() {
-    if (!activeSample) return;
-    const payload = sampleToPayload(activeSample.sample);
+  function downloadJson(payload, fileName) {
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    const rollout = expandedRolloutId ?? 0;
-    a.download = `trajectory_r${rollout}_s${activeSample.pos}.json`;
+    a.download = fileName;
     a.click();
     URL.revokeObjectURL(url);
   }
 
-  function downloadAllTrajectories() {
+  async function downloadSampleTrajectory() {
+    if (!activeSample) return;
+    const rollout = expandedRolloutId ?? 0;
+    const sampleIndex = activeSample.index;
+    const payload = await fetchRolloutExport(runId, rollout);
+    const sample = payload?.samples?.[sampleIndex];
+    if (!sample) return;
+    downloadJson(sample, `trajectory_r${rollout}_s${sampleIndex}.json`);
+  }
+
+  async function downloadAllTrajectories() {
     if (!expandedRollout?.samples?.length) return;
     const rollout = expandedRolloutId ?? 0;
-    const payload = {
-      training_run_id: runId,
-      rollout_id: rollout,
-      total: expandedRollout.samples.length,
-      mean: expandedRollout.samples.reduce((a, s) => a + (s.score || 0), 0) / expandedRollout.samples.length,
-      samples: expandedRollout.samples.map(sampleToPayload),
-    };
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `rollout_${runId}_r${rollout}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
+    const payload = await fetchRolloutExport(runId, rollout);
+    if (!payload) return;
+    downloadJson(payload, `rollout_${runId}_r${rollout}.json`);
   }
 
   async function loadRollouts(signal) {
