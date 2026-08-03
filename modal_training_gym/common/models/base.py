@@ -179,8 +179,9 @@ class ModelConfig:
     model_path: str | None = None
     architecture: ModelArchitecture | None = None
     response_parser: ResponseParser | None = None
-    # Catalog key for configs sharing one HF repo id (Gemma-4 text vs VL), so tooling
-    # that indexes by name keeps both. Unset when model_name is already unique.
+    # Catalog key for a config that shares one HF repo id with another (e.g. Gemma-4's
+    # vision mode vs text-only), so tooling that indexes by name keeps both. Unset when
+    # model_name is already unique.
     catalog_name: str | None = None
 
     def __init__(self, **kwargs: Any) -> None:

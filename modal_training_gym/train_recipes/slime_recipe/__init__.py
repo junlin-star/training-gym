@@ -2,9 +2,6 @@ from modal_training_gym.train_recipes.slime_recipe.recipe import SlimeRecipe
 from modal_training_gym.train_recipes.slime_recipe.gemma4_26b_a4b import (
     Gemma4_26B_A4B_Recipe,
 )
-from modal_training_gym.train_recipes.slime_recipe.gemma4_26b_a4b_vl import (
-    Gemma4_26B_A4B_VL_Recipe,
-)
 from modal_training_gym.train_recipes.slime_recipe.glm_4_7 import GLM_4_7_Recipe
 from modal_training_gym.train_recipes.slime_recipe.qwen3_0_6b import Qwen3_0_6b_Recipe
 from modal_training_gym.train_recipes.slime_recipe.qwen3_1_7b import Qwen3_1_7b_Recipe
@@ -24,7 +21,6 @@ from modal_training_gym.train_recipes.slime_recipe.qwen3_vl_8b import (
 __all__ = [
     "SlimeRecipe",
     "Gemma4_26B_A4B_Recipe",
-    "Gemma4_26B_A4B_VL_Recipe",
     "GLM_4_7_Recipe",
     "Qwen3_0_6b_Recipe",
     "Qwen3_1_7b_Recipe",

@@ -11,7 +11,6 @@ from .base import (
     parse_qwen3_response,
 )
 from .gemma4_26b_a4b import Gemma4_26B_A4B
-from .gemma4_26b_a4b_vl import Gemma4_26B_A4B_VL
 from .glm_4_7 import GLM_4_7
 from .qwen3_0_6b import Qwen3_0_6B
 from .qwen3_1_7b import Qwen3_1_7B
@@ -31,7 +30,6 @@ __all__ = [
     "ModelConfig",
     "ParsedResponse",
     "Gemma4_26B_A4B",
-    "Gemma4_26B_A4B_VL",
     "GLM_4_7",
     "Qwen3_0_6B",
     "Qwen3_1_7B",
