@@ -1064,9 +1064,23 @@ def fastapi_app():
             )
 
         now = time.time()
+        since_ts = _parse_log_time(since, now)
+        until_ts = _parse_log_time(until, now)
+        for value, parsed, name in (
+            (since, since_ts, "since"),
+            (until, until_ts, "until"),
+        ):
+            if value and parsed is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"{name} must be epoch seconds, ISO 8601, "
+                        "or a relative time such as 24h"
+                    ),
+                )
         since_ts, until_ts = _resolve_log_window(
-            _parse_log_time(since, now),
-            _parse_log_time(until, now),
+            since_ts,
+            until_ts,
             default_since=run.started_at or run.created_at or 0,
             default_until=run.ended_at or run.completed_at or 0,
             now=now,

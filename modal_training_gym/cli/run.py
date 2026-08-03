@@ -30,6 +30,8 @@ from .output import print_json, print_renderable, print_table
 
 
 DEFAULT_RUN_LIMIT = 50
+DEFAULT_LOG_TAIL = 100
+MAX_LOG_TAIL = 20_000
 CLI_FIELD_NAMES = {
     "display_status": "status",
     "display_stage": "stage",
@@ -399,6 +401,165 @@ def show_run_params(*, run_id: str, json_output: bool) -> None:
     )
 
 
+def _validate_log_payload(
+    payload: object,
+) -> tuple[list[dict[str, object]], bool, int | float | None]:
+    if not isinstance(payload, dict) or not isinstance(payload.get("logs"), list):
+        raise CLIError(
+            "Dashboard returned invalid log data.",
+            error="invalid_dashboard_response",
+            exit_code=ExitCode.BACKEND,
+        )
+
+    logs: list[dict[str, object]] = []
+    for entry in payload["logs"]:
+        if not isinstance(entry, dict) or not isinstance(entry.get("line"), str):
+            raise CLIError(
+                "Dashboard returned invalid log data.",
+                error="invalid_dashboard_response",
+                exit_code=ExitCode.BACKEND,
+            )
+        logs.append(entry)
+
+    has_more = payload.get("has_more", False)
+    next_until = payload.get("next_until")
+    if not isinstance(has_more, bool) or (
+        next_until is not None
+        and (not isinstance(next_until, (int, float)) or isinstance(next_until, bool))
+    ):
+        raise CLIError(
+            "Dashboard returned invalid log pagination data.",
+            error="invalid_dashboard_response",
+            exit_code=ExitCode.BACKEND,
+        )
+    return logs, has_more, next_until
+
+
+def _print_log_line(line: str) -> None:
+    click.echo(line, nl=not line.endswith("\n"))
+
+
+def _decode_stream_event(event: str, data: str) -> dict[str, object]:
+    try:
+        payload = json.loads(data)
+    except (TypeError, ValueError) as exc:
+        raise CLIError(
+            "Dashboard returned malformed log stream data.",
+            error="invalid_dashboard_response",
+            exit_code=ExitCode.BACKEND,
+        ) from exc
+    if not isinstance(payload, dict):
+        raise CLIError(
+            "Dashboard returned invalid log stream data.",
+            error="invalid_dashboard_response",
+            exit_code=ExitCode.BACKEND,
+        )
+    if event != "message":
+        payload = {"event": event, **payload}
+    return payload
+
+
+def show_run_logs(
+    *,
+    run_id: str,
+    follow: bool,
+    since: str | None,
+    until: str | None,
+    tail: int | None,
+    search: str | None,
+    json_output: bool,
+) -> None:
+    """Show historical logs or follow the live dashboard log stream."""
+    if follow and (since or until or tail is not None):
+        raise click.UsageError(
+            "--since, --until, and --tail apply only when fetching logs "
+            "without --follow."
+        )
+
+    encoded_run_id = quote(run_id, safe="")
+    not_found_error = CLIError(
+        f"Training run {run_id!r} was not found.",
+        error="run_not_found",
+        exit_code=ExitCode.NOT_FOUND,
+        run_id=run_id,
+        hint="training-gym run list",
+    )
+
+    with DashboardClient() as client:
+        if not follow:
+            payload = client.get_json(
+                f"/api/runs/{encoded_run_id}/logs",
+                params={
+                    "since": since,
+                    "until": until,
+                    "max_lines": tail or DEFAULT_LOG_TAIL,
+                    "search": search,
+                },
+                not_found_error=not_found_error,
+            )
+            logs, has_more, next_until = _validate_log_payload(payload)
+            if has_more:
+                message = (
+                    f"[showing the newest {len(logs)} logs; older logs are available"
+                )
+                if next_until is not None:
+                    message += f" with --until {next_until}"
+                click.echo(f"{message}]", err=True)
+            if json_output:
+                print_json(
+                    {
+                        "logs": logs,
+                        "has_more": has_more,
+                        "next_until": next_until,
+                    }
+                )
+                return
+            for entry in logs:
+                _print_log_line(str(entry["line"]))
+            return
+
+        for event, data in client.iter_event_stream(
+            f"/api/runs/{encoded_run_id}/logs/stream",
+            params={"search": search},
+            not_found_error=not_found_error,
+        ):
+            decoded = _decode_stream_event(event, data)
+            if event == "done":
+                return
+            if event == "error":
+                raise CLIError(
+                    str(decoded.get("error") or "Dashboard log stream failed."),
+                    error="log_stream_failed",
+                    exit_code=ExitCode.BACKEND,
+                    run_id=run_id,
+                )
+            if json_output:
+                click.echo(json.dumps(decoded, ensure_ascii=False))
+            elif event == "message":
+                line = decoded.get("line")
+                if not isinstance(line, str):
+                    raise CLIError(
+                        "Dashboard returned invalid log stream data.",
+                        error="invalid_dashboard_response",
+                        exit_code=ExitCode.BACKEND,
+                    )
+                _print_log_line(line)
+            elif event == "dropped":
+                click.echo(
+                    f"[dropped {decoded.get('dropped', 0)} log lines]",
+                    err=True,
+                )
+            elif event == "reconnect":
+                click.echo("[reconnecting log stream]", err=True)
+        raise CLIError(
+            "Dashboard log stream ended unexpectedly.",
+            error="log_stream_disconnected",
+            exit_code=ExitCode.BACKEND,
+            run_id=run_id,
+            hint="Re-run the command to reconnect.",
+        )
+
+
 def list_runs(
     *,
     since: str | None,
@@ -490,6 +651,79 @@ def get_command(*, run_id: str, verbose: bool, json_output: bool) -> None:
 def params_command(*, run_id: str, json_output: bool) -> None:
     """Show the framework training recipe for a single run."""
     show_run_params(run_id=run_id, json_output=json_output)
+
+
+@run_group.command(
+    "logs",
+    help=(
+        "Show logs for a training run.\n\n"
+        f"By default, shows the latest {DEFAULT_LOG_TAIL} logs. "
+        "Use --follow to stream new logs."
+    ),
+    epilog=(
+        "Examples:\n"
+        "  training-gym run logs brave-falcon-3fa8 --follow\n"
+        "  training-gym run logs brave-falcon-3fa8 --since 30m -j"
+    ),
+)
+@click.argument("run_id")
+@click.option(
+    "-f",
+    "--follow",
+    is_flag=True,
+    default=False,
+    help="Keep streaming new logs until interrupted or the run stops.",
+)
+@click.option(
+    "--since",
+    default=None,
+    metavar="START",
+    help="Show logs since a timestamp or relative time (e.g. 30m, 2h).",
+)
+@click.option(
+    "--until",
+    default=None,
+    metavar="END",
+    help="Show logs up to a timestamp or relative time (e.g. 30m, 2h).",
+)
+@click.option(
+    "-n",
+    "--tail",
+    type=click.IntRange(min=1, max=MAX_LOG_TAIL),
+    default=None,
+    metavar="N",
+    help=(
+        f"Show at most the newest N logs within the requested window "
+        f"(default: {DEFAULT_LOG_TAIL}; max: {MAX_LOG_TAIL})."
+    ),
+)
+@click.option(
+    "--search",
+    default=None,
+    metavar="TEXT",
+    help="Filter by search text.",
+)
+@json_option
+def logs_command(
+    *,
+    run_id: str,
+    follow: bool,
+    since: str | None,
+    until: str | None,
+    tail: int | None,
+    search: str | None,
+    json_output: bool,
+) -> None:
+    """Show logs for a training run."""
+    show_run_logs(
+        run_id=run_id,
+        follow=follow,
+        since=since,
+        until=until,
+        tail=tail,
+        search=search,
+        json_output=json_output,
+    )
 
 
 @run_group.command(
