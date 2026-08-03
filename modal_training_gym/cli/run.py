@@ -16,6 +16,7 @@ import click
 from pydantic import ValidationError
 from rich.columns import Columns
 from rich.console import Group
+from rich.filesize import decimal as format_filesize
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
@@ -202,18 +203,6 @@ def _parse_steps(value: str | None) -> set[int] | None:
     return steps
 
 
-def _format_bytes(size_bytes: int | None) -> str:
-    if size_bytes is None:
-        return "unknown size"
-    units = ("B", "KiB", "MiB", "GiB", "TiB")
-    value = float(size_bytes)
-    for unit in units:
-        if value < 1024 or unit == units[-1]:
-            return f"{int(value)} {unit}" if unit == "B" else f"{value:.1f} {unit}"
-        value /= 1024
-    return f"{size_bytes} B"
-
-
 def _trace_output_path(out: str, run_id: str) -> Path:
     if not run_id or run_id in {".", ".."} or Path(run_id).name != run_id:
         raise click.BadParameter(
@@ -320,13 +309,18 @@ def download_run_traces(
         estimated_size_bytes = (
             estimated_size if isinstance(estimated_size, int) else None
         )
+        estimated_size_text = (
+            format_filesize(estimated_size_bytes)
+            if estimated_size_bytes is not None
+            else "unknown size"
+        )
         if dry_run:
             if json_output:
                 print_json(report)
             else:
                 click.echo(
                     f"{report['step_count']} steps, {report['sample_count']} samples, "
-                    f"approximately {_format_bytes(estimated_size_bytes)}"
+                    f"approximately {estimated_size_text}"
                 )
             return
 
@@ -334,7 +328,7 @@ def download_run_traces(
             confirm_or_require_yes(
                 f"Download {report['step_count']} steps "
                 f"({report['sample_count']} samples, "
-                f"approximately {_format_bytes(estimated_size_bytes)}) "
+                f"approximately {estimated_size_text}) "
                 f"to {output_path}?"
             )
 
@@ -427,7 +421,7 @@ def download_run_traces(
     else:
         click.echo(
             f"Downloaded {report['step_count']} steps, "
-            f"{report['sample_count']} samples ({_format_bytes(downloaded_size)})"
+            f"{report['sample_count']} samples ({format_filesize(downloaded_size)})"
         )
         click.echo(str(output_path))
 
