@@ -158,8 +158,14 @@ export async function fetchRolloutExport(trainingRunId, rolloutId) {
   const res = await fetch(
     `${SERVER}/runs/${encodeURIComponent(trainingRunId)}/rollouts/${encodeURIComponent(rolloutId)}/export`,
   );
-  if (!res.ok) return null;
-  return await res.json();
+  if (!res.ok) {
+    throw new Error(`Rollout download failed (HTTP ${res.status})`);
+  }
+  try {
+    return await res.json();
+  } catch {
+    throw new Error("Rollout download returned invalid JSON");
+  }
 }
 
 // Historical Modal logs for a run, served from the durable storage.
