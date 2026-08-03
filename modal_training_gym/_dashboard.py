@@ -819,7 +819,7 @@ def fastapi_app():
             raise HTTPException(
                 status_code=404,
                 detail=f"Rollout {rollout_id} for run {training_run_id!r} not found",
-            ) from None
+            )
 
         if isinstance(data, dict):
             _apply_parsed(data.get("samples"))
