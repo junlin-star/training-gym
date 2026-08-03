@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 
+import click
 import pytest
 from click.testing import CliRunner
 
@@ -62,6 +63,39 @@ def _summary(**overrides):
     }
     value.update(overrides)
     return value
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (None, None),
+        ("1,4,9", {1, 4, 9}),
+        ("4-10", {4, 5, 6, 7, 8, 9}),
+        ("4-10:2", {4, 6, 8}),
+        ("1,4-10:2,9", {1, 4, 6, 8, 9}),
+        (" 1, 4-10:2 ", {1, 4, 6, 8}),
+    ],
+)
+def test_parse_steps(value, expected):
+    assert run_module._parse_steps(value) == expected
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "",
+        "1,",
+        "-1",
+        "4-4",
+        "10-4",
+        "4-10:0",
+        "4-10:-1",
+        "not-a-step",
+    ],
+)
+def test_parse_steps_rejects_invalid_values(value):
+    with pytest.raises(click.BadParameter):
+        run_module._parse_steps(value)
 
 
 def test_run_list_help_derives_filter_flags_from_schema():
@@ -428,7 +462,7 @@ def test_run_trace_help_documents_flags_and_examples():
     assert "RUN_ID" in result.stdout
     for flag in ("--out", "--step", "--dry-run", "--yes", "--force", "--json"):
         assert flag in result.stdout
-    assert "training-gym run trace run_8f2a" in result.stdout
+    assert "training-gym run trace brave-falcon-3fa8" in result.stdout
 
 
 def test_run_trace_dry_run_filters_steps_without_downloading(tmp_path):
