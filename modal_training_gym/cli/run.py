@@ -577,8 +577,7 @@ def kill_runs(
         _print_kill_report(runs)
         if killable:
             click.echo(
-                f"Terminated {len(killable)} "
-                f"{'run' if len(killable) == 1 else 'runs'}."
+                f"Terminated {len(killable)} {'run' if len(killable) == 1 else 'runs'}."
             )
         else:
             click.echo("No active runs to terminate.")
