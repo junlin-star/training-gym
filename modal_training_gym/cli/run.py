@@ -242,6 +242,7 @@ def _trace_summary_payload(
         "steps": [
             {
                 "step": rollout.rollout_id,
+                "file_name": f"step_{rollout.rollout_id:04d}.json",
                 "samples": rollout.total,
                 "mean_reward": rollout.mean,
                 "size_bytes": rollout.size_bytes,
@@ -280,40 +281,44 @@ def download_run_traces(
                 not_found_error=not_found_error,
             )
         )
-        available = _validate_rollouts(
+        rollout_summaries = _validate_rollouts(
             client.get_json(
                 f"/api/runs/{encoded_run_id}/rollouts",
                 params=None,
             )
         )
-        available_by_step = {rollout.rollout_id: rollout for rollout in available}
+        summaries_by_step = {
+            rollout.rollout_id: rollout for rollout in rollout_summaries
+        }
         if selected_steps is None:
-            rollouts = sorted(available, key=lambda rollout: rollout.rollout_id)
+            selected_summaries = sorted(
+                rollout_summaries,
+                key=lambda rollout: rollout.rollout_id,
+            )
         else:
-            missing = sorted(selected_steps - available_by_step.keys())
+            missing = sorted(selected_steps - summaries_by_step.keys())
             if missing:
                 missing_text = ", ".join(str(value) for value in missing)
                 raise click.BadParameter(
                     f"Step(s) not found for run {run_id!r}: {missing_text}.",
                     param_hint="--step",
                 )
-            rollouts = [available_by_step[value] for value in sorted(selected_steps)]
+            selected_summaries = [
+                summaries_by_step[value] for value in sorted(selected_steps)
+            ]
 
         report = _trace_summary_payload(
             run_id=run_id,
             output_path=output_path,
-            rollouts=rollouts,
+            rollouts=selected_summaries,
             dry_run=dry_run,
         )
         estimated_size = report["size_bytes"]
-        estimated_size_bytes = (
-            estimated_size if isinstance(estimated_size, int) else None
-        )
-        estimated_size_text = (
-            format_filesize(estimated_size_bytes)
-            if estimated_size_bytes is not None
-            else "unknown size"
-        )
+        if not isinstance(estimated_size, int):
+            estimated_size_text = "unknown size"
+        else:
+            estimated_size_text = format_filesize(estimated_size)
+        
         if dry_run:
             if json_output:
                 print_json(report)
@@ -339,10 +344,10 @@ def download_run_traces(
                 dir=output_path.parent,
             )
         )
-        manifest_steps: list[dict[str, object]] = []
+        downloaded_steps: list[dict[str, object]] = []
         downloaded_size = 0
         try:
-            for rollout_summary in rollouts:
+            for rollout_summary in selected_summaries:
                 rollout_id = rollout_summary.rollout_id
                 payload = client.get_json(
                     f"/api/runs/{encoded_run_id}/rollouts/{rollout_id}",
@@ -363,15 +368,6 @@ def download_run_traces(
                         error="invalid_dashboard_response",
                         exit_code=ExitCode.BACKEND,
                     ) from exc
-                if (
-                    rollout.training_run_id != run_id
-                    or rollout.rollout_id != rollout_id
-                ):
-                    raise CLIError(
-                        "Dashboard returned rollout data for the wrong run or step.",
-                        error="invalid_dashboard_response",
-                        exit_code=ExitCode.BACKEND,
-                    )
                 file_name = f"step_{rollout_id:04d}.json"
                 data = (
                     json.dumps(
@@ -383,16 +379,17 @@ def download_run_traces(
                 ).encode()
                 (staging_path / file_name).write_bytes(data)
                 downloaded_size += len(data)
-                manifest_steps.append(
+                downloaded_steps.append(
                     {
                         "step": rollout_id,
                         "file_name": file_name,
                         "samples": rollout.total,
                         "mean_reward": rollout.mean,
+                        "size_bytes": len(data),
                     }
                 )
 
-            manifest = {"run_id": run_id, "steps": manifest_steps}
+            manifest = {"run_id": run_id, "steps": downloaded_steps}
             (staging_path / "manifest.json").write_text(
                 json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
                 encoding="utf-8",
@@ -415,7 +412,7 @@ def download_run_traces(
             shutil.rmtree(staging_path, ignore_errors=True)
 
     report["size_bytes"] = downloaded_size
-    report["steps"] = manifest_steps
+    report["steps"] = downloaded_steps
     if json_output:
         print_json(report)
     else:

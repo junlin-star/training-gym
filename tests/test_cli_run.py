@@ -503,6 +503,13 @@ def test_run_trace_dry_run_filters_steps_without_downloading(tmp_path):
     assert payload["sample_count"] == 16
     assert payload["size_bytes"] == 2002
     assert [step["step"] for step in payload["steps"]] == [0, 2]
+    assert set(payload["steps"][0]) == {
+        "step",
+        "file_name",
+        "samples",
+        "mean_reward",
+        "size_bytes",
+    }
     assert payload["output_path"] == str(tmp_path / "run-1")
     assert FakeDashboardClient.requests == [
         ("/api/runs/run-1", None),
@@ -576,12 +583,14 @@ def test_run_trace_downloads_steps_and_writes_manifest(tmp_path):
                 "file_name": "step_0000.json",
                 "samples": 1,
                 "mean_reward": 0.25,
+                "size_bytes": (output_path / "step_0000.json").stat().st_size,
             },
             {
                 "step": 2,
                 "file_name": "step_0002.json",
                 "samples": 1,
                 "mean_reward": 0.75,
+                "size_bytes": (output_path / "step_0002.json").stat().st_size,
             },
         ],
     }
@@ -596,6 +605,13 @@ def test_run_trace_downloads_steps_and_writes_manifest(tmp_path):
     assert payload["output_path"] == str(output_path)
     assert payload["dry_run"] is False
     assert payload["size_bytes"] > 0
+    assert set(payload["steps"][0]) == {
+        "step",
+        "file_name",
+        "samples",
+        "mean_reward",
+        "size_bytes",
+    }
 
 
 def test_run_trace_rejects_missing_and_invalid_steps(tmp_path):
