@@ -9,6 +9,7 @@ phase-reporter; reads happen via the dashboard's
 
 from __future__ import annotations
 
+import json
 import time
 from collections.abc import Awaitable
 from typing import Any
@@ -78,6 +79,7 @@ class TrainingRolloutSummary(BaseModel):
     created_at: int
     total: int
     mean: float
+    size_bytes: int | None = None
     rollout_time: float | None = None
     error_summary: dict[str, Any] | None = None
     tag_stats: dict[str, dict[str, Any]] | None = None
@@ -193,18 +195,24 @@ class TrainingRolloutResult(BaseModel):
             int(item.get("rollout_id", 0) or 0),
         )
 
-    def _summary_item(self) -> dict[str, Any]:
+    def _summary_item(self, *, size_bytes: int) -> dict[str, Any]:
         # summary_key keeps (run_id, rollout_id) uniqueness across runs.
-        return {**self.to_summary(), "summary_key": self.storage_key}
+        return {
+            **self.to_summary(),
+            "size_bytes": size_bytes,
+            "summary_key": self.storage_key,
+        }
 
     def save(self, *, is_async: bool = False) -> None | Awaitable[None]:
         self._touch_created_at()
+        payload = self.model_dump(mode="json")
+        size_bytes = len(json.dumps(payload).encode())
         return vol_put_with_summary(
             MetadataStore.TRAINING_ROLLOUTS,
             self.storage_key,
-            self.model_dump(mode="json"),
+            payload,
             summary_store=MetadataStore.TRAINING_ROLLOUTS_SUMMARY,
-            summary_item=self._summary_item(),
+            summary_item=self._summary_item(size_bytes=size_bytes),
             item_id_key="summary_key",
             sort_key=self._summary_sort_key,
             reverse=False,

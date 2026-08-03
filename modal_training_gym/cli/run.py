@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import json
+import shutil
+import tempfile
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
@@ -20,12 +23,15 @@ from rich.text import Text
 from modal_training_gym.common.run_list import run_list_field_metadata
 from modal_training_gym.common.run_summary import RunSummary
 from modal_training_gym.common.time import parse_time
-from modal_training_gym.common.training_rollout import TrainingRolloutSummary
+from modal_training_gym.common.training_rollout import (
+    TrainingRolloutResult,
+    TrainingRolloutSummary,
+)
 
 from .client import DashboardClient
 from .commands import _TrainingGymGroup
 from .errors import CLIError, ExitCode
-from .options import json_option
+from .options import confirm_or_require_yes, json_option, yes_option
 from .output import print_json, print_renderable, print_table
 
 
@@ -158,6 +164,272 @@ def _validate_rollouts(payload: object) -> list[TrainingRolloutSummary]:
             error="invalid_dashboard_response",
             exit_code=ExitCode.BACKEND,
         ) from exc
+
+
+def _parse_steps(value: str | None) -> set[int] | None:
+    """Parse steps and Python-style ``start-end[:stride]`` ranges."""
+    if value is None:
+        return None
+
+    steps: set[int] = set()
+    try:
+        for raw_part in value.split(","):
+            part = raw_part.strip()
+            if not part:
+                raise ValueError
+            if "-" not in part:
+                step = int(part)
+                if step < 0:
+                    raise ValueError
+                steps.add(step)
+                continue
+
+            bounds, separator, stride_text = part.partition(":")
+            start_text, dash, end_text = bounds.partition("-")
+            if not dash or not start_text or not end_text:
+                raise ValueError
+            start, end = int(start_text), int(end_text)
+            stride = int(stride_text) if separator else 1
+            if start < 0 or end <= start or stride < 1:
+                raise ValueError
+            steps.update(range(start, end, stride))
+    except ValueError as exc:
+        raise click.BadParameter(
+            "Must be a comma-separated list of non-negative steps or "
+            "start-inclusive, end-exclusive ranges such as 4-100:2.",
+            param_hint="--step",
+        ) from exc
+    return steps
+
+
+def _format_bytes(size_bytes: int | None) -> str:
+    if size_bytes is None:
+        return "unknown size"
+    units = ("B", "KiB", "MiB", "GiB", "TiB")
+    value = float(size_bytes)
+    for unit in units:
+        if value < 1024 or unit == units[-1]:
+            return f"{int(value)} {unit}" if unit == "B" else f"{value:.1f} {unit}"
+        value /= 1024
+    return f"{size_bytes} B"
+
+
+def _trace_output_path(out: str, run_id: str) -> Path:
+    if not run_id or run_id in {".", ".."} or Path(run_id).name != run_id:
+        raise click.BadParameter(
+            "Must be a single safe path component.",
+            param_hint="RUN_ID",
+        )
+    output_root = Path(out).expanduser().resolve()
+    target = output_root / run_id
+    if target.is_symlink():
+        raise CLIError(
+            f"Trace output path {str(target)!r} is a symbolic link.",
+            error="unsafe_output_path",
+        )
+    return target
+
+
+def _trace_summary_payload(
+    *,
+    run_id: str,
+    output_path: Path,
+    rollouts: list[TrainingRolloutSummary],
+    dry_run: bool,
+) -> dict[str, object]:
+    known_sizes = [rollout.size_bytes for rollout in rollouts]
+    total_size = (
+        sum(size for size in known_sizes if size is not None)
+        if all(size is not None for size in known_sizes)
+        else None
+    )
+    return {
+        "run_id": run_id,
+        "output_path": str(output_path),
+        "dry_run": dry_run,
+        "step_count": len(rollouts),
+        "sample_count": sum(rollout.total for rollout in rollouts),
+        "size_bytes": total_size,
+        "steps": [
+            {
+                "step": rollout.rollout_id,
+                "samples": rollout.total,
+                "mean_reward": rollout.mean,
+                "size_bytes": rollout.size_bytes,
+            }
+            for rollout in rollouts
+        ],
+    }
+
+
+def download_run_traces(
+    *,
+    run_id: str,
+    out: str,
+    step: str | None,
+    dry_run: bool,
+    yes: bool,
+    json_output: bool,
+) -> None:
+    """Download selected rollout payloads and write a local trace manifest."""
+    selected_steps = _parse_steps(step)
+    output_path = _trace_output_path(out, run_id)
+    encoded_run_id = quote(run_id, safe="")
+    not_found_error = CLIError(
+        f"Training run {run_id!r} was not found.",
+        error="run_not_found",
+        exit_code=ExitCode.NOT_FOUND,
+        run_id=run_id,
+        hint="training-gym run list",
+    )
+
+    with DashboardClient() as client:
+        _validate_run_summary(
+            client.get_json(
+                f"/api/runs/{encoded_run_id}",
+                params=None,
+                not_found_error=not_found_error,
+            )
+        )
+        available = _validate_rollouts(
+            client.get_json(
+                f"/api/runs/{encoded_run_id}/rollouts",
+                params=None,
+            )
+        )
+        available_by_step = {rollout.rollout_id: rollout for rollout in available}
+        if selected_steps is None:
+            rollouts = sorted(available, key=lambda rollout: rollout.rollout_id)
+        else:
+            missing = sorted(selected_steps - available_by_step.keys())
+            if missing:
+                missing_text = ", ".join(str(value) for value in missing)
+                raise click.BadParameter(
+                    f"Step(s) not found for run {run_id!r}: {missing_text}.",
+                    param_hint="--step",
+                )
+            rollouts = [available_by_step[value] for value in sorted(selected_steps)]
+
+        report = _trace_summary_payload(
+            run_id=run_id,
+            output_path=output_path,
+            rollouts=rollouts,
+            dry_run=dry_run,
+        )
+        estimated_size = report["size_bytes"]
+        estimated_size_bytes = (
+            estimated_size if isinstance(estimated_size, int) else None
+        )
+        if dry_run:
+            if json_output:
+                print_json(report)
+            else:
+                click.echo(
+                    f"{report['step_count']} steps, {report['sample_count']} samples, "
+                    f"approximately {_format_bytes(estimated_size_bytes)}"
+                )
+            return
+
+        if not yes:
+            confirm_or_require_yes(
+                f"Download {report['step_count']} steps "
+                f"({report['sample_count']} samples, "
+                f"approximately {_format_bytes(estimated_size_bytes)}) "
+                f"to {output_path}?"
+            )
+
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        staging_path = Path(
+            tempfile.mkdtemp(
+                prefix=f".{run_id}-",
+                dir=output_path.parent,
+            )
+        )
+        manifest_steps: list[dict[str, object]] = []
+        downloaded_size = 0
+        try:
+            for rollout_summary in rollouts:
+                rollout_id = rollout_summary.rollout_id
+                payload = client.get_json(
+                    f"/api/runs/{encoded_run_id}/rollouts/{rollout_id}",
+                    params=None,
+                    not_found_error=CLIError(
+                        f"Step {rollout_id} for run {run_id!r} was not found.",
+                        error="rollout_not_found",
+                        exit_code=ExitCode.NOT_FOUND,
+                        run_id=run_id,
+                        step=rollout_id,
+                    ),
+                )
+                try:
+                    rollout = TrainingRolloutResult.model_validate(payload)
+                except ValidationError as exc:
+                    raise CLIError(
+                        "Dashboard returned invalid rollout data.",
+                        error="invalid_dashboard_response",
+                        exit_code=ExitCode.BACKEND,
+                    ) from exc
+                if (
+                    rollout.training_run_id != run_id
+                    or rollout.rollout_id != rollout_id
+                ):
+                    raise CLIError(
+                        "Dashboard returned rollout data for the wrong run or step.",
+                        error="invalid_dashboard_response",
+                        exit_code=ExitCode.BACKEND,
+                    )
+                file_name = f"step_{rollout_id:04d}.json"
+                data = (
+                    json.dumps(
+                        rollout.model_dump(mode="json"),
+                        ensure_ascii=False,
+                        indent=2,
+                    )
+                    + "\n"
+                ).encode()
+                (staging_path / file_name).write_bytes(data)
+                downloaded_size += len(data)
+                manifest_steps.append(
+                    {
+                        "step": rollout_id,
+                        "file_name": file_name,
+                        "samples": rollout.total,
+                        "mean_reward": rollout.mean,
+                    }
+                )
+
+            manifest = {"run_id": run_id, "steps": manifest_steps}
+            (staging_path / "manifest.json").write_text(
+                json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+
+            output_path.mkdir(parents=True, exist_ok=True)
+            for old_path in output_path.glob("step_*.json"):
+                old_path.unlink()
+            manifest_path = output_path / "manifest.json"
+            if manifest_path.exists():
+                manifest_path.unlink()
+            for staged_file in staging_path.iterdir():
+                staged_file.replace(output_path / staged_file.name)
+        except OSError as exc:
+            raise CLIError(
+                f"Could not write trace files to {str(output_path)!r}.",
+                error="trace_write_failed",
+            ) from exc
+        finally:
+            shutil.rmtree(staging_path, ignore_errors=True)
+
+    report["size_bytes"] = downloaded_size
+    report["steps"] = manifest_steps
+    if json_output:
+        print_json(report)
+    else:
+        click.echo(
+            f"Downloaded {report['step_count']} steps, "
+            f"{report['sample_count']} samples ({_format_bytes(downloaded_size)})"
+        )
+        click.echo(str(output_path))
 
 
 def _format_step(summary: RunSummary) -> str:
@@ -722,6 +994,64 @@ def logs_command(
         until=until,
         tail=tail,
         search=search,
+        json_output=json_output,
+    )
+
+
+@run_group.command(
+    "trace",
+    help=(
+        "Download agent traces for a run to a local directory and print the "
+        "path along with metadata about the number of samples and size of files."
+    ),
+    epilog=(
+        "Examples:\n"
+        "  training-gym run trace brave-falcon-3fa8 --out ./traces --step 4-100:2\n"
+        "  training-gym run trace brave-falcon-3fa8 --out ./traces "
+        "--step 1,4,9 --dry-run\n"
+        "  training-gym run trace brave-falcon-3fa8 --out ./traces --yes"
+    ),
+)
+@click.argument("run_id")
+@click.option(
+    "--out",
+    required=True,
+    metavar="DIR",
+    help="Output directory.",
+)
+@click.option(
+    "--step",
+    default=None,
+    metavar="STEP",
+    help=(
+        "Select steps by list or range, such as 1,4,9 or 4-100:2. "
+        "The range end is excluded. Defaults to all steps."
+    ),
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    default=False,
+    help="Report step/sample count and approximate size without downloading.",
+)
+@yes_option
+@json_option
+def trace_command(
+    *,
+    run_id: str,
+    out: str,
+    step: str | None,
+    dry_run: bool,
+    yes: bool,
+    json_output: bool,
+) -> None:
+    """Download agent traces for a run."""
+    download_run_traces(
+        run_id=run_id,
+        out=out,
+        step=step,
+        dry_run=dry_run,
+        yes=yes,
         json_output=json_output,
     )
 
