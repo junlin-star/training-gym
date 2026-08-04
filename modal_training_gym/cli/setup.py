@@ -207,7 +207,7 @@ def set_password(password: str | None = None) -> None:
 
     setup(
         interactive=False,
-        require_proxy_auth=get_dashboard_proxy_auth(),
+        require_proxy_auth=get_dashboard_proxy_auth() is True,
     )
 
 
