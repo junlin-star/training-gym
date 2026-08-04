@@ -227,6 +227,7 @@ def _download_trace_step(
     run_id: str,
     summary: TrainingRolloutSummary,
     staging_path: Path,
+    file_name: str,
 ) -> tuple[dict[str, object], int]:
     rollout_id = summary.rollout_id
     payload = client.get_json(
@@ -250,7 +251,6 @@ def _download_trace_step(
             exit_code=ExitCode.BACKEND,
         ) from exc
 
-    file_name = f"step_{rollout_id:04d}.json"
     data = (
         json.dumps(
             payload,
@@ -327,6 +327,7 @@ def download_run_traces(
                 summaries_by_step[value] for value in sorted(selected_steps)
             ]
 
+        step_width = max(4, len(str(max(summaries_by_step, default=0))))
         known_sizes = [summary.export_size_bytes for summary in selected_summaries]
         total_size = (
             sum(size for size in known_sizes if size is not None)
@@ -343,7 +344,7 @@ def download_run_traces(
             "steps": [
                 {
                     "step": summary.rollout_id,
-                    "file_name": f"step_{summary.rollout_id:04d}.json",
+                    "file_name": f"step_{summary.rollout_id:0{step_width}d}.json",
                     "samples": summary.total,
                     "mean_reward": summary.mean,
                     "export_size_bytes": summary.export_size_bytes,
@@ -392,6 +393,9 @@ def download_run_traces(
                     run_id=run_id,
                     summary=rollout_summary,
                     staging_path=staging_path,
+                    file_name=(
+                        f"step_{rollout_summary.rollout_id:0{step_width}d}.json"
+                    ),
                 )
                 downloaded_steps.append(entry)
                 downloaded_size += size_bytes

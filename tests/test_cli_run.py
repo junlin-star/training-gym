@@ -521,6 +521,43 @@ def test_run_trace_dry_run_filters_steps_without_downloading(tmp_path):
     assert not (tmp_path / "run-1").exists()
 
 
+def test_run_trace_file_names_use_highest_step_width(tmp_path):
+    FakeDashboardClient.payloads = {
+        "/api/runs/run-1": _summary(),
+        "/api/runs/run-1/rollouts": [
+            {
+                "training_run_id": "run-1",
+                "rollout_id": step,
+                "created_at": 100,
+                "total": 8,
+                "mean": 0.5,
+                "export_size_bytes": 1000,
+            }
+            for step in (2, 10_000)
+        ],
+    }
+
+    result = CliRunner().invoke(
+        cli_module.entrypoint_cli,
+        [
+            "run",
+            "trace",
+            "run-1",
+            "--out",
+            str(tmp_path),
+            "--dry-run",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert [step["file_name"] for step in payload["steps"]] == [
+        "step_00002.json",
+        "step_10000.json",
+    ]
+
+
 def test_run_trace_dry_run_reports_unknown_size_for_legacy_rollouts(tmp_path):
     FakeDashboardClient.payloads = {
         "/api/runs/run-1": _summary(),
