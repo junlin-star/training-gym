@@ -60,7 +60,9 @@ def test_rollout_async_save_survives_unmounted_volume(fake_volume):
     ]
     summary_item = json.loads(summary)["items"][0]
     assert summary_item["summary_key"] == "t3__00000000"
-    assert summary_item["size_bytes"] == len(blob)
+    assert summary_item["export_size_bytes"] == len(
+        (json.dumps(json.loads(blob), ensure_ascii=False, indent=2) + "\n").encode()
+    )
 
 
 @pytest.mark.parametrize("fw", list(Framework))

@@ -478,7 +478,7 @@ def test_run_trace_dry_run_filters_steps_without_downloading(tmp_path):
                 "created_at": 100 + step,
                 "total": 8,
                 "mean": step / 10,
-                "size_bytes": 1000 + step,
+                "export_size_bytes": 1000 + step,
             }
             for step in range(5)
         ],
@@ -504,14 +504,14 @@ def test_run_trace_dry_run_filters_steps_without_downloading(tmp_path):
     assert payload["dry_run"] is True
     assert payload["step_count"] == 2
     assert payload["sample_count"] == 16
-    assert payload["size_bytes"] == 2002
+    assert payload["export_size_bytes"] == 2002
     assert [step["step"] for step in payload["steps"]] == [0, 2]
     assert set(payload["steps"][0]) == {
         "step",
         "file_name",
         "samples",
         "mean_reward",
-        "size_bytes",
+        "export_size_bytes",
     }
     assert payload["output_path"] == str(tmp_path / "run-1")
     assert FakeDashboardClient.requests == [
@@ -562,8 +562,8 @@ def test_run_trace_dry_run_reports_unknown_size_for_legacy_rollouts(tmp_path):
     assert human.exit_code == 0
     assert "approximately unknown size" in human.stdout
     payload = json.loads(json_result.stdout)
-    assert payload["size_bytes"] is None
-    assert payload["steps"][0]["size_bytes"] is None
+    assert payload["export_size_bytes"] is None
+    assert payload["steps"][0]["export_size_bytes"] is None
 
 
 def test_run_trace_downloads_steps_and_writes_manifest(tmp_path):
@@ -574,7 +574,7 @@ def test_run_trace_downloads_steps_and_writes_manifest(tmp_path):
             "created_at": 100 + step,
             "total": 1,
             "mean": reward,
-            "size_bytes": 500,
+            "export_size_bytes": 500,
         }
         for step, reward in ((0, 0.25), (2, 0.75))
     ]
@@ -637,14 +637,14 @@ def test_run_trace_downloads_steps_and_writes_manifest(tmp_path):
                 "file_name": "step_0000.json",
                 "samples": 1,
                 "mean_reward": 0.25,
-                "size_bytes": (output_path / "step_0000.json").stat().st_size,
+                "export_size_bytes": (output_path / "step_0000.json").stat().st_size,
             },
             {
                 "step": 2,
                 "file_name": "step_0002.json",
                 "samples": 1,
                 "mean_reward": 0.75,
-                "size_bytes": (output_path / "step_0002.json").stat().st_size,
+                "export_size_bytes": (output_path / "step_0002.json").stat().st_size,
             },
         ],
     }
@@ -666,13 +666,13 @@ def test_run_trace_downloads_steps_and_writes_manifest(tmp_path):
     payload = json.loads(result.stdout)
     assert payload["output_path"] == str(output_path)
     assert payload["dry_run"] is False
-    assert payload["size_bytes"] > 0
+    assert payload["export_size_bytes"] > 0
     assert set(payload["steps"][0]) == {
         "step",
         "file_name",
         "samples",
         "mean_reward",
-        "size_bytes",
+        "export_size_bytes",
     }
     assert [
         timeout
