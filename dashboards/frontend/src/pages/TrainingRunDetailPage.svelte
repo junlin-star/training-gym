@@ -1,5 +1,5 @@
 <script>
-  import { onMount, tick } from "svelte";
+  import { onMount, tick, untrack } from "svelte";
   import { ArrowLeft, ChevronLeft, ChevronRight, Download, ExternalLink, Minimize2, X } from "lucide-svelte";
   import Tabs from "../components/Tabs.svelte";
   import RunSummary from "../components/RunSummary.svelte";
@@ -410,7 +410,10 @@
   async function loadRollouts(signal) {
     if (!runId) return;
     try {
-      const wasEmpty = rolloutSummaries.length === 0;
+      // Untracked: the fetch effect calls this synchronously, so a tracked read
+      // here makes the effect depend on the state it is about to write, and
+      // every fetch (which always yields a fresh array) retriggers it forever.
+      const wasEmpty = untrack(() => rolloutSummaries.length === 0);
       const rows = await fetchRunRollouts(runId, { signal });
       if (signal?.aborted) return;
       rolloutSummaries = rows;
