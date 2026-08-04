@@ -74,6 +74,7 @@ class TrainingRolloutSummary(BaseModel):
     rollout_id: int
     created_at: int
     total: int
+    episode_count: int | None = None
     mean: float
     rollout_time: float | None = None
     error_summary: dict[str, Any] | None = None

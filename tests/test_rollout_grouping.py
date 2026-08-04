@@ -5,6 +5,7 @@ from modal_training_gym.common.sample import Sample
 from modal_training_gym.common.training_rollout import (
     TrainingRolloutResult,
     TrainingRolloutSample,
+    TrainingRolloutSummary,
 )
 from modal_training_gym.frameworks.slime import phase_reporting as pr
 
@@ -124,6 +125,31 @@ def test_mean_averages_rollouts_not_samples():
     assert rollout.episode_count == 4
     assert rollout.to_summary()["episode_count"] == 4
     assert rollout.to_summary()["total"] == 10
+
+
+def test_episode_count_reaches_the_dashboard_through_the_summary_model():
+    samples = [
+        TrainingRolloutSample(score=reward, rollout_index=index)
+        for index, (reward, turns) in enumerate(EPISODES)
+        for _ in range(turns)
+    ]
+    summary = TrainingRolloutSummary.model_validate(_rollout(samples).to_summary())
+
+    assert (summary.episode_count, summary.total) == (4, 10)
+
+
+def test_episode_count_reads_as_unknown_for_records_written_before_it_existed():
+    summary = TrainingRolloutSummary.model_validate(
+        {
+            "training_run_id": "t",
+            "rollout_id": 0,
+            "created_at": 0,
+            "total": 3,
+            "mean": 1.0,
+        }
+    )
+
+    assert summary.episode_count is None
 
 
 def test_mean_unchanged_for_one_sample_per_rollout():
