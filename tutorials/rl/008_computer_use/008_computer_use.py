@@ -23,7 +23,7 @@
 # ```
 # cd training-gym
 # uv sync
-# uv run python tutorials/rl/008_computer_use/008_computer_use.py
+# uv run tutorials/rl/008_computer_use/008_computer_use.py
 # ```
 #
 # To detach and watch it from the Modal dashboard instead:

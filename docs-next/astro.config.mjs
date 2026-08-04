@@ -203,9 +203,6 @@ export default defineConfig({
         { label: 'CLI Reference', link: '/reference/cli/' },
         { label: 'Support', link: '/support/' },
       ],
-      editLink: {
-        baseUrl: 'https://github.com/modal-projects/training-gym/edit/main/docs-next/',
-      },
       lastUpdated: true,
       disable404Route: true,
     }),

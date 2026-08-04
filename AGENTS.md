@@ -21,25 +21,25 @@ uv run ruff format --check modal_training_gym/
 uv run pyright modal_training_gym/    # if pyright is available
 
 # Compile check (no GPU needed)
-uv run python -m compileall modal_training_gym/
+uv run -m compileall modal_training_gym/
 
 # Tutorials — NEVER edit generated files directly
-uv run python tutorials/generate_tutorial.py              # regenerate all .py + .ipynb
-uv run python tutorials/generate_tutorial.py path/to/src  # regenerate one
+uv run tutorials/generate_tutorial.py              # regenerate all .py + .ipynb
+uv run tutorials/generate_tutorial.py path/to/src  # regenerate one
 
 # Docs (Astro/Starlight site at docs-next/)
-uv run python scripts/generate_all.py --skip-build   # regen API reference + tutorial pages
+uv run scripts/generate_all.py --skip-build   # regen API reference + tutorial pages
 cd docs-next && npm ci && npm run dev                 # local dev server
-uv run python scripts/generate_all.py                 # full regen + build
+uv run scripts/generate_all.py                 # full regen + build
 
 # Deploy
 uv run modal deploy docs-next/docs_next_app.py        # docs site → gym.modal.dev
 uv run modal deploy dashboards/app.py                  # observability dashboard
 
 # Validate model configs / map a diff to affected tutorials
-uv run python scripts/validate_model_configs.py list
-uv run python scripts/validate_model_configs.py check -m qwen3-4b
-git diff | uv run python scripts/diff_impact.py
+uv run scripts/validate_model_configs.py list
+uv run scripts/validate_model_configs.py check -m qwen3-4b
+git diff | uv run scripts/diff_impact.py
 ```
 
 ## Architecture
@@ -93,7 +93,7 @@ Each source declares `TUTORIAL_METADATA` dict with `framework`, `cluster_shape`,
 - Never edit `tutorials/<bucket>/<name>/<name>.py` or `.ipynb` — they are generated. Edit `tutorials/tutorial_generator/<bucket>/<name>.py` and run the generator.
 - Ruff excludes `tutorials/**` — generated tutorial code is not linted.
 - Python 3.12 is pinned. Modal's `serialized=True` requires local ↔ remote Python version match.
-- Modal Secrets `huggingface-secret` (HF_TOKEN) and `wandb-secret` (WANDB_API_KEY) are required for remote runs.
+- Modal Secrets `huggingface-secret` (HF_TOKEN) and `wandb-secret` (WANDB_API_KEY) are optional: HF auth is only needed for gated/rate-limited Hub access, and `wandb-secret` only when a `WandbConfig` is passed.
 - Served endpoints (`DeploymentConfig.serve()`) are public by default for SGLang (`unauthenticated=True`). Pass `unauthenticated=False` to require Modal proxy auth (export `MODAL_KEY` (`wk-…`) / `MODAL_SECRET` (`ws-…`) in the launching shell, or eval/`generate`/teacher calls return HTTP 401). vLLM cannot honor `unauthenticated` (`modal.experimental.http_server` has no proxy-auth knob): `True` (default) is a silent no-op for `VllmRecipe`; explicit `False` emits `warnings.warn` because the endpoint remains public. For calls from remote workers (custom rm/reward fns) to authenticated endpoints, also forward the pair into the worker via a `modal.Secret` — the driver shell env doesn't reach them.
 - Every framework's Modal app is tagged with `_modal_framework`, `_modal_job_type=training`, and W&B project/group for dashboard auto-discovery (see `common/__init__.py: COMMON_TRAINING_GYM_TAGS`).
 
