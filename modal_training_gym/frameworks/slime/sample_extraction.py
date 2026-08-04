@@ -15,6 +15,7 @@ import json
 import os
 from typing import Any
 
+from modal_training_gym.common.coerce import optional_int
 from modal_training_gym.common.sample import Sample
 
 # Import path of the run model's response parser (a (str) -> ParsedResponse
@@ -495,6 +496,7 @@ def _sample_to_dict(
     include_trace: bool = False,
     include_image: bool = False,
     include_trajectory: bool = False,
+    n_samples_per_prompt: int = 1,
 ) -> dict[str, Any]:
     """Best-effort extraction of (prompt, response, reward, metadata) from a
     slime Sample-like object. Duck-typed so we don't import slime here."""
@@ -581,6 +583,15 @@ def _sample_to_dict(
         "response": response_text,
         "metadata": metadata,
     }
+    sample_index = optional_int(get("index"))
+    rollout_index = optional_int(get("rollout_id"))
+    if rollout_index is None:
+        rollout_index = sample_index
+    if rollout_index is not None:
+        out["rollout_index"] = rollout_index
+    if sample_index is not None:
+        out["sample_index"] = sample_index
+        out["group_index"] = sample_index // max(1, int(n_samples_per_prompt or 1))
     # Store raw + parsed (mirrors eval's EvalRowResult) so the dashboard can show
     # cleaned content without re-parsing. Parsing happens here, in the recorder.
     parsed = _parsed_response_dict(response_text, parser)
