@@ -56,7 +56,12 @@ def _merge_recipe(base: SlimeRecipe, overrides: SlimeRecipe) -> SlimeRecipe:
         default_val = _field_default(f)
         if f.name in declared or default_val is _dc.MISSING or user_val != default_val:
             base_fields[f.name] = user_val
-    return type(base)(**base_fields)
+    merged = type(base)(**base_fields)
+    # Reconstructing from every field would mark them all caller-supplied, so carry
+    # the user's actual choices over for `_for_dataset` to read.
+    if (explicit := getattr(overrides, "_explicit_fields", None)) is not None:
+        object.__setattr__(merged, "_explicit_fields", explicit)
+    return merged
 
 
 def _field_default(field: _dc.Field) -> Any:

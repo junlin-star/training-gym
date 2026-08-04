@@ -1,3 +1,4 @@
+import dataclasses
 import os
 from collections.abc import Callable
 from dataclasses import field
@@ -281,6 +282,29 @@ class SlimeRecipe(BaseTrainRecipe):
     multimodal_keys: dict | str | None = None
 
     # ── Validators ───────────────────────────────────────────────────────────
+
+    @property
+    def explicit_fields(self) -> frozenset[str]:
+        """Names of the fields the caller passed to the constructor.
+
+        ``_for_dataset`` needs this to tell a caller's choice from a default, which
+        the value alone cannot: an explicit ``num_rollout=2`` is indistinguishable
+        from an unset field defaulting to 2. Pydantic records this for models but
+        not for dataclasses, hence the validator below.
+        """
+        return getattr(self, "_explicit_fields", frozenset())
+
+    @model_validator(mode="wrap")
+    @classmethod
+    def _capture_explicit_fields(cls, data: Any, handler: Any) -> "SlimeRecipe":
+        names: set[str] = set()
+        if args := getattr(data, "args", None):
+            names.update(f.name for f in dataclasses.fields(cls)[: len(args)])
+        if kwargs := getattr(data, "kwargs", None):
+            names.update(kwargs)
+        recipe = handler(data)
+        object.__setattr__(recipe, "_explicit_fields", frozenset(names))
+        return recipe
 
     @staticmethod
     def _callable_path(fn: Callable) -> str:

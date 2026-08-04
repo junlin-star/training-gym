@@ -143,10 +143,14 @@ class DatasetConfig:
 class HuggingFaceDataset(DatasetConfig):
     """Dataset backed by a HuggingFace ``datasets`` repo.
 
-    Subclass and set ``hf_repo`` plus column mappings. When
-    ``input_column`` and ``output_column`` are set, ``prepare()``
-    auto-wraps rows into chat-message format
-    (``{"messages": [{"role": "user", ...}, {"role": "assistant", ...}]}``).
+    Subclass and set ``hf_repo`` plus column mappings. When ``input_column`` and
+    ``output_column`` are set, ``prepare()`` auto-wraps rows into chat-message
+    format (``{"messages": [{"role": "user", ...}], "label": ...}``).
+
+    The ground truth goes to ``label_key`` only, not into ``messages`` as an
+    assistant turn: the rollout prompt is the chat-templated message list, so an
+    assistant turn hands the model the answer. Set ``include_answer_turn = True``
+    for SFT, where the answer is the training target.
     """
 
     _type: DatasetType = DatasetType.HUGGING_FACE
@@ -160,6 +164,7 @@ class HuggingFaceDataset(DatasetConfig):
     prompt_template: str = "{input}"
     n_rows: int = 0
     label_key: str = "label"
+    include_answer_turn: bool = False
 
     def __init__(self, **kwargs: Any) -> None:
         for k, v in kwargs.items():
@@ -194,6 +199,7 @@ class HuggingFaceDataset(DatasetConfig):
         sys_prompt = self.system_prompt
         template = self.prompt_template
         label_key = self.label_key
+        include_answer = self.include_answer_turn
 
         def _to_chat(row: dict) -> dict:
             user_content = template.format(input=row[in_col])
@@ -201,7 +207,8 @@ class HuggingFaceDataset(DatasetConfig):
             if sys_prompt:
                 msgs.append({"role": "system", "content": sys_prompt})
             msgs.append({"role": "user", "content": user_content})
-            msgs.append({"role": "assistant", "content": row[out_col]})
+            if include_answer:
+                msgs.append({"role": "assistant", "content": row[out_col]})
             return {"messages": msgs, label_key: str(row[out_col])}
 
         return ds.map(_to_chat, remove_columns=ds.column_names)

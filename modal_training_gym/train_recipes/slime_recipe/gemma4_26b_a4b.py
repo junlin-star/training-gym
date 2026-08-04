@@ -1,6 +1,6 @@
 """Gemma-4-26B-A4B GRPO recipe (1x8xH100), text-only or vision-language."""
 
-from dataclasses import MISSING, field, replace
+from dataclasses import field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -45,14 +45,6 @@ def _vl_image_run_commands() -> list[str]:
 
 def _has_images(dataset: "DatasetConfig | None") -> bool:
     return "image" in (getattr(dataset, "multimodal_keys", None) or {})
-
-
-def _declared_default(cls: type, name: str) -> Any:
-    """The dataclass default for ``name``, i.e. the value that means "unset"."""
-    f = cls.__dataclass_fields__[name]
-    if f.default_factory is not MISSING:
-        return f.default_factory()
-    return f.default
 
 
 # Applied over the text-only defaults below on an image dataset, to the fields the
@@ -164,12 +156,14 @@ class Gemma4_26B_A4B_Recipe(SlimeRecipe):
     def _for_dataset(self, dataset: "DatasetConfig | None") -> SlimeRecipe:
         if not _has_images(dataset):
             return self
-        cls = type(self)
+        # Keyed on what the caller passed, not on how the value compares to the
+        # text default: an explicit `num_rollout=2` matches this recipe's default,
+        # and reading that as unset would silently run the vision default of 15.
+        explicit = self.explicit_fields
         vision = {
             name: value() if callable(value) else value
             for name, value in _VISION_MODE.items()
-            if name != "extra_config"
-            and getattr(self, name) == _declared_default(cls, name)
+            if name != "extra_config" and name not in explicit
         }
         # extra_config may already hold hook paths resolved at construction, so merge
         # into it (keys the caller set win) instead of replacing it wholesale.
@@ -177,7 +171,11 @@ class Gemma4_26B_A4B_Recipe(SlimeRecipe):
             **_VISION_MODE["extra_config"],
             **(self.extra_config or {}),
         }
-        return replace(self, **vision)
+        resolved = replace(self, **vision)
+        # `replace` marks every field explicit, so carry the real set forward and
+        # resolving twice stays a no-op.
+        object.__setattr__(resolved, "_explicit_fields", explicit | vision.keys())
+        return resolved
 
     def validate_model_parallelism(self, model: "ModelConfig") -> None:
         super().validate_model_parallelism(model)
