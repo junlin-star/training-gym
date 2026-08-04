@@ -14,6 +14,8 @@ from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from modal_training_gym.cli.setup import deployed_dashboard_url
+
 
 CONFIG_PATH = Path.home() / ".training-gym.toml"
 MODAL_CONFIG_PATH = Path(
@@ -79,13 +81,13 @@ def get_dashboard_proxy_auth() -> bool | None:
     """
     dashboard = load_config().get("dashboard")
     if not isinstance(dashboard, dict):
-        return None
+        dashboard = {}
 
     persisted = dashboard.get("proxy_auth")
     if not isinstance(persisted, bool):
         persisted = None
 
-    url = dashboard.get("url")
+    url = dashboard.get("url") or deployed_dashboard_url()
     if isinstance(url, str) and url.strip():
         request = Request(
             url.strip().rstrip("/") + DASHBOARD_PROXY_AUTH_PATH,
