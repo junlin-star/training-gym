@@ -1,4 +1,5 @@
 import dataclasses
+import functools
 import os
 from collections.abc import Callable
 from dataclasses import field
@@ -87,6 +88,21 @@ _HOOK_WRAPPER_PATHS = {
     "custom_megatron_before_log_prob_hook": "modal_training_gym.frameworks.slime.phase_reporting.before_log_prob_hook",
     "custom_megatron_before_train_step_hook": "modal_training_gym.frameworks.slime.phase_reporting.before_train_step_hook",
 }
+
+
+@functools.cache
+def _declared_below(cls: type) -> frozenset[str]:
+    """Fields declared by subclasses below the recipe that owns ``_for_dataset``.
+
+    Those are the caller's own config, so they count as chosen. The fields that
+    recipe declares itself are the defaults ``_for_dataset`` exists to override.
+    """
+    names: set[str] = set()
+    for klass in cls.__mro__:
+        if "_for_dataset" in vars(klass):
+            break
+        names |= set(vars(klass).get("__annotations__", {}))
+    return frozenset(names)
 
 
 @dataclass(config=ConfigDict(extra="forbid", arbitrary_types_allowed=True))
@@ -659,14 +675,16 @@ class SlimeRecipe(BaseTrainRecipe):
 
     @property
     def explicit_fields(self) -> frozenset[str]:
-        """Names of the fields the caller passed to the constructor.
+        """Names of the fields the caller chose, by constructor or subclass body.
 
         ``_for_dataset`` needs this to tell a caller's choice from a default, which
         the value alone cannot: an explicit ``num_rollout=2`` is indistinguishable
-        from an unset field defaulting to 2. Pydantic records this for models but
-        not for dataclasses, hence the validator below.
+        from an unset field defaulting to 2. Pydantic records constructor arguments
+        for models but not for dataclasses, hence the validator below.
         """
-        return getattr(self, "_explicit_fields", frozenset())
+        return getattr(self, "_explicit_fields", frozenset()) | _declared_below(
+            type(self)
+        )
 
     @model_validator(mode="wrap")
     @classmethod

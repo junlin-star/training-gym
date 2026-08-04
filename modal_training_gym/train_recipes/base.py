@@ -30,9 +30,9 @@ def carry_explicit_fields(source: Any, rebuilt: Any) -> Any:
     Rebuilding as ``type(r)(**all_fields)`` passes every field as a kwarg, so the
     validator would record them all as caller-set and make ``_for_dataset`` a no-op.
     """
-    explicit = getattr(source, "_explicit_fields", None)
+    explicit = getattr(source, "explicit_fields", None)
     if explicit is not None:
-        object.__setattr__(rebuilt, "_explicit_fields", explicit)
+        object.__setattr__(rebuilt, "_explicit_fields", frozenset(explicit))
     return rebuilt
 
 
