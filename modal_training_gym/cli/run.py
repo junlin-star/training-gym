@@ -22,7 +22,10 @@ from rich.table import Table
 from rich.text import Text
 
 from modal_training_gym.common.modal_lifecycle import app_live_status, stop_app_or_raise
-from modal_training_gym.common.run import TrainingRun, TrainingRunStatus
+from modal_training_gym.common.run import (
+    TrainingRunStatus,
+    finalize_training_run,
+)
 from modal_training_gym.common.run_list import run_list_field_metadata
 from modal_training_gym.common.run_summary import RunSummary
 from modal_training_gym.common.time import parse_time
@@ -530,26 +533,6 @@ def _build_kill_run_report(
     }
 
 
-def _mark_killed_run_stopped(run_id: str, *, ended_at: int) -> bool:
-    run = TrainingRun.from_id(run_id)
-    if not isinstance(run, TrainingRun):
-        raise TypeError("TrainingRun.from_id returned an asynchronous result")
-    if run.status != TrainingRunStatus.RUNNING:
-        return False
-
-    metadata = dict(run.metadata or {})
-    metadata["terminal_reason"] = "killed_by_cli"
-    run.status = TrainingRunStatus.STOPPED
-    run.metadata = metadata
-    run.ended_at = ended_at
-    if run.completed_at is None:
-        run.completed_at = ended_at
-    if run.started_at:
-        run.duration_seconds = max(0, ended_at - run.started_at)
-    run.save()
-    return True
-
-
 def kill_runs(
     *,
     run_ids: tuple[str, ...],
@@ -592,6 +575,12 @@ def kill_runs(
     runs_to_kill = [
         run_report for run_report in run_reports if run_report["action"] == "would_kill"
     ]
+    stale_runs_to_cancel = [
+        run_report
+        for run_report in run_reports
+        if run_report["skip_reason"] == "modal_app_not_live"
+        and run_report["status"] not in TERMINAL_RUN_STATUSES
+    ]
     error_count = sum(
         run_report["skip_reason"] == "missing_modal_app_id"
         for run_report in run_reports
@@ -620,24 +609,28 @@ def kill_runs(
 
     killed_run_ids: list[str] = []
     for run in runs_to_kill:
+        modal_app_id = run["modal_app_id"]
+        assert modal_app_id is not None
         try:
-            stop_app_or_raise(str(run["modal_app_id"]))
+            stop_app_or_raise(modal_app_id)
         except Exception as exc:
             raise CLIError(
                 f"Could not stop the Modal app for run {run['run_id']!r}.",
                 error="modal_stop_failed",
                 exit_code=ExitCode.BACKEND,
                 run_id=run["run_id"],
-                modal_app_id=run["modal_app_id"],
+                modal_app_id=modal_app_id,
                 killed_run_ids=killed_run_ids,
             ) from exc
         run["action"] = "killed"
-        killed_run_ids.append(str(run["run_id"]))
+        killed_run_ids.append(run["run_id"])
         try:
-            metadata_updated = _mark_killed_run_stopped(
-                str(run["run_id"]),
+            run["status"] = finalize_training_run(
+                run["run_id"],
+                status=TrainingRunStatus.STOPPED,
+                reason="killed_by_cli",
                 ended_at=int(time.time()),
-            )
+            ).value
         except Exception as exc:
             raise CLIError(
                 f"Stopped the Modal app for run {run['run_id']!r}, "
@@ -645,11 +638,28 @@ def kill_runs(
                 error="run_metadata_update_failed",
                 exit_code=ExitCode.BACKEND,
                 run_id=run["run_id"],
+                modal_app_id=modal_app_id,
+                killed_run_ids=killed_run_ids,
+            ) from exc
+
+    for run in stale_runs_to_cancel:
+        try:
+            run["status"] = finalize_training_run(
+                run["run_id"],
+                status=TrainingRunStatus.CANCELLED,
+                reason="modal_app_not_live",
+                ended_at=int(time.time()),
+            ).value
+        except Exception as exc:
+            raise CLIError(
+                f"Modal app for run {run['run_id']!r} is no longer live, "
+                "but its metadata could not be updated.",
+                error="run_metadata_update_failed",
+                exit_code=ExitCode.BACKEND,
+                run_id=run["run_id"],
                 modal_app_id=run["modal_app_id"],
                 killed_run_ids=killed_run_ids,
             ) from exc
-        if metadata_updated:
-            run["status"] = TrainingRunStatus.STOPPED.value
 
     if json_output:
         print_json(result)
