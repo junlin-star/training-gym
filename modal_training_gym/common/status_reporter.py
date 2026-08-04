@@ -91,6 +91,7 @@ def _post(item: dict[str, Any]) -> None:
     body = json.dumps(item, default=str).encode("utf-8")
 
     from modal_training_gym.common.config import modal_proxy_auth_headers
+
     headers = {
         "Content-Type": "application/json",
         **modal_proxy_auth_headers(),
