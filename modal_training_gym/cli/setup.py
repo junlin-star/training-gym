@@ -78,9 +78,10 @@ def setup(interactive: bool = True, proxy_auth: bool | None = None) -> str:
 
     dashboard = _load_dashboard_for_deploy(requires_proxy_auth)
 
-    if requires_proxy_auth and not ensure_proxy_auth(interactive=interactive):
-        raise RuntimeError(
-            "Dashboard proxy auth requires MODAL_KEY and MODAL_SECRET. "
+    has_proxy_auth_token = ensure_proxy_auth(interactive=interactive)
+    if requires_proxy_auth and not has_proxy_auth_token:
+        print(
+            "WARNING: Dashboard proxy auth requires MODAL_KEY and MODAL_SECRET. "
             "Run `training-gym set-proxy-auth` or export both variables."
         )
 
