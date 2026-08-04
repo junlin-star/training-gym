@@ -408,7 +408,7 @@ def download_run_traces(
             manifest_path = output_path / "manifest.json"
             if manifest_path.exists():
                 manifest_path.unlink()
-            for staged_file in staging_path.iterdir():
+            for staged_file in list(staging_path.iterdir()):
                 staged_file.replace(output_path / staged_file.name)
         except OSError as exc:
             raise CLIError(
