@@ -31,6 +31,40 @@ import '../styles/custom.css';
       </nav>
     </main>
 
+    {/* Starlight's base styles ship with its own page layout, which this route bypasses.
+        Only the props and utilities the shared header and search button rely on are needed. */}
+    <style is:global>
+      :root {
+        --sl-z-index-navbar: 20;
+      }
+
+      .sl-flex {
+        display: flex;
+      }
+
+      .sl-block {
+        display: block;
+      }
+
+      .sl-hidden {
+        display: none;
+      }
+
+      @media (min-width: 50rem) {
+        .md\:sl-flex {
+          display: flex;
+        }
+
+        .md\:sl-block {
+          display: block;
+        }
+
+        .md\:sl-hidden {
+          display: none;
+        }
+      }
+    </style>
+
     <style>
       body {
         margin: 0;
