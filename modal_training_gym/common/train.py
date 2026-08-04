@@ -24,7 +24,7 @@ from modal_training_gym.utils.metadata import MetadataStore, vol_put
 from modal_training_gym.frameworks.miles import build_miles_app
 from modal_training_gym.frameworks.slime import build_slime_app
 from modal_training_gym.train_recipes.base import BaseTrainRecipe, RecipeType
-from modal_training_gym.train_recipes.miles_recipe import MilesConfig
+from modal_training_gym.train_recipes.miles_recipe import MilesRecipe
 from modal_training_gym.train_recipes.slime_recipe import SlimeRecipe
 from pydantic import ConfigDict
 from pydantic.dataclasses import dataclass
@@ -386,13 +386,13 @@ class TrainConfig:
             training_run_id = self._generate_training_run_id()
         recipe_type = self.recipe.recipe_type
         if recipe_type == RecipeType.MILES:
-            if not isinstance(self.recipe, MilesConfig):
+            if not isinstance(self.recipe, MilesRecipe):
                 raise TrainingGymConfigError(
                     f"Recipe type {recipe_type} requires MilesConfig, got {type(self.recipe).__name__}"
                 )
             return build_miles_app(
                 training_run_id=training_run_id,
-                miles=cast(MilesConfig, self.recipe),
+                miles=cast(MilesRecipe, self.recipe),
                 model=self.model,
                 dataset=self.dataset,
                 checkpoint=self.checkpoint,
@@ -426,7 +426,7 @@ class TrainConfig:
     def framework(self) -> Framework:
         if isinstance(self.recipe, SlimeRecipe):
             return Framework.SLIME
-        if isinstance(self.recipe, MilesConfig):
+        if isinstance(self.recipe, MilesRecipe):
             return Framework.MILES
         raise TrainingGymConfigError(
             f"Unknown recipe type: {type(self.recipe).__name__}"
@@ -435,7 +435,7 @@ class TrainConfig:
     def _initializing_status(self) -> FrameworkStatus:
         if isinstance(self.recipe, SlimeRecipe):
             return SlimeStatus.INITIALIZING
-        if isinstance(self.recipe, MilesConfig):
+        if isinstance(self.recipe, MilesRecipe):
             return MilesStatus.INITIALIZING
         raise TrainingGymConfigError(
             f"Unknown recipe type: {type(self.recipe).__name__}"
@@ -481,7 +481,7 @@ class TrainConfig:
             summary["recipe"] = _serialize_slime_params(
                 combined, dataset=dataset, model=model
             )
-        elif isinstance(recipe, MilesConfig):
+        elif isinstance(recipe, MilesRecipe):
             summary["recipe"] = {
                 "gpu_type": recipe.gpu_type,
                 "actor_num_nodes": recipe.actor_num_nodes,
@@ -662,7 +662,7 @@ class TrainConfig:
                                 framework_status_url=framework_status_url,
                                 framework_status_token=framework_status_token,
                             )
-                    elif isinstance(self.recipe, MilesConfig) and needs_conversion:
+                    elif isinstance(self.recipe, MilesRecipe) and needs_conversion:
                         _set_status(MilesStatus.DOWNLOAD_MODEL, is_active=False)
                         app.download.remote(
                             training_run_id=training_run_id,

@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import pytest
 
 from modal_training_gym.common.errors import GpuAllocationError
-from modal_training_gym.train_recipes.miles_recipe.recipe import MilesConfig
+from modal_training_gym.train_recipes.miles_recipe.recipe import MilesRecipe
 from modal_training_gym.train_recipes.gpu_allocation import (
     resolve_gpu_allocation,
     validate_megatron_actor_parallelism,
@@ -69,7 +69,7 @@ def test_large_rollout_allocation_warns() -> None:
 def test_miles_uses_same_gpu_allocation_math() -> None:
     with warnings.catch_warnings():
         warnings.simplefilter("error")
-        config = MilesConfig(
+        config = MilesRecipe(
             colocate=False,
             rollout_num_gpus=8,
             rollout_num_gpus_per_engine=4,
@@ -87,7 +87,7 @@ def test_miles_rejects_bad_gpu_count_type() -> None:
     # resolve_gpu_allocation runs; both ValidationError and GpuAllocationError
     # are ValueError subclasses.
     with pytest.raises(ValueError, match="actor_num_gpus_per_node"):
-        MilesConfig(actor_num_gpus_per_node=8.5)
+        MilesRecipe(actor_num_gpus_per_node=8.5)
 
 
 @pytest.mark.parametrize("value", [True, 8.0, "8"])

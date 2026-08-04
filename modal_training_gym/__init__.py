@@ -46,7 +46,7 @@ _EXPORTS = {
         "modal_training_gym.train_recipes.miles_recipe",
         "Kimi_K2_6_LoRA_Recipe",
     ),
-    "MilesConfig": ("modal_training_gym.train_recipes.miles_recipe", "MilesConfig"),
+    "MilesRecipe": ("modal_training_gym.train_recipes.miles_recipe", "MilesRecipe"),
     "parse_qwen3_response": (
         "modal_training_gym.common.models",
         "parse_qwen3_response",
@@ -120,7 +120,7 @@ __all__ = [
     "ModelArchitecture",
     "ModelConfig",
     "ModelDeployment",
-    "MilesConfig",
+    "MilesRecipe",
     "parse_qwen3_response",
     "ParsedResponse",
     "Qwen3_0_6B",

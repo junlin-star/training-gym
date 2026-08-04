@@ -14,7 +14,7 @@ from modal_training_gym.frameworks.miles.modal_helpers.utils import (
     resolve_checkpoint_ref,
 )
 from modal_training_gym.common.errors import TrainingGymConfigError
-from modal_training_gym.train_recipes.miles_recipe.recipe import MilesConfig
+from modal_training_gym.train_recipes.miles_recipe.recipe import MilesRecipe
 
 
 def _valid_safetensors(path: Path) -> bool:
@@ -53,7 +53,7 @@ def _remove_if_invalid(path: str | Path) -> bool:
 
 
 @dataclass(config=ConfigDict(extra="forbid", arbitrary_types_allowed=True))
-class _KimiK2Recipe(MilesConfig):
+class _KimiK2Recipe(MilesRecipe):
     gpu_type: str = "H200"
     memory: tuple[int, int] = (1024, int(2 * 1024 * 1024))
     image_run_commands: list[str] = field(
