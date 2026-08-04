@@ -21,7 +21,7 @@
 # verifiable half. In a later tutorial, we will cover the subjective half.
 # To run the tutorial, run the following command:
 # ```
-# uv run python tutorials/rl/000_rl_basics/000_rl_basics.py
+# uv run tutorials/rl/000_rl_basics/000_rl_basics.py
 # ```
 # ## Prerequisites
 #

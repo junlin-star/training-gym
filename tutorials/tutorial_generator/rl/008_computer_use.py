@@ -4,7 +4,7 @@
 TUTORIAL_METADATA = {
     "framework": "`slime`",
     "cluster_shape": "1 × 8×H100",
-    "summary": "GUI grounding with Qwen3-VL-8B — predict click coordinates from screenshots",
+    "summary": "GUI grounding to predict click coordinates",
     "difficulty": "Advanced",
     "order": 45,
     "api_classes": [
@@ -58,7 +58,7 @@ def _run_instructions():
     ```
     cd training-gym
     uv sync
-    uv run python tutorials/rl/008_computer_use/008_computer_use.py
+    uv run tutorials/rl/008_computer_use/008_computer_use.py
     ```
 
     To detach and watch it from the Modal dashboard instead:

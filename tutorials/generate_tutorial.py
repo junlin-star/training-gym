@@ -16,8 +16,8 @@ Outputs land at `tutorials/<bucket>/<name>/<name>.py` and
 `tutorials/<bucket>/<name>/<name>.ipynb`.
 
 Usage:
-    uv run python generate_tutorial.py                   # regenerate all
-    uv run python generate_tutorial.py <input.py> ...    # regenerate specific
+    uv run generate_tutorial.py                   # regenerate all
+    uv run generate_tutorial.py <input.py> ...    # regenerate specific
 """
 
 from __future__ import annotations
