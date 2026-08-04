@@ -732,7 +732,7 @@ def fastapi_app():
         run = await _get_run_or_404(result.training_run_id)
         await _require_framework_status_token(result.training_run_id, authorization)
 
-        await result.save(is_async=True)
+        await run_in_threadpool(result.save)
         run.record_latest_rollout(result)
         await run.save(is_async=True)
         invalidate_cache("runs")
