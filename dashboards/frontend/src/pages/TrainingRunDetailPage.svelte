@@ -277,7 +277,7 @@
       let b = count === 1 ? 0 : Math.floor(((scores[r] - lo) / span) * count);
       b = Math.max(0, Math.min(count - 1, b));
       buckets[b].rollouts += 1;
-      buckets[b].samples.push(...positions);
+      for (const p of positions) buckets[b].samples.push(p);
     });
     const maxCount = Math.max(...buckets.map((b) => b.rollouts), 1);
     return {
