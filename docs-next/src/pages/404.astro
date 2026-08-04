@@ -1,28 +1,88 @@
 ---
-import StarlightPage from '@astrojs/starlight/components/StarlightPage.astro';
+import Header from '../components/Header.astro';
+import '../styles/custom.css';
 ---
 
-<StarlightPage
-  frontmatter={{
-    title: 'Not Found',
-    template: 'splash',
-    pagefind: false,
-    head: [
-      {
-        tag: 'meta',
-        attrs: {
-          name: 'description',
-          content: 'The requested Training Gym docs page could not be found.',
-        },
-      },
-    ],
-  }}
->
-  <p>
-    Sorry, this page doesn't exist! We weren't able to find the Training Gym
-    documentation you were looking for. Did you type the correct URL?
-  </p>
-  <a class="sl-link-button primary" href="/">Overview</a>
-  <a class="sl-link-button secondary" href="/tutorials/">Tutorials</a>
-  <a class="sl-link-button secondary" href="/reference/">API Reference</a>
-</StarlightPage>
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" href="/modal-logo.svg" />
+    <title>Not Found | Training Gym</title>
+    <meta
+      name="description"
+      content="The requested Training Gym docs page could not be found."
+    />
+  </head>
+  <body>
+    <header class="header"><div class="sl-container"><Header /></div></header>
+
+    <main class="tg-404">
+      <h1>Not Found</h1>
+      <p>
+        Sorry, this page doesn't exist! We weren't able to find the Training Gym
+        documentation you were looking for. Did you type the correct URL?
+      </p>
+      <nav aria-label="Suggested pages">
+        <a class="tg-action-button tg-action-button--primary" href="/">Overview</a>
+        <a class="tg-action-button tg-action-button--ghost" href="/tutorials/">Tutorials</a>
+        <a class="tg-action-button tg-action-button--ghost" href="/reference/">API Reference</a>
+      </nav>
+    </main>
+
+    <style>
+      body {
+        margin: 0;
+        min-height: 100vh;
+        font-family: var(--sl-font);
+        -webkit-font-smoothing: antialiased;
+      }
+
+      .header {
+        border-bottom: 1px solid #2f2f2f;
+      }
+
+      .header > .sl-container {
+        max-width: 87.5rem;
+        margin-inline: auto;
+        padding-block: 0.75rem;
+        padding-inline: var(--sl-nav-pad-x);
+      }
+
+      .tg-404 {
+        max-width: var(--sl-content-width);
+        margin-inline: auto;
+        padding: clamp(3rem, 10vh, 5.5rem) var(--sl-nav-pad-x);
+      }
+
+      .tg-404 h1 {
+        margin: 0;
+        color: var(--sl-color-white);
+        font-size: var(--sl-text-h1);
+        font-weight: 600;
+        letter-spacing: -0.02em;
+      }
+
+      .tg-404 p {
+        margin: 1rem 0 0;
+        max-width: 60ch;
+        color: var(--sl-color-text);
+        line-height: 1.7;
+        text-wrap: pretty;
+      }
+
+      .tg-404 nav {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.75rem;
+        margin-top: 2.25rem;
+      }
+
+      /* The shared `:is(.tg-action-button, …)` rule outranks `--primary` on its own. */
+      .tg-404 nav .tg-action-button--primary {
+        color: var(--sl-color-accent);
+      }
+    </style>
+  </body>
+</html>
