@@ -51,7 +51,7 @@ YAML_CONFIG_FIELDS = ("eval_config", "custom_config_path", "sglang_config")
 
 
 @dataclass(config=ConfigDict(extra="forbid", arbitrary_types_allowed=True))
-class MilesConfig(BaseTrainRecipe):
+class MilesRecipe(BaseTrainRecipe):
     """Training Gym config for Miles training on Modal.
 
     Non-launcher attributes become Miles CLI flags. This intentionally mirrors
@@ -168,7 +168,7 @@ class MilesConfig(BaseTrainRecipe):
     # ── Validators ───────────────────────────────────────────────────────────
 
     @model_validator(mode="after")
-    def _validate_gpu_allocation(self) -> "MilesConfig":
+    def _validate_gpu_allocation(self) -> "MilesRecipe":
         resolve_gpu_allocation(self)
         return self
 

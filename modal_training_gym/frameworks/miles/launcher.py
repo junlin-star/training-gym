@@ -53,7 +53,7 @@ from modal_training_gym.train_recipes.miles_recipe.recipe import (
     CHECKPOINTS_PATH,
     DATA_PATH,
     HF_CACHE_PATH,
-    MilesConfig,
+    MilesRecipe,
 )
 from modal_training_gym.common.patches import encode_patch
 from modal_training_gym.frameworks.miles.modal_helpers.utils import (
@@ -73,7 +73,7 @@ _MILES_PATCHES = Path(__file__).parent / "modal_helpers" / "patches"
 _PATCH_SGLANG_ABORT_B64 = encode_patch("patch_sglang_abort", _MILES_PATCHES)
 
 
-def _build_miles_base_image(miles: MilesConfig) -> Image:
+def _build_miles_base_image(miles: MilesRecipe) -> Image:
     image = (
         Image.from_registry(miles.docker_image)
         .entrypoint([])
@@ -92,7 +92,7 @@ def _build_miles_base_image(miles: MilesConfig) -> Image:
 def build_miles_app(
     *,
     training_run_id: str,
-    miles: MilesConfig,
+    miles: MilesRecipe,
     model: ModelConfig,
     dataset: DatasetConfig,
     checkpoint: Checkpoint | None = None,
@@ -246,7 +246,7 @@ def build_miles_app(
         name="prepare_dataset",
     )
     def prepare_dataset():
-        run_prepare_dataset(dataset, data_volume, MilesConfig._resolve_data_paths)
+        run_prepare_dataset(dataset, data_volume, MilesRecipe._resolve_data_paths)
 
     convert_nnodes = get_checkpoint_conversion_policy(miles, model=model)[0]
     convert_multi_node = convert_nnodes > 1
@@ -553,7 +553,7 @@ def build_miles_app(
             await checkpoints_volume.commit.aio()
 
             await _set_framework_status(MilesStatus.PREPARE_DATASET)
-            prompt_data, eval_paths = MilesConfig._resolve_data_paths(dataset)
+            prompt_data, eval_paths = MilesRecipe._resolve_data_paths(dataset)
             needs_prepare = not os.path.exists(prompt_data)
             if dataset.always_prepare and os.path.exists(prompt_data):
                 data_dir = os.path.dirname(prompt_data)
