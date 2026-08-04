@@ -8,8 +8,11 @@ from __future__ import annotations
 
 import os
 import tomllib
+from json import JSONDecodeError, loads
 from pathlib import Path
 from typing import Any
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 
 CONFIG_PATH = Path.home() / ".training-gym.toml"
@@ -18,6 +21,7 @@ MODAL_CONFIG_PATH = Path(
 )
 
 _dashboard_requires_proxy_auth = False
+DASHBOARD_PROXY_AUTH_PATH = "/api/proxy-auth"
 
 
 def set_dashboard_requires_proxy_auth(value: bool) -> None:
@@ -66,13 +70,39 @@ def get_dashboard_url() -> str | None:
 
 
 def get_dashboard_proxy_auth() -> bool | None:
-    """Return the last deployed dashboard proxy-auth mode, if recorded."""
+    """Return the deployed dashboard's proxy-auth mode, if known.
+
+    The live endpoint is authoritative. Modal itself returns 403 before a
+    proxy-authenticated dashboard request reaches FastAPI, so that status also
+    identifies an authenticated deployment. The persisted mode remains a
+    fallback for older or temporarily unreachable dashboards.
+    """
     dashboard = load_config().get("dashboard")
-    if isinstance(dashboard, dict):
-        proxy_auth = dashboard.get("proxy_auth")
-        if isinstance(proxy_auth, bool):
-            return proxy_auth
-    return None
+    if not isinstance(dashboard, dict):
+        return None
+
+    persisted = dashboard.get("proxy_auth")
+    if not isinstance(persisted, bool):
+        persisted = None
+
+    url = dashboard.get("url")
+    if not isinstance(url, str) or not url.strip():
+        return persisted
+
+    request = Request(
+        url.strip().rstrip("/") + DASHBOARD_PROXY_AUTH_PATH,
+        headers=modal_proxy_auth_headers(),
+    )
+    try:
+        with urlopen(request, timeout=5) as response:
+            value = loads(response.read())
+            return value if isinstance(value, bool) else persisted
+    except HTTPError as exc:
+        if exc.code == 403:
+            return True
+    except (JSONDecodeError, OSError, URLError, UnicodeDecodeError):
+        pass
+    return persisted
 
 
 PROXY_AUTH_SECTION = "proxy_auth"

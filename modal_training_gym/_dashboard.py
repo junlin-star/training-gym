@@ -35,7 +35,10 @@ from starlette.requests import Request
 # Used as endpoint parameter annotations, so — like ``Request`` above — these
 # must resolve from this module's globals.
 from modal_training_gym.common.advantage_distribution import AdvantageDistribution
-from modal_training_gym.common.config import dashboard_requires_proxy_auth
+from modal_training_gym.common.config import (
+    DASHBOARD_PROXY_AUTH_PATH,
+    dashboard_requires_proxy_auth,
+)
 from modal_training_gym.common.run import FrameworkStatusUpdate, TrainingRun
 from modal_training_gym.common.run_list import (
     filter_run_summaries,
@@ -52,6 +55,8 @@ from modal_training_gym.common.training_rollout import (
     TrainingRolloutResult,
     TrainingRolloutSummary,
 )
+
+_DASHBOARD_REQUIRES_PROXY_AUTH = dashboard_requires_proxy_auth()
 
 SummaryLoader = Callable[[], Awaitable[list[JsonDict]]]
 
@@ -118,11 +123,12 @@ MODAL_CREDS_SECRET_NAME = "_training-gym-modal-creds"
 # Set a real value via ``training-gym set-password``.
 DASHBOARD_PASSWORD_SECRET_NAME = "_training-gym-dashboard-password"
 
-# Write endpoints authenticated by their own per-run bearer token. They're
-# exempt from Basic Auth so launchers (which send ``Authorization: Bearer``)
-# keep working even when a dashboard password is set.
+# Routes that must bypass Basic Auth. Write endpoints authenticate with their
+# own per-run bearer token; the proxy-auth status route must report only the
+# Modal-layer setting, independent of dashboard password protection.
 PASSWORD_EXEMPT_PATHS = frozenset(
     {
+        DASHBOARD_PROXY_AUTH_PATH,
         "/api/framework-status",
         "/api/training-rollouts",
         "/api/advantage-distributions",
@@ -359,7 +365,7 @@ def reconcile() -> None:
     min_containers=1,
     secrets=_function_secrets(),
 )
-@modal.asgi_app(requires_proxy_auth=dashboard_requires_proxy_auth())
+@modal.asgi_app(requires_proxy_auth=_DASHBOARD_REQUIRES_PROXY_AUTH)
 def fastapi_app():
     import base64
     import binascii
@@ -414,6 +420,10 @@ def fastapi_app():
                     headers={"WWW-Authenticate": 'Basic realm="training-gym"'},
                 )
         return await call_next(request)
+
+    @web.get(DASHBOARD_PROXY_AUTH_PATH)
+    async def proxy_auth_status() -> bool:
+        return _DASHBOARD_REQUIRES_PROXY_AUTH
 
     cache_ttl_seconds = 30.0
     cache_keys = ("runs", "train_results", "evals", "deployments")

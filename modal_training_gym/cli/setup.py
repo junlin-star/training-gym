@@ -57,7 +57,7 @@ def _resolve_dashboard_proxy_auth(proxy_auth: bool | None) -> bool:
 
     if get_dashboard_proxy_auth() is True:
         raise ProxyAuthChoiceRequired(
-            "The dashboard was last deployed with proxy auth. "
+            "The deployed dashboard uses proxy auth. "
             "Pass either --proxy-auth or --no-proxy-auth explicitly."
         )
     return False
