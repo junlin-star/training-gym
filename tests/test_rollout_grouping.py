@@ -121,6 +121,9 @@ def test_mean_averages_rollouts_not_samples():
 
     assert rollout.mean == 1.5
     assert rollout.total == 10
+    assert rollout.episode_count == 4
+    assert rollout.to_summary()["episode_count"] == 4
+    assert rollout.to_summary()["total"] == 10
 
 
 def test_mean_unchanged_for_one_sample_per_rollout():
@@ -147,6 +150,7 @@ def test_mean_falls_back_to_the_rollout_id_in_metadata():
 
     assert rollout.mean == 1.5
     assert rollout.total == 10
+    assert rollout.episode_count == 4
 
 
 def test_metadata_fallback_treats_rollout_zero_as_a_rollout():

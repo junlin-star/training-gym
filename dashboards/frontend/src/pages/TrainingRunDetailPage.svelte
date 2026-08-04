@@ -233,7 +233,7 @@
   const rolloutColumns = [
     { key: "step", label: "Step", width: 72, minWidth: 56 },
     { key: "mean", label: "Mean reward", width: 118, minWidth: 96 },
-    { key: "samples", label: "Samples", width: 80, minWidth: 64 },
+    { key: "rollouts", label: "Rollouts", width: 80, minWidth: 64 },
     { key: "when", label: "When", width: 88, minWidth: 64 },
   ];
 
@@ -242,8 +242,6 @@
   let advantageSteps = $state([]);
   let hasAdvantages = $derived(advantageSteps.length > 0);
 
-  // Per-step sample view: a histogram of sample scores. Clicking a bar opens
-  // a single-sample viewer scoped to that bucket; ←/→ step through it.
   const BUCKET_COUNT = 12;
   let activeBucket = $state(null); // histogram bucket index, or null
   let activeSamplePos = $state(0); // position within the active bucket's list
@@ -253,7 +251,7 @@
     const rollouts = groupByRollout(samples);
     if (!rollouts.length) return null;
     const scores = rolloutScores(samples, rollouts);
-    // Loop instead of Math.min(...arr): a single rollout's per-sample array can
+    // Loop instead of Math.min(...arr): a single step's rollout-score array can
     // exceed the engine's max argument count and make the spread throw a
     // RangeError (same failure class buildDist avoids).
     let lo = Infinity;
@@ -266,14 +264,13 @@
     // lone bar pinned to one edge.
     const count = lo === hi ? 1 : BUCKET_COUNT;
     const span = hi - lo || 1;
-    const buckets = Array.from({ length: count }, () => ({ rollouts: 0, samples: [] }));
+    const buckets = Array.from({ length: count }, () => []);
     rollouts.forEach((positions, r) => {
       let b = count === 1 ? 0 : Math.floor(((scores[r] - lo) / span) * count);
       b = Math.max(0, Math.min(count - 1, b));
-      buckets[b].rollouts += 1;
-      for (const p of positions) buckets[b].samples.push(p);
+      buckets[b].push(positions[0]);
     });
-    const maxCount = Math.max(...buckets.map((b) => b.rollouts), 1);
+    const maxCount = Math.max(...buckets.map((b) => b.length), 1);
     return {
       lo,
       hi,
@@ -286,23 +283,14 @@
     };
   });
 
-  let grouped = $derived(!!sampleDist && sampleDist.total !== sampleDist.sampleCount);
-  let distSummary = $derived(
-    !sampleDist
-      ? ""
-      : grouped
-        ? `${plural(sampleDist.total, "rollout")} · ${plural(sampleDist.sampleCount, "sample")}`
-        : plural(sampleDist.total, "sample"),
-  );
+  let distSummary = $derived(!sampleDist ? "" : plural(sampleDist.total, "rollout"));
 
   function plural(n, unit) {
     return `${n} ${unit}${n === 1 ? "" : "s"}`;
   }
 
   function bucketLabel(bucket, b) {
-    const head = plural(bucket.rollouts, grouped ? "rollout" : "sample");
-    const of = grouped ? ` · ${plural(bucket.samples.length, "sample")}` : "";
-    return `${head}${of} · reward ${bucketRange(b)}`;
+    return `${plural(bucket.length, "rollout")} · reward ${bucketRange(b)}`;
   }
 
   function bucketRange(b) {
@@ -315,7 +303,7 @@
 
   function openBucket(b) {
     const d = sampleDist;
-    if (!d || !d.buckets[b]?.samples.length) return;
+    if (!d || !d.buckets[b]?.length) return;
     activeBucket = b;
     activeSamplePos = 0;
   }
@@ -328,16 +316,16 @@
   function stepSample(delta) {
     const d = sampleDist;
     if (!d || activeBucket == null) return;
-    const list = d.buckets[activeBucket]?.samples || [];
+    const list = d.buckets[activeBucket] || [];
     if (!list.length) return;
     activeSamplePos = Math.max(0, Math.min(list.length - 1, activeSamplePos + delta));
   }
 
-  // The sample currently shown in the viewer (or null when no bucket is open).
+  // The rollout currently shown in the viewer (or null when no bucket is open).
   let activeSample = $derived.by(() => {
     const d = sampleDist;
     if (!d || activeBucket == null) return null;
-    const list = d.buckets[activeBucket]?.samples || [];
+    const list = d.buckets[activeBucket] || [];
     const idx = list[activeSamplePos];
     if (idx == null) return null;
     return {
@@ -384,7 +372,7 @@
     const a = document.createElement("a");
     a.href = url;
     const rollout = expandedRolloutId ?? 0;
-    a.download = `trajectory_r${rollout}_s${activeSample.pos}.json`;
+    a.download = `trajectory_r${rollout}_rollout${rolloutIndex(activeSample.sample) ?? activeSample.pos}.json`;
     a.click();
     URL.revokeObjectURL(url);
   }
@@ -521,9 +509,9 @@
       const detail = await fetchRollout(runId, rolloutId);
       if (expandedRolloutId === rolloutId) {
         expandedRollout = detail;
-        // Preselect the first populated bucket so a sample is shown right away.
+        // Preselect the first populated bucket so a rollout is shown right away.
         const d = sampleDist;
-        const first = d ? d.buckets.findIndex((b) => b.samples.length > 0) : -1;
+        const first = d ? d.buckets.findIndex((b) => b.length > 0) : -1;
         if (first >= 0) openBucket(first);
       }
     } finally {
@@ -1529,7 +1517,7 @@
                     <span class="inline-block text-[10px] font-medium p-[1px_6px] rounded-[3px] ml-[6px] align-middle bg-[rgba(251,191,36,0.15)] text-[#fbbf24] [border:1px_solid_rgba(251,191,36,0.25)]" title="Some samples failed due to infrastructure error">partial failure</span>
                   {/if}
                 </td>
-                <td>{r.total}</td>
+                <td>{r.episode_count ?? "—"}</td>
                 <td>
                   <TimeAgo timestamp={r.created_at} showJustNow falsyRepresentation="—" />
                 </td>
@@ -1538,9 +1526,9 @@
                 <tr>
                   <td class="p-[12px_10px] bg-(--color-c-gray-08,#1c1c1c) cursor-default" colspan={rolloutColumns.length}>
                     {#if expandedRolloutLoading}
-                      <div class="detail-empty">Loading samples…</div>
+                      <div class="detail-empty">Loading rollouts…</div>
                     {:else if !expandedRollout || !sampleDist}
-                      <div class="detail-empty">No samples recorded.</div>
+                      <div class="detail-empty">No rollouts recorded.</div>
                     {:else}
                       {@const stepTiming = stepTimingForRollout(r.rollout_id)}
                       {#if stepTiming}
@@ -1643,18 +1631,18 @@
                                 class="sample-nav-btn"
                                 onclick={() => stepSample(-1)}
                                 disabled={activeSample.pos === 0}
-                                aria-label="Previous sample"
+                                aria-label="Previous rollout"
                               >
                                 <ChevronLeft size={14} />
                               </button>
                               <span class="text-[12px] text-(--text-bright) [font-variant-numeric:tabular-nums]">
-                                Sample {activeSample.pos + 1} / {activeSample.count}
+                                Rollout {activeSample.pos + 1} / {activeSample.count}
                               </span>
                               <button
                                 class="sample-nav-btn"
                                 onclick={() => stepSample(1)}
                                 disabled={activeSample.pos === activeSample.count - 1}
-                                aria-label="Next sample"
+                                aria-label="Next rollout"
                               >
                                 <ChevronRight size={14} />
                               </button>
@@ -1675,7 +1663,7 @@
                               <button
                                 class="sample-nav-btn"
                                 onclick={closeBucket}
-                                aria-label="Close sample viewer"
+                                aria-label="Close rollout viewer"
                               >
                                 <X size={14} />
                               </button>
@@ -1771,7 +1759,7 @@
                           {/if}
                         </div>
                       {:else}
-                        <div class="text-[12px] text-(--muted) p-[4px_0]">Click a bar to inspect its samples.</div>
+                        <div class="text-[12px] text-(--muted) p-[4px_0]">Click a bar to inspect its rollouts.</div>
                       {/if}
                     {/if}
                   </td>

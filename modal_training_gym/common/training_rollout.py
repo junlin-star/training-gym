@@ -106,6 +106,10 @@ class TrainingRolloutResult(BaseModel):
         return len(self.samples)
 
     @property
+    def episode_count(self) -> int:
+        return len(self._rollout_groups())
+
+    @property
     def mean(self) -> float:
         groups = self._rollout_groups()
         if not groups:
@@ -189,6 +193,7 @@ class TrainingRolloutResult(BaseModel):
             "rollout_id": self.rollout_id,
             "created_at": self.created_at,
             "total": self.total,
+            "episode_count": self.episode_count,
             "mean": self.mean,
         }
         if self.rollout_time is not None:
