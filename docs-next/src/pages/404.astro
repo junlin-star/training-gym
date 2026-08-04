@@ -1,149 +1,310 @@
 ---
 const actions = [
-  { href: '/', label: 'Back to overview' },
-  { href: '/tutorials/', label: 'Browse tutorials' },
+  { href: '/', label: 'Back to overview', variant: 'primary' },
+  { href: '/tutorials/', label: 'Browse tutorials', variant: 'ghost' },
+  { href: '/reference/', label: 'API reference', variant: 'ghost' },
 ];
 ---
 
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" href="/modal-logo.svg" />
     <title>Page not found | Training Gym</title>
     <meta
       name="description"
       content="The requested Training Gym docs page could not be found."
     />
     <style>
-      @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Space+Grotesk:wght@400;500;600;700&display=swap');
+      @import url('https://fonts.googleapis.com/css2?family=Fira+Mono:wght@400;500&family=Inter:wght@400;500;600;700&display=swap');
+
+      @font-face {
+        font-family: 'Goga';
+        src: url('https://modal-cdn.com/fonts/Goga-VariableVF.woff2') format('woff2');
+        font-weight: 100 900;
+        font-style: normal;
+        font-display: swap;
+      }
 
       :root {
-        color-scheme: light dark;
-        --tg-bg: #050a07;
-        --tg-panel: rgba(12, 20, 15, 0.84);
-        --tg-border: rgba(147, 255, 168, 0.18);
-        --tg-accent: #72f27d;
-        --tg-text: #e7f5e8;
-        --tg-muted: #aac4ae;
+        color-scheme: dark;
+        --sl-color-accent: #7fee64;
+        --sl-color-white: #ffffff;
+        --sl-color-gray-2: #d1d1d1;
+        --sl-color-gray-3: #a3a3a3;
+        --sl-color-bg: #181818;
+        --sl-color-black: #181818;
+        --tg-panel: #1c1c1c;
+        --tg-panel-alt: #242424;
+        --tg-border: rgba(255, 255, 255, 0.1);
+        --tg-border-strong: rgba(255, 255, 255, 0.2);
+        --tg-font:
+          'Inter', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+          'Segoe UI', sans-serif;
+        --tg-font-mono:
+          'Fira Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
       }
 
       * {
         box-sizing: border-box;
       }
 
+      html {
+        background: linear-gradient(180deg, var(--sl-color-bg) 0%, var(--sl-color-black) 100%);
+      }
+
       body {
         margin: 0;
         min-height: 100vh;
-        display: grid;
-        place-items: center;
-        padding: 1.5rem;
-        font-family: 'Space Grotesk', system-ui, sans-serif;
-        color: var(--tg-text);
-        background:
-          radial-gradient(circle at top left, rgba(114, 242, 125, 0.16), transparent 26rem),
-          radial-gradient(circle at top right, rgba(58, 193, 255, 0.12), transparent 24rem),
-          linear-gradient(180deg, #050a07, #0a110c 100%);
+        display: flex;
+        flex-direction: column;
+        background: transparent;
+        color: var(--sl-color-gray-2);
+        font-family: var(--tg-font);
+        -webkit-font-smoothing: antialiased;
+      }
+
+      header {
+        border-bottom: 1px solid #2f2f2f;
+        background: var(--sl-color-bg);
+      }
+
+      .header-inner {
+        display: flex;
+        align-items: center;
+        gap: 0.55rem;
+        max-width: 56rem;
+        margin: 0 auto;
+        padding: 0.75rem 1.25rem;
+      }
+
+      .title-wrapper {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.55rem;
+        text-decoration: none;
+      }
+
+      .title-wrapper img {
+        height: 17.5px;
+        width: auto;
+      }
+
+      .site-title {
+        color: var(--sl-color-accent);
+        display: inline-flex;
+        align-items: baseline;
+        gap: 0.18rem;
+        font-family: 'Goga', var(--tg-font);
+        font-feature-settings: 'ss01' on;
+        font-size: 17.6px;
+        font-weight: 600;
+        letter-spacing: -0.02em;
+        line-height: 1;
+        white-space: nowrap;
+      }
+
+      .site-title__modal {
+        color: #ddffdc;
       }
 
       main {
-        width: min(42rem, 100%);
-        padding: clamp(1.5rem, 4vw, 3rem);
-        border: 1px solid var(--tg-border);
-        border-radius: 1.75rem;
-        background: var(--tg-panel);
-        backdrop-filter: blur(20px);
-        box-shadow: 0 32px 80px rgba(0, 0, 0, 0.34);
+        flex: 1;
+        display: flex;
+        align-items: center;
+        width: 100%;
+        max-width: 56rem;
+        margin: 0 auto;
+        padding: clamp(3rem, 12vh, 7rem) 1.25rem;
       }
 
-      .eyebrow {
+      .status {
         display: inline-flex;
         align-items: center;
-        gap: 0.6rem;
-        margin-bottom: 1rem;
-        color: var(--tg-accent);
-        font-size: 0.76rem;
-        font-weight: 700;
-        letter-spacing: 0.14em;
-        text-transform: uppercase;
+        gap: 0.5rem;
+        padding: 0.3rem 0.65rem;
+        border: 1px solid color-mix(in srgb, var(--sl-color-accent) 40%, transparent);
+        border-radius: 9999px;
+        background: color-mix(in srgb, var(--sl-color-accent) 5%, transparent);
+        color: var(--sl-color-accent);
+        font-family: var(--tg-font-mono);
+        font-size: 0.8125rem;
+        line-height: 1;
       }
 
-      .eyebrow::before {
-        content: '404';
-        display: inline-grid;
-        place-items: center;
-        width: 2.4rem;
-        height: 2.4rem;
-        border-radius: 0.8rem;
-        background: linear-gradient(135deg, var(--tg-accent), #3ac1ff);
-        color: #061009;
-        font-family: 'IBM Plex Mono', monospace;
-        letter-spacing: 0.06em;
+      .status::before {
+        content: '';
+        width: 0.4rem;
+        height: 0.4rem;
+        border-radius: 50%;
+        background: currentColor;
       }
 
       h1 {
-        margin: 0;
-        max-width: 12ch;
-        font-size: clamp(2.75rem, 8vw, 4.9rem);
-        line-height: 0.95;
-        letter-spacing: -0.05em;
+        margin: 1.5rem 0 0;
+        max-width: 18ch;
+        color: var(--sl-color-white);
+        font-size: clamp(2.35rem, 6vw, 3.75rem);
+        font-weight: 600;
+        line-height: 1.05;
+        letter-spacing: -0.03em;
+        text-wrap: balance;
       }
 
       p {
-        margin: 1.2rem 0 0;
-        max-width: 38rem;
-        color: var(--tg-muted);
-        font-size: 1.08rem;
-        line-height: 1.7;
+        margin: 1rem 0 0;
+        max-width: 60ch;
+        font-size: 1.0625rem;
+        line-height: 1.65;
+        text-wrap: pretty;
+      }
+
+      .path {
+        margin-top: 1.75rem;
+        padding: 0.85rem 1rem;
+        border: 1px solid var(--tg-border);
+        border-radius: 0.5rem;
+        background: var(--tg-panel-alt);
+        color: var(--sl-color-gray-3);
+        font-family: var(--tg-font-mono);
+        font-size: 0.875rem;
+        overflow-x: auto;
+        white-space: nowrap;
+      }
+
+      .path span {
+        color: var(--sl-color-accent);
+        user-select: none;
+      }
+
+      .path code {
+        color: var(--sl-color-gray-2);
       }
 
       nav {
         display: flex;
         flex-wrap: wrap;
-        gap: 0.9rem;
+        gap: 0.6rem;
         margin-top: 2rem;
       }
 
-      a {
+      nav a {
         display: inline-flex;
         align-items: center;
         justify-content: center;
-        padding: 0.9rem 1.25rem;
-        border: 1px solid var(--tg-border);
-        border-radius: 999px;
-        color: var(--tg-text);
-        font-weight: 600;
+        min-height: 2.25rem;
+        padding: 0.375rem 0.9rem;
+        border: 1px solid var(--tg-border-strong);
+        border-radius: 9999px;
+        background: transparent;
+        color: var(--sl-color-gray-2);
+        font-size: 0.875rem;
+        line-height: 1;
         text-decoration: none;
         transition:
-          transform 0.2s ease,
-          background-color 0.2s ease,
-          border-color 0.2s ease;
+          border-color 0.15s ease,
+          background-color 0.15s ease,
+          color 0.15s ease;
       }
 
-      a:first-child {
-        background: var(--tg-accent);
-        border-color: var(--tg-accent);
-        color: #061009;
+      nav a:hover {
+        border-color: color-mix(in srgb, var(--tg-border-strong) 72%, white);
+        background: rgba(255, 255, 255, 0.05);
+        color: var(--sl-color-white);
       }
 
-      a:hover {
-        transform: translateY(-1px);
+      nav a.primary {
+        border-color: color-mix(in srgb, var(--sl-color-accent) 40%, transparent);
+        background: color-mix(in srgb, var(--sl-color-accent) 5%, transparent);
+        color: var(--sl-color-accent);
+      }
+
+      nav a.primary:hover {
+        background: color-mix(in srgb, var(--sl-color-accent) 10%, transparent);
+        color: var(--sl-color-accent);
+      }
+
+      nav a:focus-visible,
+      .title-wrapper:focus-visible {
+        outline: 2px solid var(--sl-color-accent);
+        outline-offset: 2px;
+      }
+
+      footer {
+        border-top: 1px solid var(--tg-border);
+        color: var(--sl-color-gray-3);
+        font-size: 0.8125rem;
+      }
+
+      .footer-inner {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem 1.25rem;
+        max-width: 56rem;
+        margin: 0 auto;
+        padding: 1.25rem;
+      }
+
+      footer a {
+        color: var(--sl-color-gray-2);
+        text-decoration: none;
+      }
+
+      footer a:hover {
+        color: var(--sl-color-accent);
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        * {
+          transition: none !important;
+        }
       }
     </style>
   </head>
   <body>
+    <header>
+      <div class="header-inner">
+        <a href="/" class="title-wrapper">
+          <img src="/modal-logo.svg" alt="Modal" />
+          <span class="site-title"
+            ><span class="site-title__modal">Modal</span><span>Training Gym</span></span
+          >
+        </a>
+      </div>
+    </header>
+
     <main>
-      <div class="eyebrow">Training Gym</div>
-      <h1>That page drifted off-cluster.</h1>
-      <p>
-        The docs URL you requested does not exist, or the route moved during the
-        Starlight cutover.
-      </p>
-      <nav>
-        {actions.map((action) => (
-          <a href={action.href}>{action.label}</a>
-        ))}
-      </nav>
+      <div>
+        <div class="status">404 · page not found</div>
+        <h1>This route never made it to the cluster.</h1>
+        <p>
+          The page you asked for doesn't exist, or it moved. The tutorials and API
+          reference below cover everything in the gym.
+        </p>
+        <div class="path">
+          <span>$</span> <code id="requested-path">GET /</code>
+        </div>
+        <nav>
+          {actions.map((action) => (
+            <a href={action.href} class={action.variant}>{action.label}</a>
+          ))}
+        </nav>
+      </div>
     </main>
+
+    <footer>
+      <div class="footer-inner">
+        <span>Modal Training Gym</span>
+        <a href="https://github.com/modal-projects/training-gym">GitHub</a>
+        <a href="/support/">Support</a>
+      </div>
+    </footer>
+
+    <script is:inline>
+      document.getElementById('requested-path').textContent =
+        'GET ' + window.location.pathname;
+    </script>
   </body>
 </html>
