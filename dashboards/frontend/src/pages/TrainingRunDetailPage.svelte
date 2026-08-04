@@ -23,6 +23,13 @@
     fetchRunAdvantageStep,
     fetchRunLogs,
   } from "../lib/api.js";
+  import {
+    groupByRollout,
+    meanRolloutScore,
+    rolloutIndex,
+    rolloutScore,
+    rolloutScores,
+  } from "../lib/rolloutGrouping.js";
 
   // Number of historical log lines requested per page.
   const HIST_PAGE = 500;
@@ -247,11 +254,11 @@
   let activeBucket = $state(null); // histogram bucket index, or null
   let activeSamplePos = $state(0); // position within the active bucket's list
 
-  // Bucket the expanded rollout's samples by score.
   let sampleDist = $derived.by(() => {
     const samples = expandedRollout?.samples || [];
-    if (!samples.length) return null;
-    const scores = samples.map((s) => Number(s.score) || 0);
+    const rollouts = groupByRollout(samples);
+    if (!rollouts.length) return null;
+    const scores = rollouts.map((p) => rolloutScore(samples, p));
     // Loop instead of Math.min(...arr): a single rollout's per-sample array can
     // exceed the engine's max argument count and make the spread throw a
     // RangeError (same failure class buildDist avoids).
@@ -261,20 +268,48 @@
       if (v < lo) lo = v;
       if (v > hi) hi = v;
     }
-    // When every sample scored the same, a single bucket reads clearer than a
+    // When every rollout scored the same, a single bucket reads clearer than a
     // lone bar pinned to one edge.
     const count = lo === hi ? 1 : BUCKET_COUNT;
     const span = hi - lo || 1;
-    const buckets = Array.from({ length: count }, () => []);
-    samples.forEach((s, i) => {
-      const score = Number(s.score) || 0;
-      let b = count === 1 ? 0 : Math.floor(((score - lo) / span) * count);
+    const buckets = Array.from({ length: count }, () => ({ rollouts: 0, samples: [] }));
+    rollouts.forEach((positions, r) => {
+      let b = count === 1 ? 0 : Math.floor(((scores[r] - lo) / span) * count);
       b = Math.max(0, Math.min(count - 1, b));
-      buckets[b].push(i);
+      buckets[b].rollouts += 1;
+      buckets[b].samples.push(...positions);
     });
-    const maxCount = Math.max(...buckets.map((b) => b.length), 1);
-    return { lo, hi, count, span, buckets, maxCount, total: samples.length };
+    const maxCount = Math.max(...buckets.map((b) => b.rollouts), 1);
+    return {
+      lo,
+      hi,
+      count,
+      span,
+      buckets,
+      maxCount,
+      total: rollouts.length,
+      sampleCount: samples.length,
+    };
   });
+
+  let grouped = $derived(!!sampleDist && sampleDist.total !== sampleDist.sampleCount);
+  let distSummary = $derived(
+    !sampleDist
+      ? ""
+      : grouped
+        ? `${plural(sampleDist.total, "rollout")} · ${plural(sampleDist.sampleCount, "sample")}`
+        : plural(sampleDist.total, "sample"),
+  );
+
+  function plural(n, unit) {
+    return `${n} ${unit}${n === 1 ? "" : "s"}`;
+  }
+
+  function bucketLabel(bucket, b) {
+    const head = plural(bucket.rollouts, grouped ? "rollout" : "sample");
+    const of = grouped ? ` · ${plural(bucket.samples.length, "sample")}` : "";
+    return `${head}${of} · reward ${bucketRange(b)}`;
+  }
 
   function bucketRange(b) {
     const d = sampleDist;
@@ -286,7 +321,7 @@
 
   function openBucket(b) {
     const d = sampleDist;
-    if (!d || !d.buckets[b]?.length) return;
+    if (!d || !d.buckets[b]?.samples.length) return;
     activeBucket = b;
     activeSamplePos = 0;
   }
@@ -299,7 +334,7 @@
   function stepSample(delta) {
     const d = sampleDist;
     if (!d || activeBucket == null) return;
-    const list = d.buckets[activeBucket] || [];
+    const list = d.buckets[activeBucket]?.samples || [];
     if (!list.length) return;
     activeSamplePos = Math.max(0, Math.min(list.length - 1, activeSamplePos + delta));
   }
@@ -308,7 +343,7 @@
   let activeSample = $derived.by(() => {
     const d = sampleDist;
     if (!d || activeBucket == null) return null;
-    const list = d.buckets[activeBucket] || [];
+    const list = d.buckets[activeBucket]?.samples || [];
     const idx = list[activeSamplePos];
     if (idx == null) return null;
     return {
@@ -334,6 +369,9 @@
   function sampleToPayload(s) {
     return {
       score: s.score,
+      rollout_index: rolloutIndex(s),
+      sample_index: s.sample_index ?? null,
+      group_index: s.group_index ?? null,
       prompt: s.prompt || null,
       response: s.response || null,
       thinking: s.thinking || null,
@@ -364,7 +402,9 @@
       training_run_id: runId,
       rollout_id: rollout,
       total: expandedRollout.samples.length,
-      mean: expandedRollout.samples.reduce((a, s) => a + (s.score || 0), 0) / expandedRollout.samples.length,
+      rollouts: groupByRollout(expandedRollout.samples).length,
+      n_samples_per_prompt: expandedRollout.n_samples_per_prompt ?? null,
+      mean: meanRolloutScore(expandedRollout.samples),
       samples: expandedRollout.samples.map(sampleToPayload),
     };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
@@ -486,7 +526,7 @@
         expandedRollout = detail;
         // Preselect the first populated bucket so a sample is shown right away.
         const d = sampleDist;
-        const first = d ? d.buckets.findIndex((b) => b.length > 0) : -1;
+        const first = d ? d.buckets.findIndex((b) => b.samples.length > 0) : -1;
         if (first >= 0) openBucket(first);
       }
     } finally {
@@ -1143,12 +1183,7 @@
   }
 
   function buildScoreDist(firstSamples, lastSamples, firstId, lastId) {
-    return buildDist(
-      firstSamples.map((s) => Number(s.score) || 0),
-      lastSamples.map((s) => Number(s.score) || 0),
-      firstId,
-      lastId,
-    );
+    return buildDist(rolloutScores(firstSamples), rolloutScores(lastSamples), firstId, lastId);
   }
 
   // Adapt a buildDist result into ComparativeBarChart inputs: one category per
@@ -1529,7 +1564,7 @@
                         {@const responseMissing = Number(m["agent/response_missing_sample_count"]) || 0}
                         {@const infraInvalid = Number(m["agent/invalid_infra_sample_count"]) || 0}
                         {@const limitsExceeded = Number(m["agent/limits_exceeded_sample_count"]) || 0}
-                        {@const totalSamples = Number(m["agent/valid_sample_count"]) || sampleDist.total || 0}
+                        {@const totalSamples = Number(m["agent/valid_sample_count"]) || sampleDist.sampleCount || 0}
                         {@const hasErrors = remoteErr > 0 || responseMissing > 0 || infraInvalid > 0}
                         {#if hasErrors}
                           <div class="rollout-diagnostics" class:diag-critical={remoteErr >= totalSamples}>
@@ -1571,33 +1606,33 @@
                             title="Download all samples as JSON"
                           >
                             <Download size={13} />
-                            Download all ({sampleDist.total} samples)
+                            Download all ({sampleDist.sampleCount} samples)
                           </button>
                         </div>
                         <div class="chart-scroll">
                           <div
                             class="flex items-end gap-[2px] h-[120px] pt-[14px] min-w-[280px] [border-bottom:1px_solid_var(--border,#2f2f2f)]"
                             role="group"
-                            aria-label="Sample score distribution"
+                            aria-label="Reward distribution"
                           >
                             {#each sampleDist.buckets as bucket, b (b)}
                               <button
                                 type="button"
                                 class="dist-bar"
                                 class:detail-active={activeBucket === b}
-                                class:is-empty={!bucket.length}
-                                style:height={`${(bucket.length / sampleDist.maxCount) * 100}%`}
-                                disabled={!bucket.length}
-                                title={`${bucket.length} sample${bucket.length === 1 ? "" : "s"} · reward ${bucketRange(b)}`}
+                                class:is-empty={!bucket.rollouts}
+                                style:height={`${(bucket.rollouts / sampleDist.maxCount) * 100}%`}
+                                disabled={!bucket.rollouts}
+                                title={bucketLabel(bucket, b)}
                                 onclick={() => openBucket(b)}
                               >
-                                <span class="absolute top-[-14px] left-0 right-0 text-center text-[10px] text-(--muted) [font-variant-numeric:tabular-nums]">{bucket.length || ""}</span>
+                                <span class="absolute top-[-14px] left-0 right-0 text-center text-[10px] text-(--muted) [font-variant-numeric:tabular-nums]">{bucket.rollouts || ""}</span>
                               </button>
                             {/each}
                           </div>
                           <div class="dist-axis">
                             <span>{formatMean(sampleDist.lo)}</span>
-                            <span class="dist-axis-label">reward · {sampleDist.total} samples</span>
+                            <span class="dist-axis-label">reward · {distSummary}</span>
                             <span>{formatMean(sampleDist.hi)}</span>
                           </div>
                         </div>

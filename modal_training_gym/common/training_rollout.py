@@ -13,7 +13,7 @@ import time
 from collections.abc import Awaitable
 from typing import Any
 
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from modal_training_gym.common.coerce import safe_int
 from modal_training_gym.common.sample import Sample
@@ -24,9 +24,21 @@ from modal_training_gym.utils.metadata import (
 )
 
 
-# A rollout sample is just a Sample (shared with eval rows). Alias kept for any
-# existing imports; new code should use Sample.
-TrainingRolloutSample = Sample
+class TrainingRolloutSample(Sample):
+    """``rollout_index`` is slime's per-episode ``Sample.rollout_id``, not the
+    step id on ``TrainingRolloutResult``."""
+
+    rollout_index: int | None = None
+    sample_index: int | None = None
+    group_index: int | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _promote_sample(cls, value: Any) -> Any:
+        if isinstance(value, Sample) and not isinstance(value, cls):
+            return value.model_dump()
+        return value
+
 
 # Metadata keys that are internal bookkeeping rather than reward-function
 # tags — numeric, but not something a user wants charted as a custom metric.
@@ -44,13 +56,27 @@ _NON_TAG_METADATA_KEYS = frozenset(
 )
 
 
-def _tag_stats_for_samples(samples: list[Sample]) -> dict[str, dict[str, Any]]:
-    """Per-tag numeric stats (count/mean/min/max) across a rollout's samples.
+def _optional_int(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
 
-    Scans each sample's free-form ``metadata`` for numeric values under
-    custom reward-function tag keys, so the dashboard can chart them over
-    rollouts without a fixed schema. Pure function, no IO.
-    """
+
+def _rollout_groups(
+    samples: list[TrainingRolloutSample],
+) -> list[list[TrainingRolloutSample]]:
+    groups: dict[tuple[str, int], list[TrainingRolloutSample]] = {}
+    for position, sample in enumerate(samples):
+        index = sample.rollout_index
+        if index is None:
+            index = _optional_int(sample.metadata.get("rollout_id"))
+        key = ("rollout", index) if index is not None else ("sample", position)
+        groups.setdefault(key, []).append(sample)
+    return list(groups.values())
+
+
+def _numeric_tags(samples: list[TrainingRolloutSample]) -> dict[str, list[float]]:
     values_by_tag: dict[str, list[float]] = {}
     for sample in samples:
         for key, value in sample.metadata.items():
@@ -58,6 +84,16 @@ def _tag_stats_for_samples(samples: list[Sample]) -> dict[str, dict[str, Any]]:
                 continue
             if isinstance(value, (int, float)) and not isinstance(value, bool):
                 values_by_tag.setdefault(key, []).append(float(value))
+    return values_by_tag
+
+
+def _tag_stats_for_samples(
+    samples: list[TrainingRolloutSample],
+) -> dict[str, dict[str, Any]]:
+    values_by_tag: dict[str, list[float]] = {}
+    for group in _rollout_groups(samples):
+        for tag, values in _numeric_tags(group).items():
+            values_by_tag.setdefault(tag, []).append(sum(values) / len(values))
 
     return {
         tag: {
@@ -89,7 +125,8 @@ class TrainingRolloutResult(BaseModel):
     training_run_id: str
     rollout_id: int
     created_at: int = 0
-    samples: list[Sample] = Field(default_factory=list)
+    n_samples_per_prompt: int = 1
+    samples: list[TrainingRolloutSample] = Field(default_factory=list)
     metrics: dict[str, Any] = Field(default_factory=dict)
     rollout_time: float | None = None
 
@@ -99,9 +136,12 @@ class TrainingRolloutResult(BaseModel):
 
     @property
     def mean(self) -> float:
-        if not self.samples:
+        groups = _rollout_groups(self.samples)
+        if not groups:
             return 0.0
-        return sum(s.score for s in self.samples) / len(self.samples)
+        return sum(sum(s.score for s in group) / len(group) for group in groups) / len(
+            groups
+        )
 
     @property
     def storage_key(self) -> str:
@@ -156,12 +196,7 @@ class TrainingRolloutResult(BaseModel):
 
     @property
     def tag_stats(self) -> dict[str, dict[str, Any]]:
-        """Per-tag numeric stats across this rollout's samples, or {} if none.
-
-        Populated from custom reward-function tags on ``Sample.metadata``
-        (anything numeric that isn't internal bookkeeping) — lets the
-        dashboard chart arbitrary reward-shaping signals over rollouts.
-        """
+        """Per-tag count/mean/min/max, weighted per rollout like ``mean``."""
         return _tag_stats_for_samples(self.samples)
 
     def to_summary(self) -> dict[str, Any]:
