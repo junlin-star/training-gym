@@ -1,9 +1,5 @@
 """Deploy the training-gym dashboard to Modal.
 
-Usage (Python):
-    import modal_training_gym
-    modal_training_gym.setup()
-
 Usage (CLI):
     training-gym setup
 
