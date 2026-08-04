@@ -316,11 +316,16 @@ def test_missing_identity_uses_stable_fallbacks():
 
 
 def test_build_current_summary_joins_result_and_derives_public_fields():
-    summary = build_run_summary(_run(), _result())
+    summary = build_run_summary(
+        _run(framework_status="generate_rollouts"),
+        _result(),
+    )
 
     assert summary.training_run_id == "run-1"
     assert summary.run_id == "run-1"
     assert summary.status == "running"
+    assert summary.display_status == "completed"
+    assert summary.display_stage == "Generating rollouts"
     assert summary.model == "Qwen/Qwen3-4B"
     assert summary.dataset == "openai/gsm8k"
     assert summary.recipe == "slime"
@@ -367,8 +372,24 @@ def test_missing_result_keeps_run_available():
     summary = build_run_summaries([_run()], train_results=None)[0]
 
     assert summary.status == "running"
+    assert summary.display_status == "pending"
     assert summary.has_train_result is False
     assert summary.train_result is None
+
+
+def test_display_stage_marks_inactive_gpu_stage_as_queued():
+    run = _run(
+        framework_status="download_model",
+        metadata={
+            "framework_progress": {
+                "is_active": False,
+            }
+        },
+    )
+
+    summary = build_run_summary(run)
+
+    assert summary.display_stage == "Queuing for GPU — Downloading model"
 
 
 def test_build_summaries_dedupes_by_id_and_prefers_newest_record():

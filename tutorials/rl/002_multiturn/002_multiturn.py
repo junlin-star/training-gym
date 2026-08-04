@@ -18,7 +18,7 @@
 # - `loss_mask`: trains only on model-generated tokens, not environment feedback.
 # Run with:
 # ```
-# uv run python tutorials/rl/002_multiturn/002_multiturn.py
+# uv run tutorials/rl/002_multiturn/002_multiturn.py
 # ```
 # ## Prerequisites
 #

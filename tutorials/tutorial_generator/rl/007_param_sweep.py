@@ -4,9 +4,9 @@
 TUTORIAL_METADATA = {
     "framework": "`slime`",
     "cluster_shape": "1 × 8×H100",
-    "summary": "Sweep hyperparameters across runs with TrainingGroup",
+    "summary": "Sweep hyperparameters across runs",
     "difficulty": "Intermediate",
-    "order": 39,
+    "order": 40,
     "api_classes": [
         "HuggingFaceDataset",
         "Qwen3_4B",
@@ -22,7 +22,7 @@ from tutorial_generator import code, markdown, notebook_only, py_only, shell
 @markdown
 def _intro():
     """
-    # Sweeping hyperparameters with `TrainingGroup`
+    # Sweeping hyperparameters with TrainingGroup
 
     Tuning an RL run usually means launching the *same* recipe several times
     with one or two knobs changed — learning rate, rollout temperature, KL
@@ -57,7 +57,7 @@ def _run_instructions():
     ```
     cd training-gym
     uv sync
-    uv run python tutorials/rl/007_param_sweep/007_param_sweep.py
+    uv run tutorials/rl/007_param_sweep/007_param_sweep.py
     ```
     """
 

@@ -170,6 +170,10 @@ class ModelConfig:
     ``architecture``) as class attributes, then override ``download()``
     to materialize weights into the shared model volume.
 
+    ``model_path`` is the directory the weights load from. Launchers point it
+    at a resumed checkpoint, so ``download()`` must leave a populated
+    ``model_path`` as it found it.
+
     Set ``response_parser`` to a function that converts raw model output
     into a :class:`ParsedResponse`.  For example, Qwen3 models set
     ``response_parser = parse_qwen3_response``.
@@ -199,11 +203,20 @@ class ModelConfig:
         return ParsedResponse(content=text)
 
 
+def _is_populated(path: str) -> bool:
+    if not os.path.isdir(path):
+        return False
+    with os.scandir(path) as entries:
+        return any(entries)
+
+
 class HFModelConfiguration(ModelConfig):
     """ModelConfig for models hosted on HuggingFace.
 
     Implements ``download()`` via ``huggingface_hub.snapshot_download``
-    using ``self.model_name`` as the repo ID.
+    using ``self.model_name`` as the repo ID. An empty ``model_path`` is
+    seeded from the snapshot; a populated one already holds the weights to
+    load and is left untouched.
     """
 
     def download(self) -> None:
@@ -216,9 +229,7 @@ class HFModelConfiguration(ModelConfig):
         # forces a re-download. Populating the cache keeps base models
         # reusable across runs.
         snapshot_dir = snapshot_download(repo_id=self.model_name)
-        if self.model_path and str(self.model_path) != snapshot_dir:
-            # An explicit model_path was requested: mirror the cached snapshot
-            # into it from the local cache (no second network download).
+        if self.model_path and not _is_populated(str(self.model_path)):
             import shutil
 
             shutil.copytree(snapshot_dir, str(self.model_path), dirs_exist_ok=True)

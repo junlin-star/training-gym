@@ -7,17 +7,17 @@ Optional args:
 """
 
 import argparse
-import inspect
 import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-import modal_training_gym.common.models as models
 from modal_training_gym.common.dataset import (
     DatasetConfig,
     HuggingFaceDataset,
     MultimodalDataset,
 )
+from modal_training_gym.common.models.qwen3_asr_1_7b import Qwen3_ASR_1_7B
+from modal_training_gym.common.models.validation import VALIDATABLE_MODELS
 from modal_training_gym.common.run import TrainingRun, TrainingRunStatus
 from modal_training_gym.common.wandb import WandbConfig
 from modal_training_gym.model import ModelConfig
@@ -27,6 +27,62 @@ from modal_training_gym.train_recipes.slime_recipe import SlimeRecipe
 VALIDATION_EPHEMERAL_DISK_MIB = 2_097_152
 
 
+def _fmt_secs(seconds: float | int | None) -> str:
+    if seconds is None:
+        return "—"
+    n = float(seconds)
+    if n >= 60:
+        minutes = int(n // 60)
+        rem = n - minutes * 60
+        return f"{minutes}m {rem:.3f}s"
+    return f"{n:.3f}s"
+
+
+def _substep_label(name: str) -> str:
+    _SUBSTEP_LABELS = {
+        "evaluate_rollouts": "Eval (before)",
+        "generate_rollouts": "Generate rollouts",
+        "offload_rollout": "Offload rollout",
+        "compute_log_probs": "Compute log probs",
+        "optimizer_step": "Optimizer step",
+        "checkpoint_save": "Checkpoint save",
+        "offload_train": "Offload train",
+        "weight_sync": "Weight sync",
+        "evaluate_rollouts_end": "Eval (after)",
+    }
+
+    return _SUBSTEP_LABELS.get(name, name.replace("_", " "))
+
+
+def _total_step_time_s(result: "TutorialResult") -> float:
+    """Sum of per-step durations.
+
+    Reported instead of wall clock, which also covers queue, model download and
+    checkpoint conversion time — variable with compute availability rather than
+    gym performance.
+    """
+    return float(
+        sum(step.get("duration_s") or 0 for step in (result.step_times or {}).values())
+    )
+
+
+def _step_keys(result: "TutorialResult") -> list[str]:
+    keys = set(result.step_times or {}) | set(result.substep_times or {})
+    return sorted(keys, key=lambda k: int(k) if k.isdigit() else k)
+
+
+def _ordered_substeps(
+    subs: dict[str, dict[str, float | None]],
+) -> list[tuple[str, dict[str, float | None]]]:
+    return sorted(
+        subs.items(),
+        key=lambda item: (
+            item[1].get("start") is None,
+            item[1].get("start") or 0,
+        ),
+    )
+
+
 @dataclass
 class TutorialResult:
     base_model_name: str
@@ -34,19 +90,39 @@ class TutorialResult:
     training_run_id: str
     training_run_status: TrainingRunStatus
     total_duration_s: float
+    step_times: dict[str, dict[str, int | None]] | None = None
+    substep_times: dict[str, dict[str, dict[str, float | None]]] | None = None
 
     @property
     def succeeded(self) -> bool:
         return self.training_run_status == TrainingRunStatus.COMPLETED
 
-    def format_tutorial_result(self) -> None:
+    def print_summary(self) -> None:
         print(f"Training run result for {self.training_run_id}")
         print("Parameters:")
         print(f"Base model name: {self.base_model_name}")
         print(f"Step count: {self.step_count}")
         print("Result:")
         print(f"Training run status: {self.training_run_status}")
+        print(f"Total step time (s): {_total_step_time_s(self)}")
         print(f"Total duration (s): {self.total_duration_s}")
+
+        keys = _step_keys(self)
+        if not keys:
+            return
+
+        print("Timings:")
+        for key in keys:
+            step = (self.step_times or {}).get(key, {})
+            duration = step.get("duration_s")
+            print(f"Step {key} ({_fmt_secs(duration)})")
+
+            for name, entry in _ordered_substeps(
+                (self.substep_times or {}).get(key, {})
+            ):
+                print(
+                    f"    {_substep_label(name)}: {_fmt_secs(entry.get('duration_s'))}"
+                )
 
     def to_dict(self) -> dict:
         data = asdict(self)
@@ -62,6 +138,8 @@ class TutorialResult:
             training_run_id=data["training_run_id"],
             training_run_status=TrainingRunStatus(data["training_run_status"]),
             total_duration_s=data["total_duration_s"],
+            step_times=data.get("step_times"),
+            substep_times=data.get("substep_times"),
         )
 
 
@@ -155,7 +233,7 @@ def pick_dataset(model_config: ModelConfig) -> DatasetConfig:
     Audio models (Qwen3-ASR) need speech clips, so they get LibriSpeech;
     everything else defaults to gsm8k.
     """
-    if isinstance(model_config, models.Qwen3_ASR_1_7B):
+    if isinstance(model_config, Qwen3_ASR_1_7B):
         return LibriSpeechASRDataset(n_rows=8)
     return Gsm8kDataset(n_rows=10)
 
@@ -167,44 +245,19 @@ def _model_config_registry() -> dict[str, type[ModelConfig]]:
     repo name ("qwen3-4b"), all lowercased.
     """
     registry: dict[str, type[ModelConfig]] = {}
-    for obj in vars(models).values():
-        if (
-            inspect.isclass(obj)
-            and issubclass(obj, ModelConfig)
-            and getattr(obj, "model_name", "")
-        ):
-            full = obj.model_name.lower()
-            registry[full] = obj
-            registry[full.rsplit("/", 1)[-1]] = obj
+    for name, model_config in VALIDATABLE_MODELS:
+        registry[name.lower()] = model_config
+        registry[model_config.model_name.lower()] = model_config
     return registry
-
-
-def _supports_slime(model_config: ModelConfig) -> bool:
-    """Whether a model has a base slime recipe, the only thing this script runs.
-
-    Derived by attempting ``SlimeRecipe.get_base_recipe`` rather than encoding
-    framework support on the model — the recipe registry is the source of truth.
-    """
-    try:
-        SlimeRecipe.get_base_recipe(model_config)
-    except Exception:
-        return False
-    return True
 
 
 def available_model_names() -> list[str]:
     """Sorted short model names (e.g. "qwen3-4b") validatable on slime.
 
-    Excludes models with no base slime recipe (e.g. Kimi on miles), since this
-    script only runs base training on slime.
+    The shared registry excludes models with no base slime recipe (e.g. Kimi on
+    miles), since this script only runs base training on slime.
     """
-    return sorted(
-        {
-            cls.model_name.rsplit("/", 1)[-1]
-            for cls in _model_config_registry().values()
-            if _supports_slime(cls())
-        }
-    )
+    return sorted(name for name, _ in VALIDATABLE_MODELS)
 
 
 def get_model_config_from_model_name(model_name: str) -> ModelConfig:
@@ -229,11 +282,6 @@ def run_base_training_on_slime(
     colocate: bool | None = None,
 ) -> TutorialResult:
     model_config = get_model_config_from_model_name(model_name)
-    if not _supports_slime(model_config):
-        raise ValueError(
-            f"model {model_config.model_name!r} has no base slime recipe; "
-            f"validatable models: {', '.join(available_model_names())}"
-        )
     dataset = pick_dataset(model_config)
     dataset_name = getattr(dataset, "hf_repo", type(dataset).__name__).rsplit("/", 1)[
         -1
@@ -279,33 +327,227 @@ def run_base_training_on_slime(
         training_run_id=train_result.training_run_id,
         training_run_status=training_run.status,
         total_duration_s=float(training_run.duration_seconds or 0.0),
+        step_times=training_run.step_times,
+        substep_times=training_run.substep_times,
     )
 
 
-def summarize_results(results_dir: str) -> str:
+def _status_label(result: TutorialResult) -> str:
+    if result.succeeded:
+        return "✅ completed"
+    return f"❌ {result.training_run_status.value}"
+
+
+def _format_secs_delta(
+    current: float | int | None, baseline: float | int | None
+) -> str | None:
+    """Compact delta vs baseline, or None when either timing is missing."""
+    if current is None or baseline is None:
+        return None
+    current_f = float(current)
+    baseline_f = float(baseline)
+    delta_s = current_f - baseline_f
+    if baseline_f <= 0:
+        return f"{delta_s:+.3f}s"
+    percent = delta_s / baseline_f * 100
+    return f"{delta_s:+.3f}s ({percent:+.0f}%)"
+
+
+def _training_run_link(training_run_id: str, dashboard_url: str | None) -> str:
+    """Training run id in backticks, linked to the dashboard if a base URL is given."""
+    if not dashboard_url:
+        return f"`{training_run_id}`"
+    base = dashboard_url.rstrip("/")
+    return f"[`{training_run_id}`]({base}/training/{training_run_id})"
+
+
+@dataclass
+class BaselineMeta:
+    commit_sha: str
+    commit_url: str
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "BaselineMeta | None":
+        sha = data.get("commit_sha")
+        url = data.get("commit_url")
+        if not sha or not url:
+            return None
+        return cls(commit_sha=str(sha), commit_url=str(url))
+
+    def commit_link(self) -> str:
+        short = self.commit_sha[:7]
+        return f"[`{short}`]({self.commit_url})"
+
+
+def _format_duration_delta(
+    result: TutorialResult, baseline_path: Path, dashboard_url: str | None
+) -> str:
+    """Format the duration change vs a baseline result, naming the baseline
+    run, e.g. "+500.0s (+33%) from [`run-id`](https://…/training/run-id)".
+    """
+    if not baseline_path.is_file():
+        return "—"
+    baseline = TutorialResult.from_dict(json.loads(baseline_path.read_text()))
+    delta = (
+        _format_secs_delta(
+            _total_step_time_s(result),
+            _total_step_time_s(baseline),
+        )
+        or "—"
+    )
+    return f"{delta} from {_training_run_link(baseline.training_run_id, dashboard_url)}"
+
+
+def _load_baseline(baseline_path: Path | None) -> TutorialResult | None:
+    if baseline_path is None or not baseline_path.is_file():
+        return None
+    return TutorialResult.from_dict(json.loads(baseline_path.read_text()))
+
+
+def _load_baseline_meta(baseline_path: Path | None) -> BaselineMeta | None:
+    """Load sidecar meta written by ``download_perf_baseline.py``."""
+    if baseline_path is None:
+        return None
+    meta_path = baseline_path.with_name(baseline_path.stem + ".meta.json")
+    if not meta_path.is_file():
+        return None
+    return BaselineMeta.from_dict(json.loads(meta_path.read_text()))
+
+
+def _format_result_details(
+    result: TutorialResult,
+    baseline: TutorialResult | None = None,
+    baseline_meta: BaselineMeta | None = None,
+    dashboard_url: str | None = None,
+) -> list[str]:
+    """Markdown <details> block with run status and a consolidated timing table."""
+    lines = [
+        "<details>",
+        f"<summary>{result.base_model_name}</summary>",
+        "",
+        f"{_training_run_link(result.training_run_id, dashboard_url)} — {_status_label(result)}",
+    ]
+    if baseline is not None:
+        baseline_bits = [
+            _training_run_link(baseline.training_run_id, dashboard_url),
+        ]
+        if baseline_meta is not None:
+            baseline_bits.append(f"on {baseline_meta.commit_link()}")
+        lines.append(f"Baseline: {' '.join(baseline_bits)}")
+    lines.append("")
+
+    keys = _step_keys(result)
+    if not keys:
+        lines.extend(["_No step timing data._", "", "</details>", ""])
+        return lines
+
+    if baseline is not None:
+        lines.extend(
+            [
+                "| Phase | Duration | Delta |",
+                "| --- | --- | --- |",
+            ]
+        )
+    else:
+        lines.extend(
+            [
+                "| Phase | Duration |",
+                "| --- | --- |",
+            ]
+        )
+
+    def _row(phase: str, duration: float | int | None, base: float | int | None) -> str:
+        if baseline is None:
+            return f"| {phase} | {_fmt_secs(duration)} |"
+        delta = _format_secs_delta(duration, base) or "—"
+        return f"| {phase} | {_fmt_secs(duration)} | {delta} |"
+
+    for key in keys:
+        step = (result.step_times or {}).get(key) or {}
+        baseline_step = ((baseline.step_times or {}).get(key) or {}) if baseline else {}
+        baseline_subs = (
+            ((baseline.substep_times or {}).get(key) or {}) if baseline else {}
+        )
+        for name, entry in _ordered_substeps(
+            (result.substep_times or {}).get(key) or {}
+        ):
+            base_entry = baseline_subs.get(name) or {}
+            lines.append(
+                _row(
+                    _substep_label(name),
+                    entry.get("duration_s"),
+                    base_entry.get("duration_s"),
+                )
+            )
+        lines.append(
+            _row(
+                f"Step {key}",
+                step.get("duration_s"),
+                baseline_step.get("duration_s"),
+            )
+        )
+    if len(keys) > 1:
+        lines.append(
+            _row(
+                "Total step time",
+                _total_step_time_s(result),
+                _total_step_time_s(baseline) if baseline else None,
+            )
+        )
+    lines.extend(["", "</details>", ""])
+    return lines
+
+
+def summarize_results(
+    results_dir: str, baseline_dir: str | None, dashboard_url: str | None = None
+) -> str:
     rows = []
+    details: list[str] = []
     for path in sorted(Path(results_dir).glob("*.json")):
         result = TutorialResult.from_dict(json.loads(path.read_text()))
-        status = (
-            "✅ completed"
-            if result.succeeded
-            else f"❌ {result.training_run_status.value}"
-        )
-        rows.append(
+        status = _status_label(result)
+        row = (
             f"| {result.base_model_name} | {status} "
-            f"| {result.total_duration_s:.1f}s | {result.step_count} "
-            f"| `{result.training_run_id}` |"
+            f"| {_total_step_time_s(result):.1f}s | {result.step_count} "
+            f"| {_training_run_link(result.training_run_id, dashboard_url)} |"
         )
+        baseline_path = (
+            Path(baseline_dir) / path.name if baseline_dir is not None else None
+        )
+        if baseline_dir is not None:
+            assert baseline_path is not None
+            delta = _format_duration_delta(result, baseline_path, dashboard_url)
+            row += f" {delta} |"
+        rows.append(row)
+        details.extend(
+            _format_result_details(
+                result,
+                _load_baseline(baseline_path),
+                _load_baseline_meta(baseline_path),
+                dashboard_url,
+            )
+        )
+
+    header = "| Model | Status | Step time | Steps | Run |"
+    divider = "| --- | --- | --- | --- | --- |"
+    empty = "| _no results_ | | | | |"
+    if baseline_dir is not None:
+        header += " Delta |"
+        divider += " --- |"
+        empty += " |"
 
     lines = [
         "<!-- validate-models-comment -->",
         "## Model Validation Results",
         "",
-        "| Model | Status | Duration | Steps | Run |",
-        "| --- | --- | --- | --- | --- |",
+        header,
+        divider,
     ]
-    lines.extend(rows or ["| _no results_ | | | | |"])
-    return "\n".join(lines)
+    lines.extend(rows or [empty])
+    if details:
+        lines.extend(["", "### Step timings", ""])
+        lines.extend(details)
+    return "\n".join(lines).rstrip() + "\n"
 
 
 def __main__():
@@ -393,6 +635,15 @@ def __main__():
         required=True,
         help="Directory containing result JSON files written by `check --output`.",
     )
+    summarize_parser.add_argument(
+        "-b",
+        "--baseline-dir",
+        help="Directory containing baseline result JSON files to compare against",
+    )
+    summarize_parser.add_argument(
+        "--dashboard-url",
+        help="Base URL of the training dashboard. If omitted, run ids are not linked.",
+    )
 
     args = parser.parse_args()
 
@@ -401,7 +652,9 @@ def __main__():
         return
 
     if args.command == "summarize":
-        print(summarize_results(args.results_dir))
+        print(
+            summarize_results(args.results_dir, args.baseline_dir, args.dashboard_url)
+        )
         return
 
     tutorial_result = run_base_training_on_slime(
@@ -414,7 +667,7 @@ def __main__():
         save_interval=args.save_interval,
         colocate=False if args.non_colocated else None,
     )
-    tutorial_result.format_tutorial_result()
+    tutorial_result.print_summary()
 
     if args.output:
         Path(args.output).write_text(json.dumps(tutorial_result.to_dict()))

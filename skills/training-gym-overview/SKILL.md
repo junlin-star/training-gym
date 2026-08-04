@@ -48,13 +48,13 @@ tutorials/
 └── generate_tutorial.py    <- AST-walks each source, emits
                               tutorials/<bucket>/<name>/<name>.py + .ipynb
 
-tests/                      <- plain-script tests (uv run python tests/<x>.py)
+tests/                      <- plain-script tests (uv run tests/<x>.py)
 .claude/skills/             <- agent-facing skills (you are here)
 ```
 
 **Never edit `tutorials/<bucket>/<name>/<name>.py` or `.ipynb` directly -- they are
 generated.** Edit `tutorials/tutorial_generator/<bucket>/<name>.py` and run
-`uv run python tutorials/generate_tutorial.py`.
+`uv run tutorials/generate_tutorial.py`.
 
 ## Core abstractions
 
@@ -243,7 +243,7 @@ remote_path=TOOLS_REMOTE_PATH, copy=True)` on every framework image.
    @markdown
    def _run_cli():
        """```bash
-       uv run python tutorials/<bucket>/<name>/<name>.py
+       uv run tutorials/<bucket>/<name>/<name>.py
        ```"""
 
 
@@ -263,9 +263,9 @@ remote_path=TOOLS_REMOTE_PATH, copy=True)` on every framework image.
 
 4. **Regenerate** and verify determinism:
    ```bash
-   uv run python tutorials/generate_tutorial.py
+   uv run tutorials/generate_tutorial.py
    # Run it again -- should produce byte-identical output (no git diff).
-   uv run python tutorials/generate_tutorial.py
+   uv run tutorials/generate_tutorial.py
    git diff tutorials/
    ```
    Pre-commit hook also runs this -- committed `.py`/`.ipynb` never drift.
@@ -303,7 +303,7 @@ existing slime tutorials for full examples.
 Always follow the tiered policy in
 [example-validation](../example-validation/SKILL.md):
 
-- **Tier 0 (local compile)** -- `uv run python -m compileall modal_training_gym/`.
+- **Tier 0 (local compile)** -- `uv run -m compileall modal_training_gym/`.
 - **Tier 1 (cheap drift checks)** -- regenerate tutorials (byte-determinism
   check) + local instantiation smoke across the affected frameworks. No GPU.
 - **Tier 2 (scheduled smoke)** -- one remote `modal run --detach` that
@@ -346,5 +346,5 @@ tutorial only. Don't expand to all tutorials on a single change.
 - Cross-framework scripts -> `modal_training_gym/tools/`.
 - Cross-framework helpers -> `modal_training_gym/common/framework.py`.
 - Tutorial sources -> `tutorials/tutorial_generator/<bucket>/<name>.py`.
-- Tutorial regeneration -> `uv run python tutorials/generate_tutorial.py`.
-- Tests -> `tests/test_*.py`, run via `uv run python tests/<file>.py`.
+- Tutorial regeneration -> `uv run tutorials/generate_tutorial.py`.
+- Tests -> `tests/test_*.py`, run via `uv run tests/<file>.py`.

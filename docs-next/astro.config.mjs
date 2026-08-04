@@ -129,6 +129,10 @@ export default defineConfig({
               label: 'Agents',
               autogenerate: { directory: 'tutorials/agent' },
             },
+            {
+              label: 'Tools',
+              autogenerate: { directory: 'tutorials/tools' },
+            },
           ],
         },
         {
@@ -172,6 +176,7 @@ export default defineConfig({
                 { label: 'Qwen3-30B-A3B', link: '/reference/models/qwen3_30b/' },
                 
                 { label: 'Qwen3.6-35B-A3B', link: '/reference/models/qwen3_6_35b/' },
+                { label: 'Qwen3.6-27B', link: '/reference/models/qwen3_6_27b/' },
               ],
             },
             {
@@ -181,6 +186,7 @@ export default defineConfig({
                 { label: 'SlimeRecipe', link: '/reference/training/slimerecipe/' },
                 
                 { label: 'Qwen3_6_35b_Recipe', link: '/reference/training/qwen3_6_35b_recipe/' },
+                { label: 'Qwen3_6_27b_Recipe', link: '/reference/training/qwen3_6_27b_recipe/' },
               ],
             },
             {
@@ -197,9 +203,6 @@ export default defineConfig({
         { label: 'CLI Reference', link: '/reference/cli/' },
         { label: 'Support', link: '/support/' },
       ],
-      editLink: {
-        baseUrl: 'https://github.com/modal-projects/training-gym/edit/main/docs-next/',
-      },
       lastUpdated: true,
       disable404Route: true,
     }),

@@ -4,7 +4,7 @@
 TUTORIAL_METADATA = {
     "framework": "`slime`",
     "cluster_shape": "1 × 2×H100",
-    "summary": "On-policy distillation on math — Qwen3-8B teacher, Qwen3-4B student",
+    "summary": "On-policy distillation on math",
     "difficulty": "Intermediate",
     "order": 30,
     "api_classes": [
@@ -74,7 +74,7 @@ def _run_instructions():
     """
     Run with:
     ```
-    uv run python tutorials/rl/003_on_policy_distillation/003_on_policy_distillation.py
+    uv run tutorials/rl/003_on_policy_distillation/003_on_policy_distillation.py
     ```
     """
 

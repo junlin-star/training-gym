@@ -43,6 +43,7 @@
   let refreshing = $state(false);
   let runsRequestId = 0;
   let hasLoadedRuns = false;
+  let initialRunsLoadStarted = false;
   let evalsRequestId = 0;
   let deploymentsRequestId = 0;
   let hasLoadedEvals = $state(false);
@@ -98,12 +99,15 @@
     }
 
     window.addEventListener("popstate", syncPageWithPath);
-    void loadRuns();
 
     // Auto-refresh the active page's data every 5s so running training runs,
     // their status/stage and rollouts stay live. Current data stays on screen
-    // (no skeleton) and only the refresh button spins while fetching.
-    const refresh = window.setInterval(load, 5000);
+    // (no skeleton) and only the refresh button spins while fetching. A run
+    // detail page refreshes its own run, so skip the full list there.
+    const refresh = window.setInterval(() => {
+      if (activePage === "training" && activeTrainingRunId) return;
+      void load();
+    }, 5000);
 
     return () => {
       window.removeEventListener("popstate", syncPageWithPath);
@@ -112,7 +116,7 @@
   });
 
   function getRecipe(run) {
-    return run.framework || "(untagged)";
+    return run.recipe || run.framework || "(untagged)";
   }
 
   const NO_GROUP = "(no group)";
@@ -122,14 +126,7 @@
   }
 
   function getStatus(run) {
-    const rawStatus = safeText(run.status).toLowerCase();
-    if (run.train_result || rawStatus === "completed") return "Completed";
-    if (rawStatus === "cancelled") return "Cancelled";
-    if (rawStatus === "stopped") return "Stopped";
-    if (rawStatus === "failed") return "Failed";
-    if (rawStatus === "running") return "Pending";
-    if (rawStatus === "pending") return "Pending";
-    return rawStatus ? rawStatus[0].toUpperCase() + rawStatus.slice(1) : "Pending";
+    return safeText(run.display_status) || "pending";
   }
 
   function getTrainingRunStatus(run) {
@@ -354,6 +351,16 @@
   }
 
   $effect(() => {
+    if (
+      !activeTrainingRunId &&
+      !hasLoadedRuns &&
+      !initialRunsLoadStarted
+    ) {
+      initialRunsLoadStarted = true;
+      void loadRuns();
+    } else if (activeTrainingRunId && !hasLoadedRuns) {
+      loading = false;
+    }
     if (activePage === "evals" && !hasLoadedEvals) {
       void loadEvals();
     }
@@ -454,10 +461,10 @@
     }));
   });
 
-  let completedTotal = $derived(allRuns.filter((run) => run.train_result).length);
-  let cancelledTotal = $derived(allRuns.filter((run) => getStatus(run) === "Cancelled").length);
-  let stoppedTotal = $derived(allRuns.filter((run) => getStatus(run) === "Stopped").length);
-  let failedTotal = $derived(allRuns.filter((run) => getStatus(run) === "Failed").length);
+  let completedTotal = $derived(allRuns.filter((run) => getStatus(run) === "completed").length);
+  let cancelledTotal = $derived(allRuns.filter((run) => getStatus(run) === "cancelled").length);
+  let stoppedTotal = $derived(allRuns.filter((run) => getStatus(run) === "stopped").length);
+  let failedTotal = $derived(allRuns.filter((run) => getStatus(run) === "failed").length);
   let runningTotal = $derived(
     allRuns.length - completedTotal - cancelledTotal - stoppedTotal - failedTotal,
   );
@@ -720,8 +727,12 @@
   let evalFailedTotal = $derived(
     allEvals.filter((ev) => getEvalStatus(ev) === "Failed").length,
   );
+  let activeTrainingRun = $derived(
+    allRuns.find((run) => run.run_id === activeTrainingRunId) || null,
+  );
 
   let statusText = $derived.by(() => {
+    if (activePage === "training" && activeTrainingRunId) return "run details";
     if (activePage === "training" && loading) return "loading...";
     if (activePage === "evals" && loadingEvals) return "loading...";
     if (activePage === "deployments" && loadingDeployments) return "loading...";
@@ -843,11 +854,11 @@
   }
 </script>
 
-<div class="min-h-[100vh] grid grid-rows-[auto_1fr] bg-(--bg)">
-  <header class="[border-bottom:1px_solid_var(--color-c-surface-highlight-gray-opaque,#272727)] bg-(--bg-depth) flex items-center justify-between gap-[1rem] min-h-[53px] p-[0_1rem] max-[900px]:min-h-[53px] max-[900px]:p-[0_1rem]">
+<div class="h-[100dvh] grid grid-rows-[auto_1fr] bg-(--bg) overflow-x-hidden">
+  <header class="[border-bottom:1px_solid_var(--color-c-surface-highlight-gray-opaque,#272727)] bg-(--bg-depth) flex items-center justify-between gap-[1rem] min-h-[53px] p-[0_1rem] max-[900px]:min-h-[53px] max-[900px]:p-[0_0.75rem]">
     <div class="inline-flex items-center gap-[0.55rem] flex-[0_0_auto] min-w-0">
       <img src={logoSvg} alt="Modal" class="h-[17.5px] w-auto flex-[0_0_auto]" />
-      <span class="inline-flex items-center gap-[0.18rem] [font-family:var(--font-display)] [font-feature-settings:'ss01'_on] text-[17.6px] leading-[1] [padding-block:0.08rem] font-[600] tracking-[-0.02em] [transform:translateY(1px)] whitespace-nowrap">
+      <span class="inline-flex items-center gap-[0.18rem] [font-family:var(--font-display)] [font-feature-settings:'ss01'_on] text-[17.6px] leading-[1] [padding-block:0.08rem] font-[600] tracking-[-0.02em] [transform:translateY(1px)] whitespace-nowrap max-[360px]:text-[15px]">
         <span class="text-[#ddffdc]">Modal</span>
         <span class="text-(--green)">Training Gym</span>
       </span>
@@ -863,10 +874,10 @@
     </a>
   </header>
 
-  <div class="grid grid-cols-[232px_minmax(0,1fr)] min-h-0 bg-(--bg) max-[900px]:grid-cols-[1fr]">
+  <div class="grid grid-cols-[232px_minmax(0,1fr)] min-h-0 h-full bg-(--bg) max-[900px]:grid-cols-[1fr] max-[900px]:grid-rows-[auto_minmax(0,1fr)]">
     <Sidebar {navItems} {activePage} onNavigate={setActivePage} />
 
-    <main class="min-w-0">
+    <main class="min-w-0 min-h-0 h-full flex flex-col overflow-y-auto">
       <DashboardHeader
         title={pageMeta[activePage].title}
         {statusText}
@@ -877,7 +888,7 @@
     {#if activePage === "training" && activeTrainingRunId}
       <TrainingRunDetailPage
         runId={activeTrainingRunId}
-        {allRuns}
+        initialRun={activeTrainingRun}
         {modelName}
         {getStatus}
         {getFrameworkStatus}
@@ -909,7 +920,6 @@
         {error}
         {modelName}
         {getStatus}
-        {getFrameworkStatus}
         {showFrameworkStatus}
         {fmtDuration}
         bind:search

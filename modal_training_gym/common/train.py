@@ -291,7 +291,49 @@ class _TrainStatusDisplay:
 
 @dataclass(config=ConfigDict(extra="forbid", arbitrary_types_allowed=True))
 class TrainConfig:
-    """Compose dataset, model, and recipe into one training entrypoint."""
+    """Compose dataset, model, and recipe into one training entrypoint.
+
+    ## Fields
+
+    dataset : DatasetConfig
+        The training dataset. ``train()`` materializes it into the
+        framework's ``/data`` volume before training if it isn't already
+        present.
+    model : ModelConfig
+        The model to train. Carries model identity (``model_name``) and
+        weight-download logic; weights are downloaded into the shared
+        HuggingFace cache volume on first use and reused across runs.
+    recipe : BaseTrainRecipe
+        Framework recipe (``SlimeRecipe`` or ``MilesConfig``). Selects the
+        training framework and carries Modal infra settings (GPU type, node
+        count, image) plus framework CLI flags.
+    checkpoint : Checkpoint | None
+        Checkpoint to resume training from. When ``None``, training starts
+        from the base model weights. Default ``None``.
+    merge_model_recipe : bool
+        When ``True``, merges the known-model preset recipe (e.g.
+        ``Qwen3_4b_Recipe``) onto recipe fields you left unset. Set
+        ``False`` to run the recipe exactly as written, with no preset
+        defaults. Default ``True``.
+    detach : bool
+        Run the training app detached so it keeps running on Modal even if
+        the local client disconnects (terminal closed, laptop asleep). Set
+        ``False`` for an attached run that stops on Ctrl-C. Default
+        ``True``.
+    group_id : str | None
+        Shared sweep id. Set by ``TrainingGroup`` so every run in a sweep
+        carries the same id, letting the dashboard group variants together.
+        Not usually set by hand. Default ``None``.
+    group_overrides : dict[str, Any] | None
+        Per-variant parameter overrides applied by ``TrainingGroup``, keyed
+        by dotted field path (e.g. ``{"recipe.lr": 1e-5}``). Recorded in
+        run metadata so the dashboard can label each variant. Default
+        ``None``.
+    group_axes : list[str] | None
+        Names of the swept parameter paths in a ``TrainingGroup`` grid.
+        Recorded in run metadata for dashboard grouping; falls back to the
+        keys of ``group_overrides`` when unset. Default ``None``.
+    """
 
     # ── Composed configs (required) ─────────────────────────────────────────
     dataset: DatasetConfig
@@ -487,6 +529,7 @@ class TrainConfig:
         return self.recipe
 
     def context_plan_line(self) -> str | None:
+        """One-line summary of the effective training context length and parallelism plan."""
         recipe = self._resolved_recipe()
         max_tokens_per_gpu = getattr(recipe, "max_tokens_per_gpu", None)
         if max_tokens_per_gpu is None:

@@ -39,7 +39,7 @@ jobs:
       - uses: astral-sh/setup-uv@v5
 
       - name: Sync dependencies
-        run: uv sync --group dev
+        run: uv sync --group ci --group dev
 
       - name: Determine models to validate
         id: list
@@ -48,12 +48,12 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             models=$(git diff "${{ github.event.pull_request.base.sha }}...HEAD" \
-              | uv run python scripts/diff_impact.py --models)
+              | uv run scripts/diff_impact.py --models)
           elif [ -n "$MODELS_INPUT" ]; then
             models=$(printf '%s' "$MODELS_INPUT" \
               | uv run python -c "import json,sys; print(json.dumps([m.strip() for m in sys.stdin.read().split(',') if m.strip()]))")
           else
-            models=$(uv run python scripts/validate_model_configs.py list)
+            models=$(uv run scripts/validate_model_configs.py list)
           fi
           echo "Selected models: $models"
           echo "models=$models" >> "$GITHUB_OUTPUT"
@@ -82,7 +82,7 @@ jobs:
       - uses: astral-sh/setup-uv@v5
 
       - name: Sync dependencies
-        run: uv sync --group dev
+        run: uv sync --group ci --group dev
 
       - name: Compute artifact name
         id: artifact
@@ -92,7 +92,7 @@ jobs:
 
       - name: Validate ${{ matrix.model }}
         run: |
-          uv run python scripts/validate_model_configs.py check \
+          uv run scripts/validate_model_configs.py check \
             --model "${{ matrix.model }}" \
             --num_steps "${{ github.event.inputs.num_steps || '1' }}" \
             --output "${{ steps.artifact.outputs.name }}.json"
@@ -111,6 +111,7 @@ jobs:
       (needs.validate.result == 'success' || needs.validate.result == 'failure')
     runs-on: ubuntu-latest
     permissions:
+      actions: read
       contents: read
       pull-requests: write
     env:
@@ -125,7 +126,7 @@ jobs:
       - uses: astral-sh/setup-uv@v5
 
       - name: Sync dependencies
-        run: uv sync --group dev
+        run: uv sync --group ci --group dev
 
       - name: Download results
         uses: actions/download-artifact@v4
@@ -134,8 +135,18 @@ jobs:
           pattern: validate-result-*
           merge-multiple: true
 
+      - name: Download baselines from main
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: uv run python scripts/download_perf_baseline.py --baseline-dir baseline
+
       - name: Build comment body
-        run: uv run python scripts/validate_model_configs.py summarize --results-dir results > comment.md
+        run: >-
+          uv run scripts/validate_model_configs.py summarize
+          --results-dir results --baseline-dir baseline
+          --dashboard-url "${{ vars.VALIDATION_DASHBOARD_URL }}"
+          > comment.md
 
       - name: Post comment
         uses: actions/github-script@v7

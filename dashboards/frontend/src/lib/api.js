@@ -73,6 +73,18 @@ export async function fetchRuns({ signal } = {}) {
   return Array.isArray(runs) ? runs : [];
 }
 
+export async function fetchRun(trainingRunId, { signal } = {}) {
+  const res = await fetch(
+    `${SERVER}/runs/${encodeURIComponent(trainingRunId)}`,
+    { signal },
+  );
+  if (res.status === 404) return null;
+  if (!res.ok) {
+    throw new Error(await getErrorFromResponse(res));
+  }
+  return await res.json();
+}
+
 export async function fetchEvals({ signal } = {}) {
   const res = await fetch(`${SERVER}/evals`, { signal });
   if (!res.ok) {
