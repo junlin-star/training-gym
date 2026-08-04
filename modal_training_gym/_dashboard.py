@@ -794,14 +794,26 @@ def fastapi_app():
                 }
             )
         if not run.modal_app_id:
-            raise HTTPException(status_code=409, detail="Run has no Modal app ID")
+            return JSONResponse(
+                {
+                    "action": "skipped",
+                    "skip_reason": "missing_modal_app_id",
+                    "status": run.status.value,
+                }
+            )
 
         modal_app_live = await run_in_threadpool(
             app_live_status,
             run.modal_app_id,
         )
         if modal_app_live is False:
-            raise HTTPException(status_code=409, detail="Modal app is not live")
+            return JSONResponse(
+                {
+                    "action": "skipped",
+                    "skip_reason": "modal_app_not_live",
+                    "status": run.status.value,
+                }
+            )
 
         try:
             await run_in_threadpool(stop_app_or_raise, run.modal_app_id)

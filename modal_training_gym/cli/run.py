@@ -568,8 +568,7 @@ def kill_runs(
     ]
     error_count = sum(
         (
-            run_report["skip_reason"] is not None
-            and run_report["skip_reason"] != "already_terminal"
+            run_report["skip_reason"] and run_report["skip_reason"] != "already_terminal"
         )
         for run_report in run_reports
     )
