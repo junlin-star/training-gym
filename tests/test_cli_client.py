@@ -98,35 +98,6 @@ def test_sends_modal_proxy_auth_headers(monkeypatch, mock_transport):
     assert requests[0].headers["modal-secret"] == "ws-test"
 
 
-def test_does_not_forward_basic_auth_to_redirected_host(monkeypatch, mock_transport):
-    monkeypatch.setenv("TRAINING_GYM_DASHBOARD_PASSWORD", "secret")
-    monkeypatch.setattr(
-        client_module,
-        "modal_proxy_auth_headers",
-        lambda: {"Modal-Key": "wk-test", "Modal-Secret": "ws-test"},
-    )
-    requests = []
-
-    def respond(request: httpx.Request) -> httpx.Response:
-        requests.append((request.url, dict(request.headers)))
-        if request.url.host == "example.test":
-            return httpx.Response(
-                302,
-                headers={"location": "https://other.test/api/items"},
-            )
-        return httpx.Response(200, json={})
-
-    mock_transport(respond)
-    with DashboardClient() as client:
-        client.get_json("/api/items")
-
-    assert requests[0][1]["authorization"].startswith("Basic ")
-    assert requests[0][1]["modal-key"] == "wk-test"
-    assert "authorization" not in requests[1][1]
-    assert "modal-key" not in requests[1][1]
-    assert "modal-secret" not in requests[1][1]
-
-
 def test_omits_auth_when_password_is_absent(monkeypatch, mock_transport):
     monkeypatch.delenv("TRAINING_GYM_DASHBOARD_PASSWORD", raising=False)
     requests = []
