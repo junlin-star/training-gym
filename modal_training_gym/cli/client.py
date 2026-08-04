@@ -124,6 +124,7 @@ class DashboardClient:
                 params=query,
                 json=json,
                 timeout=DEFAULT_TIMEOUT_SECONDS if timeout is None else timeout,
+                follow_redirects=method == "GET",
             )
         except httpx.TimeoutException as exc:
             raise CLIError(
@@ -226,7 +227,10 @@ class DashboardClient:
                 "Dashboard authentication was rejected.",
                 error="authentication_failed",
                 exit_code=ExitCode.AUTH,
-                hint="training-gym set-password",
+                hint=(
+                    "Run `training-gym set-password`, then export "
+                    f"`{DASHBOARD_PASSWORD_ENV}='<password>'`."
+                ),
             )
         if status_code == 404:
             raise CLIError(

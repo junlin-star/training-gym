@@ -22,6 +22,7 @@ from rich.table import Table
 from rich.text import Text
 
 from modal_training_gym.common.modal_lifecycle import app_live_status
+from modal_training_gym.common.run import TrainingRunStatus
 from modal_training_gym.common.run_list import run_list_field_metadata
 from modal_training_gym.common.run_summary import RunSummary
 from modal_training_gym.common.time import parse_time
@@ -41,7 +42,6 @@ DEFAULT_RUN_LIMIT = 50
 DEFAULT_LOG_TAIL = 100
 MAX_LOG_TAIL = 20_000
 TRACE_DOWNLOAD_TIMEOUT_SECONDS = 300.0
-TERMINAL_RUN_STATUSES = frozenset({"completed", "cancelled", "stopped", "failed"})
 CLI_FIELD_NAMES = {
     "display_status": "status",
     "display_stage": "stage",
@@ -494,8 +494,8 @@ def _build_kill_run_report(
     now: float,
     modal_app_live: bool | None,
 ) -> _KillRunReport:
-    status = (summary.display_status or summary.status or "pending").lower()
-    if status in TERMINAL_RUN_STATUSES:
+    status = summary.status.lower()
+    if status != TrainingRunStatus.RUNNING.value:
         action, skip_reason = "skipped", "already_terminal"
     elif not summary.modal_app_id:
         action, skip_reason = "skipped", "missing_modal_app_id"

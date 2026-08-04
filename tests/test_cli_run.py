@@ -596,7 +596,7 @@ def test_run_kill_dry_run_reports_jobs_without_stopping(monkeypatch):
             "run_id": "run-1",
             "modal_app_id": "ap-1",
             "modal_app_live": None,
-            "status": "pending",
+            "status": "running",
             "current_step": 3,
             "total_steps": 10,
             "step_unit": "step",

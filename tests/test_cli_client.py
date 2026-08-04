@@ -134,6 +134,25 @@ def test_does_not_forward_basic_auth_to_redirected_host(monkeypatch, mock_transp
     assert "authorization" not in requests[1].headers
 
 
+def test_post_json_rejects_redirect_without_reissuing_request(mock_transport):
+    requests = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(302, headers={"location": "/api/runs/run-1/kill/"})
+
+    mock_transport(respond)
+    with DashboardClient() as client:
+        with pytest.raises(CLIError) as exc_info:
+            client.post_json("/api/runs/run-1/kill")
+
+    assert exc_info.value.error == "dashboard_redirect"
+    assert exc_info.value.exit_code == ExitCode.BACKEND
+    assert [(request.method, str(request.url)) for request in requests] == [
+        ("POST", "https://example.test/api/runs/run-1/kill")
+    ]
+
+
 def test_omits_auth_when_password_is_absent(monkeypatch, mock_transport):
     monkeypatch.delenv("TRAINING_GYM_DASHBOARD_PASSWORD", raising=False)
     requests = []
