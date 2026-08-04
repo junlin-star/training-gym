@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import json
 
 import httpx
 import pytest
@@ -78,6 +79,22 @@ def test_get_json_supports_per_request_timeout(mock_transport):
         "write": 120.0,
         "pool": 120.0,
     }
+
+
+def test_post_json_sends_json_body(mock_transport):
+    seen = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={"status": "ok"})
+
+    mock_transport(respond)
+    with DashboardClient() as client:
+        result = client.post_json("/api/runs/run-1/kill", json={"force": True})
+
+    assert result == {"status": "ok"}
+    assert seen[0].method == "POST"
+    assert json.loads(seen[0].content) == {"force": True}
 
 
 def test_sends_basic_auth_when_password_exists(monkeypatch, mock_transport):

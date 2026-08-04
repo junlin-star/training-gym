@@ -8,8 +8,12 @@ from click.testing import CliRunner
 
 from modal_training_gym import cli as cli_module
 from modal_training_gym.cli import run as run_module
-from modal_training_gym.cli.errors import ExitCode
-from modal_training_gym.common.run import TrainingRun, finalize_training_run
+from modal_training_gym.cli.errors import CLIError, ExitCode
+from modal_training_gym.common.run import (
+    TrainingRun,
+    TrainingRunStatus,
+    finalize_training_run,
+)
 
 
 class FakeDashboardClient:
@@ -18,6 +22,8 @@ class FakeDashboardClient:
     streams: dict[str, list[tuple[str, str]]] = {}
     not_found_paths: set[str] = set()
     requests: list[tuple[str, dict[str, object]]] = []
+    posts: list[tuple[str, object]] = []
+    post_payloads: dict[str, object] = {}
     timeouts: list[tuple[str, float | None]] = []
 
     def __enter__(self):
@@ -33,6 +39,15 @@ class FakeDashboardClient:
             raise not_found_error
         return self.payloads.get(path, self.payload)
 
+    def post_json(self, path, *, json=None, not_found_error=None, timeout=None):
+        self.posts.append((path, json))
+        if path in self.not_found_paths and not_found_error is not None:
+            raise not_found_error
+        return self.post_payloads.get(
+            path,
+            {"action": "killed", "skip_reason": None, "status": "stopped"},
+        )
+
     def iter_event_stream(self, path, *, params=None, not_found_error=None):
         self.requests.append((path, params))
         if path in self.not_found_paths and not_found_error is not None:
@@ -47,6 +62,8 @@ def fake_dashboard(monkeypatch):
     FakeDashboardClient.streams = {}
     FakeDashboardClient.not_found_paths = set()
     FakeDashboardClient.requests = []
+    FakeDashboardClient.posts = []
+    FakeDashboardClient.post_payloads = {}
     FakeDashboardClient.timeouts = []
     monkeypatch.setattr(run_module, "DashboardClient", FakeDashboardClient)
     monkeypatch.setattr(run_module, "app_live_status", lambda _app_id: None)
@@ -493,14 +510,14 @@ def test_mark_run_terminal_updates_running_record(monkeypatch):
 
     status = finalize_training_run(
         "run-1",
-        status=run_module.TrainingRunStatus.STOPPED,
+        status=TrainingRunStatus.STOPPED,
         reason="killed_by_cli",
         ended_at=225,
     )
 
-    assert status == run_module.TrainingRunStatus.STOPPED
+    assert status == TrainingRunStatus.STOPPED
     assert saved == [run]
-    assert run.status == run_module.TrainingRunStatus.STOPPED
+    assert run.status == TrainingRunStatus.STOPPED
     assert run.ended_at == 225
     assert run.completed_at == 225
     assert run.duration_seconds == 125
@@ -515,7 +532,7 @@ def test_mark_run_terminal_preserves_terminal_record(monkeypatch):
         training_run_id="run-1",
         framework="slime",
         config={},
-        status=run_module.TrainingRunStatus.COMPLETED,
+        status=TrainingRunStatus.COMPLETED,
     )
     monkeypatch.setattr(
         TrainingRun,
@@ -530,13 +547,13 @@ def test_mark_run_terminal_preserves_terminal_record(monkeypatch):
 
     status = finalize_training_run(
         "run-1",
-        status=run_module.TrainingRunStatus.STOPPED,
+        status=TrainingRunStatus.STOPPED,
         reason="killed_by_cli",
         ended_at=225,
     )
 
-    assert status == run_module.TrainingRunStatus.COMPLETED
-    assert run.status == run_module.TrainingRunStatus.COMPLETED
+    assert status == TrainingRunStatus.COMPLETED
+    assert run.status == TrainingRunStatus.COMPLETED
 
 
 def test_run_kill_dry_run_reports_jobs_without_stopping(monkeypatch):
@@ -558,16 +575,13 @@ def test_run_kill_dry_run_reports_jobs_without_stopping(monkeypatch):
             duration_seconds=60,
         ),
     }
-    stopped: list[str] = []
-    monkeypatch.setattr(run_module, "stop_app_or_raise", stopped.append)
-
     result = CliRunner().invoke(
         cli_module.entrypoint_cli,
         ["run", "kill", "run-1", "run-2", "--dry-run", "--json"],
     )
 
     assert result.exit_code == 0
-    assert stopped == []
+    assert FakeDashboardClient.posts == []
     assert FakeDashboardClient.requests == [
         ("/api/runs/run-1", None),
         ("/api/runs/run-2", None),
@@ -648,27 +662,15 @@ def test_run_kill_stops_each_active_modal_app_and_skips_terminal_runs(monkeypatc
             modal_app_id="ap-3",
         ),
     }
-    stopped: list[str] = []
-    monkeypatch.setattr(run_module, "stop_app_or_raise", stopped.append)
-    metadata_updates: list[str] = []
-
-    def update_metadata(run_id, *, status, reason, ended_at):
-        assert ended_at > 0
-        metadata_updates.append((run_id, status, reason))
-        return status
-
-    monkeypatch.setattr(run_module, "finalize_training_run", update_metadata)
-
     result = CliRunner().invoke(
         cli_module.entrypoint_cli,
         ["run", "kill", "run-1", "run-2", "run-3", "--yes", "--json"],
     )
 
     assert result.exit_code == 0
-    assert stopped == ["ap-1", "ap-2"]
-    assert metadata_updates == [
-        ("run-1", run_module.TrainingRunStatus.STOPPED, "killed_by_cli"),
-        ("run-2", run_module.TrainingRunStatus.STOPPED, "killed_by_cli"),
+    assert FakeDashboardClient.posts == [
+        ("/api/runs/run-1/kill", None),
+        ("/api/runs/run-2/kill", None),
     ]
     payload = json.loads(result.stdout)
     assert [run["action"] for run in payload["runs"]] == [
@@ -719,21 +721,13 @@ def test_run_kill_continues_after_run_without_modal_app(monkeypatch):
             modal_app_id="ap-2",
         ),
     }
-    stopped: list[str] = []
-    monkeypatch.setattr(run_module, "stop_app_or_raise", stopped.append)
-    monkeypatch.setattr(
-        run_module,
-        "finalize_training_run",
-        lambda _run_id, *, status, reason, ended_at: status,
-    )
-
     result = CliRunner().invoke(
         cli_module.entrypoint_cli,
         ["run", "kill", "run-1", "run-2", "--yes", "--json"],
     )
 
     assert result.exit_code == ExitCode.BACKEND
-    assert stopped == ["ap-2"]
+    assert FakeDashboardClient.posts == [("/api/runs/run-2/kill", None)]
     payload = json.loads(result.stdout)
     assert payload["error_count"] == 1
     assert [(run["run_id"], run["action"]) for run in payload["runs"]] == [
@@ -749,15 +743,11 @@ def test_run_kill_reports_canonical_terminal_status_after_stopping(monkeypatch):
         modal_app_id="ap-1",
     )
     monkeypatch.setattr(run_module, "app_live_status", lambda _app_id: True)
-    stopped: list[str] = []
-    monkeypatch.setattr(run_module, "stop_app_or_raise", stopped.append)
-    monkeypatch.setattr(
-        run_module,
-        "finalize_training_run",
-        lambda _run_id, *, status, reason, ended_at: (
-            run_module.TrainingRunStatus.COMPLETED
-        ),
-    )
+    FakeDashboardClient.post_payloads["/api/runs/run-1/kill"] = {
+        "action": "killed",
+        "skip_reason": None,
+        "status": "completed",
+    }
 
     result = CliRunner().invoke(
         cli_module.entrypoint_cli,
@@ -765,23 +755,27 @@ def test_run_kill_reports_canonical_terminal_status_after_stopping(monkeypatch):
     )
 
     assert result.exit_code == 0
-    assert stopped == ["ap-1"]
+    assert FakeDashboardClient.posts == [("/api/runs/run-1/kill", None)]
     payload = json.loads(result.stdout)
     assert payload["runs"][0]["action"] == "killed"
     assert payload["runs"][0]["status"] == "completed"
 
 
-def test_run_kill_reports_modal_stop_failure(monkeypatch):
+def test_run_kill_reports_dashboard_kill_failure(monkeypatch):
     FakeDashboardClient.payload = _summary(
         status="running",
         display_status="pending",
         modal_app_id="ap-1",
     )
 
-    def fail_stop(_app_id):
-        raise RuntimeError("not authenticated")
+    def fail_post(_self, _path, **_kwargs):
+        raise CLIError(
+            "Could not stop the Modal app",
+            error="dashboard_server_error",
+            exit_code=ExitCode.BACKEND,
+        )
 
-    monkeypatch.setattr(run_module, "stop_app_or_raise", fail_stop)
+    monkeypatch.setattr(FakeDashboardClient, "post_json", fail_post)
 
     result = CliRunner().invoke(
         cli_module.entrypoint_cli,
@@ -789,22 +783,16 @@ def test_run_kill_reports_modal_stop_failure(monkeypatch):
     )
 
     assert result.exit_code == ExitCode.BACKEND
-    assert "Could not stop the Modal app for run 'run-1'" in result.stderr
+    assert "Could not stop the Modal app" in result.stderr
 
 
-def test_run_kill_reports_metadata_failure_after_stopping_app(monkeypatch):
+def test_run_kill_rejects_invalid_dashboard_response():
     FakeDashboardClient.payload = _summary(
         status="running",
         display_status="pending",
         modal_app_id="ap-1",
     )
-    stopped: list[str] = []
-    monkeypatch.setattr(run_module, "stop_app_or_raise", stopped.append)
-
-    def fail_update(_run_id, *, status, reason, ended_at):
-        raise RuntimeError(f"write failed at {ended_at}")
-
-    monkeypatch.setattr(run_module, "finalize_training_run", fail_update)
+    FakeDashboardClient.post_payloads["/api/runs/run-1/kill"] = {}
 
     result = CliRunner().invoke(
         cli_module.entrypoint_cli,
@@ -812,9 +800,7 @@ def test_run_kill_reports_metadata_failure_after_stopping_app(monkeypatch):
     )
 
     assert result.exit_code == ExitCode.BACKEND
-    assert stopped == ["ap-1"]
-    assert "Stopped the Modal app" in result.stderr
-    assert "could not update its metadata" in result.stderr
+    assert "Dashboard returned invalid kill data" in result.stderr
 
 
 def test_run_trace_dry_run_filters_steps_without_downloading(tmp_path):

@@ -70,6 +70,41 @@ class DashboardClient:
         timeout: float | httpx.Timeout | None = None,
     ) -> Any:
         """GET a dashboard-relative path and decode its JSON response."""
+        return self._request_json(
+            "GET",
+            path,
+            params=params,
+            not_found_error=not_found_error,
+            timeout=timeout,
+        )
+
+    def post_json(
+        self,
+        path: str,
+        *,
+        json: Mapping[str, Any] | None = None,
+        not_found_error: CLIError | None = None,
+        timeout: float | httpx.Timeout | None = None,
+    ) -> Any:
+        """POST to a dashboard-relative path and decode its JSON response."""
+        return self._request_json(
+            "POST",
+            path,
+            json=json,
+            not_found_error=not_found_error,
+            timeout=timeout,
+        )
+
+    def _request_json(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: QueryParams | None = None,
+        json: Mapping[str, Any] | None = None,
+        not_found_error: CLIError | None = None,
+        timeout: float | httpx.Timeout | None = None,
+    ) -> Any:
         parsed_path = urlsplit(path)
         if parsed_path.scheme or parsed_path.netloc:
             raise CLIError(
@@ -83,9 +118,11 @@ class DashboardClient:
             else None
         )
         try:
-            response = self._client.get(
+            response = self._client.request(
+                method,
                 path.lstrip("/"),
                 params=query,
+                json=json,
                 timeout=DEFAULT_TIMEOUT_SECONDS if timeout is None else timeout,
             )
         except httpx.TimeoutException as exc:

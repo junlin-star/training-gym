@@ -21,11 +21,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from modal_training_gym.common.modal_lifecycle import app_live_status, stop_app_or_raise
-from modal_training_gym.common.run import (
-    TrainingRunStatus,
-    finalize_training_run,
-)
+from modal_training_gym.common.modal_lifecycle import app_live_status
 from modal_training_gym.common.run_list import run_list_field_metadata
 from modal_training_gym.common.run_summary import RunSummary
 from modal_training_gym.common.time import parse_time
@@ -600,48 +596,43 @@ def kill_runs(
         )
 
     killed_run_ids: list[str] = []
-    for run in runs_to_kill:
-        modal_app_id = run["modal_app_id"]
-        assert modal_app_id is not None
-        try:
-            stop_app_or_raise(modal_app_id)
-        except Exception as exc:
-            raise CLIError(
-                f"Could not stop the Modal app for run {run['run_id']!r}.",
-                error="modal_stop_failed",
-                exit_code=ExitCode.BACKEND,
-                run_id=run["run_id"],
-                modal_app_id=modal_app_id,
-                killed_run_ids=killed_run_ids,
-            ) from exc
-        run["action"] = "killed"
-        killed_run_ids.append(run["run_id"])
-        try:
-            run["status"] = finalize_training_run(
-                run["run_id"],
-                status=TrainingRunStatus.STOPPED,
-                reason="killed_by_cli",
-                ended_at=int(time.time()),
-            ).value
-        except Exception as exc:
-            raise CLIError(
-                f"Stopped the Modal app for run {run['run_id']!r}, "
-                "but could not update its metadata.",
-                error="run_metadata_update_failed",
-                exit_code=ExitCode.BACKEND,
-                run_id=run["run_id"],
-                modal_app_id=modal_app_id,
-                killed_run_ids=killed_run_ids,
-            ) from exc
+    with DashboardClient() as client:
+        for run in runs_to_kill:
+            response = client.post_json(
+                f"/api/runs/{quote(run['run_id'], safe='')}/kill",
+            )
+            if not isinstance(response, dict):
+                raise CLIError(
+                    "Dashboard returned invalid kill data.",
+                    error="invalid_dashboard_response",
+                    exit_code=ExitCode.BACKEND,
+                )
+            action = response.get("action")
+            status = response.get("status")
+            skip_reason = response.get("skip_reason")
+            if action not in {"killed", "skipped"} or not isinstance(status, str):
+                raise CLIError(
+                    "Dashboard returned invalid kill data.",
+                    error="invalid_dashboard_response",
+                    exit_code=ExitCode.BACKEND,
+                )
+            run["action"] = action
+            run["status"] = status
+            run["skip_reason"] = skip_reason if isinstance(skip_reason, str) else None
+            if action == "killed":
+                killed_run_ids.append(run["run_id"])
+
+    result["kill_count"] = len(killed_run_ids)
+    result["skipped_count"] = len(run_reports) - len(killed_run_ids)
 
     if json_output:
         print_json(result)
     else:
         _print_kill_report(run_reports)
-        if runs_to_kill:
+        if killed_run_ids:
             click.echo(
-                f"Terminated {len(runs_to_kill)} "
-                f"{'run' if len(runs_to_kill) == 1 else 'runs'}."
+                f"Terminated {len(killed_run_ids)} "
+                f"{'run' if len(killed_run_ids) == 1 else 'runs'}."
             )
         else:
             click.echo("No active runs to terminate.")
