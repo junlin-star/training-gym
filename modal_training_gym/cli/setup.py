@@ -289,6 +289,7 @@ def ensure_dashboard_deployed() -> str | None:
     """
     try:
         from modal_training_gym.common.config import (
+            get_dashboard_proxy_auth,
             get_dashboard_url,
             save_dashboard_url,
         )
@@ -304,7 +305,10 @@ def ensure_dashboard_deployed() -> str | None:
             f"Training-gym dashboard ({DASHBOARD_APP_NAME!r}) is not deployed — "
             "deploying it now (this happens once)."
         )
-        return setup(interactive=False)
+        return setup(
+            interactive=False,
+            proxy_auth=get_dashboard_proxy_auth() is True,
+        )
     except Exception as exc:
         print(
             f"WARNING: could not ensure the training-gym dashboard is deployed: "

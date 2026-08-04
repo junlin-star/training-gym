@@ -68,6 +68,33 @@ def test_dashboard_import_sets_proxy_auth_mode(monkeypatch):
     assert config.dashboard_requires_proxy_auth() is True
 
 
+@pytest.mark.parametrize(
+    ("last_proxy_auth", "expected"),
+    [(True, True), (False, False), (None, False)],
+)
+def test_auto_deploy_reuses_proxy_auth_mode(monkeypatch, last_proxy_auth, expected):
+    calls = []
+    monkeypatch.setattr(
+        cli_setup_module,
+        "deployed_dashboard_url",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        config,
+        "get_dashboard_proxy_auth",
+        lambda: last_proxy_auth,
+    )
+
+    def setup(**kwargs):
+        calls.append(kwargs)
+        return "https://dashboard.test"
+
+    monkeypatch.setattr(cli_setup_module, "setup", setup)
+
+    assert cli_setup_module.ensure_dashboard_deployed() == "https://dashboard.test"
+    assert calls == [{"interactive": False, "proxy_auth": expected}]
+
+
 def _capture_report(reporter, monkeypatch):
     requests = []
 
