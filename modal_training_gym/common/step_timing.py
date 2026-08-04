@@ -6,8 +6,14 @@ from typing import Any
 
 from modal_training_gym.common.status import SlimeStatus
 
+class Role(str, Enum):
+    DRIVER = "driver"
+    ROLLOUT = "rollout"
+    ACTOR = "actor"
+    CRITIC = "critic"
 
 class Substep(str, Enum):
+    # Included in legacy substep times
     EVAL_BEFORE = SlimeStatus.EVAL_ROLLOUT_LOGGING.value
     GENERATE_ROLLOUTS = SlimeStatus.ROLLOUT_LOGGING.value
     OFFLOAD_ROLLOUT = SlimeStatus.OFFLOAD_ROLLOUT.value
@@ -18,6 +24,13 @@ class Substep(str, Enum):
     WEIGHT_SYNC = SlimeStatus.WEIGHT_SYNC.value
     EVAL_AFTER = f"{SlimeStatus.EVAL_ROLLOUT_LOGGING.value}_end"
 
+    WAIT_FOR_ROLLOUT = "wait_for_rollout"        # driver
+    TRAIN_MODELS = "train_models"                # driver
+    CUSTOM_REWARD = "custom_reward"              # rollout worker
+    REWARD_POST_PROCESS = "reward_post_process"  # rollout worker
+    FORWARD_BACKWARD = "forward_backward"        # actor / critic
+
+ 
 
 def record_step_time_event(
     step_times: MutableMapping[str, Any],
