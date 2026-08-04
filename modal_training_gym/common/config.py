@@ -86,22 +86,34 @@ def get_dashboard_proxy_auth() -> bool | None:
         persisted = None
 
     url = dashboard.get("url")
-    if not isinstance(url, str) or not url.strip():
-        return persisted
+    if isinstance(url, str) and url.strip():
+        request = Request(
+            url.strip().rstrip("/") + DASHBOARD_PROXY_AUTH_PATH,
+            headers=modal_proxy_auth_headers(),
+        )
+        try:
+            with urlopen(request, timeout=5) as response:
+                value = loads(response.read())
+                if isinstance(value, bool):
+                    if value:
+                        print("The deployed dashboard uses proxy authentication.")
+                    else:
+                        print("The deployed dashboard does not use proxy authentication.")
+                    return value
+        except HTTPError as exc:
+            if exc.code in {401, 403}:
+                print("The deployed dashboard appears to use proxy authentication.")
+                return True
+            elif exc.code != 404:
+                raise
 
-    request = Request(
-        url.strip().rstrip("/") + DASHBOARD_PROXY_AUTH_PATH,
-        headers=modal_proxy_auth_headers(),
-    )
-    try:
-        with urlopen(request, timeout=5) as response:
-            value = loads(response.read())
-            return value if isinstance(value, bool) else persisted
-    except HTTPError as exc:
-        if exc.code == 403:
-            return True
-    except (JSONDecodeError, OSError, URLError, UnicodeDecodeError):
-        pass
+    if persisted is not None:
+        print("Unable to reach existing dashboard.")
+        if persisted:
+            print("The last deploy from this computer used proxy authentication.")
+        else:
+            print("The last deploy from this computer did not use proxy authentication.")
+
     return persisted
 
 

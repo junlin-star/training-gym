@@ -31,10 +31,6 @@ DASHBOARD_APP_NAME = "training-gym-dashboard"
 DASHBOARD_WEB_FUNCTION = "fastapi_app"
 
 
-class ProxyAuthChoiceRequired(ValueError):
-    """Raised when an authenticated redeploy requires an explicit CLI choice."""
-
-
 def _load_dashboard_for_deploy(requires_proxy_auth: bool):
     """Import the declarative dashboard with the selected ASGI proxy-auth mode."""
     import importlib
@@ -49,21 +45,7 @@ def _load_dashboard_for_deploy(requires_proxy_auth: bool):
     return importlib.import_module(module_name)
 
 
-def _resolve_dashboard_proxy_auth(proxy_auth: bool | None) -> bool:
-    if proxy_auth is not None:
-        return proxy_auth
-
-    from modal_training_gym.common.config import get_dashboard_proxy_auth
-
-    if get_dashboard_proxy_auth() is True:
-        raise ProxyAuthChoiceRequired(
-            "The deployed dashboard uses proxy auth. "
-            "Pass either --proxy-auth or --no-proxy-auth explicitly."
-        )
-    return False
-
-
-def setup(interactive: bool = True, proxy_auth: bool | None = None) -> str:
+def setup(require_proxy_auth: bool, interactive: bool = True) -> str:
     """Deploy the training-gym dashboard, persist its URL, and return it.
 
     ``interactive=False`` resolves Modal credentials silently (from env vars
@@ -72,14 +54,19 @@ def setup(interactive: bool = True, proxy_auth: bool | None = None) -> str:
     """
     import modal
 
-    requires_proxy_auth = _resolve_dashboard_proxy_auth(proxy_auth)
-
     from modal_training_gym.common.config import CONFIG_PATH, save_dashboard_url
 
-    dashboard = _load_dashboard_for_deploy(requires_proxy_auth)
+    if require_proxy_auth:
+        print("Deploying dashboard with proxy authentication enabled.")
+    else:
+        print("This dashboard will not have proxy authentication enabled.")
+        print("If you would like to enable it, run `training-gym setup --proxy-auth`.")
+        print()
+
+    dashboard = _load_dashboard_for_deploy(require_proxy_auth)
 
     has_proxy_auth_token = ensure_proxy_auth(interactive=interactive)
-    if requires_proxy_auth and not has_proxy_auth_token:
+    if require_proxy_auth and not has_proxy_auth_token:
         print(
             "WARNING: Dashboard proxy auth requires MODAL_KEY and MODAL_SECRET. "
             "Run `training-gym set-proxy-auth` or export both variables."
@@ -96,7 +83,7 @@ def setup(interactive: bool = True, proxy_auth: bool | None = None) -> str:
         dashboard.app.deploy()
 
     web_url = dashboard.fastapi_app.get_web_url()
-    save_dashboard_url(web_url, proxy_auth=requires_proxy_auth)
+    save_dashboard_url(web_url, proxy_auth=require_proxy_auth)
     print(f"\nDashboard deployed: {web_url}")
     print(f"Saved dashboard URL to {CONFIG_PATH}")
     return web_url
@@ -224,7 +211,7 @@ def set_password(password: str | None = None) -> None:
 
     setup(
         interactive=False,
-        proxy_auth=get_dashboard_proxy_auth(),
+        require_proxy_auth=get_dashboard_proxy_auth(),
     )
 
 
@@ -307,7 +294,7 @@ def ensure_dashboard_deployed() -> str | None:
         )
         return setup(
             interactive=False,
-            proxy_auth=get_dashboard_proxy_auth() is True,
+            require_proxy_auth=get_dashboard_proxy_auth() is True,
         )
     except Exception as exc:
         print(

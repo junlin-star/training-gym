@@ -56,8 +56,6 @@ from modal_training_gym.common.training_rollout import (
     TrainingRolloutSummary,
 )
 
-_DASHBOARD_REQUIRES_PROXY_AUTH = dashboard_requires_proxy_auth()
-
 SummaryLoader = Callable[[], Awaitable[list[JsonDict]]]
 
 
@@ -72,6 +70,8 @@ class LogEntry(TypedDict):
 
 REPO_URL = "https://github.com/modal-projects/training-gym.git"
 REPO_BRANCH = "main"
+
+DASHBOARD_REQUIRES_PROXY_AUTH_ENV_KEY = "DASHBOARD_REQUIRES_PROXY_AUTH"
 
 _repo_frontend = Path(__file__).resolve().parents[1] / "dashboards" / "frontend"
 _has_local_frontend = _repo_frontend.is_dir()
@@ -102,9 +102,13 @@ def _build_image() -> modal.Image:
             "rm -rf /tmp/training-gym",
         )
 
-    return base.run_commands(
-        "cd /app/frontend && npm install && npm run build",
-    ).add_local_python_source("modal_training_gym", copy=True)
+    return (
+        base.run_commands("cd /app/frontend && npm install && npm run build")
+        .add_local_python_source("modal_training_gym", copy=True)
+        .env({
+            DASHBOARD_REQUIRES_PROXY_AUTH_ENV_KEY: "true" if dashboard_requires_proxy_auth() else "false"
+        })
+    )
 
 
 image = _build_image()
@@ -365,7 +369,7 @@ def reconcile() -> None:
     min_containers=1,
     secrets=_function_secrets(),
 )
-@modal.asgi_app(requires_proxy_auth=_DASHBOARD_REQUIRES_PROXY_AUTH)
+@modal.asgi_app(requires_proxy_auth=dashboard_requires_proxy_auth())
 def fastapi_app():
     import base64
     import binascii
@@ -423,7 +427,7 @@ def fastapi_app():
 
     @web.get(DASHBOARD_PROXY_AUTH_PATH)
     async def proxy_auth_status() -> bool:
-        return _DASHBOARD_REQUIRES_PROXY_AUTH
+        return os.environ.get(DASHBOARD_REQUIRES_PROXY_AUTH_ENV_KEY, "false") == "true"
 
     cache_ttl_seconds = 30.0
     cache_keys = ("runs", "train_results", "evals", "deployments")
