@@ -25,13 +25,17 @@ def setup_command(proxy_auth: bool, no_proxy_auth: bool) -> None:
             "--proxy-auth and --no-proxy-auth cannot be used together."
         )
 
-    from .setup import ProxyAuthChoiceRequired, setup
+    from .setup import setup
+    from modal_training_gym.common.config import get_dashboard_proxy_auth
 
-    selected = True if proxy_auth else False if no_proxy_auth else None
-    try:
-        setup(proxy_auth=selected)
-    except ProxyAuthChoiceRequired as exc:
-        raise click.UsageError(str(exc)) from exc
+    if not proxy_auth and not no_proxy_auth:
+        if get_dashboard_proxy_auth() is True:
+            raise click.UsageError(
+                "The deployed dashboard uses proxy auth. "
+                "Pass either --proxy-auth or --no-proxy-auth explicitly."
+            )
+
+    setup(require_proxy_auth=proxy_auth)
 
 
 @click.command("open", cls=_TrainingGymCommand)

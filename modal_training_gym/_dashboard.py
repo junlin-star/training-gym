@@ -33,7 +33,10 @@ from starlette.requests import Request
 # Used as endpoint parameter annotations, so — like ``Request`` above — these
 # must resolve from this module's globals.
 from modal_training_gym.common.advantage_distribution import AdvantageDistribution
-from modal_training_gym.common.config import dashboard_requires_proxy_auth
+from modal_training_gym.common.config import (
+    DASHBOARD_PROXY_AUTH_PATH,
+    dashboard_requires_proxy_auth,
+)
 from modal_training_gym.common.run import FrameworkStatusUpdate, TrainingRun
 from modal_training_gym.common.run_list import (
     filter_run_summaries,
@@ -67,6 +70,8 @@ class LogEntry(TypedDict):
 REPO_URL = "https://github.com/modal-projects/training-gym.git"
 REPO_BRANCH = "main"
 
+DASHBOARD_REQUIRES_PROXY_AUTH_ENV_KEY = "DASHBOARD_REQUIRES_PROXY_AUTH"
+
 _repo_frontend = Path(__file__).resolve().parents[1] / "dashboards" / "frontend"
 _has_local_frontend = _repo_frontend.is_dir()
 
@@ -96,9 +101,17 @@ def _build_image() -> modal.Image:
             "rm -rf /tmp/training-gym",
         )
 
-    return base.run_commands(
-        "cd /app/frontend && npm install && npm run build",
-    ).add_local_python_source("modal_training_gym", copy=True)
+    return (
+        base.run_commands("cd /app/frontend && npm install && npm run build")
+        .add_local_python_source("modal_training_gym", copy=True)
+        .env(
+            {
+                DASHBOARD_REQUIRES_PROXY_AUTH_ENV_KEY: "true"
+                if dashboard_requires_proxy_auth()
+                else "false"
+            }
+        )
+    )
 
 
 image = _build_image()
@@ -117,11 +130,12 @@ MODAL_CREDS_SECRET_NAME = "_training-gym-modal-creds"
 # Set a real value via ``training-gym set-password``.
 DASHBOARD_PASSWORD_SECRET_NAME = "_training-gym-dashboard-password"
 
-# Write endpoints authenticated by their own per-run bearer token. They're
-# exempt from Basic Auth so launchers (which send ``Authorization: Bearer``)
-# keep working even when a dashboard password is set.
+# Routes that must bypass Basic Auth. Write endpoints authenticate with their
+# own per-run bearer token; the proxy-auth status route must report only the
+# Modal-layer setting, independent of dashboard password protection.
 PASSWORD_EXEMPT_PATHS = frozenset(
     {
+        DASHBOARD_PROXY_AUTH_PATH,
         "/api/framework-status",
         "/api/training-rollouts",
         "/api/advantage-distributions",
@@ -413,6 +427,10 @@ def fastapi_app():
                     headers={"WWW-Authenticate": 'Basic realm="training-gym"'},
                 )
         return await call_next(request)
+
+    @web.get(DASHBOARD_PROXY_AUTH_PATH)
+    async def proxy_auth_status() -> bool:
+        return os.environ.get(DASHBOARD_REQUIRES_PROXY_AUTH_ENV_KEY, "false") == "true"
 
     cache_ttl_seconds = 30.0
     cache_keys = ("runs", "train_results", "evals", "deployments")

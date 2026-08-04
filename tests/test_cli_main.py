@@ -64,12 +64,15 @@ def test_main_returns_no_command_exit_code(capsys):
 def test_setup_dispatches_to_existing_function(runner, monkeypatch):
     setup = Mock()
     monkeypatch.setattr("modal_training_gym.cli.setup.setup", setup)
+    monkeypatch.setattr(
+        "modal_training_gym.common.config.get_dashboard_proxy_auth", lambda: False
+    )
 
     result = runner.invoke(cli_module.entrypoint_cli, ["setup"])
 
     assert result.exit_code == 0
     assert result.stderr == ""
-    setup.assert_called_once_with(proxy_auth=None)
+    setup.assert_called_once_with(require_proxy_auth=False)
 
 
 @pytest.mark.parametrize(
@@ -86,7 +89,7 @@ def test_setup_preserves_proxy_auth_choice(runner, monkeypatch, flag, expected):
     result = runner.invoke(cli_module.entrypoint_cli, ["setup", flag])
 
     assert result.exit_code == 0
-    setup.assert_called_once_with(proxy_auth=expected)
+    setup.assert_called_once_with(require_proxy_auth=expected)
 
 
 def test_setup_rejects_both_proxy_auth_flags(runner):
@@ -102,19 +105,17 @@ def test_setup_rejects_both_proxy_auth_flags(runner):
 def test_setup_prompts_for_explicit_choice_after_authenticated_deploy(
     runner, monkeypatch
 ):
-    from modal_training_gym.cli.setup import ProxyAuthChoiceRequired
-
-    setup = Mock(
-        side_effect=ProxyAuthChoiceRequired(
-            "Pass either --proxy-auth or --no-proxy-auth explicitly."
-        )
-    )
+    setup = Mock()
     monkeypatch.setattr("modal_training_gym.cli.setup.setup", setup)
+    monkeypatch.setattr(
+        "modal_training_gym.common.config.get_dashboard_proxy_auth", lambda: True
+    )
 
     result = runner.invoke(cli_module.entrypoint_cli, ["setup"])
 
     assert result.exit_code == 2
     assert "--proxy-auth or --no-proxy-auth" in result.stderr
+    setup.assert_not_called()
 
 
 def test_open_dispatches_to_existing_function(runner, monkeypatch):
@@ -193,6 +194,9 @@ def test_expected_errors_use_declared_exit_code(runner, monkeypatch):
         )
 
     monkeypatch.setattr("modal_training_gym.cli.setup.setup", fail)
+    monkeypatch.setattr(
+        "modal_training_gym.common.config.get_dashboard_proxy_auth", lambda: False
+    )
 
     result = runner.invoke(cli_module.entrypoint_cli, ["setup"])
 
@@ -253,6 +257,9 @@ def test_main_maps_click_keyboard_interrupt_to_130(monkeypatch, capsys):
     monkeypatch.setattr(
         "modal_training_gym.cli.setup.setup",
         interrupt,
+    )
+    monkeypatch.setattr(
+        "modal_training_gym.common.config.get_dashboard_proxy_auth", lambda: False
     )
 
     assert cli_module.main(["setup"]) == 130
