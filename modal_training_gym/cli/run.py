@@ -499,19 +499,14 @@ def _build_kill_run_report(
     modal_app_live: bool | None,
 ) -> _KillRunReport:
     status = (summary.display_status or summary.status or "pending").lower()
-    if not summary.modal_app_id and status not in TERMINAL_RUN_STATUSES:
-        should_kill = False
-        skip_reason = "missing_modal_app_id"
+    if status in TERMINAL_RUN_STATUSES:
+        action, skip_reason = "skipped", "already_terminal"
+    elif not summary.modal_app_id:
+        action, skip_reason = "skipped", "missing_modal_app_id"
+    elif modal_app_live is False:
+        action, skip_reason = "skipped", "modal_app_not_live"
     else:
-        should_kill = modal_app_live is True or (
-            modal_app_live is None and status not in TERMINAL_RUN_STATUSES
-        )
-        if should_kill:
-            skip_reason = None
-        elif modal_app_live is False:
-            skip_reason = "modal_app_not_live"
-        else:
-            skip_reason = "already_terminal"
+        action, skip_reason = "would_kill", None
 
     current_step, total_steps, step_unit = _current_step(summary)
     duration_seconds = summary.duration_seconds
@@ -528,7 +523,7 @@ def _build_kill_run_report(
         "total_steps": total_steps,
         "step_unit": step_unit,
         "duration_seconds": duration_seconds,
-        "action": "would_kill" if should_kill else "skipped",
+        "action": action,
         "skip_reason": skip_reason,
     }
 

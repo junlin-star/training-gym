@@ -605,6 +605,27 @@ def test_run_kill_dry_run_reports_jobs_without_stopping(monkeypatch):
     ]
 
 
+def test_run_kill_treats_finished_non_live_run_as_successful_noop(monkeypatch):
+    FakeDashboardClient.payload = _summary(
+        status="completed",
+        display_status="completed",
+        modal_app_id="ap-1",
+    )
+    monkeypatch.setattr(run_module, "app_live_status", lambda _app_id: False)
+
+    result = CliRunner().invoke(
+        cli_module.entrypoint_cli,
+        ["run", "kill", "run-1", "--dry-run", "--json"],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["kill_count"] == 0
+    assert payload["error_count"] == 0
+    assert payload["runs"][0]["action"] == "skipped"
+    assert payload["runs"][0]["skip_reason"] == "already_terminal"
+
+
 def test_run_kill_stops_each_active_modal_app_and_skips_terminal_runs(monkeypatch):
     FakeDashboardClient.payloads = {
         "/api/runs/run-1": _summary(
