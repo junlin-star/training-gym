@@ -15,6 +15,7 @@ import json
 import os
 from typing import Any
 
+from modal_training_gym.common.coerce import optional_int
 from modal_training_gym.common.sample import Sample
 
 # Import path of the run model's response parser (a (str) -> ParsedResponse
@@ -488,13 +489,6 @@ def _extract_image_from_sample(sample: Any) -> str | None:
     return None
 
 
-def _optional_int(value: Any) -> int | None:
-    try:
-        return int(value)
-    except (TypeError, ValueError, OverflowError):
-        return None
-
-
 def _sample_to_dict(
     sample: Any,
     parser: Any = None,
@@ -589,8 +583,8 @@ def _sample_to_dict(
         "response": response_text,
         "metadata": metadata,
     }
-    sample_index = _optional_int(get("index"))
-    rollout_index = _optional_int(get("rollout_id"))
+    sample_index = optional_int(get("index"))
+    rollout_index = optional_int(get("rollout_id"))
     if rollout_index is None:
         rollout_index = sample_index
     if rollout_index is not None:

@@ -17,17 +17,9 @@ export function groupByRollout(samples) {
   return [...groups.values()];
 }
 
-export function rolloutScore(samples, positions) {
-  const sum = positions.reduce((a, i) => a + (Number(samples[i]?.score) || 0), 0);
-  return sum / positions.length;
-}
-
-export function rolloutScores(samples) {
-  return groupByRollout(samples).map((positions) => rolloutScore(samples, positions));
-}
-
-export function meanRolloutScore(samples) {
-  const scores = rolloutScores(samples);
-  if (!scores.length) return 0;
-  return scores.reduce((a, v) => a + v, 0) / scores.length;
+export function rolloutScores(samples, groups = groupByRollout(samples)) {
+  return groups.map((positions) => {
+    const sum = positions.reduce((a, i) => a + (Number(samples[i]?.score) || 0), 0);
+    return sum / positions.length;
+  });
 }

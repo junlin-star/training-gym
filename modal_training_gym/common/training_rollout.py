@@ -15,7 +15,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
-from modal_training_gym.common.coerce import safe_int
+from modal_training_gym.common.coerce import optional_int, safe_int
 from modal_training_gym.common.sample import Sample
 from modal_training_gym.utils.metadata import (
     MetadataStore,
@@ -56,26 +56,6 @@ _NON_TAG_METADATA_KEYS = frozenset(
 )
 
 
-def _optional_int(value: Any) -> int | None:
-    try:
-        return int(value)
-    except (TypeError, ValueError, OverflowError):
-        return None
-
-
-def _rollout_groups(
-    samples: list[TrainingRolloutSample],
-) -> list[list[TrainingRolloutSample]]:
-    groups: dict[tuple[str, int], list[TrainingRolloutSample]] = {}
-    for position, sample in enumerate(samples):
-        index = sample.rollout_index
-        if index is None:
-            index = _optional_int(sample.metadata.get("rollout_id"))
-        key = ("rollout", index) if index is not None else ("sample", position)
-        groups.setdefault(key, []).append(sample)
-    return list(groups.values())
-
-
 def _numeric_tags(samples: list[TrainingRolloutSample]) -> dict[str, list[float]]:
     values_by_tag: dict[str, list[float]] = {}
     for sample in samples:
@@ -85,25 +65,6 @@ def _numeric_tags(samples: list[TrainingRolloutSample]) -> dict[str, list[float]
             if isinstance(value, (int, float)) and not isinstance(value, bool):
                 values_by_tag.setdefault(key, []).append(float(value))
     return values_by_tag
-
-
-def _tag_stats_for_samples(
-    samples: list[TrainingRolloutSample],
-) -> dict[str, dict[str, Any]]:
-    values_by_tag: dict[str, list[float]] = {}
-    for group in _rollout_groups(samples):
-        for tag, values in _numeric_tags(group).items():
-            values_by_tag.setdefault(tag, []).append(sum(values) / len(values))
-
-    return {
-        tag: {
-            "count": len(values),
-            "mean": sum(values) / len(values),
-            "min": min(values),
-            "max": max(values),
-        }
-        for tag, values in values_by_tag.items()
-    }
 
 
 class TrainingRolloutSummary(BaseModel):
@@ -125,10 +86,20 @@ class TrainingRolloutResult(BaseModel):
     training_run_id: str
     rollout_id: int
     created_at: int = 0
-    n_samples_per_prompt: int = 1
+    n_samples_per_prompt: int | None = None
     samples: list[TrainingRolloutSample] = Field(default_factory=list)
     metrics: dict[str, Any] = Field(default_factory=dict)
     rollout_time: float | None = None
+
+    def _rollout_groups(self) -> list[list[TrainingRolloutSample]]:
+        groups: dict[tuple[str, int], list[TrainingRolloutSample]] = {}
+        for position, sample in enumerate(self.samples):
+            index = sample.rollout_index
+            if index is None:
+                index = optional_int(sample.metadata.get("rollout_id"))
+            key = ("rollout", index) if index is not None else ("sample", position)
+            groups.setdefault(key, []).append(sample)
+        return list(groups.values())
 
     @property
     def total(self) -> int:
@@ -136,7 +107,7 @@ class TrainingRolloutResult(BaseModel):
 
     @property
     def mean(self) -> float:
-        groups = _rollout_groups(self.samples)
+        groups = self._rollout_groups()
         if not groups:
             return 0.0
         return sum(sum(s.score for s in group) / len(group) for group in groups) / len(
@@ -197,7 +168,20 @@ class TrainingRolloutResult(BaseModel):
     @property
     def tag_stats(self) -> dict[str, dict[str, Any]]:
         """Per-tag count/mean/min/max, weighted per rollout like ``mean``."""
-        return _tag_stats_for_samples(self.samples)
+        values_by_tag: dict[str, list[float]] = {}
+        for group in self._rollout_groups():
+            for tag, values in _numeric_tags(group).items():
+                values_by_tag.setdefault(tag, []).append(sum(values) / len(values))
+
+        return {
+            tag: {
+                "count": len(values),
+                "mean": sum(values) / len(values),
+                "min": min(values),
+                "max": max(values),
+            }
+            for tag, values in values_by_tag.items()
+        }
 
     def to_summary(self) -> dict[str, Any]:
         summary: dict[str, Any] = {

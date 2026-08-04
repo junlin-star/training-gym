@@ -88,6 +88,18 @@ def test_grouping_survives_the_rollout_sample_model():
     assert (dumped["sample_index"], dumped["group_index"]) == (7, 3)
 
 
+def test_samples_per_prompt_reads_as_unknown_when_the_recorder_did_not_report_it():
+    reported = TrainingRolloutResult.model_validate(
+        {"training_run_id": "t", "rollout_id": 0, "n_samples_per_prompt": 8}
+    )
+    historical = TrainingRolloutResult.model_validate(
+        {"training_run_id": "t", "rollout_id": 0}
+    )
+
+    assert reported.n_samples_per_prompt == 8
+    assert historical.n_samples_per_prompt is None
+
+
 def test_grouping_stays_off_the_shared_eval_sample():
     assert not hasattr(Sample(score=1.0), "rollout_index")
 

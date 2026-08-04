@@ -23,13 +23,7 @@
     fetchRunAdvantageStep,
     fetchRunLogs,
   } from "../lib/api.js";
-  import {
-    groupByRollout,
-    meanRolloutScore,
-    rolloutIndex,
-    rolloutScore,
-    rolloutScores,
-  } from "../lib/rolloutGrouping.js";
+  import { groupByRollout, rolloutIndex, rolloutScores } from "../lib/rolloutGrouping.js";
 
   // Number of historical log lines requested per page.
   const HIST_PAGE = 500;
@@ -258,7 +252,7 @@
     const samples = expandedRollout?.samples || [];
     const rollouts = groupByRollout(samples);
     if (!rollouts.length) return null;
-    const scores = rollouts.map((p) => rolloutScore(samples, p));
+    const scores = rolloutScores(samples, rollouts);
     // Loop instead of Math.min(...arr): a single rollout's per-sample array can
     // exceed the engine's max argument count and make the spread throw a
     // RangeError (same failure class buildDist avoids).
@@ -398,14 +392,17 @@
   function downloadAllTrajectories() {
     if (!expandedRollout?.samples?.length) return;
     const rollout = expandedRolloutId ?? 0;
+    const samples = expandedRollout.samples;
+    const groups = groupByRollout(samples);
+    const scores = rolloutScores(samples, groups);
     const payload = {
       training_run_id: runId,
       rollout_id: rollout,
-      total: expandedRollout.samples.length,
-      rollouts: groupByRollout(expandedRollout.samples).length,
+      total: samples.length,
+      rollouts: groups.length,
       n_samples_per_prompt: expandedRollout.n_samples_per_prompt ?? null,
-      mean: meanRolloutScore(expandedRollout.samples),
-      samples: expandedRollout.samples.map(sampleToPayload),
+      mean: scores.reduce((a, v) => a + v, 0) / scores.length,
+      samples: samples.map(sampleToPayload),
     };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
