@@ -567,7 +567,7 @@ def kill_runs(
         run_report for run_report in run_reports if run_report["action"] == "would_kill"
     ]
     error_count = sum(
-        (run_report["skip_reason"] and run_report["skip_reason"] != "already_terminal")
+        run_report["skip_reason"] not in (None, "already_terminal")
         for run_report in run_reports
     )
     result: dict[str, object] = {
