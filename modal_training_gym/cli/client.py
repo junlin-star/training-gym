@@ -93,6 +93,7 @@ class DashboardClient:
         *,
         params: QueryParams | None = None,
         not_found_error: CLIError | None = None,
+        timeout: float | httpx.Timeout | None = None,
     ) -> Any:
         """GET a dashboard-relative path and decode its JSON response."""
         parsed_path = urlsplit(path)
@@ -108,7 +109,11 @@ class DashboardClient:
             else None
         )
         try:
-            response = self._client.get(path.lstrip("/"), params=query)
+            response = self._client.get(
+                path.lstrip("/"),
+                params=query,
+                timeout=DEFAULT_TIMEOUT_SECONDS if timeout is None else timeout,
+            )
         except httpx.TimeoutException as exc:
             raise CLIError(
                 "Dashboard request timed out.",

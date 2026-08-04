@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 
+import click
 import pytest
 from click.testing import CliRunner
 
@@ -15,6 +16,7 @@ class FakeDashboardClient:
     streams: dict[str, list[tuple[str, str]]] = {}
     not_found_paths: set[str] = set()
     requests: list[tuple[str, dict[str, object]]] = []
+    timeouts: list[tuple[str, float | None]] = []
 
     def __enter__(self):
         return self
@@ -22,8 +24,9 @@ class FakeDashboardClient:
     def __exit__(self, *_args):
         return None
 
-    def get_json(self, path, *, params=None, not_found_error=None):
+    def get_json(self, path, *, params=None, not_found_error=None, timeout=None):
         self.requests.append((path, params))
+        self.timeouts.append((path, timeout))
         if path in self.not_found_paths and not_found_error is not None:
             raise not_found_error
         return self.payloads.get(path, self.payload)
@@ -42,6 +45,7 @@ def fake_dashboard(monkeypatch):
     FakeDashboardClient.streams = {}
     FakeDashboardClient.not_found_paths = set()
     FakeDashboardClient.requests = []
+    FakeDashboardClient.timeouts = []
     monkeypatch.setattr(run_module, "DashboardClient", FakeDashboardClient)
 
 
@@ -62,6 +66,39 @@ def _summary(**overrides):
     }
     value.update(overrides)
     return value
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (None, None),
+        ("1,4,9", {1, 4, 9}),
+        ("4-10", {4, 5, 6, 7, 8, 9}),
+        ("4-10:2", {4, 6, 8}),
+        ("1,4-10:2,9", {1, 4, 6, 8, 9}),
+        (" 1, 4-10:2 ", {1, 4, 6, 8}),
+    ],
+)
+def test_parse_steps(value, expected):
+    assert run_module._parse_steps(value) == expected
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "",
+        "1,",
+        "-1",
+        "4-4",
+        "10-4",
+        "4-10:0",
+        "4-10:-1",
+        "not-a-step",
+    ],
+)
+def test_parse_steps_rejects_invalid_values(value):
+    with pytest.raises(click.BadParameter):
+        run_module._parse_steps(value)
 
 
 def test_run_list_help_derives_filter_flags_from_schema():
@@ -418,6 +455,309 @@ def test_run_logs_rejects_historical_bounds_with_follow():
     assert result.exit_code == 2
     assert "apply only when fetching logs without --follow" in result.stderr
     assert FakeDashboardClient.requests == []
+
+
+def test_run_trace_help_documents_flags_and_examples():
+    result = CliRunner().invoke(cli_module.entrypoint_cli, ["run", "trace", "--help"])
+
+    assert result.exit_code == 0
+    assert "Download agent traces for a run" in result.stdout
+    assert "RUN_ID" in result.stdout
+    for flag in ("--out", "--step", "--dry-run", "--yes", "--force", "--json"):
+        assert flag in result.stdout
+    assert "training-gym run trace brave-falcon-3fa8" in result.stdout
+
+
+def test_run_trace_dry_run_filters_steps_without_downloading(tmp_path):
+    FakeDashboardClient.payloads = {
+        "/api/runs/run-1": _summary(),
+        "/api/runs/run-1/rollouts": [
+            {
+                "training_run_id": "run-1",
+                "rollout_id": step,
+                "created_at": 100 + step,
+                "total": 8,
+                "mean": step / 10,
+                "export_size_bytes": 1000 + step,
+            }
+            for step in range(5)
+        ],
+    }
+
+    result = CliRunner().invoke(
+        cli_module.entrypoint_cli,
+        [
+            "run",
+            "trace",
+            "run-1",
+            "--out",
+            str(tmp_path),
+            "--step",
+            "0-4:2",
+            "--dry-run",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["dry_run"] is True
+    assert payload["step_count"] == 2
+    assert payload["sample_count"] == 16
+    assert payload["export_size_bytes"] == 2002
+    assert [step["step"] for step in payload["steps"]] == [0, 2]
+    assert set(payload["steps"][0]) == {
+        "step",
+        "file_name",
+        "samples",
+        "mean_reward",
+        "export_size_bytes",
+    }
+    assert payload["output_path"] == str(tmp_path / "run-1")
+    assert FakeDashboardClient.requests == [
+        ("/api/runs/run-1", None),
+        ("/api/runs/run-1/rollouts", None),
+    ]
+    assert not (tmp_path / "run-1").exists()
+
+
+def test_run_trace_file_names_use_highest_step_width(tmp_path):
+    FakeDashboardClient.payloads = {
+        "/api/runs/run-1": _summary(),
+        "/api/runs/run-1/rollouts": [
+            {
+                "training_run_id": "run-1",
+                "rollout_id": step,
+                "created_at": 100,
+                "total": 8,
+                "mean": 0.5,
+                "export_size_bytes": 1000,
+            }
+            for step in (2, 10_000)
+        ],
+    }
+
+    result = CliRunner().invoke(
+        cli_module.entrypoint_cli,
+        [
+            "run",
+            "trace",
+            "run-1",
+            "--out",
+            str(tmp_path),
+            "--dry-run",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert [step["file_name"] for step in payload["steps"]] == [
+        "step_00002.json",
+        "step_10000.json",
+    ]
+
+
+def test_run_trace_dry_run_reports_unknown_size_for_legacy_rollouts(tmp_path):
+    FakeDashboardClient.payloads = {
+        "/api/runs/run-1": _summary(),
+        "/api/runs/run-1/rollouts": [
+            {
+                "training_run_id": "run-1",
+                "rollout_id": 0,
+                "created_at": 100,
+                "total": 8,
+                "mean": 0.5,
+            }
+        ],
+    }
+
+    human = CliRunner().invoke(
+        cli_module.entrypoint_cli,
+        [
+            "run",
+            "trace",
+            "run-1",
+            "--out",
+            str(tmp_path),
+            "--dry-run",
+        ],
+    )
+    json_result = CliRunner().invoke(
+        cli_module.entrypoint_cli,
+        [
+            "run",
+            "trace",
+            "run-1",
+            "--out",
+            str(tmp_path),
+            "--dry-run",
+            "--json",
+        ],
+    )
+
+    assert human.exit_code == 0
+    assert "approximately unknown size" in human.stdout
+    payload = json.loads(json_result.stdout)
+    assert payload["export_size_bytes"] is None
+    assert payload["steps"][0]["export_size_bytes"] is None
+
+
+def test_run_trace_downloads_steps_and_writes_manifest(tmp_path):
+    summaries = [
+        {
+            "training_run_id": "run-1",
+            "rollout_id": step,
+            "created_at": 100 + step,
+            "total": 1,
+            "mean": reward,
+            "export_size_bytes": 500,
+        }
+        for step, reward in ((0, 0.25), (2, 0.75))
+    ]
+    FakeDashboardClient.payloads = {
+        "/api/runs/run-1": _summary(),
+        "/api/runs/run-1/rollouts": summaries,
+        "/api/runs/run-1/rollouts/0": {
+            "training_run_id": "run-1",
+            "rollout_id": 0,
+            "samples": [
+                {
+                    "score": 0.25,
+                    "prompt": "original question",
+                    "response": "original answer",
+                    "raw_prompt": "<|im_start|>user\noriginal question<|im_end|>",
+                    "raw_response": "<think>hidden</think>original answer",
+                    "parsed_response": {
+                        "content": "original answer",
+                        "thinking": "hidden",
+                    },
+                    "trace": [{"name": "generate", "start": 1.0, "end": 2.0}],
+                }
+            ],
+        },
+        "/api/runs/run-1/rollouts/2": {
+            "training_run_id": "run-1",
+            "rollout_id": 2,
+            "samples": [
+                {
+                    "score": 0.75,
+                    "prompt": "another",
+                    "response": "response",
+                    "trace": [{"name": "reward", "start": 3.0, "end": 4.0}],
+                }
+            ],
+        },
+    }
+
+    result = CliRunner().invoke(
+        cli_module.entrypoint_cli,
+        [
+            "run",
+            "trace",
+            "run-1",
+            "--out",
+            str(tmp_path),
+            "--yes",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0
+    output_path = tmp_path / "run-1"
+    manifest = json.loads((output_path / "manifest.json").read_text())
+    assert manifest == {
+        "run_id": "run-1",
+        "steps": [
+            {
+                "step": 0,
+                "file_name": "step_0000.json",
+                "samples": 1,
+                "mean_reward": 0.25,
+                "export_size_bytes": (output_path / "step_0000.json").stat().st_size,
+            },
+            {
+                "step": 2,
+                "file_name": "step_0002.json",
+                "samples": 1,
+                "mean_reward": 0.75,
+                "export_size_bytes": (output_path / "step_0002.json").stat().st_size,
+            },
+        ],
+    }
+    step_zero = json.loads((output_path / "step_0000.json").read_text())
+    assert step_zero["samples"][0]["trace"][0]["name"] == "generate"
+    assert step_zero["samples"][0]["prompt"] == "original question"
+    assert step_zero["samples"][0]["response"] == "original answer"
+    assert step_zero["samples"][0]["raw_prompt"] == (
+        "<|im_start|>user\noriginal question<|im_end|>"
+    )
+    assert step_zero["samples"][0]["raw_response"] == (
+        "<think>hidden</think>original answer"
+    )
+    assert step_zero["samples"][0]["parsed_response"] == {
+        "content": "original answer",
+        "thinking": "hidden",
+    }
+    assert json.loads((output_path / "step_0002.json").read_text())["rollout_id"] == 2
+    payload = json.loads(result.stdout)
+    assert payload["output_path"] == str(output_path)
+    assert payload["dry_run"] is False
+    assert payload["export_size_bytes"] > 0
+    assert set(payload["steps"][0]) == {
+        "step",
+        "file_name",
+        "samples",
+        "mean_reward",
+        "export_size_bytes",
+    }
+    assert [
+        timeout
+        for path, timeout in FakeDashboardClient.timeouts
+        if timeout == run_module.TRACE_DOWNLOAD_TIMEOUT_SECONDS
+    ] == [
+        run_module.TRACE_DOWNLOAD_TIMEOUT_SECONDS,
+        run_module.TRACE_DOWNLOAD_TIMEOUT_SECONDS,
+    ]
+
+
+def test_run_trace_rejects_missing_and_invalid_steps(tmp_path):
+    FakeDashboardClient.payloads = {
+        "/api/runs/run-1": _summary(),
+        "/api/runs/run-1/rollouts": [],
+    }
+
+    missing = CliRunner().invoke(
+        cli_module.entrypoint_cli,
+        [
+            "run",
+            "trace",
+            "run-1",
+            "--out",
+            str(tmp_path),
+            "--step",
+            "4",
+            "--dry-run",
+        ],
+    )
+    invalid = CliRunner().invoke(
+        cli_module.entrypoint_cli,
+        [
+            "run",
+            "trace",
+            "run-1",
+            "--out",
+            str(tmp_path),
+            "--step",
+            "4-2",
+            "--dry-run",
+        ],
+    )
+
+    assert missing.exit_code == 2
+    assert "Step(s) not found" in missing.stderr
+    assert invalid.exit_code == 2
+    assert "start-inclusive, end-exclusive ranges such as 4-100:2" in invalid.stderr
 
 
 @pytest.mark.parametrize(

@@ -7,10 +7,8 @@ it uses the local ``dashboards/frontend`` directory instead.
 
 from __future__ import annotations
 
-import ast
 import asyncio
 import os
-import re
 import secrets as _secrets
 import time
 from pathlib import Path
@@ -51,6 +49,7 @@ from modal_training_gym.common.time import parse_time as _parse_log_time
 from modal_training_gym.common.training_rollout import (
     TrainingRolloutResult,
     TrainingRolloutSummary,
+    _apply_parsed,
 )
 
 SummaryLoader = Callable[[], Awaitable[list[JsonDict]]]
@@ -622,63 +621,6 @@ def fastapi_app():
     async def load_deployments() -> list[JsonDict]:
         return await load_list_summary(MetadataStore.DEPLOYMENTS_SUMMARY)
 
-    # ── Response display ──────────────────────────────────────────────────
-    # Responses are parsed at write time (slime recorder for rollouts, the eval
-    # harness for evals) and stored as ``parsed_response``. Here we just surface
-    # that cleaned content for display, keeping the raw under ``raw_response``.
-    def _clean_prompt(text: str) -> str:
-        """Make a chat-templated prompt readable for display.
-
-        Dataset prompts often arrive as a chat template wrapping a Python repr
-        of the messages list (e.g. ``<|im_start|>user\\n[{'content': '...',
-        'role': 'user'}]<|im_end|>...``) plus a leaked reference/assistant turn.
-        Pull the message content out and drop the template scaffolding; fall
-        back to stripping special tokens when there's no messages repr.
-        """
-        start, end = text.find("[{"), text.rfind("}]")
-        if start != -1 and end > start:
-            try:
-                data = ast.literal_eval(text[start : end + 2])
-                if isinstance(data, list):
-                    parts = [
-                        str(m["content"])
-                        for m in data
-                        if isinstance(m, dict) and m.get("content")
-                    ]
-                    if parts:
-                        return "\n\n".join(parts).strip()
-            except (ValueError, SyntaxError):
-                pass
-        cleaned = re.sub(r"<\|[^|]*\|>", "", text)
-        cleaned = re.sub(r"</?think>", "", cleaned)
-        # Drop standalone role-header lines left behind by the template.
-        cleaned = re.sub(r"(?m)^(system|user|assistant)\s*$\n?", "", cleaned)
-        return re.sub(r"\n{3,}", "\n\n", cleaned).strip()
-
-    def _apply_parsed(rows: object) -> None:
-        if not isinstance(rows, list):
-            return
-        for row in rows:
-            if not isinstance(row, dict):
-                continue
-            parsed = row.get("parsed_response")
-            if isinstance(parsed, dict) and isinstance(parsed.get("content"), str):
-                raw = row.get("response")
-                if isinstance(raw, str):
-                    row["raw_response"] = raw
-                row["response"] = parsed.get("content") or ""
-                if parsed.get("thinking"):
-                    row["thinking"] = parsed["thinking"]
-                if parsed.get("tool_calls"):
-                    row["tool_calls"] = parsed["tool_calls"]
-            # Clean the (chat-templated) prompt for display, keeping the raw.
-            raw_prompt = row.get("prompt")
-            if isinstance(raw_prompt, str) and raw_prompt:
-                cleaned_prompt = _clean_prompt(raw_prompt)
-                if cleaned_prompt and cleaned_prompt != raw_prompt:
-                    row["raw_prompt"] = raw_prompt
-                    row["prompt"] = cleaned_prompt
-
     def _bearer_token(authorization: str | None) -> str:
         scheme, _, token = (authorization or "").partition(" ")
         if scheme.lower() != "bearer":
@@ -804,7 +746,7 @@ def fastapi_app():
         await _require_framework_status_token(result.training_run_id, authorization)
         run = await _get_run_or_404(result.training_run_id)
 
-        await result.save(is_async=True)
+        await run_in_threadpool(result.save)
         run.record_latest_rollout(result)
         await run.save(is_async=True)
         invalidate_cache("runs")
@@ -834,6 +776,7 @@ def fastapi_app():
                 status_code=404,
                 detail=f"Rollout {rollout_id} for run {training_run_id!r} not found",
             )
+
         if isinstance(data, dict):
             _apply_parsed(data.get("samples"))
         return JSONResponse(data)

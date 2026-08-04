@@ -9,6 +9,10 @@ phase-reporter; reads happen via the dashboard's
 
 from __future__ import annotations
 
+import ast
+import copy
+import json
+import re
 import time
 from collections.abc import Awaitable
 from typing import Any
@@ -56,6 +60,61 @@ _NON_TAG_METADATA_KEYS = frozenset(
 )
 
 
+def _clean_prompt(text: str) -> str:
+    """Make a chat-templated prompt readable for display.
+
+    Dataset prompts often arrive as a chat template wrapping a Python repr
+    of the messages list (e.g. ``<|im_start|>user\\n[{'content': '...',
+    'role': 'user'}]<|im_end|>...``) plus a leaked reference/assistant turn.
+    Pull the message content out and drop the template scaffolding; fall
+    back to stripping special tokens when there's no messages repr.
+    """
+    start, end = text.find("[{"), text.rfind("}]")
+    if start != -1 and end > start:
+        try:
+            data = ast.literal_eval(text[start : end + 2])
+            if isinstance(data, list):
+                parts = [
+                    str(m["content"])
+                    for m in data
+                    if isinstance(m, dict) and m.get("content")
+                ]
+                if parts:
+                    return "\n\n".join(parts).strip()
+        except (ValueError, SyntaxError):
+            pass
+    cleaned = re.sub(r"<\|[^|]*\|>", "", text)
+    cleaned = re.sub(r"</?think>", "", cleaned)
+    # Drop standalone role-header lines left behind by the template.
+    cleaned = re.sub(r"(?m)^(system|user|assistant)\s*$\n?", "", cleaned)
+    return re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+
+
+def _apply_parsed(rows: object) -> None:
+    if not isinstance(rows, list):
+        return
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        parsed = row.get("parsed_response")
+        if isinstance(parsed, dict) and isinstance(parsed.get("content"), str):
+            raw = row.get("response")
+            if isinstance(raw, str):
+                row["raw_response"] = raw
+            row["response"] = parsed.get("content") or ""
+            if parsed.get("thinking"):
+                row["thinking"] = parsed["thinking"]
+            if parsed.get("tool_calls"):
+                row["tool_calls"] = parsed["tool_calls"]
+        # Clean the (chat-templated) prompt for display, keeping the raw.
+        raw_prompt = row.get("prompt")
+        if isinstance(raw_prompt, str) and raw_prompt:
+            cleaned_prompt = _clean_prompt(raw_prompt)
+            if cleaned_prompt and cleaned_prompt != raw_prompt:
+                row["raw_prompt"] = raw_prompt
+                row["prompt"] = cleaned_prompt
+
+
 def _numeric_tags(samples: list[TrainingRolloutSample]) -> dict[str, list[float]]:
     values_by_tag: dict[str, list[float]] = {}
     for sample in samples:
@@ -76,6 +135,7 @@ class TrainingRolloutSummary(BaseModel):
     total: int
     episode_count: int | None = None
     mean: float
+    export_size_bytes: int | None = None
     rollout_time: float | None = None
     error_summary: dict[str, Any] | None = None
     tag_stats: dict[str, dict[str, Any]] | None = None
@@ -218,18 +278,28 @@ class TrainingRolloutResult(BaseModel):
             int(item.get("rollout_id", 0) or 0),
         )
 
-    def _summary_item(self) -> dict[str, Any]:
+    def _summary_item(self, *, export_size_bytes: int) -> dict[str, Any]:
         # summary_key keeps (run_id, rollout_id) uniqueness across runs.
-        return {**self.to_summary(), "summary_key": self.storage_key}
+        return {
+            **self.to_summary(),
+            "export_size_bytes": export_size_bytes,
+            "summary_key": self.storage_key,
+        }
 
     def save(self, *, is_async: bool = False) -> None | Awaitable[None]:
         self._touch_created_at()
+        payload = self.model_dump(mode="json")
+        export_payload = copy.deepcopy(payload)
+        _apply_parsed(export_payload.get("samples"))
+        export_size_bytes = len(
+            (json.dumps(export_payload, ensure_ascii=False, indent=2) + "\n").encode()
+        )
         return vol_put_with_summary(
             MetadataStore.TRAINING_ROLLOUTS,
             self.storage_key,
-            self.model_dump(mode="json"),
+            payload,
             summary_store=MetadataStore.TRAINING_ROLLOUTS_SUMMARY,
-            summary_item=self._summary_item(),
+            summary_item=self._summary_item(export_size_bytes=export_size_bytes),
             item_id_key="summary_key",
             sort_key=self._summary_sort_key,
             reverse=False,

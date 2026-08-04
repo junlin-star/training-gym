@@ -10,6 +10,7 @@ from modal_training_gym import _dashboard
 from modal_training_gym.common.framework import Framework
 from modal_training_gym.common.run import TrainingRun
 from modal_training_gym.common.train_result import TrainResult
+from modal_training_gym.common.training_rollout import TrainingRolloutResult
 from modal_training_gym.utils import metadata
 from modal_training_gym.utils.metadata import MetadataStore
 
@@ -98,6 +99,39 @@ def test_get_run_route_returns_404_for_unknown_run(fake_volume, monkeypatch, tmp
 
     assert response.status_code == 404
     assert response.json()["detail"] == "Training run 'missing' not found"
+
+
+def test_rollout_route_preserves_raw_text_and_adds_cleaned_text(
+    fake_volume, monkeypatch, tmp_path
+):
+    raw_prompt = "<|im_start|>user\nraw prompt<|im_end|>"
+    raw_response = "<think>secret</think>raw answer"
+    TrainingRolloutResult(
+        training_run_id="run-route-1",
+        rollout_id=3,
+        samples=[
+            {
+                "score": 0.5,
+                "prompt": raw_prompt,
+                "response": raw_response,
+                "parsed_response": {
+                    "content": "raw answer",
+                    "thinking": "secret",
+                },
+            }
+        ],
+    ).save()
+
+    with _client(monkeypatch, tmp_path) as client:
+        display = client.get("/api/runs/run-route-1/rollouts/3")
+
+    assert display.status_code == 200
+    display_sample = display.json()["samples"][0]
+    assert display_sample["prompt"] == "raw prompt"
+    assert display_sample["response"] == "raw answer"
+    assert display_sample["raw_prompt"] == raw_prompt
+    assert display_sample["raw_response"] == raw_response
+    assert display_sample["parsed_response"]["thinking"] == "secret"
 
 
 def test_runs_route_keeps_runs_when_train_result_store_fails(
