@@ -14,8 +14,6 @@ from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from modal_training_gym.cli.setup import deployed_dashboard_url
-
 
 CONFIG_PATH = Path.home() / ".training-gym.toml"
 MODAL_CONFIG_PATH = Path(
@@ -79,6 +77,9 @@ def get_dashboard_proxy_auth() -> bool | None:
     identifies an authenticated deployment. The persisted mode remains a
     fallback for older or temporarily unreachable dashboards.
     """
+    # Imported here: ``cli`` imports this module, so a module-level import cycles.
+    from modal_training_gym.cli.setup import deployed_dashboard_url
+
     dashboard = load_config().get("dashboard")
     if not isinstance(dashboard, dict):
         dashboard = {}
