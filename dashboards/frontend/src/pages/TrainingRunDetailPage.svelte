@@ -1605,13 +1605,13 @@
                                 type="button"
                                 class="dist-bar"
                                 class:detail-active={activeBucket === b}
-                                class:is-empty={!bucket.rollouts}
-                                style:height={`${(bucket.rollouts / sampleDist.maxCount) * 100}%`}
-                                disabled={!bucket.rollouts}
+                                class:is-empty={!bucket.length}
+                                style:height={`${(bucket.length / sampleDist.maxCount) * 100}%`}
+                                disabled={!bucket.length}
                                 title={bucketLabel(bucket, b)}
                                 onclick={() => openBucket(b)}
                               >
-                                <span class="absolute top-[-14px] left-0 right-0 text-center text-[10px] text-(--muted) [font-variant-numeric:tabular-nums]">{bucket.rollouts || ""}</span>
+                                <span class="absolute top-[-14px] left-0 right-0 text-center text-[10px] text-(--muted) [font-variant-numeric:tabular-nums]">{bucket.length || ""}</span>
                               </button>
                             {/each}
                           </div>
