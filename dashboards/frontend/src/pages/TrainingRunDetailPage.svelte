@@ -268,7 +268,7 @@
     rollouts.forEach((positions, r) => {
       let b = count === 1 ? 0 : Math.floor(((scores[r] - lo) / span) * count);
       b = Math.max(0, Math.min(count - 1, b));
-      buckets[b].push(positions[0]);
+      buckets[b].push({ positions, score: scores[r] });
     });
     const maxCount = Math.max(...buckets.map((b) => b.length), 1);
     return {
@@ -326,10 +326,12 @@
     const d = sampleDist;
     if (!d || activeBucket == null) return null;
     const list = d.buckets[activeBucket] || [];
-    const idx = list[activeSamplePos];
-    if (idx == null) return null;
+    const entry = list[activeSamplePos];
+    if (!entry) return null;
     return {
-      sample: expandedRollout.samples[idx],
+      sample: expandedRollout.samples[entry.positions[0]],
+      samples: entry.positions.map((p) => expandedRollout.samples[p]),
+      score: entry.score,
       pos: activeSamplePos,
       count: list.length,
     };
@@ -366,7 +368,11 @@
 
   function downloadSampleTrajectory() {
     if (!activeSample) return;
-    const payload = sampleToPayload(activeSample.sample);
+    const turns = activeSample.samples;
+    const payload =
+      turns.length === 1
+        ? sampleToPayload(turns[0])
+        : { mean: activeSample.score, turns: turns.length, samples: turns.map(sampleToPayload) };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -1650,7 +1656,9 @@
                             </div>
                             <div class="sample-viewer-actions">
                               <span class="text-(--text-bright) [font-variant-numeric:tabular-nums]">
-                                reward {formatMean(activeSample.sample.score)}
+                                reward {formatMean(activeSample.score)}{activeSample.samples.length > 1
+                                  ? ` · first of ${activeSample.samples.length} turns`
+                                  : ""}
                               </span>
                               <button
                                 class="sample-nav-btn"
