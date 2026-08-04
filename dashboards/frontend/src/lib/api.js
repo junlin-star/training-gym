@@ -136,6 +136,8 @@ export async function fetchRunRollouts(trainingRunId, { signal } = {}) {
       rollout_id: Number(item.rollout_id) || 0,
       created_at: Number(item.created_at) || 0,
       total: Number(item.total) || 0,
+      episode_count:
+        item.episode_count == null ? null : Number(item.episode_count) || 0,
       mean: typeof item.mean === "number" ? item.mean : Number(item.mean) || 0,
       rollout_time: Number.isFinite(Number(item.rollout_time))
         ? Number(item.rollout_time)

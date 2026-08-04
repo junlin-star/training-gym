@@ -17,7 +17,7 @@
 # and DeepScaler math reward verification.
 # To run the tutorial, run the following command:
 # ```
-# uv run python tutorials/multinode/001_kimi_k26/001_kimi_k26.py
+# uv run tutorials/multinode/001_kimi_k26/001_kimi_k26.py
 # ```
 # ## Prerequisites
 #

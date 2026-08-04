@@ -4,13 +4,16 @@ from __future__ import annotations
 
 import time
 
+from modal_training_gym.common.advantage_distribution import AdvantageDistribution
 from modal_training_gym.common.run import TrainingRun, TrainingRunStatus
 from modal_training_gym.utils.metadata import (
     MetadataStore,
     vol_get_summary_items,
     vol_put_summary_items,
     vol_remove,
+    vol_remove_keys_with_prefix,
 )
+
 
 TERMINAL_STATUSES = frozenset({TrainingRunStatus.FAILED, TrainingRunStatus.CANCELLED})
 
@@ -65,6 +68,10 @@ def cleanup(*, older_than_days: int = 7, dry_run: bool = False) -> None:
         if vol_remove(MetadataStore.TRAINING_RUNS, rid):
             deleted_runs += 1
         vol_remove(MetadataStore.FRAMEWORK_STATUS_TOKENS, rid)
+        vol_remove_keys_with_prefix(
+            MetadataStore.ADVANTAGE_DISTRIBUTIONS,
+            AdvantageDistribution.run_prefix(rid),
+        )
         deleted_tokens += 1
 
     rollout_summary = (

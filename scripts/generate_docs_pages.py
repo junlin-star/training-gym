@@ -8,7 +8,6 @@ import subprocess
 import textwrap
 from pathlib import Path, PurePosixPath
 
-
 REPO_URL = "https://github.com/modal-projects/training-gym"
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_STARLIGHT_DIR = ROOT / "docs-next" / "src" / "content" / "docs"
@@ -59,7 +58,6 @@ def current_ref() -> str:
 REF = current_ref()
 BLOB_BASE = f"{REPO_URL}/blob/{REF}"
 TREE_BASE = f"{REPO_URL}/tree/{REF}"
-EDIT_BASE = f"{REPO_URL}/edit/{REF}"
 RAW_BASE = f"https://raw.githubusercontent.com/modal-projects/training-gym/{REF}"
 
 
@@ -230,22 +228,23 @@ def transform_markdown(
 def starlight_frontmatter(destination: str) -> str:
     if destination == "index.md":
         return textwrap.dedent(
-            f"""\
+            """\
             ---
             title: Training Gym SDK
-            description: Open-source Python SDK for GRPO and RL post-training of LLMs on Modal GPU clusters — tutorials, API reference, and runnable examples.
-            editUrl: {EDIT_BASE}/README.md
+            description: Open-source Python SDK for GRPO and RL post-training of LLMs on Modal.
             next: false
+            tableOfContents:
+              minHeadingLevel: 2
+              maxHeadingLevel: 2
             ---
             """
         )
 
     return textwrap.dedent(
-        f"""\
+        """\
         ---
         title: Tutorials
-        description: Runnable Modal training examples across intro, RL, SFT, and infrastructure-focused walkthroughs.
-        editUrl: {EDIT_BASE}/tutorials/README.md
+        description: Examples for using the Training Gym SDK.
         prev: false
         next: false
         ---

@@ -1,9 +1,5 @@
 """Deploy the training-gym dashboard to Modal.
 
-Usage (Python):
-    import modal_training_gym
-    modal_training_gym.setup()
-
 Usage (CLI):
     training-gym setup
 
@@ -24,18 +20,28 @@ What this does:
 """
 
 from __future__ import annotations
+import os
 import webbrowser
-
-from modal_training_gym._dashboard import (
-    MODAL_CREDS_SECRET_NAME,
-    ensure_creds_secret,
-)
 
 DASHBOARD_APP_NAME = "training-gym-dashboard"
 DASHBOARD_WEB_FUNCTION = "fastapi_app"
 
 
-def setup(interactive: bool = True) -> str:
+def _load_dashboard_for_deploy(requires_proxy_auth: bool):
+    """Import the declarative dashboard with the selected ASGI proxy-auth mode."""
+    import importlib
+    import sys
+
+    from modal_training_gym.common import config
+
+    module_name = "modal_training_gym._dashboard"
+    config.set_dashboard_requires_proxy_auth(requires_proxy_auth)
+    if module_name in sys.modules:
+        return importlib.reload(sys.modules[module_name])
+    return importlib.import_module(module_name)
+
+
+def setup(require_proxy_auth: bool, interactive: bool = True) -> str:
     """Deploy the training-gym dashboard, persist its URL, and return it.
 
     ``interactive=False`` resolves Modal credentials silently (from env vars
@@ -44,23 +50,36 @@ def setup(interactive: bool = True) -> str:
     """
     import modal
 
-    from modal_training_gym._dashboard import app, fastapi_app
     from modal_training_gym.common.config import CONFIG_PATH, save_dashboard_url
 
-    ensure_proxy_auth(interactive=interactive)
+    if require_proxy_auth:
+        print("Deploying dashboard with proxy authentication enabled.")
+    else:
+        print("This dashboard will not have proxy authentication enabled.")
+        print("If you would like to enable it, run `training-gym setup --proxy-auth`.")
+        print()
 
-    if not ensure_creds_secret(interactive=interactive):
+    dashboard = _load_dashboard_for_deploy(require_proxy_auth)
+
+    has_proxy_auth_token = ensure_proxy_auth(interactive=interactive)
+    if require_proxy_auth and not has_proxy_auth_token:
         print(
-            f"WARNING: continuing without the {MODAL_CREDS_SECRET_NAME!r} "
+            "WARNING: Dashboard proxy auth requires MODAL_KEY and MODAL_SECRET. "
+            "Run `training-gym set-proxy-auth` or export both variables."
+        )
+
+    if not dashboard.ensure_creds_secret(interactive=interactive):
+        print(
+            f"WARNING: continuing without the {dashboard.MODAL_CREDS_SECRET_NAME!r} "
             "Modal Secret — the dashboard will not be able to stream Modal "
             "app logs."
         )
 
     with modal.enable_output():
-        app.deploy()
+        dashboard.app.deploy()
 
-    web_url = fastapi_app.get_web_url()
-    save_dashboard_url(web_url)
+    web_url = dashboard.fastapi_app.get_web_url()
+    save_dashboard_url(web_url, proxy_auth=require_proxy_auth)
     print(f"\nDashboard deployed: {web_url}")
     print(f"Saved dashboard URL to {CONFIG_PATH}")
     return web_url
@@ -81,10 +100,15 @@ def ensure_proxy_auth(interactive: bool = True, force: bool = False) -> bool:
     from modal_training_gym.common.config import (
         CONFIG_PATH,
         get_proxy_auth,
+        load_proxy_auth,
         save_proxy_auth,
     )
 
     key, secret = get_proxy_auth()
+    if not force:
+        load_proxy_auth()
+        key = os.environ.get("MODAL_KEY", "").strip() or key
+        secret = os.environ.get("MODAL_SECRET", "").strip() or secret
     if key and secret and not force:
         return True
     if not interactive:
@@ -179,7 +203,12 @@ def set_password(password: str | None = None) -> None:
     else:
         print("Dashboard password cleared (open access). Redeploying...")
 
-    setup(interactive=False)
+    from modal_training_gym.common.config import get_dashboard_proxy_auth
+
+    setup(
+        interactive=False,
+        require_proxy_auth=get_dashboard_proxy_auth(),
+    )
 
 
 def open_dashboard() -> str | None:
@@ -243,6 +272,7 @@ def ensure_dashboard_deployed() -> str | None:
     """
     try:
         from modal_training_gym.common.config import (
+            get_dashboard_proxy_auth,
             get_dashboard_url,
             save_dashboard_url,
         )
@@ -258,7 +288,10 @@ def ensure_dashboard_deployed() -> str | None:
             f"Training-gym dashboard ({DASHBOARD_APP_NAME!r}) is not deployed — "
             "deploying it now (this happens once)."
         )
-        return setup(interactive=False)
+        return setup(
+            interactive=False,
+            require_proxy_auth=get_dashboard_proxy_auth() is True,
+        )
     except Exception as exc:
         print(
             f"WARNING: could not ensure the training-gym dashboard is deployed: "

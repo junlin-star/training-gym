@@ -513,11 +513,7 @@ def generate_index_page(manifest: list[dict]) -> str:
     lines = [
         "---",
         "title: API Reference",
-        "description: API reference for training-gym public classes.",
         "---",
-        "",
-        "Complete reference for the training-gym Python library.",
-        "",
     ]
 
     for group_key, group_info in sorted(GROUPS.items(), key=lambda x: x[1]["order"]):

@@ -242,6 +242,7 @@ def _download_trace_step(
     run_id: str,
     summary: TrainingRolloutSummary,
     staging_path: Path,
+    file_name: str,
 ) -> tuple[dict[str, object], int]:
     rollout_id = summary.rollout_id
     payload = client.get_json(
@@ -265,7 +266,6 @@ def _download_trace_step(
             exit_code=ExitCode.BACKEND,
         ) from exc
 
-    file_name = f"step_{rollout_id:04d}.json"
     data = (
         json.dumps(
             payload,
@@ -281,7 +281,7 @@ def _download_trace_step(
             "file_name": file_name,
             "samples": rollout.total,
             "mean_reward": rollout.mean,
-            "size_bytes": len(data),
+            "export_size_bytes": len(data),
         },
         len(data),
     )
@@ -293,7 +293,7 @@ def download_run_traces(
     out: str,
     step: str | None,
     dry_run: bool,
-    yes: bool,
+    skip_confirmation: bool,
     json_output: bool,
 ) -> None:
     """Download selected rollout payloads and write a local trace manifest."""
@@ -342,7 +342,8 @@ def download_run_traces(
                 summaries_by_step[value] for value in sorted(selected_steps)
             ]
 
-        known_sizes = [summary.size_bytes for summary in selected_summaries]
+        step_width = max(4, len(str(max(summaries_by_step, default=0))))
+        known_sizes = [summary.export_size_bytes for summary in selected_summaries]
         total_size = (
             sum(size for size in known_sizes if size is not None)
             if all(size is not None for size in known_sizes)
@@ -354,19 +355,19 @@ def download_run_traces(
             "dry_run": dry_run,
             "step_count": len(selected_summaries),
             "sample_count": sum(summary.total for summary in selected_summaries),
-            "size_bytes": total_size,
+            "export_size_bytes": total_size,
             "steps": [
                 {
                     "step": summary.rollout_id,
-                    "file_name": f"step_{summary.rollout_id:04d}.json",
+                    "file_name": f"step_{summary.rollout_id:0{step_width}d}.json",
                     "samples": summary.total,
                     "mean_reward": summary.mean,
-                    "size_bytes": summary.size_bytes,
+                    "export_size_bytes": summary.export_size_bytes,
                 }
                 for summary in selected_summaries
             ],
         }
-        estimated_size = report["size_bytes"]
+        estimated_size = report["export_size_bytes"]
         if not isinstance(estimated_size, int):
             estimated_size_text = "unknown size"
         else:
@@ -382,7 +383,7 @@ def download_run_traces(
                 )
             return
 
-        if not yes:
+        if not skip_confirmation:
             confirm_or_require_yes(
                 f"Download {report['step_count']} steps "
                 f"({report['sample_count']} samples, "
@@ -407,6 +408,9 @@ def download_run_traces(
                     run_id=run_id,
                     summary=rollout_summary,
                     staging_path=staging_path,
+                    file_name=(
+                        f"step_{rollout_summary.rollout_id:0{step_width}d}.json"
+                    ),
                 )
                 downloaded_steps.append(entry)
                 downloaded_size += size_bytes
@@ -423,7 +427,7 @@ def download_run_traces(
             manifest_path = output_path / "manifest.json"
             if manifest_path.exists():
                 manifest_path.unlink()
-            for staged_file in staging_path.iterdir():
+            for staged_file in list(staging_path.iterdir()):
                 staged_file.replace(output_path / staged_file.name)
         except OSError as exc:
             raise CLIError(
@@ -433,7 +437,7 @@ def download_run_traces(
         finally:
             shutil.rmtree(staging_path, ignore_errors=True)
 
-    report["size_bytes"] = downloaded_size
+    report["export_size_bytes"] = downloaded_size
     report["steps"] = downloaded_steps
     if json_output:
         print_json(report)
@@ -1251,7 +1255,7 @@ def trace_command(
         out=out,
         step=step,
         dry_run=dry_run,
-        yes=yes,
+        skip_confirmation=yes,
         json_output=json_output,
     )
 

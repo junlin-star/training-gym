@@ -53,7 +53,7 @@ def _run_instructions():
     """
     Run with:
     ```
-    uv run python tutorials/misc/000_agent_sandbox/000_agent_sandbox.py
+    uv run tutorials/misc/000_agent_sandbox/000_agent_sandbox.py
     ```
     """
 
