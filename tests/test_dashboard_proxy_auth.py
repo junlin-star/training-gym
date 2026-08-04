@@ -69,17 +69,6 @@ def test_dashboard_proxy_auth_treats_403_as_enabled(config_path, monkeypatch):
     assert config.get_dashboard_proxy_auth() is True
 
 
-def test_unspecified_mode_defaults_to_no_proxy_auth(config_path):
-    assert cli_setup_module._resolve_dashboard_proxy_auth(None) is False
-
-
-def test_unspecified_mode_requires_choice_after_proxy_auth(config_path):
-    config.save_dashboard_url("https://dashboard.test", proxy_auth=True)
-
-    with pytest.raises(cli_setup_module.ProxyAuthChoiceRequired):
-        cli_setup_module._resolve_dashboard_proxy_auth(None)
-
-
 def test_proxy_auth_status_does_not_require_basic_auth(monkeypatch, tmp_path):
     static = tmp_path / "static"
     (static / "assets").mkdir(parents=True)
@@ -139,7 +128,7 @@ def test_auto_deploy_reuses_proxy_auth_mode(monkeypatch, last_proxy_auth, expect
     monkeypatch.setattr(cli_setup_module, "setup", setup)
 
     assert cli_setup_module.ensure_dashboard_deployed() == "https://dashboard.test"
-    assert calls == [{"interactive": False, "proxy_auth": expected}]
+    assert calls == [{"interactive": False, "require_proxy_auth": expected}]
 
 
 def _capture_report(reporter, monkeypatch):

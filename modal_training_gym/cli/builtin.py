@@ -27,14 +27,14 @@ def setup_command(proxy_auth: bool, no_proxy_auth: bool) -> None:
 
     from .setup import setup
     from modal_training_gym.common.config import get_dashboard_proxy_auth
-    
+
     if not proxy_auth and not no_proxy_auth:
         if get_dashboard_proxy_auth() is True:
             raise click.UsageError(
                 "The deployed dashboard uses proxy auth. "
                 "Pass either --proxy-auth or --no-proxy-auth explicitly."
             )
-    
+
     setup(require_proxy_auth=proxy_auth)
 
 

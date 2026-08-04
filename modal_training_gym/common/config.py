@@ -98,7 +98,9 @@ def get_dashboard_proxy_auth() -> bool | None:
                     if value:
                         print("The deployed dashboard uses proxy authentication.")
                     else:
-                        print("The deployed dashboard does not use proxy authentication.")
+                        print(
+                            "The deployed dashboard does not use proxy authentication."
+                        )
                     return value
         except HTTPError as exc:
             if exc.code in {401, 403}:
@@ -106,13 +108,17 @@ def get_dashboard_proxy_auth() -> bool | None:
                 return True
             elif exc.code != 404:
                 raise
+        except (JSONDecodeError, OSError, URLError, UnicodeDecodeError):
+            pass
 
     if persisted is not None:
         print("Unable to reach existing dashboard.")
         if persisted:
             print("The last deploy from this computer used proxy authentication.")
         else:
-            print("The last deploy from this computer did not use proxy authentication.")
+            print(
+                "The last deploy from this computer did not use proxy authentication."
+            )
 
     return persisted
 

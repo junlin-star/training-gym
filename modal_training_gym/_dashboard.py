@@ -105,9 +105,13 @@ def _build_image() -> modal.Image:
     return (
         base.run_commands("cd /app/frontend && npm install && npm run build")
         .add_local_python_source("modal_training_gym", copy=True)
-        .env({
-            DASHBOARD_REQUIRES_PROXY_AUTH_ENV_KEY: "true" if dashboard_requires_proxy_auth() else "false"
-        })
+        .env(
+            {
+                DASHBOARD_REQUIRES_PROXY_AUTH_ENV_KEY: "true"
+                if dashboard_requires_proxy_auth()
+                else "false"
+            }
+        )
     )
 
 
