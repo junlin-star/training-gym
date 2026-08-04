@@ -1,8 +1,9 @@
 ---
-const actions = [
-  { href: '/', label: 'Back to overview', variant: 'primary' },
-  { href: '/tutorials/', label: 'Browse tutorials', variant: 'ghost' },
-  { href: '/reference/', label: 'API reference', variant: 'ghost' },
+const navItems = [
+  { href: '/', label: 'Overview' },
+  { href: '/tutorials/', label: 'Tutorials' },
+  { href: '/reference/', label: 'API Reference' },
+  { href: '/support/', label: 'Support' },
 ];
 ---
 
@@ -18,7 +19,7 @@ const actions = [
       content="The requested Training Gym docs page could not be found."
     />
     <style>
-      @import url('https://fonts.googleapis.com/css2?family=Fira+Mono:wght@400;500&family=Inter:wght@400;500;600;700&display=swap');
+      @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap');
 
       @font-face {
         font-family: 'Goga';
@@ -30,52 +31,37 @@ const actions = [
 
       :root {
         color-scheme: dark;
-        --sl-color-accent: #7fee64;
-        --sl-color-white: #ffffff;
-        --sl-color-gray-2: #d1d1d1;
-        --sl-color-gray-3: #a3a3a3;
-        --sl-color-bg: #181818;
-        --sl-color-black: #181818;
-        --tg-panel: #1c1c1c;
-        --tg-panel-alt: #242424;
-        --tg-border: rgba(255, 255, 255, 0.1);
-        --tg-border-strong: rgba(255, 255, 255, 0.2);
+        --tg-accent: #7fee64;
+        --tg-bg: #181818;
+        --tg-text: #d1d1d1;
+        --tg-border: rgba(255, 255, 255, 0.2);
         --tg-font:
           'Inter', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
           'Segoe UI', sans-serif;
-        --tg-font-mono:
-          'Fira Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
       }
 
       * {
         box-sizing: border-box;
       }
 
-      html {
-        background: linear-gradient(180deg, var(--sl-color-bg) 0%, var(--sl-color-black) 100%);
-      }
-
       body {
         margin: 0;
         min-height: 100vh;
-        display: flex;
-        flex-direction: column;
-        background: transparent;
-        color: var(--sl-color-gray-2);
+        background: var(--tg-bg);
+        color: var(--tg-text);
         font-family: var(--tg-font);
         -webkit-font-smoothing: antialiased;
       }
 
       header {
         border-bottom: 1px solid #2f2f2f;
-        background: var(--sl-color-bg);
       }
 
       .header-inner {
         display: flex;
         align-items: center;
-        gap: 0.55rem;
-        max-width: 56rem;
+        gap: 3.5rem;
+        max-width: 80rem;
         margin: 0 auto;
         padding: 0.75rem 1.25rem;
       }
@@ -93,10 +79,10 @@ const actions = [
       }
 
       .site-title {
-        color: var(--sl-color-accent);
         display: inline-flex;
         align-items: baseline;
         gap: 0.18rem;
+        color: var(--tg-accent);
         font-family: 'Goga', var(--tg-font);
         font-feature-settings: 'ss01' on;
         font-size: 17.6px;
@@ -106,100 +92,66 @@ const actions = [
         white-space: nowrap;
       }
 
-      .site-title__modal {
+      .site-title span:first-child {
         color: #ddffdc;
       }
 
-      main {
-        flex: 1;
+      nav.top {
         display: flex;
+        flex-wrap: wrap;
         align-items: center;
-        width: 100%;
+        gap: 1.75rem;
+      }
+
+      nav.top a {
+        color: var(--tg-text);
+        font-size: 0.875rem;
+        text-decoration: none;
+        white-space: nowrap;
+      }
+
+      nav.top a:hover {
+        color: var(--tg-accent);
+      }
+
+      main {
         max-width: 56rem;
         margin: 0 auto;
-        padding: clamp(3rem, 12vh, 7rem) 1.25rem;
-      }
-
-      .status {
-        display: inline-flex;
-        align-items: center;
-        gap: 0.5rem;
-        padding: 0.3rem 0.65rem;
-        border: 1px solid color-mix(in srgb, var(--sl-color-accent) 40%, transparent);
-        border-radius: 9999px;
-        background: color-mix(in srgb, var(--sl-color-accent) 5%, transparent);
-        color: var(--sl-color-accent);
-        font-family: var(--tg-font-mono);
-        font-size: 0.8125rem;
-        line-height: 1;
-      }
-
-      .status::before {
-        content: '';
-        width: 0.4rem;
-        height: 0.4rem;
-        border-radius: 50%;
-        background: currentColor;
+        padding: clamp(3rem, 10vh, 6rem) 1.25rem;
       }
 
       h1 {
-        margin: 1.5rem 0 0;
-        max-width: 18ch;
-        color: var(--sl-color-white);
-        font-size: clamp(2.35rem, 6vw, 3.75rem);
-        font-weight: 600;
-        line-height: 1.05;
-        letter-spacing: -0.03em;
-        text-wrap: balance;
+        margin: 0;
+        color: var(--tg-accent);
+        font-size: 2rem;
+        font-weight: 500;
+        letter-spacing: -0.01em;
       }
 
       p {
         margin: 1rem 0 0;
         max-width: 60ch;
-        font-size: 1.0625rem;
-        line-height: 1.65;
+        font-size: 1rem;
+        line-height: 1.6;
         text-wrap: pretty;
       }
 
-      .path {
-        margin-top: 1.75rem;
-        padding: 0.85rem 1rem;
-        border: 1px solid var(--tg-border);
-        border-radius: 0.5rem;
-        background: var(--tg-panel-alt);
-        color: var(--sl-color-gray-3);
-        font-family: var(--tg-font-mono);
-        font-size: 0.875rem;
-        overflow-x: auto;
-        white-space: nowrap;
-      }
-
-      .path span {
-        color: var(--sl-color-accent);
-        user-select: none;
-      }
-
-      .path code {
-        color: var(--sl-color-gray-2);
-      }
-
-      nav {
+      nav.actions {
         display: flex;
         flex-wrap: wrap;
         gap: 0.6rem;
-        margin-top: 2rem;
+        margin-top: 1.75rem;
       }
 
-      nav a {
+      nav.actions a {
         display: inline-flex;
         align-items: center;
         justify-content: center;
         min-height: 2.25rem;
         padding: 0.375rem 0.9rem;
-        border: 1px solid var(--tg-border-strong);
+        border: 1px solid var(--tg-border);
         border-radius: 9999px;
-        background: transparent;
-        color: var(--sl-color-gray-2);
+        color: var(--tg-text);
         font-size: 0.875rem;
         line-height: 1;
         text-decoration: none;
@@ -209,56 +161,30 @@ const actions = [
           color 0.15s ease;
       }
 
-      nav a:hover {
-        border-color: color-mix(in srgb, var(--tg-border-strong) 72%, white);
+      nav.actions a:hover {
+        border-color: color-mix(in srgb, var(--tg-border) 72%, white);
         background: rgba(255, 255, 255, 0.05);
-        color: var(--sl-color-white);
+        color: #ffffff;
       }
 
-      nav a.primary {
-        border-color: color-mix(in srgb, var(--sl-color-accent) 40%, transparent);
-        background: color-mix(in srgb, var(--sl-color-accent) 5%, transparent);
-        color: var(--sl-color-accent);
-      }
-
-      nav a.primary:hover {
-        background: color-mix(in srgb, var(--sl-color-accent) 10%, transparent);
-        color: var(--sl-color-accent);
-      }
-
-      nav a:focus-visible,
-      .title-wrapper:focus-visible {
-        outline: 2px solid var(--sl-color-accent);
+      a:focus-visible {
+        outline: 2px solid var(--tg-accent);
         outline-offset: 2px;
       }
 
-      footer {
-        border-top: 1px solid var(--tg-border);
-        color: var(--sl-color-gray-3);
-        font-size: 0.8125rem;
-      }
+      @media (max-width: 40em) {
+        .header-inner {
+          gap: 1rem;
+        }
 
-      .footer-inner {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 0.5rem 1.25rem;
-        max-width: 56rem;
-        margin: 0 auto;
-        padding: 1.25rem;
-      }
-
-      footer a {
-        color: var(--sl-color-gray-2);
-        text-decoration: none;
-      }
-
-      footer a:hover {
-        color: var(--sl-color-accent);
+        nav.top {
+          gap: 1rem;
+        }
       }
 
       @media (prefers-reduced-motion: reduce) {
-        * {
-          transition: none !important;
+        nav.actions a {
+          transition: none;
         }
       }
     </style>
@@ -268,43 +194,25 @@ const actions = [
       <div class="header-inner">
         <a href="/" class="title-wrapper">
           <img src="/modal-logo.svg" alt="Modal" />
-          <span class="site-title"
-            ><span class="site-title__modal">Modal</span><span>Training Gym</span></span
-          >
+          <span class="site-title"><span>Modal</span><span>Training Gym</span></span>
         </a>
+        <nav class="top" aria-label="Primary">
+          {navItems.map((item) => <a href={item.href}>{item.label}</a>)}
+        </nav>
       </div>
     </header>
 
     <main>
-      <div>
-        <div class="status">404 · page not found</div>
-        <h1>This route never made it to the cluster.</h1>
-        <p>
-          The page you asked for doesn't exist, or it moved. The tutorials and API
-          reference below cover everything in the gym.
-        </p>
-        <div class="path">
-          <span>$</span> <code id="requested-path">GET /</code>
-        </div>
-        <nav>
-          {actions.map((action) => (
-            <a href={action.href} class={action.variant}>{action.label}</a>
-          ))}
-        </nav>
-      </div>
+      <h1>Not Found</h1>
+      <p>
+        Sorry, this page doesn't exist! We weren't able to find the Training Gym
+        documentation you were looking for. Did you type the correct URL?
+      </p>
+      <nav class="actions" aria-label="Suggested pages">
+        <a href="/">Overview</a>
+        <a href="/tutorials/">Tutorials</a>
+        <a href="/reference/">API Reference</a>
+      </nav>
     </main>
-
-    <footer>
-      <div class="footer-inner">
-        <span>Modal Training Gym</span>
-        <a href="https://github.com/modal-projects/training-gym">GitHub</a>
-        <a href="/support/">Support</a>
-      </div>
-    </footer>
-
-    <script is:inline>
-      document.getElementById('requested-path').textContent =
-        'GET ' + window.location.pathname;
-    </script>
   </body>
 </html>
