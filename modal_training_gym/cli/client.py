@@ -140,6 +140,13 @@ class DashboardClient:
                 hint="training-gym setup",
             ) from exc
 
+        if method != "GET" and response.is_redirect:
+            raise CLIError(
+                "Dashboard redirected a mutation request.",
+                error="dashboard_redirect",
+                exit_code=ExitCode.BACKEND,
+                hint="training-gym setup",
+            )
         if response.status_code == 404 and not_found_error is not None:
             raise not_found_error
 
