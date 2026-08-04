@@ -3,7 +3,7 @@
 TUTORIAL_METADATA = {
     "framework": "`slime`",
     "cluster_shape": "1 × 1×H100",
-    "summary": "Qwen3-4B haiku evaluation with verifiable rewards — serve, evaluate, train, compare",
+    "summary": "Haiku evaluation with verifiable rewards",
     "difficulty": "Beginner",
     "order": 10,
     "api_classes": [
@@ -50,7 +50,7 @@ def run_instructions():
     """
     To run the tutorial, run the following command:
     ```
-    uv run python tutorials/rl/000_rl_basics/000_rl_basics.py
+    uv run tutorials/rl/000_rl_basics/000_rl_basics.py
     ```
     """
 

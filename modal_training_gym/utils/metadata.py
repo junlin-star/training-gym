@@ -294,6 +294,29 @@ def vol_list_prefix(store: MetadataStore | str, prefix: str) -> list[dict[str, A
     return results
 
 
+def vol_remove_keys_with_prefix(store: MetadataStore | str, prefix: str) -> int:
+    """Delete every item whose key (file basename) starts with ``prefix``.
+
+    Reads directory entries only (unlike vol_list_prefix). Returns the number of items removed.
+    """
+    from modal.exception import NotFoundError
+
+    vol = _metadata_volume()
+    _safe_reload(vol)
+    try:
+        entries = list(vol.iterdir(_store_path(store)))
+    except (FileNotFoundError, NotFoundError):
+        return 0
+    removed = 0
+    for entry in entries:
+        name = entry.path.rsplit("/", 1)[-1]
+        if not name.endswith(".json") or not name.startswith(prefix):
+            continue
+        if vol_remove(store, name[: -len(".json")]):
+            removed += 1
+    return removed
+
+
 def vol_count_items(store: MetadataStore | str) -> int:
     """Count canonical ``.json`` files in a store without reading them.
 

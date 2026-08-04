@@ -1,13 +1,16 @@
 ---
 import CopyPageDropdown from './CopyPageDropdown.astro';
 
-const { editUrl, entry } = Astro.locals.starlightRoute;
-const sourceUrl = editUrl
-  ? editUrl.toString().replace('/edit/', '/blob/')
-  : 'https://github.com/modal-projects/training-gym';
+const { entry } = Astro.locals.starlightRoute;
 const pageUrl = new URL(Astro.url.pathname, Astro.site ?? Astro.url).toString();
 
 const currentPath = Astro.url.pathname;
+const sourceUrl =
+  currentPath === '/' || currentPath === ''
+    ? 'https://github.com/modal-projects/training-gym/blob/main/README.md'
+    : currentPath === '/tutorials/' || currentPath === '/tutorials'
+      ? 'https://github.com/modal-projects/training-gym/blob/main/tutorials/README.md'
+      : 'https://github.com/modal-projects/training-gym';
 const tutorialMatch = currentPath.match(/^\/tutorials\/(\w+)\/(\w+)\/?$/);
 const useCompactQuickstartHeader =
   currentPath === '/tutorials/intro/quickstart/' ||

@@ -48,7 +48,7 @@ def _run_instructions():
     """
     To run the tutorial, run the following command:
     ```
-    uv run python tutorials/multinode/002_glm_4_7/002_glm_4_7.py
+    uv run tutorials/multinode/002_glm_4_7/002_glm_4_7.py
     ```
     """
 

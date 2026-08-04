@@ -24,7 +24,7 @@
 # 6. Evaluate the trained student with the same eval function.
 # Run with:
 # ```
-# uv run python tutorials/rl/009_cross_tokenizer_distillation/009_cross_tokenizer_distillation.py
+# uv run tutorials/rl/009_cross_tokenizer_distillation/009_cross_tokenizer_distillation.py
 # ```
 # Set PYTHONUNBUFFERED=1 if running inside of an agent shell (e.g. Claude Code) to see output.
 # ## Prerequisites

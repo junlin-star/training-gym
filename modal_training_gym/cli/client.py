@@ -10,7 +10,10 @@ from urllib.parse import urlsplit
 
 import httpx
 
-from modal_training_gym.common.config import get_dashboard_url
+from modal_training_gym.common.config import (
+    get_dashboard_url,
+    modal_proxy_auth_headers,
+)
 
 from .errors import CLIError, ExitCode
 
@@ -18,6 +21,27 @@ from .errors import CLIError, ExitCode
 DASHBOARD_PASSWORD_ENV = "TRAINING_GYM_DASHBOARD_PASSWORD"
 DEFAULT_TIMEOUT_SECONDS = 10.0
 QueryParams = Mapping[str, str | int | float | bool | None]
+
+
+def _strip_proxy_auth_on_cross_origin_redirect(response: httpx.Response) -> None:
+    """Prevent Modal proxy credentials from following redirects to another origin."""
+    location = response.headers.get("location")
+    if not response.is_redirect or not location:
+        return
+
+    source = response.request.url
+    target = source.join(location)
+    if (
+        source.scheme,
+        source.host,
+        source.port,
+    ) != (
+        target.scheme,
+        target.host,
+        target.port,
+    ):
+        response.request.headers.pop("Modal-Key", None)
+        response.request.headers.pop("Modal-Secret", None)
 
 
 class DashboardClient:
@@ -57,6 +81,8 @@ class DashboardClient:
         self._client = httpx.Client(
             base_url=configured_url.rstrip("/") + "/",
             auth=auth,
+            headers=modal_proxy_auth_headers(),
+            event_hooks={"response": [_strip_proxy_auth_on_cross_origin_redirect]},
             timeout=DEFAULT_TIMEOUT_SECONDS,
             follow_redirects=True,
         )
@@ -189,7 +215,10 @@ class DashboardClient:
                 "Dashboard authentication was rejected.",
                 error="authentication_failed",
                 exit_code=ExitCode.AUTH,
-                hint="training-gym set-password",
+                hint=(
+                    "Run `training-gym set-proxy-auth` for Modal proxy auth, "
+                    "or `training-gym set-password` for dashboard Basic Auth."
+                ),
             )
         if status_code == 404:
             raise CLIError(

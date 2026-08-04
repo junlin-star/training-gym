@@ -40,7 +40,7 @@ def _run_instructions():
     """
     To run the tutorial, run the following command:
     ```
-    uv run python tutorials/multinode/000_kimi_k25/000_kimi_k25.py
+    uv run tutorials/multinode/000_kimi_k25/000_kimi_k25.py
     ```
     """
 

@@ -214,7 +214,7 @@ def build_miles_app(
             checkpoints_mount_path: checkpoints_volume,
         },
         timeout=4 * 60 * 60,
-        secrets=hf_secrets(),
+        secrets=[*hf_secrets(), *proxy_auth_secrets()],
         serialized=True,
         name="download",
     )
@@ -253,19 +253,20 @@ def build_miles_app(
 
     @app.function(
         image=image,
-        gpu=gpu_spec,
-        volumes=all_volumes,
-        timeout=4 * 60 * 60,
-        experimental_options={"efa_enabled": True} if convert_multi_node else {},
+        volumes={
+            str(HF_CACHE_PATH): hf_cache_volume,
+            checkpoints_mount_path: checkpoints_volume,
+        },
+        timeout=60 * 60,
+        secrets=[*hf_secrets(), *proxy_auth_secrets()],
         serialized=True,
-        name="convert_checkpoint",
+        name="resolve_checkpoint",
     )
-    @clustered(convert_nnodes, rdma=convert_multi_node)
-    def convert_checkpoint(
+    def resolve_checkpoint(
         training_run_id: str = "",
         framework_status_url: str = "",
         framework_status_token: str = "",
-    ):
+    ) -> str | None:
         from modal_training_gym.common.status_reporter import (
             enqueue_framework_status,
             flush as flush_status_reporter,
@@ -284,10 +285,20 @@ def build_miles_app(
             print("Bridge mode - no conversion needed.")
             if training_run_id:
                 flush_status_reporter(timeout_seconds=2.0)
-            return
+            return None
 
         hf_cache_volume.reload()
         checkpoints_volume.reload()
+
+        save_path = str(miles.ref_load)
+        if has_torch_dist_checkpoint(save_path):
+            print(
+                f"Found existing torch_dist checkpoint at {save_path}; "
+                "skipping conversion."
+            )
+            if training_run_id:
+                flush_status_reporter(timeout_seconds=2.0)
+            return None
 
         conversion_hf_checkpoint = (
             getattr(miles, "megatron_conversion_hf_checkpoint", None)
@@ -295,17 +306,33 @@ def build_miles_app(
             or model.model_path
             or model.model_name
         )
-        hf_path = resolve_checkpoint_ref(conversion_hf_checkpoint)
+        return resolve_checkpoint_ref(conversion_hf_checkpoint)
+
+    @app.function(
+        image=image,
+        gpu=gpu_spec,
+        volumes=all_volumes,
+        timeout=4 * 60 * 60,
+        secrets=proxy_auth_secrets() or None,
+        experimental_options={"efa_enabled": True} if convert_multi_node else {},
+        serialized=True,
+        name="convert_checkpoint",
+    )
+    @clustered(convert_nnodes, rdma=convert_multi_node)
+    def convert_checkpoint(
+        hf_path: str,
+        training_run_id: str = "",
+        framework_status_url: str = "",
+        framework_status_token: str = "",
+    ):
+        from modal_training_gym.common.status_reporter import (
+            flush as flush_status_reporter,
+        )
+
         save_path = str(miles.ref_load)
         num_nodes, nproc_per_node, extra_args = get_checkpoint_conversion_policy(
             miles, model=model
         )
-
-        if has_torch_dist_checkpoint(save_path):
-            print(
-                f"Found existing torch_dist checkpoint at {save_path}; skipping conversion."
-            )
-            return
 
         if num_nodes == 1:
             node_rank, master_addr, nnodes = 0, "127.0.0.1", 1

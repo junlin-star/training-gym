@@ -85,6 +85,25 @@ def _resolve_slime_recipe(
     return resolved
 
 
+def _convert_checkpoint_on_cache_miss(
+    app: Any,
+    *,
+    training_run_id: str,
+    framework_status_url: str,
+    framework_status_token: str,
+) -> bool:
+    call_kwargs = {
+        "training_run_id": training_run_id,
+        "framework_status_url": framework_status_url,
+        "framework_status_token": framework_status_token,
+    }
+    hf_path = app.resolve_checkpoint.remote(**call_kwargs)
+    if hf_path is None:
+        return False
+    app.convert_checkpoint.remote(hf_path=hf_path, **call_kwargs)
+    return True
+
+
 _STAGE_LABELS: dict[str, str] = {
     SlimeStatus.INITIALIZING.value: "Initializing",
     SlimeStatus.DOWNLOAD_MODEL.value: "Downloading model",
@@ -637,7 +656,8 @@ class TrainConfig:
                         )
                         if needs_conversion:
                             _set_status(SlimeStatus.CONVERT_MODEL, is_active=False)
-                            app.convert_checkpoint.remote(
+                            _convert_checkpoint_on_cache_miss(
+                                app,
                                 training_run_id=training_run_id,
                                 framework_status_url=framework_status_url,
                                 framework_status_token=framework_status_token,
@@ -650,7 +670,8 @@ class TrainConfig:
                             framework_status_token=framework_status_token,
                         )
                         _set_status(MilesStatus.CONVERT_MODEL, is_active=False)
-                        app.convert_checkpoint.remote(
+                        _convert_checkpoint_on_cache_miss(
+                            app,
                             training_run_id=training_run_id,
                             framework_status_url=framework_status_url,
                             framework_status_token=framework_status_token,

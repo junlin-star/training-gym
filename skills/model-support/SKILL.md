@@ -98,4 +98,4 @@ Wiring a new `<Model>` + `<Model>_Recipe` requires edits in all of:
 3. Top-level `modal_training_gym/__init__.py`: add to `_EXPORTS` (lazy map) **and** `__all__`.
 4. `SlimeRecipe.get_base_recipe` (recipe.py): add the `model_name → Recipe()` branch.
 
-Verify with: `uv run python -m compileall`, `uv run ruff check <files>`, and a quick `python -c "from modal_training_gym import <Model>, <Model>_Recipe; r=<Model>_Recipe(); print(r.gpu_allocation.summary())"` — instantiating the recipe runs the GPU-allocation and parallelism validators, catching bad TP/PP/EP/node math before any Modal run.
+Verify with: `uv run -m compileall`, `uv run ruff check <files>`, and a quick `python -c "from modal_training_gym import <Model>, <Model>_Recipe; r=<Model>_Recipe(); print(r.gpu_allocation.summary())"` — instantiating the recipe runs the GPU-allocation and parallelism validators, catching bad TP/PP/EP/node math before any Modal run.

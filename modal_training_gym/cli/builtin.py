@@ -8,11 +8,30 @@ from .commands import _TrainingGymCommand
 
 
 @click.command("setup", cls=_TrainingGymCommand)
-def setup_command() -> None:
+@click.option(
+    "--proxy-auth",
+    is_flag=True,
+    help="Require Modal proxy authentication for the dashboard.",
+)
+@click.option(
+    "--no-proxy-auth",
+    is_flag=True,
+    help="Deploy the dashboard without Modal proxy authentication.",
+)
+def setup_command(proxy_auth: bool, no_proxy_auth: bool) -> None:
     """Deploy the training-gym dashboard to Modal."""
-    from .setup import setup
+    if proxy_auth and no_proxy_auth:
+        raise click.UsageError(
+            "--proxy-auth and --no-proxy-auth cannot be used together."
+        )
 
-    setup()
+    from .setup import ProxyAuthChoiceRequired, setup
+
+    selected = True if proxy_auth else False if no_proxy_auth else None
+    try:
+        setup(proxy_auth=selected)
+    except ProxyAuthChoiceRequired as exc:
+        raise click.UsageError(str(exc)) from exc
 
 
 @click.command("open", cls=_TrainingGymCommand)

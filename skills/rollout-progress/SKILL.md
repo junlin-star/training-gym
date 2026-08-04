@@ -33,7 +33,7 @@ Run the helper from the repo root so it uses the project venv and metadata
 access:
 
 ```bash
-uv run python .claude/skills/rollout-progress/scripts/run_progress.py <run_id> --tail 200
+uv run .claude/skills/rollout-progress/scripts/run_progress.py <run_id> --tail 200
 ```
 
 `<run_id>` may be the full id, a prefix, the 8-char wandb id, a substring, or

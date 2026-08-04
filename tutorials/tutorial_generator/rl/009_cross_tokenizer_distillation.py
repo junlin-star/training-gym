@@ -4,7 +4,7 @@
 TUTORIAL_METADATA = {
     "framework": "`slime`",
     "cluster_shape": "1 × 4×B200 (teacher) + 2 × 8×H100 (train) + 1 × 8×H100 (rollout)",
-    "summary": "Cross-tokenizer agentic distillation on BFCL v3 multi-turn with live, execution-grounded rewards — DeepSeek V4 Flash teacher, Qwen3.6-35B-A3B student",
+    "summary": "Cross-tokenizer agentic distillation on BFCL v3 multi-turn",
     "difficulty": "Advanced",
     "order": 60,
     "api_classes": [
@@ -53,7 +53,7 @@ def _run_instructions():
     """
     Run with:
     ```
-    uv run python tutorials/rl/009_cross_tokenizer_distillation/009_cross_tokenizer_distillation.py
+    uv run tutorials/rl/009_cross_tokenizer_distillation/009_cross_tokenizer_distillation.py
     ```
     Set PYTHONUNBUFFERED=1 if running inside of an agent shell (e.g. Claude Code) to see output.
     """

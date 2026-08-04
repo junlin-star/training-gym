@@ -212,6 +212,32 @@ def _is_complete_torch_dist_checkpoint(path: str) -> bool:
     return "common.pt" in names and any(name.endswith(".distcp") for name in names)
 
 
+def _checkpoint_conversion_cache_status(
+    save_path: str, current_config: dict[str, Any]
+) -> tuple[str, dict[str, Any] | None]:
+    """Return the state of a cached HF-to-torch-dist conversion."""
+    if not os.path.exists(save_path):
+        return "missing", None
+    if not has_torch_dist_checkpoint(
+        save_path, is_complete=_is_complete_torch_dist_checkpoint
+    ):
+        return "incomplete", None
+
+    import json
+
+    config_path = os.path.join(save_path, _CONVERSION_CONFIG_FILE)
+    if not os.path.isfile(config_path):
+        return "stale", None
+    try:
+        with open(config_path) as f:
+            stored_config = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return "stale", None
+    if stored_config != current_config:
+        return "stale", stored_config
+    return "hit", stored_config
+
+
 def _serialize_recipe_value(value: Any) -> Any:
     if value is None or isinstance(value, str | int | float | bool):
         return value
@@ -675,7 +701,7 @@ def build_slime_app(
             checkpoints_mount_path: checkpoints_volume,
         },
         timeout=6 * 60 * 60,
-        secrets=hf_secrets(),
+        secrets=[*hf_secrets(), *proxy_auth_secrets()],
         serialized=True,
         name="download",
     )
@@ -708,23 +734,20 @@ def build_slime_app(
 
     @app.function(
         image=image,
-        gpu=gpu_spec,
-        memory=slime.memory,
-        cloud=slime.cloud,
-        region=slime.region,
-        volumes=all_volumes,
-        timeout=4 * 60 * 60,
-        experimental_options={"efa_enabled": True},
+        volumes={
+            str(HF_CACHE_PATH): hf_cache_volume,
+            checkpoints_mount_path: checkpoints_volume,
+        },
+        timeout=60 * 60,
+        secrets=[*hf_secrets(), *proxy_auth_secrets()],
         serialized=True,
-        name="convert_checkpoint",
+        name="resolve_checkpoint",
     )
-    @clustered_if(convert_nnodes > 1, convert_nnodes, gpu_type=slime.gpu_type)
-    def convert_checkpoint(
+    def resolve_checkpoint(
         training_run_id: str = "",
         framework_status_url: str = "",
         framework_status_token: str = "",
-    ):
-        from huggingface_hub import snapshot_download
+    ) -> str | None:
         from modal_training_gym.common.status_reporter import (
             enqueue_framework_status,
             flush as flush_status_reporter,
@@ -739,26 +762,80 @@ def build_slime_app(
                 is_active=True,
             )
 
-        # Bridge mode loads the HF weights directly into Megatron via AutoBridge at train time
-        # (slime's _load_checkpoint_hf), so there is no offline HF→torch_dist conversion to run.
-        # The HF reference path is wired into `ref_load` in `train` below.
+        # Bridge mode loads HF weights directly into Megatron at train time.
         if getattr(slime, "megatron_to_hf_mode", None) == "bridge":
             print(
                 "Bridge mode — HF weights loaded directly via AutoBridge; no conversion needed."
             )
             if training_run_id:
                 flush_status_reporter(timeout_seconds=2.0)
-            return
+            return None
 
         hf_cache_volume.reload()
         checkpoints_volume.reload()
 
+        save_path = str(slime.ref_load)
+        current_config = _build_conversion_config(slime, model=model)
+        cache_status, stored_config = _checkpoint_conversion_cache_status(
+            save_path, current_config
+        )
+        if cache_status == "hit":
+            print(f"Using existing torch_dist checkpoint at {save_path}.")
+            if training_run_id:
+                flush_status_reporter(timeout_seconds=2.0)
+            return None
+
+        if cache_status == "stale":
+            if stored_config is None:
+                print(
+                    f"Checkpoint at {save_path} has missing or unreadable conversion "
+                    "config metadata — reconverting."
+                )
+            else:
+                print(
+                    f"Checkpoint at {save_path} was built with different config:"
+                    f"\n  stored: {stored_config}\n  current: {current_config}"
+                )
+        if cache_status in {"stale", "incomplete"}:
+            print(f"Removing {cache_status} torch_dist checkpoint at {save_path}.")
+            import shutil
+
+            shutil.rmtree(save_path, ignore_errors=True)
+            checkpoints_volume.commit()
+
         if slime.megatron_conversion_hf_checkpoint:
-            hf_path = resolve_checkpoint_ref(slime.megatron_conversion_hf_checkpoint)
-        elif model.model_path:
-            hf_path = str(model.model_path)
-        else:
-            hf_path = snapshot_download(model.model_name, local_files_only=True)
+            return resolve_checkpoint_ref(slime.megatron_conversion_hf_checkpoint)
+        if model.model_path:
+            return str(model.model_path)
+
+        from huggingface_hub import snapshot_download
+
+        return snapshot_download(model.model_name, local_files_only=True)
+
+    @app.function(
+        image=image,
+        gpu=gpu_spec,
+        memory=slime.memory,
+        cloud=slime.cloud,
+        region=slime.region,
+        volumes=all_volumes,
+        timeout=4 * 60 * 60,
+        secrets=proxy_auth_secrets() or None,
+        experimental_options={"efa_enabled": True},
+        serialized=True,
+        name="convert_checkpoint",
+    )
+    @clustered_if(convert_nnodes > 1, convert_nnodes, gpu_type=slime.gpu_type)
+    def convert_checkpoint(
+        hf_path: str,
+        training_run_id: str = "",
+        framework_status_url: str = "",
+        framework_status_token: str = "",
+    ):
+        from modal_training_gym.common.status_reporter import (
+            flush as flush_status_reporter,
+        )
+
         save_path = str(slime.ref_load)
 
         num_nodes, nproc_per_node, extra_args = get_checkpoint_conversion_policy(
@@ -767,67 +844,8 @@ def build_slime_app(
         node_rank, master_addr, _, nnodes = get_modal_cluster_context(num_nodes)
 
         import json
-        import shutil
 
         current_config = _build_conversion_config(slime, model=model)
-
-        if os.path.exists(save_path):
-            complete = has_torch_dist_checkpoint(
-                save_path, is_complete=_is_complete_torch_dist_checkpoint
-            )
-            stale = True
-            if complete:
-                config_path = os.path.join(save_path, _CONVERSION_CONFIG_FILE)
-                if os.path.isfile(config_path):
-                    try:
-                        with open(config_path) as f:
-                            stored_config = json.load(f)
-                        stale = stored_config != current_config
-                        if stale and node_rank == 0:
-                            print(
-                                f"Checkpoint at {save_path} was built with "
-                                f"different config:\n  stored: {stored_config}"
-                                f"\n  current: {current_config}"
-                            )
-                    except (OSError, json.JSONDecodeError):
-                        stale = True
-                        if node_rank == 0:
-                            print(
-                                f"Checkpoint at {save_path} has unreadable "
-                                f"conversion config — reconverting."
-                            )
-                else:
-                    # Legacy checkpoint without config metadata — cannot
-                    # verify compatibility.  Force re-conversion so the
-                    # checkpoint is rebuilt with the correct layout and
-                    # metadata for future validation.
-                    stale = True
-                    if node_rank == 0:
-                        print(
-                            f"Checkpoint at {save_path} has no conversion "
-                            f"config metadata — reconverting to ensure "
-                            f"compatibility."
-                        )
-                if not stale:
-                    if node_rank == 0:
-                        print(f"Using existing torch_dist checkpoint at {save_path}.")
-                    if training_run_id:
-                        flush_status_reporter(timeout_seconds=2.0)
-                    return
-
-            # Either incomplete (e.g. a preempted conversion) or stale: rebuild
-            # it. Rank 0 removes the directory and commits; other ranks wait for
-            # the removal to land before reconverting.
-            if node_rank == 0:
-                import shutil
-
-                reason = "stale" if complete else "incomplete"
-                print(f"Removing {reason} torch_dist checkpoint at {save_path}.")
-                shutil.rmtree(save_path, ignore_errors=True)
-                checkpoints_volume.commit()
-            else:
-                time.sleep(5)
-                checkpoints_volume.reload()
 
         torchrun_args = [f"--nproc-per-node={nproc_per_node}"]
         if nnodes > 1:

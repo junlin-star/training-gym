@@ -209,7 +209,14 @@ def _post(item: dict[str, Any]) -> None:
         return
 
     body = json.dumps(item, default=str).encode("utf-8")
-    headers = {"Content-Type": "application/json"}
+
+    from modal_training_gym.common.config import modal_proxy_auth_headers
+
+    headers = {
+        "Content-Type": "application/json",
+        **modal_proxy_auth_headers(),
+    }
+
     token = _report_token()
     if token:
         headers["Authorization"] = f"Bearer {token}"
