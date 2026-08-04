@@ -35,6 +35,7 @@ from starlette.requests import Request
 # Used as endpoint parameter annotations, so — like ``Request`` above — these
 # must resolve from this module's globals.
 from modal_training_gym.common.advantage_distribution import AdvantageDistribution
+from modal_training_gym.common.config import dashboard_requires_proxy_auth
 from modal_training_gym.common.run import FrameworkStatusUpdate, TrainingRun
 from modal_training_gym.common.run_list import (
     filter_run_summaries,
@@ -355,7 +356,7 @@ def reconcile() -> None:
     min_containers=1,
     secrets=_function_secrets(),
 )
-@modal.asgi_app()
+@modal.asgi_app(requires_proxy_auth=dashboard_requires_proxy_auth())
 def fastapi_app():
     import base64
     import binascii

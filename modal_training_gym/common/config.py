@@ -17,6 +17,19 @@ MODAL_CONFIG_PATH = Path(
     os.environ.get("MODAL_CONFIG_PATH") or os.path.expanduser("~/.modal.toml")
 )
 
+_dashboard_requires_proxy_auth = False
+
+
+def set_dashboard_requires_proxy_auth(value: bool) -> None:
+    """Set the mode used when `_dashboard` next registers its web function."""
+    global _dashboard_requires_proxy_auth
+    _dashboard_requires_proxy_auth = value
+
+
+def dashboard_requires_proxy_auth() -> bool:
+    """Return the proxy-auth mode for the next dashboard module import."""
+    return _dashboard_requires_proxy_auth
+
 
 def load_config() -> dict[str, Any]:
     """Return the parsed ``~/.training-gym.toml``, or ``{}`` if missing."""
@@ -29,13 +42,15 @@ def load_config() -> dict[str, Any]:
         return {}
 
 
-def save_dashboard_url(url: str) -> None:
-    """Persist the deployed dashboard URL under ``[dashboard].url``."""
+def save_dashboard_url(url: str, *, proxy_auth: bool | None = None) -> None:
+    """Persist the deployed dashboard URL and optional proxy-auth mode."""
     config = load_config()
     dashboard = config.get("dashboard")
     if not isinstance(dashboard, dict):
         dashboard = {}
     dashboard["url"] = url
+    if proxy_auth is not None:
+        dashboard["proxy_auth"] = proxy_auth
     config["dashboard"] = dashboard
     CONFIG_PATH.write_text(_render(config))
 
@@ -47,6 +62,16 @@ def get_dashboard_url() -> str | None:
         url = dashboard.get("url")
         if isinstance(url, str) and url.strip():
             return url.strip()
+    return None
+
+
+def get_dashboard_proxy_auth() -> bool | None:
+    """Return the last deployed dashboard proxy-auth mode, if recorded."""
+    dashboard = load_config().get("dashboard")
+    if isinstance(dashboard, dict):
+        proxy_auth = dashboard.get("proxy_auth")
+        if isinstance(proxy_auth, bool):
+            return proxy_auth
     return None
 
 
@@ -94,6 +119,16 @@ def load_proxy_auth() -> bool:
         os.environ.get("MODAL_KEY", "").strip()
         and os.environ.get("MODAL_SECRET", "").strip()
     )
+
+
+def modal_proxy_auth_headers() -> dict[str, str]:
+    """Return Modal proxy-auth headers from env or saved local credentials."""
+    load_proxy_auth()
+    key = os.environ.get("MODAL_KEY", "").strip()
+    secret = os.environ.get("MODAL_SECRET", "").strip()
+    if key and secret:
+        return {"Modal-Key": key, "Modal-Secret": secret}
+    return {}
 
 
 def get_framework_status_url() -> str | None:

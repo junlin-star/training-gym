@@ -214,7 +214,7 @@ def build_miles_app(
             checkpoints_mount_path: checkpoints_volume,
         },
         timeout=4 * 60 * 60,
-        secrets=hf_secrets(),
+        secrets=[*hf_secrets(), *proxy_auth_secrets()],
         serialized=True,
         name="download",
     )
@@ -256,6 +256,7 @@ def build_miles_app(
         gpu=gpu_spec,
         volumes=all_volumes,
         timeout=4 * 60 * 60,
+        secrets=proxy_auth_secrets() or None,
         experimental_options={"efa_enabled": True} if convert_multi_node else {},
         serialized=True,
         name="convert_checkpoint",

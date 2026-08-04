@@ -69,7 +69,52 @@ def test_setup_dispatches_to_existing_function(runner, monkeypatch):
 
     assert result.exit_code == 0
     assert result.stderr == ""
-    setup.assert_called_once_with()
+    setup.assert_called_once_with(proxy_auth=None)
+
+
+@pytest.mark.parametrize(
+    ("flag", "expected"),
+    [
+        ("--proxy-auth", True),
+        ("--no-proxy-auth", False),
+    ],
+)
+def test_setup_preserves_proxy_auth_choice(runner, monkeypatch, flag, expected):
+    setup = Mock()
+    monkeypatch.setattr("modal_training_gym.cli.setup.setup", setup)
+
+    result = runner.invoke(cli_module.entrypoint_cli, ["setup", flag])
+
+    assert result.exit_code == 0
+    setup.assert_called_once_with(proxy_auth=expected)
+
+
+def test_setup_rejects_both_proxy_auth_flags(runner):
+    result = runner.invoke(
+        cli_module.entrypoint_cli,
+        ["setup", "--proxy-auth", "--no-proxy-auth"],
+    )
+
+    assert result.exit_code == 2
+    assert "cannot be used together" in result.stderr
+
+
+def test_setup_prompts_for_explicit_choice_after_authenticated_deploy(
+    runner, monkeypatch
+):
+    from modal_training_gym.cli.setup import ProxyAuthChoiceRequired
+
+    setup = Mock(
+        side_effect=ProxyAuthChoiceRequired(
+            "Pass either --proxy-auth or --no-proxy-auth explicitly."
+        )
+    )
+    monkeypatch.setattr("modal_training_gym.cli.setup.setup", setup)
+
+    result = runner.invoke(cli_module.entrypoint_cli, ["setup"])
+
+    assert result.exit_code == 2
+    assert "--proxy-auth or --no-proxy-auth" in result.stderr
 
 
 def test_open_dispatches_to_existing_function(runner, monkeypatch):
@@ -139,7 +184,7 @@ def test_click_usage_errors_use_exit_two_and_stderr(runner):
 
 
 def test_expected_errors_use_declared_exit_code(runner, monkeypatch):
-    def fail():
+    def fail(**_kwargs):
         raise CLIError(
             "offline",
             error="dashboard_unreachable",
@@ -202,7 +247,7 @@ def test_main_maps_unexpected_errors(monkeypatch, capsys):
 
 
 def test_main_maps_click_keyboard_interrupt_to_130(monkeypatch, capsys):
-    def interrupt():
+    def interrupt(**_kwargs):
         raise KeyboardInterrupt
 
     monkeypatch.setattr(

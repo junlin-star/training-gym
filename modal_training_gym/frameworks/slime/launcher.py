@@ -675,7 +675,7 @@ def build_slime_app(
             checkpoints_mount_path: checkpoints_volume,
         },
         timeout=6 * 60 * 60,
-        secrets=hf_secrets(),
+        secrets=[*hf_secrets(), *proxy_auth_secrets()],
         serialized=True,
         name="download",
     )
@@ -714,6 +714,7 @@ def build_slime_app(
         region=slime.region,
         volumes=all_volumes,
         timeout=4 * 60 * 60,
+        secrets=proxy_auth_secrets() or None,
         experimental_options={"efa_enabled": True},
         serialized=True,
         name="convert_checkpoint",

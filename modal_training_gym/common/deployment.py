@@ -13,7 +13,6 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
-import os
 import threading
 import warnings
 from dataclasses import dataclass
@@ -86,14 +85,9 @@ def _modal_proxy_auth_headers() -> dict[str, str]:
     when neither source provides them, so endpoints without proxy auth are
     unaffected.
     """
-    from modal_training_gym.common.config import load_proxy_auth
+    from modal_training_gym.common.config import modal_proxy_auth_headers
 
-    load_proxy_auth()
-    key = os.environ.get("MODAL_KEY", "").strip()
-    secret = os.environ.get("MODAL_SECRET", "").strip()
-    if key and secret:
-        return {"Modal-Key": key, "Modal-Secret": secret}
-    return {}
+    return modal_proxy_auth_headers()
 
 
 def _raise_for_proxy_auth(status_code: int, url: str) -> None:

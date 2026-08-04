@@ -24,18 +24,46 @@ What this does:
 """
 
 from __future__ import annotations
+import os
 import webbrowser
-
-from modal_training_gym._dashboard import (
-    MODAL_CREDS_SECRET_NAME,
-    ensure_creds_secret,
-)
 
 DASHBOARD_APP_NAME = "training-gym-dashboard"
 DASHBOARD_WEB_FUNCTION = "fastapi_app"
 
 
-def setup(interactive: bool = True) -> str:
+class ProxyAuthChoiceRequired(ValueError):
+    """Raised when an authenticated redeploy requires an explicit CLI choice."""
+
+
+def _load_dashboard_for_deploy(requires_proxy_auth: bool):
+    """Import the declarative dashboard with the selected ASGI proxy-auth mode."""
+    import importlib
+    import sys
+
+    from modal_training_gym.common import config
+
+    module_name = "modal_training_gym._dashboard"
+    config.set_dashboard_requires_proxy_auth(requires_proxy_auth)
+    if module_name in sys.modules:
+        return importlib.reload(sys.modules[module_name])
+    return importlib.import_module(module_name)
+
+
+def _resolve_dashboard_proxy_auth(proxy_auth: bool | None) -> bool:
+    if proxy_auth is not None:
+        return proxy_auth
+
+    from modal_training_gym.common.config import get_dashboard_proxy_auth
+
+    if get_dashboard_proxy_auth() is True:
+        raise ProxyAuthChoiceRequired(
+            "The dashboard was last deployed with proxy auth. "
+            "Pass either --proxy-auth or --no-proxy-auth explicitly."
+        )
+    return False
+
+
+def setup(interactive: bool = True, proxy_auth: bool | None = None) -> str:
     """Deploy the training-gym dashboard, persist its URL, and return it.
 
     ``interactive=False`` resolves Modal credentials silently (from env vars
@@ -44,23 +72,30 @@ def setup(interactive: bool = True) -> str:
     """
     import modal
 
-    from modal_training_gym._dashboard import app, fastapi_app
+    requires_proxy_auth = _resolve_dashboard_proxy_auth(proxy_auth)
+
     from modal_training_gym.common.config import CONFIG_PATH, save_dashboard_url
 
-    ensure_proxy_auth(interactive=interactive)
+    dashboard = _load_dashboard_for_deploy(requires_proxy_auth)
 
-    if not ensure_creds_secret(interactive=interactive):
+    if requires_proxy_auth and not ensure_proxy_auth(interactive=interactive):
+        raise RuntimeError(
+            "Dashboard proxy auth requires MODAL_KEY and MODAL_SECRET. "
+            "Run `training-gym set-proxy-auth` or export both variables."
+        )
+
+    if not dashboard.ensure_creds_secret(interactive=interactive):
         print(
-            f"WARNING: continuing without the {MODAL_CREDS_SECRET_NAME!r} "
+            f"WARNING: continuing without the {dashboard.MODAL_CREDS_SECRET_NAME!r} "
             "Modal Secret — the dashboard will not be able to stream Modal "
             "app logs."
         )
 
     with modal.enable_output():
-        app.deploy()
+        dashboard.app.deploy()
 
-    web_url = fastapi_app.get_web_url()
-    save_dashboard_url(web_url)
+    web_url = dashboard.fastapi_app.get_web_url()
+    save_dashboard_url(web_url, proxy_auth=requires_proxy_auth)
     print(f"\nDashboard deployed: {web_url}")
     print(f"Saved dashboard URL to {CONFIG_PATH}")
     return web_url
@@ -81,10 +116,15 @@ def ensure_proxy_auth(interactive: bool = True, force: bool = False) -> bool:
     from modal_training_gym.common.config import (
         CONFIG_PATH,
         get_proxy_auth,
+        load_proxy_auth,
         save_proxy_auth,
     )
 
     key, secret = get_proxy_auth()
+    if not force:
+        load_proxy_auth()
+        key = os.environ.get("MODAL_KEY", "").strip() or key
+        secret = os.environ.get("MODAL_SECRET", "").strip() or secret
     if key and secret and not force:
         return True
     if not interactive:
@@ -179,7 +219,12 @@ def set_password(password: str | None = None) -> None:
     else:
         print("Dashboard password cleared (open access). Redeploying...")
 
-    setup(interactive=False)
+    from modal_training_gym.common.config import get_dashboard_proxy_auth
+
+    setup(
+        interactive=False,
+        proxy_auth=get_dashboard_proxy_auth(),
+    )
 
 
 def open_dashboard() -> str | None:
