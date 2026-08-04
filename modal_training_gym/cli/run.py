@@ -459,7 +459,7 @@ def _format_step(current: int | None, total: int | None, unit: str) -> str:
 def _print_kill_report(runs: list[_KillRunReport]) -> None:
     print_table(
         [
-            "Run",
+            "Training Run",
             "Modal app",
             "Status",
             "Current step",
@@ -482,7 +482,7 @@ def _print_kill_report(runs: list[_KillRunReport]) -> None:
                     else "—"
                 ),
                 (
-                    f"{row['action']} ({row['skip_reason']})"
+                    f"{row['action']}: {row['skip_reason']}"
                     if row["skip_reason"]
                     else row["action"]
                 ).replace("_", " "),
@@ -537,7 +537,7 @@ def kill_runs(
     *,
     run_ids: tuple[str, ...],
     dry_run: bool,
-    yes: bool,
+    skip_confirmation: bool,
     json_output: bool,
 ) -> None:
     """Stop the Modal apps underlying one or more training runs."""
@@ -575,14 +575,11 @@ def kill_runs(
     runs_to_kill = [
         run_report for run_report in run_reports if run_report["action"] == "would_kill"
     ]
-    stale_runs_to_cancel = [
-        run_report
-        for run_report in run_reports
-        if run_report["skip_reason"] == "modal_app_not_live"
-        and run_report["status"] not in TERMINAL_RUN_STATUSES
-    ]
     error_count = sum(
-        run_report["skip_reason"] == "missing_modal_app_id"
+        (
+            run_report["skip_reason"] is not None
+            and run_report["skip_reason"] != "already_terminal"
+        )
         for run_report in run_reports
     )
     result: dict[str, object] = {
@@ -601,7 +598,7 @@ def kill_runs(
             raise click.exceptions.Exit(int(ExitCode.BACKEND))
         return
 
-    if runs_to_kill and not yes:
+    if runs_to_kill and not skip_confirmation:
         run_word = "run" if len(runs_to_kill) == 1 else "runs"
         confirm_or_require_yes(
             f"Terminate {len(runs_to_kill)} {run_word}? This cannot be undone."
@@ -639,25 +636,6 @@ def kill_runs(
                 exit_code=ExitCode.BACKEND,
                 run_id=run["run_id"],
                 modal_app_id=modal_app_id,
-                killed_run_ids=killed_run_ids,
-            ) from exc
-
-    for run in stale_runs_to_cancel:
-        try:
-            run["status"] = finalize_training_run(
-                run["run_id"],
-                status=TrainingRunStatus.CANCELLED,
-                reason="modal_app_not_live",
-                ended_at=int(time.time()),
-            ).value
-        except Exception as exc:
-            raise CLIError(
-                f"Modal app for run {run['run_id']!r} is no longer live, "
-                "but its metadata could not be updated.",
-                error="run_metadata_update_failed",
-                exit_code=ExitCode.BACKEND,
-                run_id=run["run_id"],
-                modal_app_id=run["modal_app_id"],
                 killed_run_ids=killed_run_ids,
             ) from exc
 
@@ -1327,7 +1305,7 @@ def kill_command(
     kill_runs(
         run_ids=run_ids,
         dry_run=dry_run,
-        yes=yes,
+        skip_confirmation=yes,
         json_output=json_output,
     )
 

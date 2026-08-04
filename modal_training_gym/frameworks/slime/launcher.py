@@ -26,7 +26,6 @@ from typing import Any
 from collections.abc import Callable, Mapping
 from enum import Enum
 from modal import App, Dict as ModalDict, Image, Secret, Volume, Retries
-from modal.exception import InputCancellation
 
 from modal_training_gym.common import hf_secrets, proxy_auth_secrets
 
@@ -1293,7 +1292,7 @@ def build_slime_app(
             await checkpoints_volume.commit.aio()
             print(f"TrainResult saved: {training_run_id}")
             return result._to_dict()
-        except (KeyboardInterrupt, InputCancellation):
+        except KeyboardInterrupt:
             mark_run_stopped(run_record)
             raise
         except BaseException as exc:

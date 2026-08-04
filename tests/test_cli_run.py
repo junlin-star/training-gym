@@ -721,38 +721,6 @@ def test_run_kill_continues_after_run_without_modal_app(monkeypatch):
     ]
 
 
-def test_run_kill_reconciles_non_live_app_immediately(monkeypatch):
-    FakeDashboardClient.payload = _summary(
-        status="running",
-        display_status="pending",
-        modal_app_id="ap-stopped",
-    )
-    monkeypatch.setattr(run_module, "app_live_status", lambda _app_id: False)
-    stopped: list[str] = []
-    monkeypatch.setattr(run_module, "stop_app_or_raise", stopped.append)
-    metadata_updates = []
-
-    def update_metadata(run_id, *, status, reason, ended_at):
-        metadata_updates.append((run_id, status, reason))
-        return status
-
-    monkeypatch.setattr(run_module, "finalize_training_run", update_metadata)
-
-    result = CliRunner().invoke(
-        cli_module.entrypoint_cli,
-        ["run", "kill", "run-1", "--yes", "--json"],
-    )
-
-    assert result.exit_code == 0
-    assert stopped == []
-    assert metadata_updates == [
-        ("run-1", run_module.TrainingRunStatus.CANCELLED, "modal_app_not_live")
-    ]
-    payload = json.loads(result.stdout)
-    assert payload["runs"][0]["action"] == "skipped"
-    assert payload["runs"][0]["status"] == "cancelled"
-
-
 def test_run_kill_reports_canonical_terminal_status_after_stopping(monkeypatch):
     FakeDashboardClient.payload = _summary(
         status="running",

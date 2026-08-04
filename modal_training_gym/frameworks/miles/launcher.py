@@ -11,7 +11,6 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from modal import App, Image, Retries, Secret, Volume
-from modal.exception import InputCancellation
 from modal.experimental import clustered
 
 from modal_training_gym.common import (
@@ -685,7 +684,7 @@ def build_miles_app(
             await checkpoints_volume.commit.aio()
             print(f"TrainResult saved: {training_run_id}")
             return result._to_dict()
-        except (KeyboardInterrupt, InputCancellation):
+        except KeyboardInterrupt:
             mark_run_stopped(run_record)
             raise
         except BaseException as exc:
