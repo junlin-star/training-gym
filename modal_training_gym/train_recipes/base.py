@@ -24,6 +24,18 @@ CHECKPOINTS_PATH = Path("/checkpoints")
 JSON_CONFIG_FIELDS = ("train_env_vars", "apply_chat_template_kwargs", "multimodal_keys")
 
 
+def carry_explicit_fields(source: Any, rebuilt: Any) -> Any:
+    """Restore ``source``'s record of caller-set fields onto a rebuilt recipe.
+
+    Rebuilding as ``type(r)(**all_fields)`` passes every field as a kwarg, so the
+    validator would record them all as caller-set and make ``_for_dataset`` a no-op.
+    """
+    explicit = getattr(source, "_explicit_fields", None)
+    if explicit is not None:
+        object.__setattr__(rebuilt, "_explicit_fields", explicit)
+    return rebuilt
+
+
 class RecipeType(Enum):
     SLIME = "slime"
     MILES = "miles"

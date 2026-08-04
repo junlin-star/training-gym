@@ -510,13 +510,36 @@ def parse_kimi_k2_response(text: str) -> ParsedResponse:
 #
 _GEMMA4_THOUGHT_RE = re.compile(r"<\|channel>thought\n?(.*?)\n?<channel\|>", re.DOTALL)
 _GEMMA4_TOOL_CALL_RE = re.compile(
-    r"<\|tool_call>call:([^{]*)\{(.*?)\}<tool_call\|>", re.DOTALL
-)
-_GEMMA4_ARG_RE = re.compile(
-    r'([^,{}:]+):\s*(<\|"\|>.*?<\|"\|>|\{.*?\}|[^,}]*)',
-    re.DOTALL,
+    r"<\|tool_call>call:([^{]*)(\{.*?\})<tool_call\|>", re.DOTALL
 )
 _GEMMA4_STR_DELIM = '<|"|>'
+_GEMMA4_BARE_KEY_RE = re.compile(r"([{,]\s*)([A-Za-z_][A-Za-z0-9_.\-]*)\s*:")
+_JSON_STRING_RE = re.compile(r'"(?:[^"\\]|\\.)*"')
+
+
+def _quote_bare_keys(raw: str) -> str:
+    """Quote Gemma's unquoted object keys, skipping string contents.
+
+    A blind substitution would corrupt a value like ``"a,b:c"``.
+    """
+    out: list[str] = []
+    last = 0
+    for match in _JSON_STRING_RE.finditer(raw):
+        out.append(_GEMMA4_BARE_KEY_RE.sub(r'\1"\2":', raw[last : match.start()]))
+        out.append(match.group(0))
+        last = match.end()
+    out.append(_GEMMA4_BARE_KEY_RE.sub(r'\1"\2":', raw[last:]))
+    return "".join(out)
+
+
+def _parse_gemma4_tool_block(name: str, body: str) -> ToolCall:
+    """Gemma wire format: the ``call:NAME`` body is JSON with bare keys and ``<|"|>``
+    in place of string quotes."""
+    try:
+        args = json.loads(_quote_bare_keys(body.replace(_GEMMA4_STR_DELIM, '"')))
+    except json.JSONDecodeError:
+        args = {}
+    return ToolCall(name=name, arguments=args if isinstance(args, dict) else {})
 
 
 def parse_gemma4_response(text: str) -> ParsedResponse:
@@ -547,20 +570,11 @@ def parse_gemma4_response(text: str) -> ParsedResponse:
         thoughts.append(tail.strip())
     thinking = "\n".join(thought for thought in thoughts if thought) or None
 
-    tool_calls: list[ToolCall] = []
-    for match in _GEMMA4_TOOL_CALL_RE.finditer(text):
-        name = match.group(1).strip()
-        if not name:
-            continue
-        # Swapping the string delimiter for a double quote turns scalars and
-        # nested objects alike into JSON that ``_coerce_arg_value`` decodes.
-        arguments = {
-            key.replace(_GEMMA4_STR_DELIM, "").strip(): _coerce_arg_value(
-                value.replace(_GEMMA4_STR_DELIM, '"')
-            )
-            for key, value in _GEMMA4_ARG_RE.findall(match.group(2))
-        }
-        tool_calls.append(ToolCall(name=name, arguments=arguments))
+    tool_calls = [
+        _parse_gemma4_tool_block(name.strip(), body)
+        for name, body in _GEMMA4_TOOL_CALL_RE.findall(text)
+        if name.strip()
+    ]
     content = _GEMMA4_TOOL_CALL_RE.sub("", text).strip()
 
     return ParsedResponse(

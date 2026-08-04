@@ -160,10 +160,11 @@ class Gemma4_26B_A4B_Recipe(SlimeRecipe):
         # text default: an explicit `num_rollout=2` matches this recipe's default,
         # and reading that as unset would silently run the vision default of 15.
         explicit = self.explicit_fields
+        merged = ("extra_config", "image_run_commands")
         vision = {
             name: value() if callable(value) else value
             for name, value in _VISION_MODE.items()
-            if name != "extra_config" and name not in explicit
+            if name not in merged and name not in explicit
         }
         # extra_config may already hold hook paths resolved at construction, so merge
         # into it (keys the caller set win) instead of replacing it wholesale.
@@ -171,6 +172,14 @@ class Gemma4_26B_A4B_Recipe(SlimeRecipe):
             **_VISION_MODE["extra_config"],
             **(self.extra_config or {}),
         }
+        # The VL patches are required for the bridge path, so they lead the caller's
+        # commands rather than yielding to them. Filtering keeps a second resolve
+        # from stacking them.
+        patches = _vl_image_run_commands()
+        vision["image_run_commands"] = [
+            *patches,
+            *(c for c in (self.image_run_commands or []) if c not in patches),
+        ]
         resolved = replace(self, **vision)
         # `replace` marks every field explicit, so carry the real set forward and
         # resolving twice stays a no-op.

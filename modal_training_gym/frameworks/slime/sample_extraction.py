@@ -549,7 +549,8 @@ class RolloutImageStore:
             ref = self._ref_by_uri.get(uri)
             if ref is None:
                 if self.count >= self._limit:
-                    return False
+                    self._ref_by_raw[raw_key] = ""
+                    continue
                 ref = hashlib.md5(uri.encode()).hexdigest()[:_IMAGE_REF_CHARS]
                 self._ref_by_uri[uri] = ref
                 metadata["image"] = uri

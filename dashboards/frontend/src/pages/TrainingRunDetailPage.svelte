@@ -350,11 +350,15 @@
     }
   }
 
-  function sampleToPayload(s, { inlineImage = false } = {}) {
+  function sampleToPayload(s, { inlineImage = false, refOnly = false } = {}) {
     let metadata = s.metadata || null;
     if (inlineImage && metadata?.image_ref && !metadata.image) {
       const { image_ref, ...rest } = metadata;
       metadata = { ...rest, image: sampleImage(s) };
+    } else if (refOnly && metadata?.image) {
+      // Bytes travel once in the payload's `images` map; keep only the ref here.
+      const { image, ...rest } = metadata;
+      metadata = rest;
     }
     return {
       score: s.score,
@@ -389,7 +393,9 @@
       rollout_id: rollout,
       total: expandedRollout.samples.length,
       mean: expandedRollout.samples.reduce((a, s) => a + (s.score || 0), 0) / expandedRollout.samples.length,
-      samples: expandedRollout.samples.map((s) => sampleToPayload(s)),
+      // Shared screenshots, keyed by the `metadata.image_ref` each sample carries.
+      images: rolloutImages,
+      samples: expandedRollout.samples.map((s) => sampleToPayload(s, { refOnly: true })),
     };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);

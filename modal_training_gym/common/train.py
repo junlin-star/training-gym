@@ -23,7 +23,11 @@ from modal_training_gym.common.modal_urls import modal_app_dashboard_url
 from modal_training_gym.utils.metadata import MetadataStore, vol_put
 from modal_training_gym.frameworks.miles import build_miles_app
 from modal_training_gym.frameworks.slime import build_slime_app
-from modal_training_gym.train_recipes.base import BaseTrainRecipe, RecipeType
+from modal_training_gym.train_recipes.base import (
+    BaseTrainRecipe,
+    RecipeType,
+    carry_explicit_fields,
+)
 from modal_training_gym.train_recipes.miles_recipe import MilesConfig
 from modal_training_gym.train_recipes.slime_recipe import SlimeRecipe
 from pydantic import ConfigDict
@@ -56,12 +60,7 @@ def _merge_recipe(base: SlimeRecipe, overrides: SlimeRecipe) -> SlimeRecipe:
         default_val = _field_default(f)
         if f.name in declared or default_val is _dc.MISSING or user_val != default_val:
             base_fields[f.name] = user_val
-    merged = type(base)(**base_fields)
-    # Reconstructing from every field would mark them all caller-supplied, so carry
-    # the user's actual choices over for `_for_dataset` to read.
-    if (explicit := getattr(overrides, "_explicit_fields", None)) is not None:
-        object.__setattr__(merged, "_explicit_fields", explicit)
-    return merged
+    return carry_explicit_fields(overrides, type(base)(**base_fields))
 
 
 def _field_default(field: _dc.Field) -> Any:
