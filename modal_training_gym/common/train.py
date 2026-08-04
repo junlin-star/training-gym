@@ -331,8 +331,9 @@ class TrainConfig:
     merge_model_recipe : bool
         When ``True``, merges the known-model preset recipe (e.g.
         ``Qwen3_4b_Recipe``) onto recipe fields you left unset. Set
-        ``False`` to run the recipe exactly as written, with no preset
-        defaults. Default ``True``.
+        ``False`` to skip that merge. Either way a recipe whose config depends
+        on the data's modality (Gemma-4's vision mode) still resolves against
+        the dataset, since it is unusable otherwise. Default ``True``.
     detach : bool
         Run the training app detached so it keeps running on Modal even if
         the local client disconnects (terminal closed, laptop asleep). Set

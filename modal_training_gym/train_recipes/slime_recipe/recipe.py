@@ -675,7 +675,7 @@ class SlimeRecipe(BaseTrainRecipe):
 
     @property
     def explicit_fields(self) -> frozenset[str]:
-        """Names of the fields the caller chose, by constructor or subclass body.
+        """Names of the fields the caller chose.
 
         ``_for_dataset`` needs this to tell a caller's choice from a default, which
         the value alone cannot: an explicit ``num_rollout=2`` is indistinguishable
@@ -685,6 +685,12 @@ class SlimeRecipe(BaseTrainRecipe):
         return getattr(self, "_explicit_fields", frozenset()) | _declared_below(
             type(self)
         )
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        """Record post-construction assignment, so a swept field counts as chosen."""
+        super().__setattr__(name, value)
+        if not name.startswith("_"):
+            object.__setattr__(self, "_explicit_fields", self.explicit_fields | {name})
 
     @model_validator(mode="wrap")
     @classmethod

@@ -355,7 +355,7 @@
     if (inlineImage && metadata?.image_ref && !metadata.image) {
       const { image_ref, ...rest } = metadata;
       metadata = { ...rest, image: sampleImage(s) };
-    } else if (refOnly && metadata?.image) {
+    } else if (refOnly && metadata?.image && metadata.image_ref) {
       // Bytes travel once in the payload's `images` map; keep only the ref here.
       const { image, ...rest } = metadata;
       metadata = rest;
