@@ -25,7 +25,8 @@ import threading
 from queue import Queue
 from typing import Any
 from urllib.error import URLError
-from urllib.request import Request, urlopen
+
+from modal_training_gym._safe_http import origin, post as _post_request
 
 
 # Shared with slime's phase_reporting, whose rollout payloads can be 100KB+ —
@@ -88,18 +89,16 @@ def _post(item: dict[str, Any]) -> None:
     token = str(item.pop("_token", "") or "").strip()
     if not url:
         return
+    # Only post to URLs that belong to the configured dashboard origin.
+    configured_url = _resolve_url()
+    if configured_url and origin(url) != origin(configured_url):
+        return
     body = json.dumps(item, default=str).encode("utf-8")
     headers = {"Content-Type": "application/json"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
-    request = Request(
-        url,
-        data=body,
-        headers=headers,
-        method="POST",
-    )
     try:
-        with urlopen(request, timeout=timeout) as response:
+        with _post_request(url, body, headers, timeout=timeout) as response:
             response.read()
     except (OSError, URLError):
         return
@@ -138,8 +137,12 @@ def enqueue_framework_status(
     Returns immediately. If no dashboard URL is configured the call is a
     silent no-op.
     """
-    resolved = (url or "").strip() or _resolve_url()
+    configured = _resolve_url()
+    resolved = (url or "").strip() or configured
     if not resolved or not training_run_id or not phase:
+        return
+    # Reject an explicit URL that does not match the configured dashboard origin.
+    if configured and origin(resolved) != origin(configured):
         return
     _ensure_worker()
     payload: dict[str, Any] = {

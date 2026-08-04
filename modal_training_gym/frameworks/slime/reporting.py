@@ -14,7 +14,8 @@ import threading
 from queue import Queue
 from typing import Any
 from urllib.error import URLError
-from urllib.request import Request, urlopen
+
+from modal_training_gym._safe_http import origin, post as _post_request
 
 PHASE_REPORT_URL_ENV = "SLIME_PHASE_REPORT_URL"
 PHASE_REPORT_TOKEN_ENV = "SLIME_PHASE_REPORT_TOKEN"
@@ -208,19 +209,18 @@ def _post(item: dict[str, Any]) -> None:
     if not url:
         return
 
+    # Only post to URLs that belong to the configured dashboard origin.
+    base_url = _phase_url()
+    if base_url and origin(url) != origin(base_url):
+        return
+
     body = json.dumps(item, default=str).encode("utf-8")
     headers = {"Content-Type": "application/json"}
     token = _report_token()
     if token:
         headers["Authorization"] = f"Bearer {token}"
-    request = Request(
-        url,
-        data=body,
-        headers=headers,
-        method="POST",
-    )
     try:
-        with urlopen(request, timeout=timeout) as response:
+        with _post_request(url, body, headers, timeout=timeout) as response:
             response.read()
     except (OSError, URLError):
         return
