@@ -17,27 +17,27 @@ export const TIMING_LABELS = {
   optimizer_step: "Optimizer step",
 };
 
+// From the design system's dataviz ramp, the way the other charts pick colors.
 // Generating is red, training is blue/green, and a phase drawn inside one of
 // them is a neighbouring hue rather than a shade of its container, so the two
-// edges read apart. All from the dashboard's own ramps, mid-steps so a screen of
-// bars stays quiet.
+// edges read apart.
 export const TIMING_COLORS = {
-  generate_rollouts: "var(--color-c-red-60, #9e4d4d)",
-  wait_for_rollout: "var(--color-c-red-40, #723c3c)",
-  generate_samples: "var(--color-c-orange-70, #ba7f49)",
-  reward: "var(--color-c-yellow-60, #a3964d)",
-  reward_batch: "var(--color-c-yellow-50, #8b8145)",
-  reward_post_process: "var(--color-c-yellow-70, #baab56)",
-  train_models: "var(--color-c-blue-60, #608199)",
-  compute_log_probs: "var(--color-c-green-60, #569846)",
-  forward_backward: "var(--color-c-blue-80, #79a4c4)",
-  optimizer_step: "var(--color-c-pale-green-50, #7c9878)",
-  weight_sync: "var(--color-c-pale-green-40, #677d64)",
-  offload_rollout: "var(--color-c-gray-40, #747474)",
-  offload_train: "var(--color-c-gray-30, #5d5d5d)",
-  checkpoint_save: "var(--color-c-pink-60, #a35e94)",
-  evaluate_rollouts: "var(--color-c-pink-40, #74476a)",
-  evaluate_rollouts_end: "var(--color-c-pink-50, #8b537f)",
+  generate_rollouts: "var(--color-c-dataviz-paired-2, #e06161)",
+  wait_for_rollout: "var(--color-c-dataviz-primary-8, #8d324c)",
+  generate_samples: "var(--color-c-dataviz-paired-8, #c86a3a)",
+  reward: "var(--color-c-dataviz-paired-5, #e6b687)",
+  reward_batch: "var(--color-c-dataviz-primary-2, #d9866b)",
+  reward_post_process: "var(--color-c-dataviz-primary-5, #decb6c)",
+  train_models: "var(--color-c-dataviz-paired-4, #6cabc1)",
+  compute_log_probs: "var(--color-c-dataviz-primary-6, #4fbe5f)",
+  forward_backward: "var(--color-c-dataviz-primary-7, #648fe0)",
+  optimizer_step: "var(--color-c-dataviz-primary-1, #adeaab)",
+  weight_sync: "var(--color-c-dataviz-primary-4, #4aa19d)",
+  offload_rollout: "var(--color-c-dataviz-primary-other, #6d6161)",
+  offload_train: "var(--color-c-gray-50, #8b8b8b)",
+  checkpoint_save: "var(--color-c-dataviz-primary-3, #ffc1f7)",
+  evaluate_rollouts: "var(--color-c-dataviz-paired-3, #ca70ad)",
+  evaluate_rollouts_end: "var(--color-c-dataviz-paired-7, #8956fa)",
 };
 
 // Work a step waits on but isn't: a checkpoint or an eval lands on one rollout
@@ -50,6 +50,28 @@ export const PHASES_BESIDE_THE_STEP = [
 
 // Below this a phase did no measurable work, so it is recorded but not drawn.
 const NEGLIGIBLE_WORK_S = 0.0005;
+
+// What a phase is drawn inside when the two ran on different lanes: the phase
+// that blocked on it, so the driver's train_models really is the actor's
+// forward/backward. Anything else measured on another lane merely ran while the
+// phase its times fall in was running — a rollout worker generating during
+// training — and takes a row of its own.
+const BLOCKED_ON = {
+  compute_log_probs: ["train_models"],
+  forward_backward: ["train_models"],
+  optimizer_step: ["train_models"],
+  generate_samples: ["generate_rollouts"],
+  reward: ["generate_samples", "generate_rollouts"],
+  reward_batch: ["generate_samples", "generate_rollouts"],
+  reward_post_process: ["generate_samples", "generate_rollouts"],
+};
+
+function nestsWithin(bar, container) {
+  return (
+    bar.role === container.role ||
+    (BLOCKED_ON[bar.name] || []).includes(container.name)
+  );
+}
 
 export function labelFor(name) {
   return TIMING_LABELS[name] || name.replace(/_/g, " ");
@@ -148,26 +170,35 @@ export function rolloutTimeline(lanes) {
   // Enclosing bars first, so a bar meets its container before itself.
   bars.sort((a, b) => a.start - b.start || b.end - a.end);
 
-  const enclosing = [];
-  for (const bar of bars) {
-    while (enclosing.length && enclosing[enclosing.length - 1].end < bar.end) {
-      enclosing.pop();
-    }
-    const container = enclosing[enclosing.length - 1];
-    bar.depth = enclosing.length;
+  bars.forEach((bar, index) => {
+    // The innermost phase this one both ran within and belongs to.
+    const container = bars
+      .slice(0, index)
+      .filter(
+        (other) =>
+          other.start <= bar.start &&
+          bar.end <= other.end &&
+          nestsWithin(bar, other),
+      )
+      .sort((a, b) => b.depth - a.depth)[0];
+    bar.depth = container ? container.depth + 1 : 0;
     bar.container = container ?? null;
     bar.inside = container ? container.name : null;
     // A bar with work inside it is drawn as an outline around that work.
     if (container) container.contains = true;
-    enclosing.push(bar);
-  }
+  });
 
   // A per-sample phase's work reads on the innermost bar it ran within
   // ("generation spent 32ms scoring 227 samples"); one nothing contains keeps a
   // bar of its own rather than going unshown.
   for (const work of perSample) {
     const container = bars
-      .filter((bar) => bar.start <= work.start && work.end <= bar.end)
+      .filter(
+        (bar) =>
+          bar.start <= work.start &&
+          work.end <= bar.end &&
+          nestsWithin(work, bar),
+      )
       .sort((a, b) => b.depth - a.depth)[0];
     if (container) container.spent.push(work);
     else
