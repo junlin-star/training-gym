@@ -460,6 +460,7 @@ def fastapi_app():
     # this without limit.
     TIMING_CACHE_MAX_RUNS = 64
     timing_cache: dict[str, tuple[float, JsonDict]] = {}
+    timing_locks: dict[str, asyncio.Lock] = {}
     cache_locks = {key: asyncio.Lock() for key in cache_keys}
     # Hold strong refs to background refresh tasks so they aren't GC'd mid-flight.
     refresh_tasks: set[asyncio.Task[list[JsonDict]]] = set()
@@ -884,27 +885,38 @@ def fastapi_app():
 
     async def _run_timings(training_run_id: str) -> JsonDict:
         """One run's stored RoleTimingRecords as lanes to draw, by rollout id."""
-        now = time.monotonic()
         cached = timing_cache.get(training_run_id)
-        if cached is not None and now < cached[0]:
+        if cached is not None and time.monotonic() < cached[0]:
             return cached[1]
 
-        found = await run_in_threadpool(load_run, training_run_id)
-        if not found:
-            # Only a run that measured nothing anywhere is pre-cutover; one with
-            # partial timing keeps its gaps rather than inferring them.
-            run = await _get_run_or_404(training_run_id)
-            for record in legacy_run_to_records(run.substep_times):
-                found.setdefault(int(record["rollout_id"]), []).append(record)
+        # The tab polls this while a run is active, so without a lock every poll
+        # that arrives during a read starts its own listing of the run's records.
+        lock = timing_locks.setdefault(training_run_id, asyncio.Lock())
+        if lock.locked() and cached is not None:
+            return cached[1]
+        async with lock:
+            cached = timing_cache.get(training_run_id)
+            if cached is not None and time.monotonic() < cached[0]:
+                return cached[1]
+            found = await run_in_threadpool(load_run, training_run_id)
+            if not found:
+                # Only a run that measured nothing anywhere is pre-cutover; one
+                # with partial timing keeps its gaps rather than inferring them.
+                run = await _get_run_or_404(training_run_id)
+                for record in legacy_run_to_records(run.substep_times):
+                    found.setdefault(int(record["rollout_id"]), []).append(record)
 
-        timings: JsonDict = {
-            str(rollout_id): rollout_lanes(records)
-            for rollout_id, records in sorted(found.items())
-        }
-        if len(timing_cache) >= TIMING_CACHE_MAX_RUNS:
-            timing_cache.clear()
-        timing_cache[training_run_id] = (now + cache_ttl_seconds, timings)
-        return timings
+            timings: JsonDict = {
+                str(rollout_id): rollout_lanes(records)
+                for rollout_id, records in sorted(found.items())
+            }
+            if len(timing_cache) >= TIMING_CACHE_MAX_RUNS:
+                timing_cache.clear()
+            timing_cache[training_run_id] = (
+                time.monotonic() + cache_ttl_seconds,
+                timings,
+            )
+            return timings
 
     @web.get("/api/runs/{training_run_id}/timings")
     async def get_run_timings(training_run_id: str):

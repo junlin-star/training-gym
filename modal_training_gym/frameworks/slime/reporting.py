@@ -30,7 +30,7 @@ _PHASE_PATH = "/api/framework-status"
 _ROLLOUT_PATH = "/api/training-rollouts"
 _ADVANTAGE_PATH = "/api/advantage-distributions"
 _PHASE_TIMEOUT_SECONDS = 1.0
-_STATUS_BOUNDARY_TIMEOUT_SECONDS = 5.0
+_STEP_EVENT_TIMEOUT_SECONDS = 5.0
 _ROLLOUT_TIMEOUT_SECONDS = 10.0
 
 
@@ -166,6 +166,13 @@ def _enqueue_rollout(payload: dict[str, Any]) -> None:
         pass
 
 
+def _post_framework_status(payload: dict[str, Any], timeout: float) -> None:
+    url = _phase_url()
+    if not url:
+        return
+    _post({"_url": url, "_timeout": timeout, **payload})
+
+
 def _enqueue_advantage(payload: dict[str, Any]) -> None:
     """Enqueue an advantage-distribution payload (longer timeout like rollouts)."""
     url = _advantage_url()
@@ -177,13 +184,6 @@ def _enqueue_advantage(payload: dict[str, Any]) -> None:
         _REPORT_QUEUE.put_nowait(item)
     except Exception:
         pass
-
-
-def _post_framework_status(payload: dict[str, Any], timeout: float) -> None:
-    url = _phase_url()
-    if not url:
-        return
-    _post({"_url": url, "_timeout": timeout, **payload})
 
 
 def _worker() -> None:
@@ -200,13 +200,13 @@ def _worker() -> None:
             _REPORT_QUEUE.task_done()
 
 
-def _post(item: dict[str, Any]) -> bool:
+def _post(item: dict[str, Any]) -> None:
     url = item.pop("_url", "")
     timeout = float(
         item.pop("_timeout", _PHASE_TIMEOUT_SECONDS) or _PHASE_TIMEOUT_SECONDS
     )
     if not url:
-        return True
+        return
 
     body = json.dumps(item, default=str).encode("utf-8")
 
@@ -229,6 +229,5 @@ def _post(item: dict[str, Any]) -> bool:
     try:
         with urlopen(request, timeout=timeout) as response:
             response.read()
-        return True
     except (OSError, URLError):
-        return False
+        return

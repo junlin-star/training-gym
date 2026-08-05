@@ -1,11 +1,10 @@
-"""Recorder aggregates, transport coalescing, and the legacy read path."""
+"""Recorder aggregates, snapshot posting, and the legacy read path."""
 
 from __future__ import annotations
 
 import asyncio
 import threading
 import time
-from queue import Queue
 
 import pytest
 
@@ -31,7 +30,7 @@ def timing_env(monkeypatch):
     monkeypatch.setenv("TRAINING_GYM_TRAINING_RUN_ID", "run-1")
     monkeypatch.setenv("TRAINING_GYM_SUBSTEP_TIMING", "auto")
     posted: list[dict] = []
-    monkeypatch.setattr(status_reporter, "enqueue_item", posted.append)
+    monkeypatch.setattr(status_reporter, "post_item", posted.append)
     return posted
 
 
@@ -146,7 +145,6 @@ def test_published_record_validates_and_reduces_to_lanes(timing_env):
             time.sleep(0.001)
 
     item = timing_env[-1]
-    assert item["_supersede_key"] == ("run-1", 2, "driver")
     record = RoleTimingRecord(
         **{key: value for key, value in item.items() if not key.startswith("_")}
     )
@@ -174,85 +172,41 @@ def test_lane_exit_publishes_even_inside_the_rate_limit(timing_env, monkeypatch)
         for _ in range(5):
             with lane.phase("train_models"):
                 pass
+    lane._poster.join(timeout=5)
     # The first measurement publishes, the next four are rate-limited away, and
     # lane exit forces the final state out even though the limit still holds.
     assert len(timing_env) == 2
-    assert timing_env[-1]["phases"]["train_models"]["count"] == 5
+    assert {item["phases"]["train_models"]["count"] for item in timing_env} == {1, 5}
 
 
-# ---------- transport ----------
+def test_snapshots_taken_while_one_is_in_flight_are_superseded(timing_env, monkeypatch):
+    """A snapshot replaces the lane's stored record, so the ones measured while
+    the dashboard was slow are skipped rather than posted in turn."""
+    monkeypatch.setattr(
+        "modal_training_gym.common.timing_recorder.MIN_PUBLISH_INTERVAL_S", 0.0
+    )
+    in_flight, finish_post = threading.Event(), threading.Event()
 
+    def slow_post(item: dict) -> None:
+        timing_env.append(item)
+        in_flight.set()
+        finish_post.wait(5)
 
-@pytest.fixture
-def queue(monkeypatch):
-    monkeypatch.setattr(status_reporter, "_QUEUE", Queue(maxsize=3))
-    monkeypatch.setattr(status_reporter, "_STARTED", True)  # no worker thread
-    monkeypatch.setattr(status_reporter, "_LATEST_BY_KEY", {})
-    return status_reporter._QUEUE
+    monkeypatch.setattr(status_reporter, "post_item", slow_post)
 
+    with recording_lane("rollout", 0) as lane:
+        with lane.phase("reward"):
+            pass
+        assert in_flight.wait(5)
+        for _ in range(5):
+            with lane.phase("reward"):
+                pass
+        finish_post.set()
+    lane._poster.join(timeout=5)
 
-def _lane_item(sequence_marker: int) -> dict:
-    return {
-        "_url": "http://test/api/timing-events",
-        "_supersede_key": ("run-1", 0, "rollout"),
-        "count": sequence_marker,
-    }
-
-
-def _accept(posted: list[dict]):
-    def post(item: dict) -> bool:
-        posted.append(item)
-        return True
-
-    return post
-
-
-def test_worker_posts_only_the_newest_snapshot_of_a_lane(queue, monkeypatch):
-    posted: list[dict] = []
-    monkeypatch.setattr(status_reporter, "_post", _accept(posted))
-
-    status_reporter.enqueue_item(_lane_item(1))
-    status_reporter.enqueue_item(_lane_item(2))
-    queue.put(None)
-    status_reporter._worker()
-
-    assert [item["count"] for item in posted] == [2]
-
-
-def test_full_queue_drops_the_snapshot_without_silencing_the_lane(queue, monkeypatch):
-    posted: list[dict] = []
-    monkeypatch.setattr(status_reporter, "_post", _accept(posted))
-
-    for _ in range(queue.maxsize):
-        queue.put_nowait({"_url": "http://test/other"})
-    status_reporter.enqueue_item(_lane_item(1))  # dropped: queue full
-    assert status_reporter._LATEST_BY_KEY == {}
-
-    for _ in range(queue.maxsize):
-        queue.get()
-    status_reporter.enqueue_item(_lane_item(2))
-    queue.put(None)
-    status_reporter._worker()
-
-    assert [item["count"] for item in posted if "count" in item] == [2]
-
-
-def test_worker_retries_a_lane_snapshot_the_dashboard_did_not_accept(
-    queue, monkeypatch
-):
-    attempts: list[dict] = []
-
-    def post(item: dict) -> bool:
-        attempts.append(item)
-        return len(attempts) > 1
-
-    monkeypatch.setattr(status_reporter, "_post", post)
-
-    status_reporter.enqueue_item(_lane_item(1))
-    queue.put(None)
-    status_reporter._worker()
-
-    assert [item["count"] for item in attempts] == [1, 1]
+    counts = [item["phases"]["reward"]["count"] for item in timing_env]
+    assert counts[0] == 1 and counts[-1] == 6
+    assert not [count for count in counts if 1 < count < 6]
 
 
 # ---------- capability probe ----------

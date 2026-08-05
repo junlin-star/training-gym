@@ -5,7 +5,8 @@ framework, torch or pydantic present.
 
 A record measures one ``(rollout_id, role)`` lane: per phase, how many times it
 ran, its summed and longest duration, when it first started and last ended, and
-each run's start and end while there are few enough of them to draw.
+each run's start and end unless it ran once per sample, which is thousands of
+runs a step.
 """
 
 from __future__ import annotations
@@ -28,8 +29,9 @@ TIMING_TIMEOUT_SECONDS = 10.0
 MIN_PUBLISH_INTERVAL_S = 1.0
 
 # Past this, a phase keeps its aggregate only: a per-sample phase runs thousands
-# of times per step, and the whole record is re-posted on every publish.
-MAX_DRAWN_INVOCATIONS = 64
+# of times per step, and the whole record is re-posted on every publish. The
+# timeline reads such a phase as work spent inside the phase that contains it.
+MAX_DRAWN_INVOCATIONS = 12
 
 
 def timing_url() -> str:
@@ -48,9 +50,8 @@ class RoleRecorder:
     :func:`recording_lane` for the other lanes; publishes to
     ``/api/timing-events``, which overwrites the lane's stored record.
 
-    Two timings exist for visibility: monotonic offsets relative to ``_t0`` to
-    guarantee positive duration, and ``lane_start_unix_s`` for wall-clock time
-    to align multiple processes in visualization.
+    Two timings exist: monotonic offsets relative to ``_t0`` to guarantee
+    positive duration, and ``lane_start_unix_s`` to align multiple processes.
 
     Publishing is gated so that, for actor/critic lanes, only the reporting
     megatron rank writes the timing file for a rollout.
@@ -74,11 +75,24 @@ class RoleRecorder:
         self._last_publish_t = float("-inf")
         # Rewards are scored concurrently on the same lane
         self._lock = threading.Lock()
+        # A snapshot replaces the lane's stored record, so only the newest one is
+        # worth posting: the poster takes whatever is here when it wakes, and a
+        # snapshot written while it was busy supersedes the ones it skipped.
+        self._snapshot: dict[str, object] | None = None
+        self._snapshot_ready = threading.Event()
+        self._poster: threading.Thread | None = None
+        self._closed = False
 
     def __enter__(self) -> "RoleRecorder":
         return self
 
     def __exit__(self, *exc: object) -> None:
+        # The poster stops first, so the final snapshot cannot be overtaken by
+        # an older one still in flight.
+        self._closed = True
+        self._snapshot_ready.set()
+        if self._poster is not None:
+            self._poster.join(timeout=TIMING_TIMEOUT_SECONDS)
         self._publish(force=True)
 
     @contextmanager
@@ -122,8 +136,17 @@ class RoleRecorder:
                         )
             self._publish()
 
+    def _post_snapshots(self) -> None:
+        while not self._closed:
+            self._snapshot_ready.wait()
+            self._snapshot_ready.clear()
+            with self._lock:
+                snapshot, self._snapshot = self._snapshot, None
+            if snapshot is not None:
+                status_reporter.post_item(snapshot)
+
     def _publish(self, force: bool = False) -> None:
-        """Post the record so far; the dashboard overwrites the stored lane."""
+        """Snapshot the record so far; the dashboard overwrites the stored lane."""
         if not self.phases:
             return
         if os.environ.get(TIMING_MODE_ENV, "auto") == "off":
@@ -153,20 +176,30 @@ class RoleRecorder:
                 }
                 for name, timing in self.phases.items()
             }
-        status_reporter.enqueue_item(
-            {
-                "_url": url,
-                "_timeout": TIMING_TIMEOUT_SECONDS,
-                # A queued older snapshot of this lane would only be overwritten
-                "_supersede_key": (training_run_id, self.rollout_id, self.role),
-                "_token": os.environ.get("TRAINING_GYM_FRAMEWORK_STATUS_TOKEN", ""),
-                "training_run_id": training_run_id,
-                "rollout_id": self.rollout_id,
-                "role": self.role,
-                "lane_start_unix_s": self.lane_start_unix_s,
-                "phases": phases,
-            }
-        )
+        snapshot = {
+            "_url": url,
+            "_timeout": TIMING_TIMEOUT_SECONDS,
+            "_token": os.environ.get("TRAINING_GYM_FRAMEWORK_STATUS_TOKEN", ""),
+            "training_run_id": training_run_id,
+            "rollout_id": self.rollout_id,
+            "role": self.role,
+            "lane_start_unix_s": self.lane_start_unix_s,
+            "phases": phases,
+        }
+        if force:
+            # The lane is closing, so no later snapshot carries these phases.
+            status_reporter.post_item(snapshot)
+            return
+        with self._lock:
+            self._snapshot = snapshot
+        if self._poster is None:
+            self._poster = threading.Thread(
+                target=self._post_snapshots,
+                name=f"training-gym-timing-{self.role}-{self.rollout_id}",
+                daemon=True,
+            )
+            self._poster.start()
+        self._snapshot_ready.set()
 
 
 _ACTIVE_LANE: ContextVar[RoleRecorder | None] = ContextVar(

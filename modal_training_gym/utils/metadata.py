@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import json
+import time
 from collections.abc import Awaitable, Callable
 from concurrent.futures import ThreadPoolExecutor
 from enum import Enum
@@ -277,8 +278,6 @@ def vol_list_prefix(
     """
     from modal.exception import NotFoundError
 
-    import time as _time
-
     vol = _metadata_volume()
     _safe_reload(vol)
     paths: list[str] = []
@@ -288,24 +287,29 @@ def vol_list_prefix(
                 entry.path
                 for entry in vol.iterdir(_store_path(store))
                 if entry.path.endswith(".json")
-                and entry.path.rsplit("/", 1)[-1].startswith(prefix)
+                and entry.path.rsplit("/", 1)[-1][: -len(".json")].startswith(prefix)
             ]
             break
         except (FileNotFoundError, NotFoundError):
             return []
         except Exception as exc:
             if "rate limit" in str(exc).lower() and attempt < 2:
-                _time.sleep(2**attempt)
+                time.sleep(2**attempt)
                 continue
             raise
 
-    def read(path: str) -> dict[str, Any]:
-        return json.loads(b"".join(vol.read_file(path)))
+    def read(path: str) -> dict[str, Any] | None:
+        # A file rewritten while it was being read is missing one item, which
+        # beats failing the whole request.
+        try:
+            return json.loads(b"".join(vol.read_file(path)))
+        except (FileNotFoundError, NotFoundError, ValueError):
+            return None
 
     # A read is a round trip of its own (~0.5s), so a dashboard page waits on
     # the slowest file rather than on their sum.
     with ThreadPoolExecutor(max_workers=16) as pool:
-        return list(pool.map(read, paths))
+        return [item for item in pool.map(read, paths) if item is not None]
 
 
 def vol_remove_keys_with_prefix(store: MetadataStore | str, prefix: str) -> int:

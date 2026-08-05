@@ -408,10 +408,6 @@
       if (wasEmpty && rolloutSummaries.length > 0 && expandedRolloutId === null) {
         toggleRolloutDetail(rolloutSummaries[0].rollout_id);
       }
-
-      const timings = await fetchRunTimings(runId, { signal });
-      if (signal?.aborted) return;
-      runTimings = timings;
     } catch (err) {
       if (signal?.aborted) return;
       // Keep the rollouts we already have on a transient poll failure — only
@@ -420,6 +416,26 @@
       if (!rolloutSummaries.length) rolloutsError = String(err?.message || err);
     } finally {
       rolloutsLoading = false;
+    }
+  }
+
+  let timingsInFlight = false;
+
+  // Loaded beside the rollout rows rather than after them, so the table is not
+  // waiting on timing to paint.
+  async function loadTimings(signal) {
+    // A read slower than the poll interval would otherwise queue another one.
+    if (!runId || timingsInFlight) return;
+    timingsInFlight = true;
+    try {
+      const timings = await fetchRunTimings(runId, { signal });
+      if (signal?.aborted) return;
+      runTimings = timings;
+    } catch {
+      // Keep the timing we have: a lane only grows, so a failed poll is stale
+      // rather than wrong.
+    } finally {
+      timingsInFlight = false;
     }
   }
 
@@ -478,12 +494,14 @@
     const controller = new AbortController();
     rolloutsLoading = true;
     void loadRollouts(controller.signal);
+    void loadTimings(controller.signal);
 
     // Poll while the run is active so new rollouts stream in.
     const interval = window.setInterval(() => {
       const status = String(run?.status || "").toLowerCase();
       if (status && status !== "running") return;
       void loadRollouts(controller.signal);
+      void loadTimings(controller.signal);
     }, 5000);
 
     return () => {

@@ -11,9 +11,41 @@
   const ZOOM_BTN_FACTOR = 1.5;
   const WHEEL_SENSITIVITY = 0.0015;
 
+  const ROW_HEIGHT_PX = 16;
+  const ROW_GAP_PX = 2;
+  // A contained row is drawn short and low inside the row containing it, so a
+  // phase measured off the driver reads as part of the phase it ran within.
+  const CONTAINED_HEIGHT_PX = 6;
+  const CONTAINED_TOP_PX = 9;
+  const CONTAINED_STEP_PX = 3;
+
+  function placeRows(rows) {
+    const topByDepth = [];
+    let nextTop = 0;
+    const placed = rows.map((row) => {
+      const containerTop = topByDepth[row.depth - 1];
+      const within = row.depth > 0 && !row.concurrent && containerTop != null;
+      const top = within
+        ? containerTop + CONTAINED_TOP_PX + (row.depth - 1) * CONTAINED_STEP_PX
+        : nextTop;
+      if (!within) nextTop = top + ROW_HEIGHT_PX + ROW_GAP_PX;
+      topByDepth[row.depth] = top;
+      return {
+        ...row,
+        top,
+        within,
+        height: within ? CONTAINED_HEIGHT_PX : ROW_HEIGHT_PX,
+      };
+    });
+    return { rows: placed, rowsHeight: Math.max(nextTop - ROW_GAP_PX, ROW_HEIGHT_PX) };
+  }
+
   let rollouts = $derived.by(() =>
     Object.entries(timings || {})
-      .map(([id, lanes]) => ({ id: Number(id), ...rolloutTimeline(lanes) }))
+      .map(([id, lanes]) => {
+        const timeline = rolloutTimeline(lanes);
+        return { id: Number(id), ...timeline, ...placeRows(timeline.rows) };
+      })
       .sort((a, b) => a.id - b.id),
   );
 
@@ -21,7 +53,7 @@
   let legend = $derived.by(() => {
     const names = new Set();
     for (const rollout of measured)
-      for (const row of rollout.rows) for (const bar of row) names.add(bar.name);
+      for (const row of rollout.rows) for (const bar of row.bars) names.add(bar.name);
     return [...names];
   });
 
@@ -173,30 +205,50 @@
           <div class="rollout" style:flex-grow={Math.max(rollout.span, 0.001)}>
             <div class="rollout-head">
               <span class="rollout-name">Rollout {rollout.id}</span>
-              <span class="rollout-span">{fmtSecs(rollout.span)}</span>
+              <span
+                class="rollout-span"
+                title={rollout.beside.length
+                  ? `step ${fmtSecs(rollout.stepDuration)}, then ${rollout.beside
+                      .map((b) => `${labelFor(b.name)} ${fmtSecs(b.duration)}`)
+                      .join(", ")}`
+                  : undefined}
+              >
+                {fmtSecs(rollout.stepDuration)}{#if rollout.beside.length}
+                  + {fmtSecs(
+                    rollout.beside.reduce((t, b) => t + b.duration, 0),
+                  )}{/if}
+              </span>
             </div>
             {#if rollout.rows.length === 0}
-              <div class="row row-empty"></div>
+              <div class="rows" style:height={`${ROW_HEIGHT_PX}px`}>
+                <div class="row row-empty" style:height={`${ROW_HEIGHT_PX}px`}></div>
+              </div>
             {:else}
-              {#each rollout.rows as row, index (index)}
-                <div class="row" class:nested={row[0].depth > 0}>
-                  {#each row as bar (bar.key)}
-                    <button
-                      class="bar"
-                      aria-label={`${labelFor(bar.name)} ${fmtSecs(bar.duration)}`}
-                      class:banded={bar.banded}
-                      class:active={pinned && isActive(rollout.id, bar)}
-                      style:background={colorFor(bar.name)}
-                      style:left={`${(bar.start / rollout.span) * 100}%`}
-                      style:width={`${Math.max(((bar.end - bar.start) / rollout.span) * 100, 0.4)}%`}
-                      onmouseenter={(e) => showTip(e, rollout.id, bar)}
-                      onmousemove={moveTip}
-                      onmouseleave={hideTip}
-                      onclick={(e) => pinTip(e, rollout.id, bar)}
-                    ></button>
-                  {/each}
-                </div>
-              {/each}
+              <div class="rows" style:height={`${rollout.rowsHeight}px`}>
+                {#each rollout.rows as row, index (index)}
+                  <div
+                    class="row"
+                    class:within={row.within}
+                    style:top={`${row.top}px`}
+                    style:height={`${row.height}px`}
+                  >
+                    {#each row.bars as bar (bar.key)}
+                      <button
+                        class="bar"
+                        aria-label={`${labelFor(bar.name)} ${fmtSecs(bar.duration)}`}
+                        class:active={pinned && isActive(rollout.id, bar)}
+                        style:background={colorFor(bar.name)}
+                        style:left={`${(bar.start / rollout.span) * 100}%`}
+                        style:width={`${Math.max(((bar.end - bar.start) / rollout.span) * 100, 0.4)}%`}
+                        onmouseenter={(e) => showTip(e, rollout.id, bar)}
+                        onmousemove={moveTip}
+                        onmouseleave={hideTip}
+                        onclick={(e) => pinTip(e, rollout.id, bar)}
+                      ></button>
+                    {/each}
+                  </div>
+                {/each}
+              </div>
             {/if}
           </div>
         {/each}
@@ -205,7 +257,8 @@
     <div class="hint">
       Hover a bar for its phase and exact times · click to pin · scroll to zoom · drag to
       pan. Bars share one clock per rollout: a thin bar ran inside the bar above it, and a
-      bar on its own row overlapped work it is not part of.
+      bar on its own row overlapped work it is not part of. A gap is time no phase was
+      measured in, not time nothing ran.
     </div>
   {/if}
 </div>
@@ -221,15 +274,12 @@
     <span class="tg-tip-when">
       {fmtSecs(tip.bar.start)} → {fmtSecs(tip.bar.end)} into the rollout
     </span>
-    {#if tip.bar.banded}
+    {#each tip.bar.spent as work (work.name)}
       <span class="tg-tip-when">
-        {tip.bar.count} runs · average {fmtSecs(tip.bar.average)} · longest
-        {fmtSecs(tip.bar.longest)}
+        {fmtSecs(work.total)} of it in {labelFor(work.name).toLowerCase()}, over {work.count}
+        calls · longest {fmtSecs(work.longest)}
       </span>
-      <span class="tg-tip-when">
-        spread over {fmtSecs(tip.bar.end - tip.bar.start)}, not one run
-      </span>
-    {/if}
+    {/each}
     {#if tip.bar.inside}
       <span class="tg-tip-when">ran inside {labelFor(tip.bar.inside)}</span>
     {/if}
@@ -390,16 +440,20 @@
     font-variant-numeric: tabular-nums;
   }
 
-  .row {
+  .rows {
     position: relative;
-    height: 16px;
+  }
+
+  .row {
+    position: absolute;
+    left: 0;
+    right: 0;
     border-radius: 3px;
     background: var(--color-c-gray-08, #1c1c1c);
   }
 
-  /* Ran inside the bar above, drawn thin so the containing phase reads first */
-  .row.nested {
-    height: 7px;
+  /* Drawn within the row that contains it, so the containing phase reads first */
+  .row.within {
     background: none;
   }
 
@@ -428,18 +482,6 @@
     outline: 1px solid var(--text-bright, #fff);
     outline-offset: -1px;
     filter: brightness(1.3);
-  }
-
-  /* A band over the span a phase's runs covered, hatched so it doesn't read as
-     one continuous run */
-  .bar.banded {
-    background-image: repeating-linear-gradient(
-      45deg,
-      rgba(0, 0, 0, 0.28),
-      rgba(0, 0, 0, 0.28) 3px,
-      transparent 3px,
-      transparent 6px
-    );
   }
 
   .hint {

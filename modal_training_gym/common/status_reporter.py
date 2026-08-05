@@ -19,12 +19,10 @@ without dashboard updates.
 
 from __future__ import annotations
 
-import atexit
-import itertools
 import json
 import os
 import threading
-from queue import Full, Queue
+from queue import Queue
 from typing import Any
 from urllib.error import URLError
 from urllib.request import Request, urlopen
@@ -37,15 +35,6 @@ _STARTED = False
 _LOCK = threading.Lock()
 _DEFAULT_TIMEOUT_SECONDS = 2.0
 _STATUS_TOKEN_ENV = "TRAINING_GYM_FRAMEWORK_STATUS_TOKEN"
-
-# Items may carry `_supersede_key`: each write of that key replaces the whole
-# resource server-side (a substep-timing lane is re-sent in full every second),
-# so only the newest one is worth POSTing. Queued older ones are skipped, which
-# keeps a slow dashboard from turning into a backlog that outlives the process.
-# Registered and read under `_LOCK`, so an item can never sit in the queue
-# looking older than it is and be skipped.
-_LATEST_BY_KEY: dict[tuple[str, int, str], int] = {}
-_sequence = itertools.count(1)
 
 
 def _resolve_url() -> str:
@@ -84,25 +73,12 @@ def _worker() -> None:
         if item is None:
             return
         try:
-            key = item.pop("_supersede_key", None)
-            sequence = item.pop("_sequence", None)
-            if key is not None:
-                with _LOCK:
-                    superseded = _LATEST_BY_KEY.get(key) != sequence
-                if superseded:
-                    continue
-                # The last snapshot of a lane has no successor to carry its
-                # phases, so a timed-out POST would drop the tail of the step.
-                if not _post(dict(item)):
-                    _post(item)
-                continue
             _post(item)
         finally:
             _QUEUE.task_done()
 
 
-def _post(item: dict[str, Any]) -> bool:
-    """POST one item; returns whether the dashboard accepted it."""
+def _post(item: dict[str, Any]) -> None:
     url = item.pop("_url", "")
     timeout = float(
         item.pop("_timeout", _DEFAULT_TIMEOUT_SECONDS) or _DEFAULT_TIMEOUT_SECONDS
@@ -111,7 +87,7 @@ def _post(item: dict[str, Any]) -> bool:
     # enqueue_item callers); don't re-resolve it here.
     token = str(item.pop("_token", "") or "").strip()
     if not url:
-        return False
+        return
     body = json.dumps(item, default=str).encode("utf-8")
 
     from modal_training_gym.common.config import modal_proxy_auth_headers
@@ -133,8 +109,7 @@ def _post(item: dict[str, Any]) -> bool:
         with urlopen(request, timeout=timeout) as response:
             response.read()
     except (OSError, URLError):
-        return False
-    return True
+        return
 
 
 def enqueue_item(item: dict[str, Any]) -> None:
@@ -144,23 +119,10 @@ def enqueue_item(item: dict[str, Any]) -> None:
     if not item.get("_url"):
         return
     _ensure_worker()
-    key = item.get("_supersede_key")
-    if key is None:
-        try:
-            _QUEUE.put_nowait(item)
-        except Full:
-            pass
-        return
-    with _LOCK:
-        sequence = next(_sequence)
-        item["_sequence"] = sequence
-        try:
-            _QUEUE.put_nowait(item)
-        except Full:
-            # Leaving the key registered here would mark every later snapshot
-            # of this lane as superseded, silencing it for the rest of the run.
-            return
-        _LATEST_BY_KEY[key] = sequence
+    try:
+        _QUEUE.put_nowait(item)
+    except Exception:
+        pass
 
 
 def post_item(item: dict[str, Any]) -> None:
@@ -209,14 +171,7 @@ def flush(timeout_seconds: float = 5.0) -> None:
     timer.daemon = True
     timer.start()
     try:
-        # unfinished_tasks, not empty(): the item being POSTed right now has
-        # left the queue but has not landed yet.
-        while _QUEUE.unfinished_tasks and not deadline.is_set():
+        while not _QUEUE.empty() and not deadline.is_set():
             deadline.wait(0.05)
     finally:
         timer.cancel()
-
-
-# The poster is a daemon thread, so without this the last step's updates die
-# with the process that recorded them.
-atexit.register(flush)

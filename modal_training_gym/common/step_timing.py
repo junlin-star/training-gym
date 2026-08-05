@@ -6,6 +6,7 @@ from typing import Any, Awaitable
 
 from pydantic import BaseModel, Field
 
+from modal_training_gym.common.config import modal_proxy_auth_headers
 from modal_training_gym.common.status import SlimeStatus
 from modal_training_gym.utils.metadata import MetadataStore, vol_list_prefix, vol_put
 
@@ -27,9 +28,9 @@ class PhaseTiming(BaseModel):
     in the phase: less than ``last_end_s - first_start_s`` when the phase ran
     repeatedly, more when its runs overlapped.
 
-    ``invocations`` holds each run as ``[start_s, end_s]``, so the timeline can
-    draw them rather than one bar per phase. Empty past
-    ``MAX_DRAWN_INVOCATIONS`` runs, where the UI draws a band instead.
+    ``invocations`` holds each run as ``[start_s, end_s]``, so a phase that ran a
+    few times draws as those runs rather than one bar over all of them. Empty
+    past ``MAX_DRAWN_INVOCATIONS`` runs, which the timeline draws as one block.
     """
 
     count: int
@@ -50,7 +51,8 @@ class RoleTimingRecord(BaseModel):
     Single writer per key, whole-file overwrite, last write wins.
     """
 
-    training_run_id: str
+    # A minted run id is name-hash; constrained because it is a path component.
+    training_run_id: str = Field(pattern=r"^[A-Za-z0-9._-]+$")
     rollout_id: int = Field(ge=0)
     role: Role
     created_at: int = 0
@@ -100,6 +102,13 @@ class Substep(str, Enum):
     FORWARD_BACKWARD = "forward_backward"  # actor / critic
 
 
+# Timed, but not part of how long a step took: a checkpoint or an eval lands on
+# one step and would make it read as many times slower than its neighbours.
+PHASES_BESIDE_THE_STEP = frozenset(
+    {Substep.CHECKPOINT_SAVE, Substep.EVAL_BEFORE, Substep.EVAL_AFTER}
+)
+
+
 def rollout_lanes(records: list[dict[str, Any]]) -> dict[str, Any]:
     """Returns which roles need to be drawn for UI for a run.
 
@@ -114,6 +123,51 @@ def rollout_lanes(records: list[dict[str, Any]]) -> dict[str, Any]:
         for record in records
     }
     return {"roles": lanes}
+
+
+def measured_run_times(
+    training_run_id: str,
+) -> tuple[
+    dict[str, dict[str, int | None]], dict[str, dict[str, dict[str, float | None]]]
+]:
+    """Per-step and per-substep durations from a run's measured timing records.
+
+    Keyed by rollout id, matching the dashboard's rows. A step's duration spans
+    every lane it touched, so the role lanes are placed on the same wall clock
+    (``lane_start_unix_s`` plus each phase's offsets) before being combined.
+    A phase measured off the driver keeps its role in the key: the actor and the
+    critic record the same names, and their times are not one phase.
+    """
+    step_times: dict[str, dict[str, int | None]] = {}
+    substep_times: dict[str, dict[str, dict[str, float | None]]] = {}
+    for rollout_id, records in sorted(load_run(training_run_id).items()):
+        substeps: dict[str, dict[str, float | None]] = {}
+        step_start, step_end, beside_the_step = None, None, 0.0
+        for record in records:
+            lane_start = record["lane_start_unix_s"]
+            role = record["role"]
+            for name, phase in record["phases"].items():
+                start = lane_start + phase["first_start_s"]
+                if name in PHASES_BESIDE_THE_STEP:
+                    # A checkpoint or an eval runs within the step that reached
+                    # it, so its time comes back out of the step's span.
+                    beside_the_step += phase["total_duration_s"]
+                else:
+                    end = lane_start + phase["last_end_s"]
+                    step_start = start if step_start is None else min(step_start, start)
+                    step_end = end if step_end is None else max(step_end, end)
+                key = name if role == Role.DRIVER.value else f"{name} ({role})"
+                substeps[key] = {
+                    "start": start,
+                    "duration_s": phase["total_duration_s"],
+                }
+        if step_start is None or step_end is None:
+            continue
+        step_times[str(rollout_id)] = {
+            "duration_s": round(max(step_end - step_start - beside_the_step, 0.0))
+        }
+        substep_times[str(rollout_id)] = substeps
+    return step_times, substep_times
 
 
 def load_run(training_run_id: str) -> dict[int, list[dict[str, Any]]]:
@@ -161,9 +215,12 @@ def probe_substep_timing(framework_status_url: str, mode: str = "auto") -> bool:
         base = base[: -len(suffix)]
     url = f"{base}/api/timing-events"
 
+    # A proxy-authenticated dashboard rejects an unsigned request at the proxy,
+    # which would read here as a dashboard that cannot accept timing at all.
+    request = urllib.request.Request(url, headers=modal_proxy_auth_headers())
     problem = ""
     try:
-        with urllib.request.urlopen(url, timeout=5.0) as response:
+        with urllib.request.urlopen(request, timeout=5.0) as response:
             payload = json.loads(response.read() or b"{}")
         if payload.get("protocol") != PROTOCOL:
             problem = f"{url} did not identify as {PROTOCOL!r}"
@@ -201,18 +258,18 @@ def legacy_run_to_records(
     for step_key, subs in (substep_times or {}).items():
         if not step_key.isdigit():
             continue
-        starts = [sub["start"] for sub in subs.values() if sub.get("start") is not None]
-        if not starts:
+        lane_start = min(
+            (sub["start"] for sub in subs.values() if sub.get("start") is not None),
+            default=None,
+        )
+        if lane_start is None:
             continue
-        lane_start = min(starts)
         phases: dict[str, dict[str, float]] = {}
         for name, sub in subs.items():
             start, duration = sub.get("start"), sub.get("duration_s")
             if start is None or duration is None:
                 continue
             rel = start - lane_start
-            # A legacy substep ran once a step, so its duration is also its
-            # total and its longest.
             phases[_LEGACY_RENAMES.get(name, name)] = {
                 "count": 1,
                 "total_duration_s": round(duration, 6),

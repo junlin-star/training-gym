@@ -27,7 +27,7 @@ from .advantage_reporting import (
     report_advantage_distribution as report_advantage_distribution,
 )
 from .reporting import (
-    _STATUS_BOUNDARY_TIMEOUT_SECONDS,
+    _STEP_EVENT_TIMEOUT_SECONDS,
     _enqueue,
     _enqueue_rollout,
     _post_framework_status,
@@ -304,7 +304,7 @@ def report_rollout_phase(
         "event_ts": time.time(),
     }
     if sync:
-        _post_framework_status(payload, _STATUS_BOUNDARY_TIMEOUT_SECONDS)
+        _post_framework_status(payload, _STEP_EVENT_TIMEOUT_SECONDS)
     else:
         _enqueue(payload)
 
@@ -312,14 +312,14 @@ def report_rollout_phase(
 __all__ = [
     "before_log_prob_hook",
     "before_train_step_hook",
-    "log_eval_rollout_data",
-    "log_rollout_data",
-    "recording_lane",
-    "recording_lane_on_reporting_rank",
     "report_advantage_distribution",
     "report_phase",
-    "report_rollout_phase",
     "report_rollout_samples",
+    "report_rollout_phase",
+    "log_eval_rollout_data",
+    "log_rollout_data",
     "RoleRecorder",
+    "recording_lane",
+    "recording_lane_on_reporting_rank",
     "time_phase",
 ]

@@ -36,6 +36,19 @@ export const TIMING_COLORS = {
   optimizer_step: "#facc15",
 };
 
+// Work a step waits on but isn't: a checkpoint or an eval lands on one rollout
+// and would otherwise make that step read as many times slower than its peers.
+export const PHASES_BESIDE_THE_STEP = [
+  "checkpoint_save",
+  "evaluate_rollouts",
+  "evaluate_rollouts_end",
+];
+
+// A phase whose runs did no measurable work (a rule based reward that returns on
+// its first line) is still recorded, but drawing it puts a bar the reader has to
+// dismiss next to the work that matters.
+const NEGLIGIBLE_WORK_S = 0.0005;
+
 export function labelFor(name) {
   return TIMING_LABELS[name] || name.replace(/_/g, " ");
 }
@@ -50,11 +63,12 @@ export function colorFor(name) {
  * lane's offsets are relative to its own start, so `lane_start_unix_s` shifts
  * them onto one axis.
  *
- * A phase contributes one bar per recorded run, or a single band over the span
- * it covered when it ran too many times to keep them. A run entirely inside
- * another is nested under it; a bar takes a row of its own only where it
- * overlaps work it is not inside, which is real concurrency. Bars carry the
- * `inside`/`overlaps` they were drawn with so hover can say which it is.
+ * A phase contributes one bar per recorded run. A phase measured once per sample
+ * keeps no runs to draw, so it reads as work spent inside the bar that contains
+ * it (`spent`) rather than as a block of its own, which would be mostly the gaps
+ * between its calls. A run entirely inside another is nested within it; a bar
+ * takes a row of its own only where it overlaps work it is not inside, which is
+ * real concurrency.
  */
 export function rolloutTimeline(lanes) {
   const roles = Object.entries(lanes?.roles || {});
@@ -64,6 +78,7 @@ export function rolloutTimeline(lanes) {
   const earliestLaneStart = laneStarts.length ? Math.min(...laneStarts) : null;
 
   const bars = [];
+  const perSample = [];
   for (const [role, lane] of roles) {
     const laneStart = Number(lane?.lane_start_unix_s);
     const shift =
@@ -74,35 +89,35 @@ export function rolloutTimeline(lanes) {
       const count = Number(phase?.count) || 0;
       const total = Number(phase?.total_duration_s) || 0;
       const runs = Array.isArray(phase?.invocations) ? phase.invocations : [];
-      if (runs.length) {
-        runs.forEach(([start, end], i) => {
-          bars.push({
-            key: `${role}:${name}:${i}`,
-            role,
-            name,
-            start: Number(start) + shift,
-            end: Number(end) + shift,
-            duration: Number(end) - Number(start),
-            count: 1,
-            banded: false,
-          });
-        });
-      } else if (count) {
-        bars.push({
-          key: `${role}:${name}`,
+      const first = (Number(phase?.first_start_s) || 0) + shift;
+      const last = (Number(phase?.last_end_s) || 0) + shift;
+      if (!count || total < NEGLIGIBLE_WORK_S) continue;
+      if (!runs.length && count > 1) {
+        perSample.push({
           role,
           name,
-          start: (Number(phase?.first_start_s) || 0) + shift,
-          end: (Number(phase?.last_end_s) || 0) + shift,
-          duration: total,
           count,
-          average: total / count,
+          total,
           longest: Number(phase?.longest_duration_s) || 0,
-          // A phase that ran once spans exactly its one run, so the band is
-          // that run; anything else covers runs the record no longer holds.
-          banded: count > 1,
+          start: first,
+          end: last,
         });
+        continue;
       }
+      // A phase that ran once spans exactly its one run, so a record without
+      // runs to draw (a pre-cutover one) still draws as the run it measured.
+      const drawn = runs.length ? runs : [[first - shift, last - shift]];
+      drawn.forEach(([start, end], index) => {
+        bars.push({
+          key: `${role}:${name}:${index}`,
+          role,
+          name,
+          start: Number(start) + shift,
+          end: Number(end) + shift,
+          duration: Number(end) - Number(start),
+          spent: [],
+        });
+      });
     }
   }
   // Enclosing bars first, so a bar meets its container before itself.
@@ -116,7 +131,26 @@ export function rolloutTimeline(lanes) {
     const container = enclosing[enclosing.length - 1];
     bar.depth = enclosing.length;
     bar.inside = container ? container.name : null;
-    if (!bar.banded) enclosing.push(bar);
+    enclosing.push(bar);
+  }
+
+  // Attach a per-sample phase to the innermost bar it ran within, so its work
+  // reads on that bar ("generation spent 32ms scoring 227 samples"). One that
+  // nothing contains keeps a bar of its own rather than going unshown.
+  for (const work of perSample) {
+    const container = bars
+      .filter((bar) => bar.start <= work.start && work.end <= bar.end)
+      .sort((a, b) => b.depth - a.depth)[0];
+    if (container) container.spent.push(work);
+    else
+      bars.push({
+        key: `${work.role}:${work.name}`,
+        ...work,
+        duration: work.total,
+        depth: 0,
+        inside: null,
+        spent: [work],
+      });
   }
 
   // Work that ran at the same time without either side containing the other:
@@ -138,20 +172,56 @@ export function rolloutTimeline(lanes) {
     ];
   }
 
-  // One row per nesting depth, and another at that depth for a bar that
-  // overlaps a bar it is not inside.
+  // One row per nesting depth, drawn within the row that contains it, and
+  // another at that depth for a bar that overlaps a bar it is not inside.
+  bars.sort((a, b) => a.start - b.start || b.end - a.end);
   const rows = [];
   for (const bar of bars) {
     const row = rows.find(
-      (r) => r[0].depth === bar.depth && r[r.length - 1].end <= bar.start,
+      (r) =>
+        r.depth === bar.depth && r.bars[r.bars.length - 1].end <= bar.start,
     );
-    if (row) row.push(bar);
-    else rows.push([bar]);
+    if (row) row.bars.push(bar);
+    else rows.push({ depth: bar.depth, bars: [bar] });
   }
-  rows.sort((a, b) => a[0].depth - b[0].depth || a[0].start - b[0].start);
+  rows.sort((a, b) => a.depth - b.depth || a.bars[0].start - b.bars[0].start);
+  const drawnDepths = new Set();
+  for (const row of rows) {
+    row.concurrent = drawnDepths.has(row.depth);
+    drawnDepths.add(row.depth);
+  }
 
   const span = bars.length ? Math.max(...bars.map((bar) => bar.end)) : 0;
-  return { rows, span };
+  const stepBars = bars.filter(
+    (bar) => !PHASES_BESIDE_THE_STEP.includes(bar.name),
+  );
+  const beside = bars.filter((bar) =>
+    PHASES_BESIDE_THE_STEP.includes(bar.name),
+  );
+  const stepStart = stepBars.length
+    ? Math.min(...stepBars.map((bar) => bar.start))
+    : 0;
+  const stepEnd = stepBars.length
+    ? Math.max(...stepBars.map((bar) => bar.end))
+    : 0;
+  // A checkpoint runs in the middle of the step it belongs to, so its time comes
+  // back out of the span rather than only off the ends of it, and time two of
+  // them shared comes out once.
+  let waitedOn = 0;
+  let takenTo = stepStart;
+  for (const bar of [...beside].sort((a, b) => a.start - b.start)) {
+    const from = Math.max(bar.start, takenTo);
+    const to = Math.min(bar.end, stepEnd);
+    if (to > from) waitedOn += to - from;
+    takenTo = Math.max(takenTo, to);
+  }
+  const stepDuration = stepEnd - stepStart - waitedOn;
+  return {
+    rows,
+    span,
+    stepDuration,
+    beside: beside.map((bar) => ({ name: bar.name, duration: bar.duration })),
+  };
 }
 
 export function fmtSecs(s) {
