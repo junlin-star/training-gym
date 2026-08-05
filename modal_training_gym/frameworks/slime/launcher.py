@@ -311,7 +311,7 @@ def aggregate_step_times(
     Each substep's duration is the gap from its start to the next recorded
     substep's start (or the step's end for the last one). Duration is None
     if a mandatory substep in between is missing. Step duration is computed
-    independently, since substeps include work outside the step (evals,
+    independently, since substeps include work outside the step (validation,
     checkpointing).
     """
     step_times: dict[str, dict[str, int | None]] = {}
@@ -925,9 +925,6 @@ def build_slime_app(
     train_secrets: list[Secret] = []
     if slime.wandb is not None:
         train_secrets.append(Secret.from_name(slime.wandb.modal_wandb_secret_name))
-    # Proxy-auth tokens for any custom_rm / generate hook that calls a
-    # DeploymentConfig.serve() endpoint (teacher /generate, etc.).
-    train_secrets.extend(proxy_auth_secrets())
     train_experimental_options: dict[str, Any] = {"efa_enabled": True}
 
     train_function_kwargs = dict(slime.train_function_kwargs or {})

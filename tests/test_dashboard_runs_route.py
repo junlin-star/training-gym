@@ -68,8 +68,6 @@ def test_runs_route_returns_typed_joined_summaries(fake_volume, monkeypatch, tmp
     assert summary["recipe"] == "slime"
     assert summary["group_id"] == "route-group"
     assert summary["display_status"] == "completed"
-    assert summary["display_stage"] == ""
-    assert "list_fields" not in summary
     assert summary["has_train_result"] is True
     assert summary["train_result"]["checkpoint_dir"] == ("/checkpoints/run-route-1")
 

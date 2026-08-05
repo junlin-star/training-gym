@@ -185,7 +185,6 @@ class RunSummary(BaseModel):
     modal_app_id: str = ""
     modal_app_url: str | None = None
     dataset_id: str = ""
-    deployment_id: str = ""
     created_at: int = _run_list_field("Created", default=0, timestamp=True)
     started_at: int = 0
     updated_at: int = _run_list_field(
@@ -567,7 +566,6 @@ def build_run_summary(
         modal_app_id=modal_app_id,
         modal_app_url=modal_app_url,
         dataset_id=_text(run.get("dataset_id")),
-        deployment_id=_text(run.get("deployment_id")),
         created_at=created_at,
         started_at=started_at,
         updated_at=updated_at,

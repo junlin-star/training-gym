@@ -81,7 +81,6 @@ class TrainingRun(BaseModel):
     framework: Framework
     config: Any
     dataset_id: str = ""
-    deployment_id: str = ""
     status: TrainingRunStatus = TrainingRunStatus.RUNNING
     framework_status: FrameworkStatus | None = None
     created_at: int = 0

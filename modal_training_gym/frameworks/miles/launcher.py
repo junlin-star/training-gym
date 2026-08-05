@@ -407,14 +407,11 @@ def build_miles_app(
         cloud=miles.cloud,
         region=miles.region,
         volumes=all_volumes,
-        secrets=[
-            *(
-                []
-                if miles.wandb is None
-                else [Secret.from_name(miles.wandb.modal_wandb_secret_name)]
-            ),
-            *proxy_auth_secrets(),
-        ],
+        secrets=(
+            []
+            if miles.wandb is None
+            else [Secret.from_name(miles.wandb.modal_wandb_secret_name)]
+        ),
         timeout=24 * 60 * 60,
         retries=Retries(max_retries=10, initial_delay=0.0),
         single_use_containers=True,

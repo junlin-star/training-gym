@@ -1,12 +1,3 @@
-"""Per-rollout training data — prompts, responses, rewards.
-
-Mirrors the EvalResult shape but lives under its own MetadataStore so the
-dashboard can list rollouts per training run without scanning the eval store.
-Records are written by slime's `log_rollout_data` hook through the async
-phase-reporter; reads happen via the dashboard's
-``/api/runs/{id}/rollouts`` endpoint.
-"""
-
 from __future__ import annotations
 
 import ast

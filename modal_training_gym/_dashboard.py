@@ -329,7 +329,6 @@ def _run_compact_sync() -> None:
     for summary_store in (
         MetadataStore.TRAINING_RUNS_SUMMARY,
         MetadataStore.TRAIN_RESULTS_SUMMARY,
-        MetadataStore.DEPLOYMENTS_SUMMARY,
     ):
         compact_summary_store(summary_store)
 
@@ -342,22 +341,19 @@ def compact_summaries() -> None:
 
 @app.function(schedule=modal.Cron("*/30 * * * *"), secrets=_function_secrets())
 def reconcile() -> None:
-    from modal_training_gym.common.reconcile import reconcile as _reconcile
+    from modal_training_gym.common.run_reconciler import reconcile_orphan_runs
 
-    outcome = _reconcile()
-    if outcome.runs:
-        print(f"Reconciled {len(outcome.runs)} orphaned run(s):")
-        for result in outcome.runs:
+    try:
+        runs = reconcile_orphan_runs()
+    except Exception as exc:
+        print(f"WARNING: run reconciliation failed: {exc}")
+        return
+    if runs:
+        print(f"Reconciled {len(runs)} orphaned run(s):")
+        for result in runs:
             print(f"  {result.training_run_id}: {result.reason}")
     else:
         print("No orphaned runs to reconcile.")
-
-    if outcome.deployments:
-        print(f"Reconciled {len(outcome.deployments)} orphaned deployment(s):")
-        for result in outcome.deployments:
-            print(f"  {result.deployment_id}: {result.reason}")
-    else:
-        print("No orphaned deployments to reconcile.")
 
 
 @app.function(

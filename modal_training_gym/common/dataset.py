@@ -572,13 +572,6 @@ class MultimodalDataset(DatasetConfig):
     input_key: str = "prompt"
     label_key: str = "label"
     modality: Literal["image", "audio", "video"] = "audio"
-    # TODO(ben/joy): gate-check media at this boundary so the evals dashboard can
-    # reliably visualize it. Two parts: (1) normalize each emitted media item to a
-    # canonical, browser-renderable container per modality (audio->wav, image->png/
-    # jpeg) instead of trusting whatever format the user brings — the audio tutorial's
-    # dataset already re-encodes to wav, make it the convention here; (2) validate the
-    # data-URI
-    # MIME matches `modality`. Pairs with the dashboard fallback in EvalsPage.svelte.
     media_column: str = ""
     output_format: str = "jsonl"
 
@@ -595,7 +588,6 @@ class MultimodalDataset(DatasetConfig):
             raise TrainingGymConfigError(
                 "media_column must differ from input_key and label_key"
             )
-        # The whole feature in one line: name the media column for the framework.
         self.multimodal_keys = {self.modality: self.media_column}
         self._rows = list(rows or [])
         if not self.dataset_id:
@@ -616,7 +608,13 @@ class MultimodalDataset(DatasetConfig):
             self.label_key: r["label"],
         }
 
-    def load(self) -> list[DatasetRow]:
+    def load(self, split: Literal["all", "train", "eval"] = "all") -> list[DatasetRow]:
+        if split != "all":
+            raise TrainingGymConfigError(
+                f"{type(self).__name__} holds one undivided set of rows and has no "
+                f"{split!r} split. Load it with split='all', or override load() on "
+                "your subclass to slice `self.rows` yourself."
+            )
         return [self._to_row(r) for r in self.rows]
 
     def _write_jsonl(self, rows: list[dict[str, Any]], path: str) -> None:

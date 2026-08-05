@@ -126,12 +126,6 @@ class TrainResult:
 
         return list_checkpoints(self.training_run_id)
 
-    @property
-    def model(self) -> "ModelConfig":
-        checkpoints = self.checkpoints()
-        model_path = checkpoints[-1].path if checkpoints else self.checkpoint_dir
-        return self._model_at(model_path)
-
     def hf_model(self, *, gpu: str | None = None) -> "ModelConfig":
         """Return a model pointed at the newest checkpoint in HuggingFace format.
 

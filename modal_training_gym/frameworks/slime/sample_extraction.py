@@ -521,11 +521,6 @@ def _sample_to_dict(
     if inference := _extract_inference_metadata(sample):
         metadata["inference"] = inference
 
-    # Pull the sample's own metadata dict through to the dashboard so it can
-    # render exit status, eval checks, custom reward-function tags, etc.
-    # Reserved keys are handled separately below (their own compaction), and
-    # oversized/non-serializable values are dropped rather than bloating the
-    # rollout payload.
     sample_meta = get("metadata") if attrs is not None else get("metadata", None)
     if isinstance(sample_meta, dict):
         for key, value in sample_meta.items():
@@ -592,8 +587,6 @@ def _sample_to_dict(
     if sample_index is not None:
         out["sample_index"] = sample_index
         out["group_index"] = sample_index // max(1, int(n_samples_per_prompt or 1))
-    # Store raw + parsed (mirrors eval's EvalRowResult) so the dashboard can show
-    # cleaned content without re-parsing. Parsing happens here, in the recorder.
     parsed = _parsed_response_dict(response_text, parser)
     if parsed is not None:
         out["parsed_response"] = parsed

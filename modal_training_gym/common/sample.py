@@ -29,9 +29,8 @@ class Sample(BaseModel):
     structure (thinking / answer / tool calls), a score, and free-form
     metadata.
 
-    Shared by eval rows (``EvalResult.rows``) and training rollout samples
-    (``TrainingRolloutResult.samples``) — they were the same shape, so this is
-    the single canonical type for both.
+    Shared by custom post-train check rows and training rollout samples
+    (``TrainingRolloutResult.samples``).
     """
 
     score: float = 0.0
