@@ -129,10 +129,11 @@ def measured_run_times(
     record the same phase names, and their times are not one substep.
 
     A step is the training work of a rollout -- from the first phase it started
-    to the last one it finished -- less the checkpoint or eval that landed on it,
-    which would otherwise read as a step many times slower than its neighbours.
-    Its lanes are placed on the same wall clock (``lane_start_unix_s`` plus each
-    phase's offsets) first, since they are measured in separate processes.
+    to the last one it finished -- less the part of a checkpoint or eval that ran
+    within it, which would otherwise read as a step many times slower than its
+    neighbours. Its lanes are placed on the same wall clock
+    (``lane_start_unix_s`` plus each phase's offsets) first, since they are
+    measured in separate processes.
     """
     beside_the_step = (
         Substep.CHECKPOINT_SAVE.value,
@@ -143,16 +144,17 @@ def measured_run_times(
     substep_times: dict[str, dict[str, dict[str, float | None]]] = {}
     for rollout_id, records in sorted(load_run(training_run_id).items()):
         substeps: dict[str, dict[str, float | None]] = {}
-        step_start, step_end, waited_on = None, None, 0.0
+        step_start, step_end = None, None
+        beside: list[tuple[float, float]] = []
         for record in records:
             lane_start = record["lane_start_unix_s"]
             role = record["role"]
             for name, phase in record["phases"].items():
                 start = lane_start + phase["first_start_s"]
+                end = lane_start + phase["last_end_s"]
                 if name in beside_the_step:
-                    waited_on += phase["total_duration_s"]
+                    beside.append((start, end))
                 else:
-                    end = lane_start + phase["last_end_s"]
                     step_start = start if step_start is None else min(step_start, start)
                     step_end = end if step_end is None else max(step_end, end)
                 key = name if role == Role.DRIVER.value else f"{name} ({role})"
@@ -162,8 +164,16 @@ def measured_run_times(
                 }
         if step_start is None or step_end is None:
             continue
+        # An eval runs before or after the step it belongs to, a checkpoint in
+        # the middle of it, so only the overlapping part comes out of the span.
+        taken_to, waited_on = step_start, 0.0
+        for start, end in sorted(beside):
+            within = min(end, step_end) - max(start, taken_to)
+            if within > 0:
+                waited_on += within
+                taken_to = min(end, step_end)
         step_times[str(rollout_id)] = {
-            "duration_s": round(max(step_end - step_start - waited_on, 0.0))
+            "duration_s": round(step_end - step_start - waited_on)
         }
         substep_times[str(rollout_id)] = substeps
     return step_times, substep_times

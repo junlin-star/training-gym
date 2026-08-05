@@ -8,7 +8,7 @@ import time
 
 import pytest
 
-from modal_training_gym.common import status_reporter
+from modal_training_gym.common import status_reporter, step_timing
 from modal_training_gym.common.step_timing import (
     PhaseTiming,
     RoleTimingRecord,
@@ -220,6 +220,49 @@ def test_probe_requires_a_dashboard_url_when_required():
 def test_probe_is_off_or_silent_without_a_dashboard():
     assert probe_substep_timing("http://test/", mode="off") is False
     assert probe_substep_timing("", mode="auto") is False
+
+
+def test_a_step_keeps_the_eval_beside_it_and_drops_the_checkpoint_within_it(
+    monkeypatch,
+):
+    def one_phase(name, start, duration):
+        return {
+            name: {
+                "count": 1,
+                "total_duration_s": duration,
+                "longest_duration_s": duration,
+                "first_start_s": start,
+                "last_end_s": start + duration,
+            }
+        }
+
+    monkeypatch.setattr(
+        step_timing,
+        "load_run",
+        lambda _: {
+            0: [
+                {
+                    "role": "driver",
+                    "lane_start_unix_s": 1000.0,
+                    "phases": {
+                        # A 60s eval before a 20s step, and a 5s checkpoint in
+                        # the middle of it.
+                        **one_phase("evaluate_rollouts", 0.0, 60.0),
+                        **one_phase("generate_rollouts", 60.0, 8.0),
+                        **one_phase("checkpoint_save", 68.0, 5.0),
+                        **one_phase("weight_sync", 73.0, 7.0),
+                    },
+                }
+            ]
+        },
+    )
+
+    step_times, substep_times = step_timing.measured_run_times("run-1")
+    assert step_times == {"0": {"duration_s": 15}}
+    assert substep_times["0"]["evaluate_rollouts"] == {
+        "start": 1000.0,
+        "duration_s": 60.0,
+    }
 
 
 # ---------- legacy read path ----------
