@@ -14,6 +14,15 @@
   const CONTAINED_INSET_PX = 2;
   const BAR_GAP_PX = 2;
 
+  // An async driver waits twice a step, on two different rollouts' generation.
+  const WAITS_ON = {
+    wait_for_rollout: (id) =>
+      id > 0
+        ? `waited on rollout ${id}'s generation, run during rollout ${id - 1}`
+        : `waited on rollout ${id}'s generation, started before the loop`,
+    wait_for_next_rollout: (id) => `waited on rollout ${id + 1}'s generation, before the weight update`,
+  };
+
   function placeRows(rows) {
     const placed = [];
     let nextTop = 0;
@@ -284,8 +293,9 @@
                         class="bar"
                         aria-label={`${labelFor(bar.name)} ${fmtSecs(bar.duration)}`}
                         class:active={pinned && isActive(rollout.id, bar)}
-                        class:outlined={bar.contains}
-                        style:background={bar.contains
+                        class:outlined={bar.contains || bar.band}
+                        class:banded={bar.band}
+                        style:background={bar.contains || bar.band
                           ? `color-mix(in srgb, ${colorFor(bar.name)} 22%, transparent)`
                           : colorFor(bar.name)}
                         style:border-color={colorFor(bar.name)}
@@ -295,7 +305,33 @@
                         onmousemove={moveTip}
                         onmouseleave={hideTip}
                         onclick={(e) => pinTip(e, rollout.id, bar)}
-                      ></button>
+                      >
+                        {#each bar.spent as work (work.name)}
+                          <span
+                            class="spent-span"
+                            style:background={colorFor(work.name)}
+                            style:left={`${((work.start - bar.start) / Math.max(bar.end - bar.start, 1e-9)) * 100}%`}
+                            style:width={`max(1px, ${((work.end - work.start) / Math.max(bar.end - bar.start, 1e-9)) * 100}%)`}
+                          ></span>
+                        {/each}
+                        {#if bar.band}
+                          <span
+                            class="band-longest"
+                            style:background={colorFor(bar.name)}
+                            style:width={`${Math.min((bar.band.longest / Math.max(bar.duration, 1e-9)) * 100, 100)}%`}
+                          ></span>
+                          <span
+                            class="band-average"
+                            style:background={colorFor(bar.name)}
+                            style:left={`${Math.min((bar.band.total / bar.band.count / Math.max(bar.duration, 1e-9)) * 100, 100)}%`}
+                          ></span>
+                          <span class="bar-text"
+                            >{bar.band.count}× {fmtSecs(
+                              bar.band.total / bar.band.count,
+                            )}</span
+                          >
+                        {/if}
+                      </button>
                     {/each}
                   </div>
                 {/each}
@@ -345,6 +381,9 @@
         calls · longest {fmtSecs(work.longest)}
       </span>
     {/each}
+    {#if WAITS_ON[tip.bar.name]}
+      <span class="tg-tip-when">{WAITS_ON[tip.bar.name](tip.rolloutId)}</span>
+    {/if}
     {#if tip.bar.inside}
       <span class="tg-tip-when">ran inside {labelFor(tip.bar.inside)}</span>
     {/if}
@@ -538,6 +577,46 @@
 
   .bar.outlined {
     border: 1px solid;
+  }
+
+  .bar.banded {
+    padding: 0;
+  }
+
+  .spent-span {
+    position: absolute;
+    bottom: 1px;
+    height: 3px;
+    border-radius: 1.5px;
+    pointer-events: none;
+  }
+
+  .band-longest {
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    opacity: 0.28;
+    pointer-events: none;
+  }
+
+  .band-average {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 1px;
+    pointer-events: none;
+  }
+
+  .bar-text {
+    position: relative;
+    display: block;
+    padding: 0 3px;
+    font-size: 9px;
+    line-height: 1;
+    color: var(--color-c-gray-9, #0b0b0b);
+    white-space: nowrap;
+    pointer-events: none;
   }
 
   .bar:hover {

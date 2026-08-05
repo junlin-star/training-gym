@@ -67,6 +67,7 @@ DRIVERS = [
         "miles/train_async.py.timing.output",
         {
             "wait_for_rollout",
+            "wait_for_next_rollout",
             "train_models",
             "checkpoint_save",
             "weight_sync",
@@ -80,6 +81,7 @@ DRIVERS = [
         "slime/train_async.py.timing.output",
         {
             "wait_for_rollout",
+            "wait_for_next_rollout",
             "train_models",
             "checkpoint_save",
             "weight_sync",

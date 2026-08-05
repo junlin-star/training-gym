@@ -247,12 +247,13 @@ _ASYNC_PHASE_WRAPS = [
         "checkpoint_save",
     ),
     # As in slime's async loop: the prefetched future is consumed before the
-    # weight update, and measured apart from it.
+    # weight update, and measured apart from it. The future here is the *next*
+    # rollout's generation, not this one's, so it is its own phase.
     (
         "            # sync generate before update weights to prevent update weight in the middle of generation\n"
         "            rollout_data_curr_ref = (await x) if (x := rollout_data_next_future) is not None else None\n"
         "            rollout_data_next_future = None\n",
-        "wait_for_rollout",
+        "wait_for_next_rollout",
     ),
     # Indented: the bring-up call before the loop is at module-function level.
     ("            await actor_model.update_weights()\n", "weight_sync"),

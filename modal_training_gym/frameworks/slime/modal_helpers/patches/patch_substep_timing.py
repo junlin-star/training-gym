@@ -263,12 +263,13 @@ _ASYNC_PHASE_WRAPS = [
     ),
     # Where an async run actually waits for generation from the second step on:
     # weights cannot be updated mid generation, so the prefetched future is
-    # consumed here. Measured apart from the weight update that follows it.
+    # consumed here. Measured apart from the weight update that follows it, and
+    # apart from the wait above: this one is on the *next* rollout's generation.
     (
         "            # sync generate before update weights to prevent update weight in the middle of generation\n"
         "            rollout_data_curr_ref = ray.get(x) if (x := rollout_data_next_future) is not None else None\n"
         "            rollout_data_next_future = None\n",
-        "wait_for_rollout",
+        "wait_for_next_rollout",
     ),
     (
         "            # PATCHED_TRAINING_GYM_WEIGHT_SYNC_STATUS: weight sync state\n"

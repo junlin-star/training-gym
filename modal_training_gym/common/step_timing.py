@@ -29,8 +29,9 @@ class PhaseTiming(BaseModel):
     repeatedly, more when its runs overlapped.
 
     ``invocations`` holds each run as ``[start_s, end_s]``, so a phase that ran a
-    few times draws as those runs rather than one bar over all of them. Empty
-    past ``MAX_DRAWN_INVOCATIONS`` runs, which the timeline draws as one block.
+    few times draws as those runs rather than one bar over all of them. Empty for
+    a phase that runs once per sample, which the timeline draws as one block over
+    its span, labelled with the count and the average.
     """
 
     count: int
@@ -93,7 +94,8 @@ class Substep(str, Enum):
     WEIGHT_SYNC = SlimeStatus.WEIGHT_SYNC.value
     EVAL_AFTER = f"{SlimeStatus.EVAL_ROLLOUT_LOGGING.value}_end"
 
-    WAIT_FOR_ROLLOUT = "wait_for_rollout"  # driver
+    WAIT_FOR_ROLLOUT = "wait_for_rollout"  # driver, on this rollout's generation
+    WAIT_FOR_NEXT_ROLLOUT = "wait_for_next_rollout"  # driver, on the next one's
     TRAIN_MODELS = "train_models"  # driver
     GENERATE_SAMPLES = "generate_samples"  # rollout worker
     REWARD = "reward"  # rollout worker, one run per sample

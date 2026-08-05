@@ -108,8 +108,8 @@ async def train(args):
                         await rollout_manager.save.remote(rollout_id)
 
             if (rollout_id + 1) % args.update_weights_interval == 0:
-                # PATCHED_TRAINING_GYM_TIMING_WAIT_FOR_ROLLOUT
-                with _tg_rec.phase('wait_for_rollout'):
+                # PATCHED_TRAINING_GYM_TIMING_WAIT_FOR_NEXT_ROLLOUT
+                with _tg_rec.phase('wait_for_next_rollout'):
                     # sync generate before update weights to prevent update weight in the middle of generation
                     rollout_data_curr_ref = (await x) if (x := rollout_data_next_future) is not None else None
                     rollout_data_next_future = None
