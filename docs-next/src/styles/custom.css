@@ -914,6 +914,9 @@ a:hover {
 
 .sl-markdown-content .tutorial-catalog table td > a > code:not(pre code),
 .sl-markdown-content .tutorial-catalog table td > code:not(pre code) {
+  box-sizing: border-box;
+  max-width: 100%;
+  overflow-wrap: anywhere;
   white-space: normal;
 }
 

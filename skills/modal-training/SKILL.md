@@ -29,14 +29,14 @@ This document captures durable repo-specific workflow for agents launching and d
 - Set `MODAL_ENVIRONMENT` explicitly, or pass `--env <env>`, when the target environment matters.
 - If your local setup relies on shell init for auth or helper tooling, ensure that setup is loaded before launching jobs.
 - Store credentials in local shell config or Modal secrets, not in tracked files.
-- **Proxy-auth tokens for served endpoints.** SGLang endpoints from `DeploymentConfig.serve()` are public by default (`unauthenticated=True`). Pass `unauthenticated=False` to require Modal proxy auth — then *any* call to that endpoint — `EvalConfig.evaluate()`, `deployment.generate()`, an OPD teacher `/generate`, health/readiness polls — must send a proxy-auth token pair or it returns **HTTP 401**. vLLM cannot honor `unauthenticated` (`modal.experimental.http_server` has no proxy-auth knob): `True` (default) is a silent no-op for `VllmRecipe`; explicit `False` emits `warnings.warn` because the endpoint remains public. Create a token in the Modal dashboard (Settings → Proxy Auth Tokens) and export it in the launching shell as `MODAL_KEY` (`wk-…`) and `MODAL_SECRET` (`ws-…`); the package turns these into `Modal-Key`/`Modal-Secret` headers. For calls issued from **remote workers** (e.g. a custom rm/reward function hitting a teacher endpoint), the driver's shell env does not reach the worker — forward the pair into the worker by attaching a `modal.Secret` (e.g. via the recipe's `train_function_kwargs={"secrets": [...]}`).
+- **Proxy-auth tokens for Modal Endpoints / Servers.** Endpoints are public by default (`unauthenticated=True`). Pass `unauthenticated=False` for authenticated access. Create a token with `modal workspace proxy-tokens create` and export `MODAL_KEY` (`wk-…`) / `MODAL_SECRET` (`ws-…`), or `training-gym set-proxy-auth`, when calling authenticated endpoints. Pass `proxy_auth=True` on request helpers so they attach credentials — never send proxy tokens unless asked. Remote workers that call authenticated endpoints need the pair via a `modal.Secret`.
 
 ## Finding The Right Entrypoint
 
 Discover the launch path from the repo itself instead of assuming a fixed command.
 
 - Start with the workflow README and identify the documented `modal run` path.
-- Inspect the corresponding launcher module to see whether it exposes intermediate stages such as dataset prep, model download, checkpoint conversion, benchmark, evaluation, or training.
+- Inspect the corresponding launcher module to see whether it exposes intermediate stages such as dataset prep, model download, checkpoint conversion, validation, or training.
 - Check for cheaper discovery paths first, such as `--help`, `--list`, `--dry-run`, or a single-node variant.
 - If the launcher uses a local entrypoint, make sure the documented invocation still maps to that entrypoint from the repo root.
 - If the workflow requires secrets, volumes, or cached artifacts, treat those prerequisites as explicit stages rather than assuming training is the first runnable step.

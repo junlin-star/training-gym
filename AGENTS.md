@@ -73,7 +73,7 @@ Launchers use `resolve_caller_module()` (in `common/framework.py`) to find the u
 
 ### TrainResult persistence
 
-`TrainResult` is a dataclass written to the metadata volume (`MetadataStore.TRAIN_RESULTS`, keyed by `training_run_id`). Created by each framework's `train()` on rank 0. Loaded by eval scripts via `TrainResult.load(training_run_id)`. The `.model` property reconstructs a `ModelConfig` pointing at the checkpoint for serving.
+`TrainResult` is a dataclass written to the metadata volume (`MetadataStore.TRAIN_RESULTS`, keyed by `training_run_id`). Created by each framework's `train()` on rank 0. Custom checks load it with `TrainResult.load(training_run_id)` and call `.hf_model()` to convert the latest checkpoint for serving.
 
 ### Tutorial system
 
@@ -89,7 +89,7 @@ Each source declares `TUTORIAL_METADATA` dict with `framework`, `cluster_shape`,
 
 ### Dashboard
 
-`dashboards/app.py` is a Modal app with a Svelte frontend (built at image-build time). Training runs, deployments, and evals write metadata to a shared Modal Volume (`training-gym-metadata`) via `modal_training_gym.utils.metadata`. The ASGI endpoint serves the pre-built SPA + JSON APIs (`/api/runs`, `/api/train-results`, `/api/evals`, `/api/deployments`) that read summary JSON from the volume on demand.
+`dashboards/app.py` is a Modal app with a Svelte frontend (built at image-build time). Training runs write metadata to a shared Modal Volume (`training-gym-metadata`) via `modal_training_gym.utils.metadata`. The ASGI endpoint serves the pre-built SPA + JSON APIs (`/api/runs`, `/api/train-results`) that read summary JSON from the volume on demand.
 
 ## Working rules
 
@@ -98,7 +98,7 @@ Each source declares `TUTORIAL_METADATA` dict with `framework`, `cluster_shape`,
 - Ruff excludes `tutorials/**` — generated tutorial code is not linted.
 - Python 3.12 is pinned. Modal's `serialized=True` requires local ↔ remote Python version match.
 - Modal Secrets `huggingface-secret` (HF_TOKEN) and `wandb-secret` (WANDB_API_KEY) are optional: HF auth is only needed for gated/rate-limited Hub access, and `wandb-secret` only when a `WandbConfig` is passed.
-- Served endpoints (`DeploymentConfig.serve()`) are public by default for SGLang (`unauthenticated=True`). Pass `unauthenticated=False` to require Modal proxy auth (export `MODAL_KEY` (`wk-…`) / `MODAL_SECRET` (`ws-…`) in the launching shell, or eval/`generate`/teacher calls return HTTP 401). vLLM cannot honor `unauthenticated` (`modal.experimental.http_server` has no proxy-auth knob): `True` (default) is a silent no-op for `VllmRecipe`; explicit `False` emits `warnings.warn` because the endpoint remains public. For calls from remote workers (custom rm/reward fns) to authenticated endpoints, also forward the pair into the worker via a `modal.Secret` — the driver shell env doesn't reach them.
+- Inference serving uses [Modal Endpoints](https://modal.com/docs/guide/endpoints) via `ensure_endpoint` / `modal endpoint create` (see `modal_training_gym.common.endpoint`). Endpoints are public by default (`unauthenticated=True`). Pass `unauthenticated=False` for authenticated access. Export `MODAL_KEY` (`wk-…`) / `MODAL_SECRET` (`ws-…`), or run `training-gym set-proxy-auth`, when calling authenticated endpoints. Pass `proxy_auth=True` on request helpers so they attach credentials — helpers never send proxy tokens unless asked (avoids leaking them to arbitrary `*.modal.*` hosts). For remote workers that call authenticated endpoints, forward the pair via a `modal.Secret` — the driver shell env does not reach them.
 - Every framework's Modal app is tagged with `_modal_framework`, `_modal_job_type=training`, and W&B project/group for dashboard auto-discovery (see `common/__init__.py: COMMON_TRAINING_GYM_TAGS`).
 
 ## Agent skills

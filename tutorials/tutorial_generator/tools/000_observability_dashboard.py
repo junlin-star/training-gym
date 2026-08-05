@@ -16,8 +16,6 @@ TUTORIAL_METADATA = {
     "api_classes": [
         "TrainConfig",
         "TrainingGroup",
-        "DeploymentConfig",
-        "EvalConfig",
     ],
 }
 
@@ -30,8 +28,8 @@ def _intro():
     """
     # The observability dashboard
 
-    Every training run, deployment, and eval launched through
-    `modal-training-gym` writes metadata to a shared Modal Volume. The
+    Every training run launched through `modal-training-gym` writes metadata
+    to a shared Modal Volume. The
     **observability dashboard** is a Modal web app that reads that volume and
     gives you a live view of everything the package is doing in your
     workspace: which runs are on which step, how rewards are trending, what
@@ -97,11 +95,9 @@ def _runs_overview():
 
     The landing page lists every training run in your workspace:
 
-    ![Training runs list with annotated components](/observability_dashboard_1_annotated.png)
-
-    1. **Sections** — switch between *Training runs*, *Deployments* (models
-       served with `DeploymentConfig`), and *Evals* (results from
-       `EvalConfig`).
+    1. **Training runs** — inspect training here. Manage served models from
+       Modal's *Endpoints* page or `modal endpoint list`, and keep
+       post-training scoring in your own scripts.
     2. **Status cards** — workspace-wide counts of completed, pending,
        stopped, and failed runs.
     3. **Search and filters** — search by run name and filter by status,
@@ -127,8 +123,6 @@ def _run_detail():
 
     Click any run to open its detail view:
 
-    ![Run summary view with annotated components](/observability_dashboard_2_annotated.png)
-
     1. **Tabs** — *Summary* (charts and timings), *Rollouts* (generated
        samples per rollout), and *Logs* (streamed container logs).
     2. **Step & substep timeline** — a per-step breakdown of where wall-clock
@@ -151,9 +145,9 @@ def _profiling():
     """
     ## Profile step and substep timings
 
-    The **Step & substep timeline** (callout 2 above) is the dashboard's
-    built-in profiler. Each training step renders as a horizontal bar,
-    labeled with its total duration and segmented by substep:
+    The **Step & substep timeline** is the dashboard's built-in profiler.
+    Each training step renders as a horizontal bar, labeled with its total
+    duration and segmented by substep:
 
     - **Generate rollouts** — sampling from the inference engine
     - **Offload rollout / Offload train** — moving weights between the
@@ -190,15 +184,12 @@ def _rollouts():
     The *Rollouts* tab shows what the model actually generated at each
     rollout step — the fastest way to debug a flat reward curve:
 
-    ![Rollouts tab with annotated components](/observability_dashboard_3_annotated.png)
-
     1. **Rollouts tab** — the badge shows how many rollout steps were
        recorded for this run.
     2. **Reward histogram** — the reward distribution across all samples in
-       the selected rollout. A bimodal split like the one above (a bar at 0.0
-       and a bar at 1.0) is what a healthy verifiable reward looks like; a
-       single spike means every sample got the same reward and the step
-       carries no learning signal.
+       the selected rollout. A bimodal split with bars at 0.0 and 1.0 is what
+       a healthy verifiable reward looks like; a single spike means every
+       sample got the same reward and the step carries no learning signal.
     3. **Download all** — export every sample in the rollout as JSON.
     4. **Sample viewer** — click a histogram bar to page through its samples
        (`←` / `→` to navigate): the full prompt, the system message, the

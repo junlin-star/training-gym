@@ -1,8 +1,10 @@
 # Modal Training Gym
 
-> Python SDK for RL post-training on Modal. Compose a model, dataset, and
-> recipe (`SlimeRecipe` / Miles) via `TrainConfig`, then call `.train()` /
-> `.launch()` — cluster topology, Ray/NCCL, volumes, and checkpointing are handled.
+> Open-source Python SDK for GRPO and RL post-training of LLMs on Modal.
+>
+> Compose a model, dataset, and recipe (`SlimeRecipe` / Miles) via
+> `TrainConfig`, then call `.train()` / `.launch()` — cluster topology,
+> Ray/NCCL, volumes, and checkpointing are handled.
 
 Requires Python 3.12. Install the package as `modal-training-gym`
 (import as `modal_training_gym`). Prefer `TrainConfig` + recipe over older
@@ -58,13 +60,10 @@ Repo: https://github.com/modal-projects/training-gym
 - [WandbConfig](https://gym.modal.dev/reference/core/wandbconfig/): `WandbConfig`
 - [ModalRayCluster](https://gym.modal.dev/reference/core/modalraycluster/): `ModalRayCluster`
 - [TrainResult](https://gym.modal.dev/reference/core/trainresult/): `TrainResult`
-
-### Evaluation
-
-- [EvalConfig](https://gym.modal.dev/reference/evaluation/evalconfig/): `EvalConfig`
-- [EvalResult](https://gym.modal.dev/reference/evaluation/evalresult/): `EvalResult`
-- [EvalRowResult](https://gym.modal.dev/reference/evaluation/evalrowresult/): `EvalRowResult`
-- [HarborEval](https://gym.modal.dev/reference/evaluation/harboreval/): `HarborEval`
+- [Sample](https://gym.modal.dev/reference/core/sample/): `Sample`
+- [MultimodalDataset](https://gym.modal.dev/reference/core/multimodaldataset/): `MultimodalDataset`
+- [extract_code](https://gym.modal.dev/reference/core/extract_code/): `extract_code`
+- [score_in_sandbox](https://gym.modal.dev/reference/core/score_in_sandbox/): `score_in_sandbox`
 
 ### Models
 
@@ -78,6 +77,8 @@ Repo: https://github.com/modal-projects/training-gym
 - [Qwen3-30B-A3B](https://gym.modal.dev/reference/models/qwen3_30b/): `Qwen3_30B`
 - [Qwen3.6-35B-A3B](https://gym.modal.dev/reference/models/qwen3_6_35b/): `Qwen3_6_35B`
 - [Qwen3.6-27B](https://gym.modal.dev/reference/models/qwen3_6_27b/): `Qwen3_6_27B`
+- [Qwen3-VL-8B](https://gym.modal.dev/reference/models/qwen3_vl_8b/): `Qwen3_VL_8B`
+- [Qwen3-ASR-1.7B](https://gym.modal.dev/reference/models/qwen3_asr_1_7b/): `Qwen3_ASR_1_7B`
 
 ### Training
 
@@ -86,13 +87,17 @@ Repo: https://github.com/modal-projects/training-gym
 - [SlimeRecipe](https://gym.modal.dev/reference/training/slimerecipe/): `SlimeRecipe`
 - [Qwen3_6_35b_Recipe](https://gym.modal.dev/reference/training/qwen3_6_35b_recipe/): `Qwen3_6_35b_Recipe`
 - [Qwen3_6_27b_Recipe](https://gym.modal.dev/reference/training/qwen3_6_27b_recipe/): `Qwen3_6_27b_Recipe`
+- [Qwen3_VL_8b_Recipe](https://gym.modal.dev/reference/training/qwen3_vl_8b_recipe/): `Qwen3_VL_8b_Recipe`
+- [Qwen3_ASR_1_7b_Recipe](https://gym.modal.dev/reference/training/qwen3_asr_1_7b_recipe/): `Qwen3_ASR_1_7b_Recipe`
+- [list_checkpoints](https://gym.modal.dev/reference/training/list_checkpoints/): `list_checkpoints`
+- [convert_checkpoint_to_hf](https://gym.modal.dev/reference/training/convert_checkpoint_to_hf/): `convert_checkpoint_to_hf`
 
-### Deployment
+### Endpoints
 
-- [DeploymentConfig](https://gym.modal.dev/reference/deployment/deploymentconfig/): `DeploymentConfig`
-- [ModelDeployment](https://gym.modal.dev/reference/deployment/modeldeployment/): `ModelDeployment`
-- [SglangRecipe](https://gym.modal.dev/reference/deployment/sglangrecipe/): `SglangRecipe`
-- [VllmRecipe](https://gym.modal.dev/reference/deployment/vllmrecipe/): `VllmRecipe`
+- [ensure_endpoint](https://gym.modal.dev/reference/endpoints/ensure_endpoint/): `ensure_endpoint`
+- [endpoint_chat](https://gym.modal.dev/reference/endpoints/endpoint_chat/): `endpoint_chat`
+- [endpoint_chat_message](https://gym.modal.dev/reference/endpoints/endpoint_chat_message/): `endpoint_chat_message`
+- [wait_for_server_url](https://gym.modal.dev/reference/endpoints/wait_for_server_url/): `wait_for_server_url`
 
 ## Optional
 
