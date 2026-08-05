@@ -492,7 +492,10 @@ def build_miles_app(
             print(f"Training run id: {training_run_id}")
             config_summary = {
                 "model": {"model_name": model.model_name} if model else {},
-                "recipe": serialize_recipe_params(miles, dataset=dataset, model=model),
+                "recipe": {
+                    "gpu_type": miles.gpu_type,
+                    **serialize_recipe_params(miles, dataset=dataset, model=model),
+                },
                 "wandb": (
                     {
                         "project": miles.wandb.project,
