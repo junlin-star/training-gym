@@ -209,31 +209,108 @@ def serialize_recipe_value(value: Any) -> Any:
     return repr(value)
 
 
-# TODO(joy): Add more explicit flagging of sensitive fields in the recipe
+REDACTED = "[redacted]"
+
+# Substrings that mark a name as credential-bearing. Matched against the
+# lowercased name, so upper-case env var names in ``train_env_vars``
+# (``HF_TOKEN``, ``AWS_SECRET_ACCESS_KEY``) and header keys in
+# ``sglang_request_params`` (``Authorization``) are covered too.
+#
+# Deliberately substring rather than exact: the recipe dataclasses declare no
+# credential fields at all today (the only key/token-ish names are
+# ``multimodal_keys``, ``max_tokens_per_gpu``, ``calculate_per_token_loss`` and
+# ``rollout_stop_token_ids`` — none secret). Every real credential arrives
+# through a free-form dict (``extra_config``, ``train_env_vars``,
+# ``sglang_config``, ``eval_config``, ``sglang_request_params``) under a key
+# name we do not control, so recall matters more than brevity here.
+_SENSITIVE_NAME_MARKERS = (
+    "api_key",
+    "apikey",
+    "access_key",
+    "private_key",
+    "wandb_key",
+    "secret",
+    "password",
+    "passwd",
+    "credential",
+    "token",
+    "bearer",
+    "authorization",
+    "oauth",
+)
+
+# Names containing "token" that are counts, limits, policies or vocabulary ids
+# rather than credentials. Without these, ``max_tokens_per_gpu`` and friends get
+# redacted and the dashboard parameter table loses real tuning knobs.
+_TOKEN_NOT_A_CREDENTIAL = (
+    "token_id",
+    "per_token",
+    "token_per",
+    "tokens_per",
+    "num_token",
+    "max_token",
+    "min_token",
+    "token_count",
+    "token_len",
+    "token_limit",
+    "token_budget",
+    "token_ratio",
+    "token_loss",
+    "tokenizer",
+)
+
+# Value prefixes distinctive enough to identify a credential regardless of the
+# key it is filed under — the backstop for a secret in a free-form dict whose
+# key name says nothing (e.g. ``{"headers": {"x-upstream": "sk-…"}}``).
+_SENSITIVE_VALUE_PREFIXES = (
+    "wk-",  # Modal proxy-auth key id
+    "ws-",  # Modal proxy-auth key secret
+    "hf_",  # Hugging Face user access token
+    "sk-",  # OpenAI-style API key
+    "ghp_",  # GitHub personal access token
+    "gho_",
+    "github_pat_",
+    "xox",  # Slack bot/user/app token
+    "akia",  # AWS access key id
+    "asia",
+)
+
+
 def is_sensitive_recipe_field(name: str) -> bool:
     normalized = name.lower()
-    if any(
-        marker in normalized
-        for marker in ("api_key", "access_key", "secret", "password")
+    if "token" in normalized and any(
+        benign in normalized for benign in _TOKEN_NOT_A_CREDENTIAL
     ):
-        return True
-    if normalized == "wandb_key":
-        return True
-    # Only treat ``*_token`` (hf_token, api_token, auth_token, access_token) as a
-    # credential. Counts and policies like ``max_tokens_per_gpu``,
-    # ``calculate_per_token_loss`` or ``rollout_stop_token_ids`` are not secrets.
-    return normalized == "token" or normalized.endswith("_token")
+        return False
+    return any(marker in normalized for marker in _SENSITIVE_NAME_MARKERS)
+
+
+def is_sensitive_recipe_value(value: Any) -> bool:
+    """Whether a value looks like a credential on its own, ignoring its key.
+
+    Requires a recognizable prefix *and* opaque-secret shape (long, no spaces or
+    path separators) so ordinary settings that happen to share a prefix — an
+    ``hf_``-prefixed flag name, a ``/root/...`` path — are not redacted.
+    """
+    if not isinstance(value, str) or len(value) < 20:
+        return False
+    if any(ch in value for ch in " \t/\\"):
+        return False
+    lowered = value.lower()
+    return any(lowered.startswith(p) for p in _SENSITIVE_VALUE_PREFIXES)
 
 
 def serialize_recipe_param_value(name: str, value: Any) -> Any:
     if is_sensitive_recipe_field(name):
-        return "[redacted]" if value not in (None, "", False) else value
+        return REDACTED if value not in (None, "", False) else value
     if isinstance(value, dict):
         return {
             str(k): serialize_recipe_param_value(str(k), v) for k, v in value.items()
         }
     if isinstance(value, list | tuple | set):
         return [serialize_recipe_param_value(name, v) for v in value]
+    if is_sensitive_recipe_value(value):
+        return REDACTED
     return serialize_recipe_value(value)
 
 

@@ -73,55 +73,43 @@ _HOOK_PATH_FLAGS = {
 
 @dataclass(config=ConfigDict(extra="forbid", arbitrary_types_allowed=True))
 class MilesRecipe(BaseTrainRecipe):
-    """Recipe dataclass for configuring Miles RL training on Modal.
+    """Recipe for configuring Miles RL training on Modal.
 
-    Fields fall into two categories:
-
-    1. **Launcher instructions** — consumed by the Modal launcher (image
-       build, cluster topology, W&B, checkpoint conversion, callable
-       shipping) and never forwarded to Miles. These are exactly the names
-       listed in ``_MILES_SKIP``.
-    2. **Miles CLI flags** — every other field is emitted to Miles'
-       ``train.py`` as ``--<field-name-with-dashes> <value>`` by
-       ``BaseTrainRecipe.cli_args``: ``None``/``False``/``""`` omit the flag
-       entirely, ``True`` emits a bare flag, lists become space-separated
-       values, dicts in ``YAML_CONFIG_FIELDS`` are materialized to temp YAML
-       files on the container and passed as paths, and dicts in
-       ``JSON_CONFIG_FIELDS`` are passed as inline JSON. ``sglang_*``-prefixed
-       fields configure the rollout engines rather than Megatron: Miles
-       registers every sglang ``ServerArgs`` option under a ``--sglang-``
-       prefix and forwards it.
+    Fields named in ``_MILES_SKIP`` are launcher instructions — image build,
+    cluster topology, W&B, checkpoint conversion, callable shipping — and are
+    never emitted as CLI flags; shipped callables reach Miles as resolved
+    import paths instead. Every other field becomes
+    ``--<field-name-with-dashes> <value>`` via ``BaseTrainRecipe.cli_args``:
+    ``None``/``False``/``""`` omit the flag, ``True`` emits it bare, lists
+    become space-separated values, ``YAML_CONFIG_FIELDS`` dicts are written to
+    YAML on the container and passed as paths, and ``JSON_CONFIG_FIELDS`` dicts
+    are passed as inline JSON. ``sglang_*`` fields configure the rollout
+    engines — Miles registers every sglang ``ServerArgs`` option under a
+    ``--sglang-`` prefix.
 
     ## App Identity
 
     recipe_type : RecipeType
         Discriminator marking this recipe as Miles; never override.
     name : str
-        Modal app title; when empty the launcher derives one from the recipe
-        class.
+        Modal app title; empty lets the launcher derive one from the class.
     app_tags : dict
-        Extra tags merged into the Modal app metadata for dashboard
-        auto-discovery.
+        Extra tags merged into the Modal app metadata for the dashboard.
 
     ## Modal Launcher
 
     docker_image : str
         Registry reference for the Miles image every container runs.
     environment : dict
-        Env vars set in the training containers (defaults include
-        ``PYTHONPATH`` for Megatron and NCCL tuning).
+        Env vars for the training containers (Megatron ``PYTHONPATH``, NCCL tuning).
     async_mode : bool
-        Run Miles' ``train_async.py`` so rollout generation and training
-        overlap (one-step off-policy) instead of alternating.
+        Run Miles' ``train_async.py``: rollout and training overlap (off-policy).
     wandb : WandbConfig | None
-        W&B settings; expands to Miles' ``--use-wandb``/``--wandb-project``/
-        ``--wandb-group`` flags.
-    image_overlay : Callable | None
-        Callable that customizes the Modal image (e.g.
-        ``lambda img: img.pip_install("pkg")``).
+        W&B settings; expands to Miles' ``--use-wandb``/``--wandb-*`` flags.
+    image_overlay : Callable[[modal.Image], modal.Image] | None
+        Customizes the Modal image, e.g. ``lambda img: img.pip_install("pkg")``.
     local_miles : str | None
-        Path to a local Miles checkout mounted over the image's copy — dev
-        overlay for testing Miles changes without an image rebuild.
+        Local Miles checkout mounted over the image's copy; no rebuild needed.
     memory : int | tuple[int, int] | None
         Modal Function memory request/limit in MiB.
     cloud : str | None
@@ -129,21 +117,16 @@ class MilesRecipe(BaseTrainRecipe):
     region : str | None
         Modal region to pin the cluster to.
     miles_model_script : str
-        Script path relative to the Miles repo, sourced before ``train.py``
-        to provide ``MODEL_ARGS``; when set, model-architecture flags are not
-        emitted from the attached ``ModelConfig``.
+        Script in the Miles repo sourced for ``MODEL_ARGS`` instead of arch flags.
     source_hf_checkpoint : str | None
-        HF repo fetched as the source checkpoint when it differs from the
-        model's own (e.g. the Kimi recipes, which convert it to INT4 + BF16).
+        Source checkpoint when it differs from the model's own (Kimi: INT4 + BF16).
     megatron_conversion_hf_checkpoint : str | None
-        HF checkpoint used for the HF→Megatron conversion step instead of the
-        training model's own weights.
+        HF weights used for the HF→Megatron conversion instead of the model's own.
     patch_files : list[str]
-        Local patch scripts copied into the image at build time (applied to
-        Miles/Megatron sources).
+        Local patch scripts applied to Miles/Megatron sources at image build.
     image_run_commands : list[str]
         Extra shell commands run while building the image.
-    image_env : dict
+    image_env : dict[str, str]
         Extra env vars baked into the image.
 
     ## Cluster and Parallelism
@@ -151,15 +134,13 @@ class MilesRecipe(BaseTrainRecipe):
     gpu_type : str
         Modal GPU type for every node, e.g. ``"H100"`` or ``"H200"``.
     colocate : bool
-        Trainer and rollout engines share the same GPUs, shifting memory
-        between phases; ``False`` gives each its own GPUs (disaggregated).
+        Trainer and rollout engines share GPUs; ``False`` gives each its own.
     actor_num_nodes : int
-        Number of nodes for the Megatron actor (trainer).
+        Nodes for the Megatron actor (trainer).
     actor_num_gpus_per_node : int
         GPUs per actor node.
     rollout_num_gpus : int | None
-        Total GPUs for rollout engines when disaggregated; ``None`` lets the
-        allocation resolver size it.
+        Rollout-engine GPUs when disaggregated; ``None`` lets the resolver size it.
     rollout_num_gpus_per_engine : int
         GPUs per sglang engine — its tensor-parallel size.
     train_backend : str
@@ -169,10 +150,9 @@ class MilesRecipe(BaseTrainRecipe):
     pipeline_model_parallel_size : int
         Megatron pipeline-parallel size for the actor.
     context_parallel_size : int | None
-        Megatron context-parallel size; multiplies the effective training
-        context length together with ``max_tokens_per_gpu``.
+        Megatron context-parallel size; multiplies the effective context length.
     expert_model_parallel_size : int | None
-        Expert-parallel size for MoE models.
+        Expert-parallel size for MoE; must divide the model's ``num_experts``.
     expert_tensor_parallel_size : int | None
         Tensor-parallel size within each expert.
     decoder_last_pipeline_num_layers : int | None
@@ -191,8 +171,7 @@ class MilesRecipe(BaseTrainRecipe):
     num_rollout : int
         Total rollout steps (= training steps) for the run.
     rollout_batch_size : int
-        Prompts sampled per rollout step; each prompt is expanded into a
-        group of sampled responses.
+        Prompts per rollout step, each expanded into a group of responses.
     rollout_max_response_len : int
         Max generated tokens per sample.
     rollout_temperature : float
@@ -204,44 +183,40 @@ class MilesRecipe(BaseTrainRecipe):
     rollout_stop_token_ids : list[int] | None
         Extra token ids that terminate generation.
     use_miles_router : bool
-        Route rollout requests through Miles' own router rather than
-        addressing engines directly.
+        Route rollout requests through Miles' router, not engines directly.
     use_rollout_routing_replay : bool
-        Replay MoE expert routing from rollout into training, so the trainer
-        sees the same expert assignment the rollout engine used.
+        Reuse the rollout's MoE expert routing in training.
 
     ## Checkpointing
 
     hf_checkpoint : str
-        HF checkpoint the run trains from (repo id or on-volume path).
+        Checkpoint trained from; normally set from the attached ``ModelConfig``.
     save : str
         Checkpoint output directory (the mounted ``/checkpoints`` volume).
     save_interval : int
         Save a checkpoint every N rollout steps.
     load : str
-        Checkpoint directory to resume from; empty starts from the converted
-        HF weights.
+        Directory to resume from; empty starts from the converted HF weights.
     no_save_optim : bool
         Omit optim state from checkpoints (smaller, but no exact resume).
     megatron_to_hf_mode : str
-        Mode used to export saved Megatron checkpoints back to HF format;
-        empty disables the export step.
+        Export mode for saved Megatron checkpoints; empty disables the export.
+
+    ## Fault Tolerance and Health Checks
+
     use_fault_tolerance : bool
-        Enable Miles' fault tolerance so the run can recover from worker
-        failures.
+        Enable Miles' fault tolerance to recover from worker failures.
     rollout_health_check_interval : int
-        Interval in seconds between rollout engine /health_generate checks
-        during generate/eval.
+        Seconds between rollout engine ``/health_generate`` checks.
     rollout_health_check_timeout : int
-        Timeout in seconds to wait for a rollout engine /health_generate
-        response before killing it.
+        Seconds to wait for ``/health_generate`` before killing the engine.
     rollout_health_check_first_wait : int
-        Initial grace period (in seconds) before starting health checks. This
-        allows time for model compilation and initialization. Increase this
-        value significantly when using deepgemm.
+        Grace period before checks start; raise a lot for deepgemm compilation.
+
+    ## Weight Sync
+
     update_weight_buffer_size : int | None
-        Byte size of the buffer used to broadcast updated weights to the
-        rollout engines.
+        Byte size of the buffer broadcasting updated weights to the engines.
 
     ## RL Algorithm
 
@@ -266,19 +241,16 @@ class MilesRecipe(BaseTrainRecipe):
     calculate_per_token_loss : bool
         Average the loss over tokens instead of over samples.
     ref_load : str
-        Checkpoint path the reference model is read from (for KL terms).
+        Checkpoint the reference model is read from (for KL terms).
     use_tis : bool
-        Truncated importance sampling, correcting for the rollout/trainer
-        policy mismatch.
+        Truncated importance sampling, correcting rollout/trainer mismatch.
 
     ## Dynamic Sampling
 
     over_sampling_batch_size : int | None
-        Prompts sampled beyond ``rollout_batch_size`` so groups rejected by
-        the filter can be replaced (DAPO).
+        Extra prompts sampled so filter-rejected groups can be replaced (DAPO).
     dynamic_sampling_filter_path : str | None
-        Import path of the predicate deciding which sample groups to keep,
-        e.g. dropping all-equal-reward groups.
+        Import path of the predicate deciding which sample groups to keep.
     balance_data : bool
         Rebalance kept samples across data-parallel ranks.
 
@@ -299,12 +271,11 @@ class MilesRecipe(BaseTrainRecipe):
     optimizer : str
         Optimizer name, e.g. ``"adam"``.
     use_distributed_optimizer : bool
-        Shard optim state across data-parallel ranks (Megatron distributed
-        optimizer).
+        Shard optim state across data-parallel ranks (Megatron distributed opt).
     optimizer_cpu_offload : bool
         Keep optimizer state on CPU, trading step time for GPU memory.
     overlap_cpu_optimizer_d2h_h2d : bool
-        Overlap the CPU-offloaded optimizer's device↔host copies with compute.
+        Overlap the offloaded optimizer's device↔host copies with compute.
     use_precision_aware_optimizer : bool
         Megatron's precision-aware optimizer (lower-precision optim state).
 
@@ -355,8 +326,7 @@ class MilesRecipe(BaseTrainRecipe):
     ## Dynamic Batching
 
     use_dynamic_batch_size : bool
-        Pack variable-length samples into micro-batches up to
-        ``max_tokens_per_gpu`` instead of a fixed micro batch size.
+        Pack samples up to ``max_tokens_per_gpu`` instead of a fixed micro batch.
     max_tokens_per_gpu : int
         Token budget per GPU per micro-batch when dynamic batching is on.
 
@@ -371,32 +341,25 @@ class MilesRecipe(BaseTrainRecipe):
     eval_top_p : float
         Nucleus-sampling top-p for eval generation.
     eval_config : dict | str | None
-        Inline dict materialized to a YAML file and passed as
-        ``--eval-config``; holds eval defaults and the eval dataset list.
+        Dict written to YAML for ``--eval-config``: eval defaults + dataset list.
     skip_eval_before_train : bool
-        Skip the eval pass that would otherwise run before the first train
-        step.
+        Skip the eval pass before the first train step.
 
     ## Reward Model
 
     rm_type : str | None
-        Name of a Miles built-in reward function (e.g. ``"deepscaler"``);
-        leave ``None`` when shipping a reward callable instead.
+        Miles built-in reward function (e.g. ``"deepscaler"``), else ``None``.
 
     ## Custom Functions and Hooks
 
     custom_rm_function : Callable | None
-        Reward callable shipped by value to the containers and registered as
-        Miles' ``custom_rm_path``.
+        Reward callable shipped by value as Miles' ``custom_rm_path``.
     custom_generate_function : Callable | None
-        Callable replacing Miles' generate step; shipped by value and
-        registered via its resolved import path.
+        Replaces Miles' generate step; shipped by value, registered by path.
     custom_reward_post_process_function : Callable | None
-        Callable applied to rewards after generation. Prefer this over
-        setting a raw dotted path yourself: functions defined in a
-        ``__main__`` tutorial script have no reliably importable module name,
-        so Miles' own ``importlib.import_module`` on that path fails inside
-        the Ray actor.
+        Applied to rewards after generation. Prefer this over a raw dotted path: a
+        ``__main__`` function has no importable module name, so Miles' own
+        ``importlib.import_module`` fails inside the Ray actor.
     rollout_function : Callable | str | None
         Replaces Miles' entire rollout loop (``--rollout-function-path``).
     custom_rollout_log_function : Callable | str | None
@@ -404,28 +367,23 @@ class MilesRecipe(BaseTrainRecipe):
     custom_eval_rollout_log_function : Callable | str | None
         Same as above, for eval rollouts.
     custom_megatron_before_log_prob_hook : Callable | str | None
-        Hook run in the Megatron trainer before log-prob computation.
+        Runs in the Megatron trainer before log-prob computation.
     custom_megatron_before_train_step_hook : Callable | str | None
-        Hook run in the Megatron trainer before each train step.
+        Runs in the Megatron trainer before each train step.
 
     ## Config Overrides
 
     extra_config : dict | str | None
-        The primary escape hatch: dict written to YAML and passed as
-        ``--custom-config-path``. Keys become attributes on Miles' parsed
-        args and always override same-named recipe fields.
+        Primary escape hatch: dict written to YAML at ``--custom-config-path``; its keys
+        become Miles args and override same-named fields.
     sglang_config : dict | str | None
-        Dict written to YAML and passed as ``--sglang-config`` — structured
-        sglang engine config that isn't a flat flag (e.g. PD-disaggregation
-        ``server_groups``).
-    apply_chat_template_kwargs : dict | str
-        Kwargs forwarded to the tokenizer's ``apply_chat_template``, passed
-        as inline JSON.
+        YAML at ``--sglang-config`` for structured engine config, not flat flags.
+    apply_chat_template_kwargs : str | dict
+        Kwargs for the tokenizer's ``apply_chat_template``, as inline JSON.
     train_env_vars : dict | str | None
         Env vars for the training processes, passed as inline JSON.
     multimodal_keys : dict | str | None
-        Dataset columns holding multimodal inputs, passed as inline JSON;
-        auto-filled from the attached ``DatasetConfig``.
+        Dataset columns holding multimodal inputs (inline JSON); auto-filled.
 
     ## SGLang Rollout Engine
 
@@ -500,12 +458,16 @@ class MilesRecipe(BaseTrainRecipe):
     megatron_to_hf_mode: str = "bridge"
     save_interval: int = 10
     no_save_optim: bool = False
+
+    # ── Fault tolerance and health checks ───────────────────────────────────
     # Miles' own argparse default; slime defaults this on instead.
     use_fault_tolerance: bool = False
     # Miles' own argparse defaults (slime uses 30/30/300).
     rollout_health_check_interval: int = 30
     rollout_health_check_timeout: int = 30
     rollout_health_check_first_wait: int = 0
+
+    # ── Weight sync ─────────────────────────────────────────────────────────
     update_weight_buffer_size: int | None = None
 
     # ── Rollout and sampling ────────────────────────────────────────────────
