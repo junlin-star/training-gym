@@ -18,10 +18,13 @@
   const CONTAINED_INSET_PX = 3;
 
   function placeRows(rows) {
-    const rowByDepth = [];
+    const placed = [];
     let nextTop = 0;
-    const placed = rows.map((row) => {
-      const container = row.concurrent ? null : rowByDepth[row.depth - 1];
+    for (const row of rows) {
+      // Only the first row of a container is drawn within it; a second one is
+      // work that overlapped it, which needs a band of its own.
+      const container =
+        row.parentIndex == null || row.concurrent ? null : placed[row.parentIndex];
       const placedRow = {
         ...row,
         within: container != null,
@@ -31,9 +34,8 @@
           : ROW_HEIGHT_PX,
       };
       if (!container) nextTop = placedRow.top + ROW_HEIGHT_PX + ROW_GAP_PX;
-      rowByDepth[row.depth] = placedRow;
-      return placedRow;
-    });
+      placed[row.index] = placedRow;
+    }
     return { rows: placed, rowsHeight: Math.max(nextTop - ROW_GAP_PX, ROW_HEIGHT_PX) };
   }
 

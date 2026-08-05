@@ -17,24 +17,25 @@ export const TIMING_LABELS = {
   optimizer_step: "Optimizer step",
 };
 
-// The colours the substep chart has always used; the phases it did not have
-// take a lighter shade of the one they run inside.
+// Generating is red, training is blue, and a phase drawn inside one of them is a
+// neighbouring hue rather than a shade of its container, so the two edges read
+// apart at a glance.
 export const TIMING_COLORS = {
-  evaluate_rollouts: "#60a5fa",
-  generate_rollouts: "#34d399",
-  generate_samples: "#6ee7b7",
-  reward: "#2dd4bf",
-  reward_batch: "#5eead4",
-  reward_post_process: "#99f6e4",
-  offload_rollout: "#a78bfa",
-  compute_log_probs: "#fbbf24",
-  train_models: "#f87171",
-  forward_backward: "#fca5a5",
-  optimizer_step: "#fb7185",
-  weight_sync: "#22d3ee",
+  generate_rollouts: "#f87171",
+  generate_samples: "#fb923c",
+  reward: "#fbbf24",
+  reward_batch: "#facc15",
+  reward_post_process: "#fde047",
+  train_models: "#60a5fa",
+  compute_log_probs: "#34d399",
+  forward_backward: "#22d3ee",
+  optimizer_step: "#818cf8",
+  weight_sync: "#a78bfa",
+  offload_rollout: "#c084fc",
+  offload_train: "#e879f9",
   checkpoint_save: "#f472b6",
-  offload_train: "#c084fc",
-  evaluate_rollouts_end: "#818cf8",
+  evaluate_rollouts: "#2dd4bf",
+  evaluate_rollouts_end: "#5eead4",
   wait_for_rollout: "#94a3b8",
 };
 
@@ -153,6 +154,7 @@ export function rolloutTimeline(lanes) {
     }
     const container = enclosing[enclosing.length - 1];
     bar.depth = enclosing.length;
+    bar.container = container ?? null;
     bar.inside = container ? container.name : null;
     // A bar with work inside it is drawn as an outline around that work.
     if (container) container.contains = true;
@@ -175,6 +177,7 @@ export function rolloutTimeline(lanes) {
         runs: work.count,
         work: work.total,
         depth: 0,
+        container: null,
         inside: null,
         contains: false,
         spent: [work],
@@ -199,23 +202,31 @@ export function rolloutTimeline(lanes) {
     ];
   }
 
-  // One row per nesting depth, drawn within the row that contains it, and
-  // another at that depth for a bar that overlaps a bar it is not inside.
-  bars.sort((a, b) => a.start - b.start || b.end - a.end);
+  // A row holds bars that ran one after another, and belongs to the row holding
+  // the bars that contain them, so it is drawn within that row and never within
+  // a bar it is not inside. Work that overlaps its own row takes another one.
+  bars.sort((a, b) => a.depth - b.depth || a.start - b.start || b.end - a.end);
   const rows = [];
+  const rowOf = new Map();
+  const rowsPerParent = new Map();
   for (const bar of bars) {
-    const row = rows.find(
-      (r) =>
-        r.depth === bar.depth && r.bars[r.bars.length - 1].end <= bar.start,
-    );
-    if (row) row.bars.push(bar);
-    else rows.push({ depth: bar.depth, bars: [bar] });
-  }
-  rows.sort((a, b) => a.depth - b.depth || a.bars[0].start - b.bars[0].start);
-  const drawnDepths = new Set();
-  for (const row of rows) {
-    row.concurrent = drawnDepths.has(row.depth);
-    drawnDepths.add(row.depth);
+    const parent = rowOf.get(bar.container) ?? null;
+    const siblings = rowsPerParent.get(parent) || [];
+    let row = siblings.find((r) => r.bars[r.bars.length - 1].end <= bar.start);
+    if (!row) {
+      // The first row of a container is drawn within it; another one is work
+      // that overlapped it, which needs a row of its own.
+      row = {
+        depth: bar.depth,
+        parentIndex: parent ? parent.index : null,
+        concurrent: siblings.length > 0,
+        bars: [],
+      };
+      row.index = rows.push(row) - 1;
+      rowsPerParent.set(parent, [...siblings, row]);
+    }
+    row.bars.push(bar);
+    rowOf.set(bar, row);
   }
 
   const span = bars.length ? Math.max(...bars.map((bar) => bar.end)) : 0;

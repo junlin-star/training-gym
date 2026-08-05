@@ -158,6 +158,36 @@ describe("rolloutTimeline", () => {
     ]);
   });
 
+  it("nests a run within the row of the bar containing it, not the last row", () => {
+    const { rows } = rolloutTimeline({
+      roles: {
+        driver: {
+          role: "driver",
+          lane_start_unix_s: 1000,
+          phases: { train_models: phase([[0, 4]]) },
+        },
+        rollout: {
+          role: "rollout",
+          lane_start_unix_s: 1000,
+          phases: {
+            // Overlaps the training without being inside it, so it takes a row
+            // of its own, and its own scoring is nested in that row.
+            generate_samples: phase([[2, 7]]),
+            reward_batch: phase([[3, 6]]),
+          },
+        },
+      },
+    });
+
+    expect(
+      rows.map((row) => [row.bars[0].name, row.depth, row.parentIndex]),
+    ).toEqual([
+      ["train_models", 0, null],
+      ["generate_samples", 0, null],
+      ["reward_batch", 1, 1],
+    ]);
+  });
+
   it("shifts lanes recorded in different processes onto one axis", () => {
     const { rows } = rolloutTimeline({
       roles: {
