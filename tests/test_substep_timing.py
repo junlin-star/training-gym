@@ -230,7 +230,7 @@ def test_probe_is_off_or_silent_without_a_dashboard():
     assert probe_substep_timing("", mode="auto") is False
 
 
-def test_a_step_keeps_the_eval_beside_it_and_drops_the_checkpoint_within_it(
+def test_a_step_adds_its_substeps_and_leaves_out_the_checkpoint_and_eval(
     monkeypatch,
 ):
     def one_phase(name, start, duration):
@@ -253,20 +253,27 @@ def test_a_step_keeps_the_eval_beside_it_and_drops_the_checkpoint_within_it(
                     "role": "driver",
                     "lane_start_unix_s": 1000.0,
                     "phases": {
-                        # A 60s eval before a 20s step, and a 5s checkpoint in
-                        # the middle of it.
+                        # A 60s eval before the step, and a 5s checkpoint in the
+                        # middle of its 15s of work.
                         **one_phase("evaluate_rollouts", 0.0, 60.0),
                         **one_phase("generate_rollouts", 60.0, 8.0),
                         **one_phase("checkpoint_save", 68.0, 5.0),
                         **one_phase("weight_sync", 73.0, 7.0),
                     },
-                }
+                },
+                {
+                    "role": "rollout",
+                    "lane_start_unix_s": 1060.0,
+                    # The driver's generate_rollouts was the wait for this.
+                    "phases": one_phase("generate_samples", 0.0, 8.0),
+                },
             ]
         },
     )
 
     step_times, substep_times = step_timing.measured_run_times("run-1")
     assert step_times == {"0": {"duration_s": 15}}
+    assert substep_times["0"]["generate_samples (rollout)"]["duration_s"] == 8.0
     assert substep_times["0"]["evaluate_rollouts"] == {
         "start": 1000.0,
         "duration_s": 60.0,

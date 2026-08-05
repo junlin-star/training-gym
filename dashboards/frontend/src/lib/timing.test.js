@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { colorFor, fmtSecs, labelFor, rolloutTimeline, TIMING_COLORS, TIMING_LABELS } from "./timing.js";
+import {
+  colorFor,
+  fmtSecs,
+  labelFor,
+  rolloutTimeline,
+  TIMING_COLORS,
+  TIMING_LABELS,
+} from "./timing.js";
 
 describe("labelFor", () => {
   it("returns a known label", () => {
@@ -224,7 +231,9 @@ describe("rolloutTimeline", () => {
     });
 
     const bars = rows.flatMap((row) => row.bars);
-    expect(bars.map((bar) => [bar.name, bar.duration])).toEqual([["reward", 0.64]]);
+    expect(bars.map((bar) => [bar.name, bar.duration])).toEqual([
+      ["reward", 0.64],
+    ]);
   });
 
   it("leaves out a phase whose runs did no measurable work", () => {
@@ -315,6 +324,30 @@ describe("rolloutTimeline", () => {
     expect(rows.flatMap((row) => row.bars).map((bar) => bar.name)).toContain(
       "checkpoint_save",
     );
+  });
+
+  it("adds the driver's substeps rather than spanning them", () => {
+    const { stepDuration } = rolloutTimeline({
+      roles: {
+        driver: {
+          role: "driver",
+          // 3s of driver work, and 7s of slime the gym does not measure.
+          phases: {
+            generate_rollouts: phase([[0, 2]]),
+            weight_sync: phase([[9, 10]]),
+          },
+          lane_start_unix_s: 1000,
+        },
+        // A worker's generation is the driver's wait, not more of the step.
+        rollout: {
+          role: "rollout",
+          lane_start_unix_s: 1000,
+          phases: { generate_samples: phase([[0, 2]]) },
+        },
+      },
+    });
+
+    expect(stepDuration).toBe(3);
   });
 });
 

@@ -220,29 +220,17 @@ export function rolloutTimeline(lanes) {
   }
 
   const span = bars.length ? Math.max(...bars.map((bar) => bar.end)) : 0;
-  const stepBars = bars.filter(
-    (bar) => !PHASES_BESIDE_THE_STEP.includes(bar.name),
-  );
   const beside = bars.filter((bar) =>
     PHASES_BESIDE_THE_STEP.includes(bar.name),
   );
-  const stepStart = stepBars.length
-    ? Math.min(...stepBars.map((bar) => bar.start))
-    : 0;
-  const stepEnd = stepBars.length
-    ? Math.max(...stepBars.map((bar) => bar.end))
-    : 0;
-  // A checkpoint runs in the middle of its step, so its time comes back out of
-  // the span rather than only off the ends of it, and shared time comes out once.
-  let waitedOn = 0;
-  let takenTo = stepStart;
-  for (const bar of [...beside].sort((a, b) => a.start - b.start)) {
-    const from = Math.max(bar.start, takenTo);
-    const to = Math.min(bar.end, stepEnd);
-    if (to > from) waitedOn += to - from;
-    takenTo = Math.max(takenTo, to);
-  }
-  const stepDuration = stepEnd - stepStart - waitedOn;
+  // The driver runs its substeps one after another, so a step is their work
+  // added up; a checkpoint or an eval is not one of them.
+  const stepDuration = bars
+    .filter(
+      (bar) =>
+        bar.role === "driver" && !PHASES_BESIDE_THE_STEP.includes(bar.name),
+    )
+    .reduce((total, bar) => total + bar.work, 0);
   return {
     rows,
     span,
