@@ -1,9 +1,11 @@
-"""The substep-timing patcher, against real framework driver sources.
+"""Golden-file test for the substep-timing patcher.
 
-Anchors are literal source lines, so the only test worth having is one that
-runs them over the sources they were written for: ``tests/testdata`` holds
-slime's ``train.py`` after the rollout-status patcher (the state the timing
-patcher sees) and miles' two entrypoints as shipped in the pinned image.
+Anchors are literal source lines, so the test worth having is one that runs them
+over the sources they were written for: ``tests/testdata`` holds slime's
+``train.py`` after the rollout-status patcher (the state the timing patcher sees)
+and miles' two entrypoints as shipped in the pinned image. Regenerate the
+expected output with ``uv run pytest tests/test_substep_timing_patch.py
+--rewrite``.
 """
 
 from __future__ import annotations
@@ -23,6 +25,52 @@ PATCHER_PATH = (
     / "patch_substep_timing.py"
 )
 
+# fixture, entrypoint, golden output, driver phases the loop must record.
+DRIVERS = [
+    (
+        "train.py.output",
+        "train.py",
+        "slime/train.py.timing.output",
+        {
+            "evaluate_rollouts",
+            "generate_rollouts",
+            "offload_rollout",
+            "train_models",
+            "checkpoint_save",
+            "offload_train",
+            "weight_sync",
+            "evaluate_rollouts_end",
+        },
+    ),
+    (
+        "miles/train.py.input",
+        "train.py",
+        "miles/train.py.timing.output",
+        {
+            "evaluate_rollouts",
+            "generate_rollouts",
+            "offload_rollout",
+            "train_models",
+            "checkpoint_save",
+            "offload_train",
+            "weight_sync",
+            "evaluate_rollouts_end",
+        },
+    ),
+    (
+        "miles/train_async.py.input",
+        "train_async.py",
+        "miles/train_async.py.timing.output",
+        {
+            "wait_for_rollout",
+            "train_models",
+            "checkpoint_save",
+            "weight_sync",
+            "evaluate_rollouts_end",
+        },
+    ),
+]
+
 
 @pytest.fixture(scope="session")
 def patcher():
@@ -36,68 +84,33 @@ def patcher():
     return module
 
 
-def _patched(patcher, tmp_path, fixture: str, entrypoint: str, wraps) -> str:
+def _patched(patcher, tmp_path, fixture: str, entrypoint: str) -> str:
+    entrypoints = (
+        patcher.MILES_ENTRYPOINTS
+        if fixture.startswith("miles/")
+        else patcher.SLIME_ENTRYPOINTS
+    )
     work = tmp_path / entrypoint
     work.write_text((TESTDATA / fixture).read_text())
-    patcher._patch_file(work, wraps)
+    patcher._patch_file(work, entrypoints[entrypoint])
     return work.read_text()
 
 
-@pytest.mark.parametrize(
-    "fixture, entrypoint, framework, expected_phases",
-    [
-        (
-            "train.py.output",
-            "train.py",
-            "slime",
-            {
-                "evaluate_rollouts",
-                "generate_rollouts",
-                "offload_rollout",
-                "train_models",
-                "checkpoint_save",
-                "offload_train",
-                "weight_sync",
-                "evaluate_rollouts_end",
-            },
-        ),
-        (
-            "miles/train.py.input",
-            "train.py",
-            "miles",
-            {
-                "evaluate_rollouts",
-                "generate_rollouts",
-                "offload_rollout",
-                "train_models",
-                "checkpoint_save",
-                "offload_train",
-                "weight_sync",
-                "evaluate_rollouts_end",
-            },
-        ),
-        (
-            "miles/train_async.py.input",
-            "train_async.py",
-            "miles",
-            {
-                "wait_for_rollout",
-                "train_models",
-                "checkpoint_save",
-                "weight_sync",
-                "evaluate_rollouts_end",
-            },
-        ),
-    ],
-)
-def test_driver_loop_is_instrumented(
-    patcher, tmp_path, fixture, entrypoint, framework, expected_phases
+@pytest.mark.parametrize("fixture, entrypoint, golden, expected_phases", DRIVERS)
+def test_patch_matches_golden(
+    patcher, tmp_path, request, fixture, entrypoint, golden, expected_phases
 ):
-    entrypoints = (
-        patcher.SLIME_ENTRYPOINTS if framework == "slime" else patcher.MILES_ENTRYPOINTS
-    )
-    patched = _patched(patcher, tmp_path, fixture, entrypoint, entrypoints[entrypoint])
+    patched = _patched(patcher, tmp_path, fixture, entrypoint)
+    golden_path = TESTDATA / golden
 
+    if request.config.getoption("--rewrite"):
+        golden_path.parent.mkdir(parents=True, exist_ok=True)
+        golden_path.write_text(patched)
+        return
+
+    assert patched == golden_path.read_text(), (
+        f"golden mismatch for {golden}; rerun with --rewrite to accept"
+    )
     assert "with _tg_role('driver', rollout_id) as _tg_rec:" in patched
     for phase in expected_phases:
         assert f"with _tg_rec.phase('{phase}'):" in patched
@@ -110,13 +123,7 @@ def test_a_conditional_phase_is_timed_inside_its_branch(patcher, tmp_path):
     Its condition spans three lines, so the closing ``):`` sits at the ``if``'s
     own indent and must not be read as the start of another clause.
     """
-    patched = _patched(
-        patcher,
-        tmp_path,
-        "train.py.output",
-        "train.py",
-        patcher.SLIME_ENTRYPOINTS["train.py"],
-    )
+    patched = _patched(patcher, tmp_path, "train.py.output", "train.py")
     save = patched.split("if release_train or should_run_periodic_action(")[1]
     before_wrap = save.split("with _tg_rec.phase('checkpoint_save'):")[0]
     assert before_wrap.split("#")[0].rstrip().endswith("):")
