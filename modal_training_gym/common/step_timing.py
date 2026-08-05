@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 
 from modal_training_gym.common.config import modal_proxy_auth_headers
 from modal_training_gym.common.status import SlimeStatus
-from modal_training_gym.utils.metadata import MetadataStore, vol_list_prefix, vol_put
+from modal_training_gym.utils.metadata import MetadataStore, vol_list, vol_put
 
 
 PROTOCOL = "training-gym-substep-timing"
@@ -183,12 +183,13 @@ def load_run(training_run_id: str) -> dict[int, list[dict[str, Any]]]:
     """Every role record of a run, keyed by rollout id.
 
     Read whole, the way a run's rollouts are: the volume rate limits listings,
-    so one listing per rollout fails as soon as a page wants a few rows. A
+    so one listing per rollout fails as soon as a page wants a few rows, and one
+    listing for the run is retried when it is the listing that is limited. A
     rollout with no records is left out; the run may predate measured timing, in
     which case the caller reads its legacy blob.
     """
     steps: dict[int, list[dict[str, Any]]] = {}
-    for record in vol_list_prefix(RoleTimingRecord.store(training_run_id), ""):
+    for record in vol_list(RoleTimingRecord.store(training_run_id)):
         steps.setdefault(record["rollout_id"], []).append(record)
     return steps
 

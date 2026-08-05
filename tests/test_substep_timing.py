@@ -209,6 +209,14 @@ def test_snapshots_taken_while_one_is_in_flight_are_superseded(timing_env, monke
     assert not [count for count in counts if 1 < count < 6]
 
 
+def test_a_lane_whose_ranks_never_form_writes_itself(timing_env):
+    """One process measuring an actor alone is the one that publishes it."""
+    with recording_lane("actor", 0, publish_gate=lambda: None) as lane:
+        with lane.phase("forward_backward"):
+            pass
+    assert [item["role"] for item in timing_env] == ["actor"]
+
+
 # ---------- capability probe ----------
 
 

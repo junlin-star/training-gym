@@ -152,6 +152,10 @@ class RoleRecorder:
         if self._publish_gate is not None:
             if self._gate_answer is None:
                 self._gate_answer = self._publish_gate()
+            if self._gate_answer is None and force:
+                # Closing without ranks having formed: this process is the only
+                # one measuring the lane, so it is the one that writes it.
+                self._gate_answer = True
             if not self._gate_answer:
                 return
 
