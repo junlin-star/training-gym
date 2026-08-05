@@ -46,6 +46,13 @@ def load_config() -> dict[str, Any]:
         return {}
 
 
+def _save_config(config: dict[str, Any]) -> None:
+    fd = os.open(CONFIG_PATH, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        os.fchmod(f.fileno(), 0o600)
+        f.write(_render(config))
+
+
 def save_dashboard_url(url: str, *, proxy_auth: bool | None = None) -> None:
     """Persist the deployed dashboard URL and optional proxy-auth mode."""
     config = load_config()
@@ -56,7 +63,7 @@ def save_dashboard_url(url: str, *, proxy_auth: bool | None = None) -> None:
     if proxy_auth is not None:
         dashboard["proxy_auth"] = proxy_auth
     config["dashboard"] = dashboard
-    CONFIG_PATH.write_text(_render(config))
+    _save_config(config)
 
 
 def get_dashboard_url() -> str | None:
@@ -146,7 +153,7 @@ def save_proxy_auth(key: str, secret: str) -> None:
     """Persist the proxy-auth token pair under ``[proxy_auth]``."""
     config = load_config()
     config[PROXY_AUTH_SECTION] = {"key": key.strip(), "secret": secret.strip()}
-    CONFIG_PATH.write_text(_render(config))
+    _save_config(config)
 
 
 def load_proxy_auth() -> bool:

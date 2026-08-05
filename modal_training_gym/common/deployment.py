@@ -25,6 +25,7 @@ from pydantic import BaseModel, ConfigDict, field_serializer, field_validator
 from modal_training_gym.common.checkpoint import (
     Checkpoint,
     CheckpointType,
+    _conversion_gpu_spec,
     convert_checkpoint_to_hf,
 )
 from modal_training_gym.common.errors import TrainingGymConfigError
@@ -212,10 +213,22 @@ class DeploymentConfig:
             self.checkpoint is not None
             and self.checkpoint.checkpoint_type == CheckpointType.megatron
         ):
+            try:
+                conversion_gpu = _conversion_gpu_spec(self.checkpoint)
+            except TrainingGymConfigError as exc:
+                if not recipe.gpu:
+                    raise TrainingGymConfigError(
+                        "Cannot infer a GPU for checkpoint conversion. "
+                        "Set DeploymentConfig.recipe.gpu before serving."
+                    ) from exc
+                n_gpu = recipe.tp if isinstance(recipe, SglangRecipe) else recipe.n_gpu
+                conversion_gpu = (
+                    f"{recipe.gpu}:{n_gpu}" if n_gpu and n_gpu > 1 else recipe.gpu
+                )
             self.checkpoint = convert_checkpoint_to_hf(
                 checkpoint=self.checkpoint,
                 model=model,
-                recipe=recipe,
+                gpu=conversion_gpu,
             )
 
         model_path = self._resolved_model_path()

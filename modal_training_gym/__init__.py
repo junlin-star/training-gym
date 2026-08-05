@@ -16,6 +16,16 @@ _EXPORTS = {
     "Sample": ("modal_training_gym.common.sample", "Sample"),
     "extract_code": ("modal_training_gym.common.eval", "extract_code"),
     "HarborEval": ("modal_training_gym.common.eval", "HarborEval"),
+    "ensure_endpoint": ("modal_training_gym.common.endpoint", "ensure_endpoint"),
+    "endpoint_chat": ("modal_training_gym.common.endpoint", "endpoint_chat"),
+    "endpoint_chat_message": (
+        "modal_training_gym.common.endpoint",
+        "endpoint_chat_message",
+    ),
+    "wait_for_server_url": (
+        "modal_training_gym.common.endpoint",
+        "wait_for_server_url",
+    ),
     "GLM_4_7": ("modal_training_gym.common.models", "GLM_4_7"),
     "HFModelConfiguration": (
         "modal_training_gym.common.models",
@@ -24,6 +34,10 @@ _EXPORTS = {
     "HuggingFaceDataset": ("modal_training_gym.common.dataset", "HuggingFaceDataset"),
     "MultimodalDataset": ("modal_training_gym.common.dataset", "MultimodalDataset"),
     "list_checkpoints": ("modal_training_gym.common.checkpoint", "list_checkpoints"),
+    "convert_checkpoint_to_hf": (
+        "modal_training_gym.common.checkpoint",
+        "convert_checkpoint_to_hf",
+    ),
     "METADATA_VOLUME_NAME": (
         "modal_training_gym.utils.metadata",
         "METADATA_VOLUME_NAME",
@@ -108,10 +122,15 @@ __all__ = [
     "Sample",
     "extract_code",
     "HarborEval",
+    "ensure_endpoint",
+    "endpoint_chat",
+    "endpoint_chat_message",
+    "wait_for_server_url",
     "HFModelConfiguration",
     "HuggingFaceDataset",
     "MultimodalDataset",
     "list_checkpoints",
+    "convert_checkpoint_to_hf",
     "Kimi_K2_6",
     "Kimi_K2_5",
     "METADATA_VOLUME_NAME",

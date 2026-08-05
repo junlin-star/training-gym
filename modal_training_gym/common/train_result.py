@@ -51,6 +51,7 @@ from dataclasses import asdict, dataclass, field, fields
 import copy
 from typing import TYPE_CHECKING, Any
 
+from modal_training_gym.common.errors import TrainingGymConfigError
 from modal_training_gym.common.framework import Framework
 from modal_training_gym.utils.metadata import (
     MetadataStore,
@@ -61,6 +62,7 @@ from modal_training_gym.utils.metadata import (
 if TYPE_CHECKING:
     from modal import Volume
 
+    from modal_training_gym.common.checkpoint import Checkpoint
     from modal_training_gym.common.models import ModelConfig
 
 
@@ -185,29 +187,71 @@ class TrainResult:
 
     # ── Volume lookup ────────────────────────────────────────────────────
 
-    def volume(self) -> "Volume":
-        volume_name = self.checkpoints_volume_name or f"{self.app_name}-checkpoints"
-        return Volume.from_name(volume_name, create_if_missing=True)
-
     @property
-    def model(self) -> "ModelConfig":
+    def checkpoints_volume(self) -> str:
+        return self.checkpoints_volume_name or f"{self.app_name}-checkpoints"
+
+    def volume(self) -> "Volume":
+        from modal import Volume
+
+        return Volume.from_name(self.checkpoints_volume, create_if_missing=True)
+
+    def _require_model_config(self) -> "ModelConfig":
         if self.model_config is None:
             raise ValueError(
                 "No model_config on this TrainResult. "
                 "Was it saved by an older launcher?"
             )
+        return self.model_config
 
-        from modal_training_gym.common.checkpoint import list_checkpoints
-
-        model = copy.copy(self.model_config)
-        checkpoints = list_checkpoints(self.training_run_id)
-        if checkpoints:
-            model.model_path = checkpoints[-1].path
-        elif self.checkpoint_dir:
-            model.model_path = self.checkpoint_dir
-
+    def _model_at(self, model_path: str) -> "ModelConfig":
+        model = copy.copy(self._require_model_config())
+        if model_path:
+            model.model_path = model_path
         if self.checkpoints_volume_name:
             setattr(model, "checkpoints_volume_name", self.checkpoints_volume_name)
         if self.checkpoints_mount_path:
             setattr(model, "checkpoints_mount_path", self.checkpoints_mount_path)
         return model
+
+    def checkpoints(self) -> "list[Checkpoint]":
+        from modal_training_gym.common.checkpoint import list_checkpoints
+
+        return list_checkpoints(self.training_run_id)
+
+    @property
+    def model(self) -> "ModelConfig":
+        checkpoints = self.checkpoints()
+        model_path = checkpoints[-1].path if checkpoints else self.checkpoint_dir
+        return self._model_at(model_path)
+
+    def hf_model(self, *, gpu: str | None = None) -> "ModelConfig":
+        """Return a model pointed at the newest checkpoint in HuggingFace format.
+
+        slime writes torch_dist checkpoints unless HF export is enabled, and
+        neither ``modal endpoint create --custom-volume-path`` nor any serving
+        runtime can load those. This converts the newest checkpoint to
+        ``<name>_hf`` on the same Volume (a GPU job, minutes) and returns a
+        :class:`~modal_training_gym.common.models.ModelConfig` pointing at it.
+
+        ``gpu`` overrides the conversion worker's GPU spec, which otherwise
+        comes from the training run's actor GPUs.
+        """
+        from modal_training_gym.common.checkpoint import (
+            _checkpoint_sort_key,
+            convert_checkpoint_to_hf,
+        )
+
+        model_config = self._require_model_config()
+        checkpoints = self.checkpoints()
+        if not checkpoints:
+            raise TrainingGymConfigError(
+                f"No checkpoints found for training run {self.training_run_id!r}."
+            )
+        latest = max(
+            checkpoints, key=lambda checkpoint: _checkpoint_sort_key(checkpoint.name)
+        )
+        if latest.checkpoint_type.value == "hf":
+            return self._model_at(latest.path)
+        converted = convert_checkpoint_to_hf(latest, model_config, gpu=gpu)
+        return self._model_at(converted.path)
