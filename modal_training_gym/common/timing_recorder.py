@@ -7,10 +7,10 @@ build-time patches inject calls into framework source that also runs on ranks
 that record nothing.
 
 A record measures one ``(rollout_id, role)`` lane. Per phase it keeps how many
-times the phase ran, the summed and longest duration, and when it first started
-and last ended, so the dashboard can show the longest and the average without
-shipping one entry per measurement -- a reward phase runs once per sample,
-thousands of times per step, and every publish re-sends the whole record.
+times the phase ran, the summed and longest duration, when it first started and
+last ended, and each run's start and end while there are few enough of them to
+draw -- a reward phase runs once per sample, thousands of times per step, and
+every publish re-sends the whole record.
 """
 
 from __future__ import annotations
@@ -33,6 +33,11 @@ TIMING_TIMEOUT_SECONDS = 10.0
 # is cumulative, so a snapshot at most this often loses nothing but detail in
 # how a step's timing filled in while it ran.
 MIN_PUBLISH_INTERVAL_S = 1.0
+
+# Past this many runs of one phase, the record carries the phase's aggregate
+# only: individual bars stop being legible (and stop fitting in a record that is
+# re-posted every second) well before a per-sample phase's thousands.
+MAX_DRAWN_INVOCATIONS = 64
 
 
 def timing_url() -> str:
@@ -73,6 +78,9 @@ class RoleRecorder:
         self._t0 = time.monotonic()
         self.lane_start_unix_s = time.time()
         self.phases: dict[str, dict[str, float]] = {}
+        # Each phase's runs as [start, end] offsets, kept separately from the
+        # aggregate above so both stay numeric and easy to accumulate.
+        self.invocations: dict[str, list[list[float]]] = {}
         self._last_publish_t = float("-inf")
         # A lane can be measured from several threads at once: rewards are
         # scored concurrently, and the framework runs generation in a worker
@@ -106,6 +114,7 @@ class RoleRecorder:
                         "first_start_s": start - self._t0,
                         "last_end_s": end - self._t0,
                     }
+                    self.invocations[name] = [[start - self._t0, end - self._t0]]
                 else:
                     timing["count"] += 1
                     timing["total_duration_s"] += duration
@@ -118,6 +127,14 @@ class RoleRecorder:
                         timing["first_start_s"], start - self._t0
                     )
                     timing["last_end_s"] = max(timing["last_end_s"], end - self._t0)
+                    if timing["count"] > MAX_DRAWN_INVOCATIONS:
+                        # Emptied rather than truncated: the first 64 of a
+                        # phase's runs would draw as if it had stopped early.
+                        self.invocations[name] = []
+                    else:
+                        self.invocations[name].append(
+                            [start - self._t0, end - self._t0]
+                        )
             self._publish()
 
     def _publish(self, force: bool = False) -> None:
@@ -142,7 +159,13 @@ class RoleRecorder:
         self._last_publish_t = now
         with self._lock:
             phases = {
-                name: {key: round(value, 6) for key, value in timing.items()}
+                name: {
+                    **{key: round(value, 6) for key, value in timing.items()},
+                    "invocations": [
+                        [round(start, 6), round(end, 6)]
+                        for start, end in self.invocations[name]
+                    ],
+                }
                 for name, timing in self.phases.items()
             }
         status_reporter.enqueue_item(

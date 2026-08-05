@@ -1,6 +1,6 @@
 <script>
   import { Download, ZoomIn, ZoomOut } from "lucide-svelte";
-  import { colorFor, fmtSecs, labelFor } from "../lib/timing.js";
+  import { colorFor, fmtSecs, labelFor, rolloutTimeline } from "../lib/timing.js";
 
   let {
     stepTimes = null,
@@ -68,52 +68,50 @@
 
   let hasData = $derived(steps.length > 0);
 
-  // Lanes are recorded in different processes, so each one's offsets are
-  // relative to its own start; lane_start_unix_s shifts them onto one timeline.
-  let laneList = $derived.by(() => {
-    const roles = Object.entries(lanes?.roles || {});
-    const laneStarts = roles
-      .map(([, lane]) => Number(lane?.lane_start_unix_s))
-      .filter((s) => Number.isFinite(s));
-    const firstLaneStart = laneStarts.length ? Math.min(...laneStarts) : null;
-
-    return roles.map(([role, lane]) => {
-      const laneStart = Number(lane?.lane_start_unix_s);
-      const shift =
-        firstLaneStart != null && Number.isFinite(laneStart) ? laneStart - firstLaneStart : 0;
-      const phases = Object.entries(lane?.phases || {})
-        .map(([name, phase]) => {
-          const count = Number(phase?.count) || 0;
-          const total = Number(phase?.total_duration_s) || 0;
-          return {
-            name,
-            count,
-            total,
-            longest: Number(phase?.longest_duration_s) || 0,
-            average: count ? total / count : 0,
-            start: (Number(phase?.first_start_s) || 0) + shift,
-            end: (Number(phase?.last_end_s) || 0) + shift,
-          };
-        })
-        .sort((a, b) => a.start - b.start);
-      return { role, phases };
-    });
+  // One row per phase, each carrying the bars of the times it ran, on the axis
+  // this rollout's lanes share; the role a phase was measured on labels the row
+  // rather than splitting the rollout into per-role timelines.
+  let phaseRows = $derived.by(() => {
+    const { rows, span } = rolloutTimeline(lanes);
+    const byPhase = new Map();
+    for (const row of rows) {
+      for (const bar of row) {
+        const phase = byPhase.get(bar.name);
+        const longest = bar.banded ? bar.longest : bar.duration;
+        if (phase) {
+          phase.bars.push(bar);
+          phase.total += bar.duration;
+          phase.longest = Math.max(phase.longest, longest);
+          phase.count += bar.count;
+        } else {
+          byPhase.set(bar.name, {
+            name: bar.name,
+            role: bar.role,
+            bars: [bar],
+            total: bar.duration,
+            longest,
+            count: bar.count,
+            start: bar.start,
+          });
+        }
+      }
+    }
+    return {
+      span,
+      phases: [...byPhase.values()].sort((a, b) => a.start - b.start),
+    };
   });
 
   // `lanes` present but empty is a real answer -- this rollout recorded no
   // timing -- so it is shown, not passed over to the legacy timeline below.
   let hasMeasuredTiming = $derived(lanes != null);
 
-  // One shared width for every lane, so a bar's position and length mean the
-  // same thing across roles.
-  let laneWindow = $derived(
-    Math.max(0.001, ...laneList.flatMap((lane) => lane.phases.map((p) => p.end))),
-  );
-
-  function phaseTitle(phase) {
-    const runs =
-      phase.count === 1 ? "ran once" : `ran ${phase.count}\u00d7, longest ${fmtSecs(phase.longest)}, average ${fmtSecs(phase.average)}`;
-    return `${labelFor(phase.name)}: ${fmtSecs(phase.total)} total, ${runs} \u2014 ${fmtSecs(phase.start)} to ${fmtSecs(phase.end)}`;
+  function barTitle(phase, bar) {
+    const when = `${fmtSecs(bar.start)} \u2192 ${fmtSecs(bar.end)}`;
+    if (!bar.banded) {
+      return `${labelFor(phase.name)} (${phase.role}): ${fmtSecs(bar.duration)}, ${when}`;
+    }
+    return `${labelFor(phase.name)} (${phase.role}): ${bar.count} runs over ${when}, ${fmtSecs(bar.duration)} in total, average ${fmtSecs(bar.average)}, longest ${fmtSecs(bar.longest)}`;
   }
 
   let legend = $derived.by(() => {
@@ -232,44 +230,40 @@
 {/snippet}
 
 {#if hasMeasuredTiming}
-  <div class="step-timings lanes">
-    {#if laneList.length === 0}
+  <div class="step-timings">
+    {#if phaseRows.phases.length === 0}
       <div class="no-timing">no timing recorded for this rollout</div>
-    {/if}
-    {#each laneList as lane (lane.role)}
-      <div class="lane">
-        <div class="lane-header">
-          <span class="lane-role">{lane.role}</span>
-        </div>
-        {#if lane.phases.length === 0}
-          <div class="no-timing">no timing recorded for this rollout</div>
-        {:else}
-          <div class="lane-phases">
-            {#each lane.phases as phase (phase.name)}
-              <div class="phase-row" title={phaseTitle(phase)}>
-                <span class="phase-name" style:color={colorFor(phase.name)}>
-                  {labelFor(phase.name)}
-                </span>
-                <span class="phase-track">
-                  <span
-                    class="phase-bar"
-                    style:background={colorFor(phase.name)}
-                    style:left={`${(phase.start / laneWindow) * 100}%`}
-                    style:width={`${Math.max(((phase.end - phase.start) / laneWindow) * 100, 0.6)}%`}
-                  ></span>
-                </span>
-                <span class="phase-total">{fmtSecs(phase.total)}</span>
-                <span class="phase-count">
-                  {#if phase.count > 1}
-                    {phase.count}× · longest {fmtSecs(phase.longest)}
-                  {/if}
-                </span>
-              </div>
-            {/each}
+    {:else}
+      <div class="lane-phases">
+        {#each phaseRows.phases as phase (phase.name)}
+          <div class="phase-row">
+            <span class="phase-name" style:color={colorFor(phase.name)}>
+              {labelFor(phase.name)}
+            </span>
+            <span class="phase-role">{phase.role}</span>
+            <span class="phase-track">
+              {#each phase.bars as bar (bar.key)}
+                <span
+                  class="phase-bar"
+                  class:banded={bar.banded}
+                  style:background={colorFor(phase.name)}
+                  style:left={`${(bar.start / phaseRows.span) * 100}%`}
+                  style:width={`${Math.max(((bar.end - bar.start) / phaseRows.span) * 100, 0.6)}%`}
+                  title={barTitle(phase, bar)}
+                ></span>
+              {/each}
+            </span>
+            <span class="phase-total">{fmtSecs(phase.total)}</span>
+            <span class="phase-count">
+              {#if phase.count > 1}
+                {phase.count}× · longest {fmtSecs(phase.longest)} · average
+                {fmtSecs(phase.total / phase.count)}
+              {/if}
+            </span>
           </div>
-        {/if}
+        {/each}
       </div>
-    {/each}
+    {/if}
   </div>
 {:else if hasData}
   <div class="step-timings">
@@ -386,24 +380,6 @@
     gap: 10px;
   }
 
-  .lane {
-    border: 1px solid var(--border, #2f2f2f);
-    border-radius: 6px;
-    padding: 8px 12px;
-  }
-
-  .lane-header {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    margin-bottom: 6px;
-  }
-
-  .lane-role {
-    font-weight: 600;
-    text-transform: capitalize;
-  }
-
   .no-timing {
     color: var(--color-c-gray-45, #6e6e6e);
     font-size: 0.85rem;
@@ -443,6 +419,24 @@
     height: 100%;
     border-radius: 3px;
     min-width: 2px;
+  }
+
+  /* A phase that ran too many times to keep each run: one band over the span
+     it covered, hatched so it doesn't read as a single continuous run. */
+  .phase-bar.banded {
+    background-image: repeating-linear-gradient(
+      45deg,
+      rgba(0, 0, 0, 0.28),
+      rgba(0, 0, 0, 0.28) 3px,
+      transparent 3px,
+      transparent 6px
+    );
+  }
+
+  .phase-role {
+    color: var(--color-c-gray-45, #6e6e6e);
+    flex: 0 0 4rem;
+    font-size: 0.78rem;
   }
 
   .phase-total {

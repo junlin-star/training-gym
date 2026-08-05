@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { colorFor, fmtSecs, labelFor, phaseSummaries, TIMING_COLORS, TIMING_LABELS } from "./timing.js";
+import { colorFor, fmtSecs, labelFor, rolloutTimeline, TIMING_COLORS, TIMING_LABELS } from "./timing.js";
 
 describe("labelFor", () => {
   it("returns a known label", () => {
@@ -36,67 +36,112 @@ describe("fmtSecs", () => {
   });
 });
 
-const phase = (count, total, longest) => ({
+/** A phase from its runs, as the recorder accumulates them. */
+const phase = (runs) => ({
+  count: runs.length,
+  total_duration_s: runs.reduce((acc, [start, end]) => acc + (end - start), 0),
+  longest_duration_s: Math.max(...runs.map(([start, end]) => end - start)),
+  first_start_s: Math.min(...runs.map(([start]) => start)),
+  last_end_s: Math.max(...runs.map(([, end]) => end)),
+  invocations: runs,
+});
+
+/** A per-sample phase, which recorded its aggregate but not its runs. */
+const bandedPhase = (count, total, longest, start, end) => ({
   count,
   total_duration_s: total,
   longest_duration_s: longest,
-  first_start_s: 0,
-  last_end_s: total,
+  first_start_s: start,
+  last_end_s: end,
+  invocations: [],
 });
 
-describe("phaseSummaries", () => {
-  it("aggregates a phase across lanes and rollouts", () => {
-    const rows = phaseSummaries({
-      0: {
-        roles: {
-          driver: { role: "driver", phases: { generate_rollouts: phase(1, 1.2, 1.2) } },
-          rollout: {
-            role: "rollout",
-            phases: { reward: phase(8, 4.0, 2.0) },
-          },
-        },
-      },
-      1: {
-        roles: {
-          driver: { role: "driver", phases: { generate_rollouts: phase(1, 0.8, 0.8) } },
-        },
-      },
-    });
-
-    const gen = rows.find((r) => r.name === "generate_rollouts");
-    expect(gen.count).toBe(2);
-    expect(gen.totalDuration).toBeCloseTo(2.0);
-    expect(gen.longestDuration).toBe(1.2);
-    expect(gen.avgDuration).toBeCloseTo(1.0);
-    expect(gen.avgPerRollout).toBeCloseTo(1.0);
-    expect(gen.rolloutsMeasured).toBe(2);
-    expect(gen.rolloutCount).toBe(2);
-  });
-
-  it("says how many rollouts a phase is missing from", () => {
-    const rows = phaseSummaries({
-      0: { roles: { rollout: { role: "rollout", phases: { reward: phase(4, 2.0, 0.7) } } } },
-      1: { roles: {} },
-    });
-
-    const reward = rows.find((r) => r.name === "reward");
-    expect(reward.rolloutsMeasured).toBe(1);
-    expect(reward.rolloutCount).toBe(2);
-    // Averaged over the rollouts that recorded it, not the ones asked for.
-    expect(reward.avgPerRollout).toBeCloseTo(2.0);
-  });
-
-  it("orders by time spent, longest first", () => {
-    const rows = phaseSummaries({
-      0: {
-        roles: {
-          driver: {
-            role: "driver",
-            phases: { weight_sync: phase(1, 0.5, 0.5), train_models: phase(1, 9.0, 9.0) },
+describe("rolloutTimeline", () => {
+  it("draws one bar per run, so alternating phases do not nest", () => {
+    const { rows, span } = rolloutTimeline({
+      roles: {
+        actor: {
+          role: "actor",
+          lane_start_unix_s: 1000,
+          phases: {
+            forward_backward: phase([
+              [0, 1],
+              [2, 3],
+            ]),
+            optimizer_step: phase([
+              [1, 2],
+              [3, 4],
+            ]),
           },
         },
       },
     });
-    expect(rows.map((r) => r.name)).toEqual(["train_models", "weight_sync"]);
+
+    // Nothing overlapped, so all four bars fit on one row in the order they ran.
+    expect(rows).toHaveLength(1);
+    expect(rows[0].map((bar) => bar.name)).toEqual([
+      "forward_backward",
+      "optimizer_step",
+      "forward_backward",
+      "optimizer_step",
+    ]);
+    expect(rows[0].map((bar) => bar.duration)).toEqual([1, 1, 1, 1]);
+    expect(span).toBe(4);
+  });
+
+  it("puts a bar on a second row only where work really overlapped", () => {
+    const { rows } = rolloutTimeline({
+      roles: {
+        rollout: {
+          role: "rollout",
+          lane_start_unix_s: 1000,
+          phases: {
+            generate_samples: phase([[0, 4]]),
+            reward: bandedPhase(32, 6.4, 0.3, 2, 4.5),
+          },
+        },
+      },
+    });
+
+    expect(rows).toHaveLength(2);
+    expect(rows[0].map((bar) => bar.name)).toEqual(["generate_samples"]);
+    const reward = rows[1][0];
+    expect(reward.banded).toBe(true);
+    expect(reward.count).toBe(32);
+    expect(reward.average).toBeCloseTo(0.2);
+    expect(reward.longest).toBe(0.3);
+    // Concurrent scoring, so the time spent exceeds the span it covered.
+    expect(reward.duration).toBe(6.4);
+    expect(reward.end - reward.start).toBe(2.5);
+  });
+
+  it("shifts lanes recorded in different processes onto one axis", () => {
+    const { rows } = rolloutTimeline({
+      roles: {
+        driver: {
+          role: "driver",
+          lane_start_unix_s: 1000,
+          phases: { train_models: phase([[0, 1]]) },
+        },
+        actor: {
+          role: "actor",
+          lane_start_unix_s: 1002,
+          phases: { forward_backward: phase([[0, 0.5]]) },
+        },
+      },
+    });
+
+    // The actor's lane opened 2s after the driver's, so its bar sits there and
+    // does not collide with the driver's first second.
+    expect(rows).toHaveLength(1);
+    expect(rows[0].map((bar) => [bar.name, bar.start])).toEqual([
+      ["train_models", 0],
+      ["forward_backward", 2],
+    ]);
+  });
+
+  it("has nothing to draw for a rollout that recorded no timing", () => {
+    expect(rolloutTimeline({ roles: {} })).toEqual({ rows: [], span: 0 });
+    expect(rolloutTimeline(null)).toEqual({ rows: [], span: 0 });
   });
 });

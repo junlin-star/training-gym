@@ -54,6 +54,7 @@ def _save_record(rollout_id: int, role: str, total: float) -> None:
                 "longest_duration_s": total / 2,
                 "first_start_s": 0.5,
                 "last_end_s": 0.5 + total,
+                "invocations": [(0.5, 0.5 + total / 2), (0.5 + total / 2, 0.5 + total)],
             }
         },
     ).save()
@@ -86,6 +87,7 @@ def test_batch_returns_a_lane_per_role_and_leaves_unmeasured_rollouts_empty(
         "longest_duration_s": 2.0,
         "first_start_s": 0.5,
         "last_end_s": 4.5,
+        "invocations": [[0.5, 2.5], [2.5, 4.5]],
     }
     assert timings["2"] == {"roles": {}}
 

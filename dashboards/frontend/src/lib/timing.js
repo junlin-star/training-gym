@@ -42,53 +42,81 @@ export function colorFor(name) {
   return TIMING_COLORS[name] || "var(--color-c-gray-40, #5e5e5e)";
 }
 
-/** Per-phase totals across the rollouts currently listed, longest first.
+/** Every measured phase run of one rollout, on the time axis its lanes share.
  *
- * `timings` is the `{rollout_id: {roles: {role: lane}}}` map the timings API
- * returns, so `rolloutsMeasured` counts the rollouts that recorded a phase and
- * `rolloutCount` how many were asked for: fewer means some rollout's lane is
- * missing, which the summary says out loud rather than averaging over.
+ * `lanes` is one rollout's `{roles: {role: lane}}` from the timings API. Lanes
+ * are recorded in different processes, each phase offset relative to its own
+ * lane's start, so `lane_start_unix_s` shifts them onto one axis.
+ *
+ * A phase that recorded its runs contributes one bar per run -- that is what
+ * makes `forward_backward` and `optimizer_step` read as alternating rather than
+ * one containing the other. A phase that ran too many times to keep them
+ * (rewards, one run per sample) contributes a single band over the span it
+ * covered, carrying `count`, `average` and `longest` instead.
+ *
+ * Bars are packed into as few rows as fit without two of them overlapping, so a
+ * row of a rendered timeline never implies concurrency that did not happen, and
+ * anything drawn beside something else really did run beside it.
  */
-export function phaseSummaries(timings = {}) {
-  const rollouts = Object.values(timings);
-  const byName = {};
+export function rolloutTimeline(lanes) {
+  const roles = Object.entries(lanes?.roles || {});
+  const laneStarts = roles
+    .map(([, lane]) => Number(lane?.lane_start_unix_s))
+    .filter((s) => Number.isFinite(s));
+  const earliestLaneStart = laneStarts.length ? Math.min(...laneStarts) : null;
 
-  for (const lanes of rollouts) {
-    const seenHere = new Set();
-    for (const lane of Object.values(lanes?.roles || {})) {
-      for (const [name, phase] of Object.entries(lane?.phases || {})) {
-        const row = (byName[name] ??= {
-          name,
-          count: 0,
-          totalDuration: 0,
-          longestDuration: 0,
-          rolloutsMeasured: 0,
+  const bars = [];
+  for (const [role, lane] of roles) {
+    const laneStart = Number(lane?.lane_start_unix_s);
+    const shift =
+      earliestLaneStart != null && Number.isFinite(laneStart)
+        ? laneStart - earliestLaneStart
+        : 0;
+    for (const [name, phase] of Object.entries(lane?.phases || {})) {
+      const count = Number(phase?.count) || 0;
+      const total = Number(phase?.total_duration_s) || 0;
+      const runs = Array.isArray(phase?.invocations) ? phase.invocations : [];
+      if (runs.length) {
+        runs.forEach(([start, end], i) => {
+          bars.push({
+            key: `${role}:${name}:${i}`,
+            role,
+            name,
+            start: Number(start) + shift,
+            end: Number(end) + shift,
+            duration: Number(end) - Number(start),
+            count: 1,
+            banded: false,
+          });
         });
-        row.count += Number(phase?.count) || 0;
-        row.totalDuration += Number(phase?.total_duration_s) || 0;
-        row.longestDuration = Math.max(
-          row.longestDuration,
-          Number(phase?.longest_duration_s) || 0,
-        );
-        if (!seenHere.has(name)) {
-          seenHere.add(name);
-          row.rolloutsMeasured += 1;
-        }
+      } else if (count) {
+        bars.push({
+          key: `${role}:${name}`,
+          role,
+          name,
+          start: (Number(phase?.first_start_s) || 0) + shift,
+          end: (Number(phase?.last_end_s) || 0) + shift,
+          duration: total,
+          count,
+          average: total / count,
+          longest: Number(phase?.longest_duration_s) || 0,
+          // A phase that ran once spans exactly its one run, so the band is
+          // that run; anything else covers runs the record no longer holds.
+          banded: count > 1,
+        });
       }
     }
   }
+  bars.sort((a, b) => a.start - b.start || a.end - b.end);
 
-  const rolloutCount = rollouts.length;
-  return Object.values(byName)
-    .map((row) => ({
-      ...row,
-      avgDuration: row.count ? row.totalDuration / row.count : 0,
-      avgPerRollout: row.rolloutsMeasured
-        ? row.totalDuration / row.rolloutsMeasured
-        : 0,
-      rolloutCount,
-    }))
-    .sort((a, b) => b.totalDuration - a.totalDuration);
+  const rows = [];
+  for (const bar of bars) {
+    const row = rows.find((r) => r[r.length - 1].end <= bar.start);
+    if (row) row.push(bar);
+    else rows.push([bar]);
+  }
+  const span = bars.length ? Math.max(...bars.map((bar) => bar.end)) : 0;
+  return { rows, span };
 }
 
 export function fmtSecs(s) {

@@ -4,7 +4,7 @@
   import Tabs from "../components/Tabs.svelte";
   import RunSummary from "../components/RunSummary.svelte";
   import StepTimings from "../components/StepTimings.svelte";
-  import PhaseSummary from "../components/PhaseSummary.svelte";
+  import RunTimeline from "../components/RunTimeline.svelte";
   import StatusPill from "../components/StatusPill.svelte";
   import TimeAgo from "../components/TimeAgo.svelte";
   import InferenceStats from "../components/InferenceStats.svelte";
@@ -1376,7 +1376,10 @@
               <div class="rollout-chart-title">
                 Substep timing across {Object.keys(runTimings).length} rollouts
               </div>
-              <PhaseSummary timings={runTimings} />
+              <RunTimeline
+                timings={runTimings}
+                downloadName={`substep_timing_${runId}.json`}
+              />
             </div>
           {/if}
           {#if run.step_times || run.substep_times}
