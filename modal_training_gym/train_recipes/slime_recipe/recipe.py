@@ -1,8 +1,6 @@
-import os
 from collections.abc import Callable
 from dataclasses import field
-from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 from modal_training_gym.train_recipes.base import (
     BaseTrainRecipe,
@@ -656,30 +654,7 @@ class SlimeRecipe(BaseTrainRecipe):
 
     # ── Validators ───────────────────────────────────────────────────────────
 
-    @staticmethod
-    def _callable_path(fn: Callable) -> str:
-        mod = getattr(fn, "__module__", None) or ""
-        name = getattr(fn, "__qualname__", None) or fn.__name__
-        if mod == "__main__":
-            import inspect
-
-            try:
-                src_file = inspect.getfile(fn)
-                if os.path.isfile(src_file):
-                    mod = Path(src_file).stem
-                else:
-                    mod = "__pending__"
-            except (TypeError, OSError):
-                mod = "__pending__"
-        return f"{mod}.{name}"
-
-    @staticmethod
-    def _path_or_callable_path(value: Callable | str | None) -> str | None:
-        if value is None:
-            return None
-        if isinstance(value, str):
-            return value
-        return SlimeRecipe._callable_path(value)
+    _SKIP_FIELDS: ClassVar[frozenset[str]] = frozenset(_SLIME_SKIP)
 
     @model_validator(mode="after")
     def _resolve_callable_paths(self) -> "SlimeRecipe":
@@ -831,18 +806,11 @@ class SlimeRecipe(BaseTrainRecipe):
         dataset: "DatasetConfig | None" = None,
         model: "ModelConfig | None" = None,
     ) -> dict[str, Any]:
-        import dataclasses as _dc
-
-        fields: dict[str, Any] = {}
-        for f in _dc.fields(self):
-            fields[f.name] = getattr(self, f.name)
+        fields = self._field_values()
         if (
             self.colocate
             and fields["sglang_cuda_graph_backend_prefill"] is None
-            and not (
-                isinstance(fields.get("extra_config"), dict)
-                and "sglang_cuda_graph_backend_prefill" in fields["extra_config"]
-            )
+            and "sglang_cuda_graph_backend_prefill" not in self._escape_hatch_keys()
         ):
             fields["sglang_cuda_graph_backend_prefill"] = "disabled"
         if dataset is not None:
@@ -853,19 +821,7 @@ class SlimeRecipe(BaseTrainRecipe):
                 fields.update(self._model_to_fields(model))
         if self.wandb is not None:
             fields.update(self._wandb_to_fields(self.wandb))
-        out = {k: v for k, v in fields.items() if k not in _SLIME_SKIP}
-        # extra_config is an explicit per-recipe escape hatch and must ALWAYS win
-        # over a top-level field's value. slime's --<flag> CLI args override the
-        # YAML custom-config, so any key a recipe also sets in extra_config would
-        # otherwise be clobbered by the field's CLI flag (e.g. qkv_format="thd"
-        # default overriding ASR/VL's extra_config "bshd"). Drop any such CLI flag
-        # so the extra_config value stands.
-        extra_cfg = fields.get("extra_config")
-        if isinstance(extra_cfg, dict):
-            for key in extra_cfg:
-                out.pop(key, None)
-        if "extra_config" in out:
-            out["custom_config_path"] = out.pop("extra_config")
+        out = self._emit_fields(fields)
         for src, dst in {
             "rollout_function": "rollout_function_path",
             "custom_rollout_log_function": "custom_rollout_log_function_path",

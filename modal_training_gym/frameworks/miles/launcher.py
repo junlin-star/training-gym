@@ -23,6 +23,7 @@ from modal_training_gym.common.framework import (
     Framework,
     mount_tools_dir,
 )
+from modal_training_gym.common.launcher_utils import serialize_recipe_params
 from modal_training_gym.common.modal_urls import modal_app_dashboard_url
 from modal_training_gym.common.models import ModelConfig
 from modal_training_gym.common.ray_cluster import ModalRayCluster
@@ -142,12 +143,12 @@ def build_miles_app(
 
     def _set_custom_config_value(key: str, value: str) -> None:
         cfg = (
-            dict(miles.custom_config_path or {})
-            if isinstance(miles.custom_config_path, dict)
+            dict(miles.extra_config or {})
+            if isinstance(miles.extra_config, dict)
             else {}
         )
         cfg[key] = value
-        miles.custom_config_path = cfg
+        miles.extra_config = cfg
 
     def _ship_callable(
         fn: Any,
@@ -164,6 +165,9 @@ def build_miles_app(
             set_path=set_path,
         )
 
+    # rm/generate paths live in the YAML custom-config; Miles reads the rest off
+    # dedicated --<name>-path flags, so those resolve back onto the field itself
+    # and MilesRecipe._fields emits them.
     _ship_callable(
         miles.custom_rm_function,
         fallback_name="custom_rm",
@@ -178,6 +182,24 @@ def build_miles_app(
     )
     miles.custom_rm_function = None
     miles.custom_generate_function = None
+
+    for attr, fallback_name in (
+        ("custom_reward_post_process_function", "custom_reward_post_process"),
+        ("rollout_function", "rollout_function"),
+        ("custom_rollout_log_function", "custom_rollout_log"),
+        ("custom_eval_rollout_log_function", "custom_eval_rollout_log"),
+        ("custom_megatron_before_log_prob_hook", "before_log_prob_hook"),
+        ("custom_megatron_before_train_step_hook", "before_train_step_hook"),
+    ):
+        value = getattr(miles, attr)
+        # A str is already an import path the user vouches for — nothing to ship.
+        if not callable(value):
+            continue
+        _ship_callable(
+            value,
+            fallback_name=fallback_name,
+            set_path=lambda path, attr=attr: object.__setattr__(miles, attr, path),
+        )
 
     hf_cache_volume = Volume.from_name("huggingface-cache", create_if_missing=True)
     data_volume = Volume.from_name(f"{volume_prefix}-data", create_if_missing=True)
@@ -470,11 +492,7 @@ def build_miles_app(
             print(f"Training run id: {training_run_id}")
             config_summary = {
                 "model": {"model_name": model.model_name} if model else {},
-                "recipe": {
-                    "gpu_type": miles.gpu_type,
-                    "actor_num_nodes": miles.actor_num_nodes,
-                    "actor_num_gpus_per_node": miles.actor_num_gpus_per_node,
-                },
+                "recipe": serialize_recipe_params(miles, dataset=dataset, model=model),
                 "wandb": (
                     {
                         "project": miles.wandb.project,

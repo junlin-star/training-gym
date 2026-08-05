@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import os
 import shlex
+from enum import Enum
 from os import PathLike
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 # (attr_name_on_cfg, cli_flag) — optional per-rank conversion args
@@ -189,6 +191,69 @@ def get_checkpoint_conversion_policy(
     )
 
 
+def serialize_recipe_value(value: Any) -> Any:
+    if value is None or isinstance(value, str | int | float | bool):
+        return value
+    if isinstance(value, Enum):
+        return value.value
+    if isinstance(value, Path | PurePosixPath):
+        return str(value)
+    if isinstance(value, dict):
+        return {str(k): serialize_recipe_value(v) for k, v in value.items()}
+    if isinstance(value, list | tuple | set):
+        return [serialize_recipe_value(v) for v in value]
+    if callable(value):
+        module = getattr(value, "__module__", "")
+        name = getattr(value, "__qualname__", getattr(value, "__name__", ""))
+        return f"{module}.{name}" if module and name else repr(value)
+    return repr(value)
+
+
+# TODO(joy): Add more explicit flagging of sensitive fields in the recipe
+def is_sensitive_recipe_field(name: str) -> bool:
+    normalized = name.lower()
+    if any(
+        marker in normalized
+        for marker in ("api_key", "access_key", "secret", "password")
+    ):
+        return True
+    if normalized == "wandb_key":
+        return True
+    # Only treat ``*_token`` (hf_token, api_token, auth_token, access_token) as a
+    # credential. Counts and policies like ``max_tokens_per_gpu``,
+    # ``calculate_per_token_loss`` or ``rollout_stop_token_ids`` are not secrets.
+    return normalized == "token" or normalized.endswith("_token")
+
+
+def serialize_recipe_param_value(name: str, value: Any) -> Any:
+    if is_sensitive_recipe_field(name):
+        return "[redacted]" if value not in (None, "", False) else value
+    if isinstance(value, dict):
+        return {
+            str(k): serialize_recipe_param_value(str(k), v) for k, v in value.items()
+        }
+    if isinstance(value, list | tuple | set):
+        return [serialize_recipe_param_value(name, v) for v in value]
+    return serialize_recipe_value(value)
+
+
+def serialize_recipe_params(
+    recipe: Any,
+    *,
+    dataset: Any = None,
+    model: Any = None,
+) -> dict[str, Any]:
+    """The recipe's effective CLI flags, serialized for the dashboard run record.
+
+    Framework-agnostic: any recipe implementing ``_fields`` works, so slime and
+    miles runs get the same parameter table.
+    """
+    return {
+        key: serialize_recipe_param_value(key, value)
+        for key, value in recipe._fields(dataset=dataset, model=model).items()
+    }
+
+
 def prepare_launch_config(
     cfg: Any,
     model: Any,
@@ -211,12 +276,19 @@ def prepare_launch_config(
         if val := getattr(cfg, attr, None):
             object.__setattr__(cfg, attr, resolve_checkpoint_ref(val))
 
+    escape_hatch = getattr(cfg, "_ESCAPE_HATCH_FIELD", None)
     for field in yaml_config_fields:
         if isinstance(val := getattr(cfg, field, None), dict):
             path = os.path.join(tmpdir, f"{field}.yaml")
             with open(path, "w") as f:
                 yaml.dump(val, f)
             print(f"Materialized {field} → {path}")
+            # Record the keys before the dict is replaced by its path: this runs
+            # before build_train_cmd calls cli_args, and the recipe's
+            # escape-hatch-wins-over-flag rule needs to know what was in there
+            # (see BaseTrainRecipe._escape_hatch_keys).
+            if field == escape_hatch:
+                object.__setattr__(cfg, "_materialized_config_keys", tuple(val))
             object.__setattr__(cfg, field, path)
 
 

@@ -4,6 +4,7 @@ import threading
 import time
 from contextlib import nullcontext
 from typing import Any
+from typing import TypeVar
 from typing import cast
 
 from modal_training_gym.common.dataset import DatasetConfig
@@ -30,7 +31,10 @@ from pydantic import ConfigDict
 from pydantic.dataclasses import dataclass
 
 
-def _merge_recipe(base: SlimeRecipe, overrides: SlimeRecipe) -> SlimeRecipe:
+_RecipeT = TypeVar("_RecipeT", bound=BaseTrainRecipe)
+
+
+def _merge_recipe(base: BaseTrainRecipe, overrides: BaseTrainRecipe) -> BaseTrainRecipe:
     base_fields = {f.name: getattr(base, f.name) for f in _dc.fields(base)}
 
     # Fields that a recipe *subclass* declares in its own body are intentional
@@ -39,7 +43,7 @@ def _merge_recipe(base: SlimeRecipe, overrides: SlimeRecipe) -> SlimeRecipe:
     # context_parallel_size=1, or disabling use_kl_loss). We collect those by
     # walking the MRO from the concrete recipe down to — but not including — the
     # framework's base recipe class (the immediate subclass of BaseTrainRecipe,
-    # e.g. SlimeRecipe / MilesConfig). For a plain base recipe (no subclass
+    # e.g. SlimeRecipe / MilesRecipe). For a plain base recipe (no subclass
     # layer) this set is empty, so we fall back to "value differs from default"
     # — which keeps an untouched recipe from clobbering the preset with bare
     # defaults (e.g. a preset's n_samples_per_prompt=8 vs default 2).
@@ -67,21 +71,26 @@ def _field_default(field: _dc.Field) -> Any:
     return _dc.MISSING
 
 
-def _resolve_slime_recipe(
+def _try_validate_model_parallelism(
+    recipe: BaseTrainRecipe, model: ModelConfig
+) -> None:
+    # Not every framework recipe implements this preflight.
+    if validate := getattr(recipe, "validate_model_parallelism", None):
+        validate(model)
+
+
+def _resolve_recipe(
     model: ModelConfig,
-    recipe: SlimeRecipe,
+    recipe: _RecipeT,
     *,
     merge_model_recipe: bool,
-) -> SlimeRecipe:
-    if not merge_model_recipe:
-        recipe.validate_model_parallelism(model)
-        return recipe
-    base_recipe = SlimeRecipe.get_base_recipe(model)
+) -> _RecipeT:
+    base_recipe = type(recipe).get_base_recipe(model) if merge_model_recipe else None
     if base_recipe is None:
-        recipe.validate_model_parallelism(model)
+        _try_validate_model_parallelism(recipe, model)
         return recipe
-    resolved = _merge_recipe(base_recipe, recipe)
-    resolved.validate_model_parallelism(model)
+    resolved = cast(_RecipeT, _merge_recipe(base_recipe, recipe))
+    _try_validate_model_parallelism(resolved, model)
     return resolved
 
 
@@ -320,7 +329,7 @@ class TrainConfig:
         weight-download logic; weights are downloaded into the shared
         HuggingFace cache volume on first use and reused across runs.
     recipe : BaseTrainRecipe
-        Framework recipe (``SlimeRecipe`` or ``MilesConfig``). Selects the
+        Framework recipe (``SlimeRecipe`` or ``MilesRecipe``). Selects the
         training framework and carries Modal infra settings (GPU type, node
         count, image) plus framework CLI flags.
     checkpoint : Checkpoint | None
@@ -388,11 +397,15 @@ class TrainConfig:
         if recipe_type == RecipeType.MILES:
             if not isinstance(self.recipe, MilesRecipe):
                 raise TrainingGymConfigError(
-                    f"Recipe type {recipe_type} requires MilesConfig, got {type(self.recipe).__name__}"
+                    f"Recipe type {recipe_type} requires MilesRecipe, got {type(self.recipe).__name__}"
                 )
             return build_miles_app(
                 training_run_id=training_run_id,
-                miles=cast(MilesRecipe, self.recipe),
+                miles=_resolve_recipe(
+                    self.model,
+                    cast(MilesRecipe, self.recipe),
+                    merge_model_recipe=self.merge_model_recipe,
+                ),
                 model=self.model,
                 dataset=self.dataset,
                 checkpoint=self.checkpoint,
@@ -404,7 +417,7 @@ class TrainConfig:
                 raise TrainingGymConfigError(
                     f"Recipe type {recipe_type} requires SlimeRecipe, got {type(self.recipe).__name__}"
                 )
-            combined = _resolve_slime_recipe(
+            combined = _resolve_recipe(
                 self.model,
                 cast(SlimeRecipe, self.recipe),
                 merge_model_recipe=self.merge_model_recipe,
@@ -468,25 +481,17 @@ class TrainConfig:
             "global_batch_size": getattr(recipe, "global_batch_size", None),
         }
 
-        if isinstance(recipe, SlimeRecipe):
-            from modal_training_gym.frameworks.slime.launcher import (
-                _serialize_slime_params,
+        if isinstance(recipe, SlimeRecipe | MilesRecipe):
+            from modal_training_gym.common.launcher_utils import (
+                serialize_recipe_params,
             )
 
-            combined = _resolve_slime_recipe(
-                model,
-                cast(SlimeRecipe, recipe),
-                merge_model_recipe=self.merge_model_recipe,
+            combined = _resolve_recipe(
+                model, recipe, merge_model_recipe=self.merge_model_recipe
             )
-            summary["recipe"] = _serialize_slime_params(
+            summary["recipe"] = serialize_recipe_params(
                 combined, dataset=dataset, model=model
             )
-        elif isinstance(recipe, MilesRecipe):
-            summary["recipe"] = {
-                "gpu_type": recipe.gpu_type,
-                "actor_num_nodes": recipe.actor_num_nodes,
-                "actor_num_gpus_per_node": recipe.actor_num_gpus_per_node,
-            }
 
         return summary
 
@@ -533,13 +538,9 @@ class TrainConfig:
         )
 
     def _resolved_recipe_for_logging(self) -> BaseTrainRecipe:
-        if isinstance(self.recipe, SlimeRecipe):
-            return _resolve_slime_recipe(
-                self.model,
-                cast(SlimeRecipe, self.recipe),
-                merge_model_recipe=self.merge_model_recipe,
-            )
-        return self.recipe
+        return _resolve_recipe(
+            self.model, self.recipe, merge_model_recipe=self.merge_model_recipe
+        )
 
     def context_plan_line(self) -> str | None:
         """One-line summary of the effective training context length and parallelism plan."""

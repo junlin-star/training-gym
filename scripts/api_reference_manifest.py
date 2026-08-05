@@ -193,6 +193,13 @@ API_REFERENCE_MANIFEST = [
         "sidebar_label": "SlimeRecipe",
     },
     {
+        "class_name": "MilesRecipe",
+        "module": "modal_training_gym.train_recipes.miles_recipe.recipe",
+        "group": "training",
+        "class_type": "config_data",
+        "sidebar_label": "MilesRecipe",
+    },
+    {
         "class_name": "Qwen3_6_35b_Recipe",
         "module": "modal_training_gym.train_recipes.slime_recipe.qwen3_6_35b",
         "group": "training",
