@@ -268,6 +268,14 @@
     <span class="tg-tip-when">
       {fmtSecs(tip.bar.start)} → {fmtSecs(tip.bar.end)} into the rollout
     </span>
+    {#if tip.bar.band}
+      <span class="tg-tip-when">
+        {tip.bar.band.count} calls · average {fmtSecs(
+          tip.bar.band.total / tip.bar.band.count,
+        )} · longest {fmtSecs(tip.bar.band.longest)}, spread over the span, not
+        one run
+      </span>
+    {/if}
     {#if tip.bar.runs > 1}
       <span class="tg-tip-when">
         {tip.bar.runs} runs at once, {fmtSecs(tip.bar.work)} of work between them

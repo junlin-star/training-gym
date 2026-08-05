@@ -133,6 +133,7 @@ export function rolloutTimeline(lanes) {
           runs: block.runs,
           work: block.work,
           contains: false,
+          band: null,
           spent: [],
         });
       });
@@ -171,13 +172,14 @@ export function rolloutTimeline(lanes) {
         key: `${work.role}:${work.name}`,
         ...work,
         duration: work.total,
-        runs: work.count,
+        runs: 1,
         work: work.total,
         depth: 0,
         container: null,
         inside: null,
         contains: false,
-        spent: [work],
+        band: work,
+        spent: [],
       });
   }
 
