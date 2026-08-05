@@ -168,8 +168,6 @@ def _build_slime_base_image() -> "Image":
             f"echo {_PATCH_DIST_CKPT_QUANTIZED_B64} | base64 -d | python3",
             f"echo {_PATCH_ZERO_STD_METRICS_B64} | base64 -d | python3",
             f"echo {_PATCH_SGLANG_PARALLEL_ALIASES_B64} | base64 -d | python3",
-            # Last: it re-indents the blocks it wraps, and unlike the patches
-            # above it fails the build rather than warning when an anchor moved.
             f"echo {_PATCH_SUBSTEP_TIMING_B64} | base64 -d | python3",
         )
     )

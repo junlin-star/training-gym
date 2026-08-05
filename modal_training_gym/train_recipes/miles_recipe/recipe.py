@@ -429,7 +429,6 @@ class MilesRecipe(BaseTrainRecipe):
     local_miles: str | None = None
     patch_files: list[str] = field(default_factory=list)
 
-    # ── Measured substep timing ──────────────────────────────────────────────
     substep_timing: Literal["auto", "require", "off"] = "auto"
 
     environment: dict = field(

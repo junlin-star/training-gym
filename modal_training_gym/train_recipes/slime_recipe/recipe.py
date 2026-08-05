@@ -506,7 +506,6 @@ class SlimeRecipe(BaseTrainRecipe):
     image_env: dict[str, str] = field(default_factory=dict)
     train_function_kwargs: dict[str, Any] = field(default_factory=dict)
 
-    # ── Measured substep timing ──────────────────────────────────────────────
     substep_timing: Literal["auto", "require", "off"] = "auto"
 
     # ── Per-sample execution tracing (dashboard timeline) ───────────────────

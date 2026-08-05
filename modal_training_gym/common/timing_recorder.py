@@ -25,14 +25,9 @@ TIMING_PATH = "/api/timing-events"
 STATUS_PATH = "/api/framework-status"
 TIMING_TIMEOUT_SECONDS = 10.0
 
-# A publish rewrites the lane's whole record on the metadata volume, and a phase
-# per sample fires thousands of times a step, so the stream is a periodic
-# sample of the lane rather than a write per phase. Closing the lane publishes
-# regardless, so what is stored at the end is complete.
 MIN_PUBLISH_INTERVAL_S = 3.0
 
-# Past this a phase keeps its aggregate only: every publish re-posts the record.
-MAX_DRAWN_INVOCATIONS = 1024
+PER_SAMPLE_PHASES = frozenset({"reward"})
 
 
 def timing_url() -> str:
@@ -74,10 +69,7 @@ class RoleRecorder:
         self.phases: dict[str, dict[str, float]] = {}
         self.invocations: dict[str, list[list[float]]] = {}
         self._last_publish_t = float("-inf")
-        # Rewards are scored concurrently on the same lane
         self._lock = threading.Lock()
-        # A snapshot replaces the lane's stored record, so only the newest one
-        # is worth posting.
         self._snapshot: dict[str, object] | None = None
         self._posted_phases: dict[str, dict[str, object]] | None = None
         self._snapshot_ready = threading.Event()
@@ -88,8 +80,6 @@ class RoleRecorder:
         return self
 
     def __exit__(self, *exc: object) -> None:
-        # Handed to the poster rather than sent here: a lane closes on the
-        # framework's event loop, which a post would hold for its whole timeout.
         self._publish(force=True)
         self._closed = True
         self._snapshot_ready.set()
@@ -115,23 +105,22 @@ class RoleRecorder:
                         "first_start_s": start - self._t0,
                         "last_end_s": end - self._t0,
                     }
-                    self.invocations[name] = [[start - self._t0, end - self._t0]]
+                    self.invocations[name] = (
+                        []
+                        if name in PER_SAMPLE_PHASES
+                        else [[start - self._t0, end - self._t0]]
+                    )
                 else:
                     timing["count"] += 1
                     timing["total_duration_s"] += duration
                     timing["longest_duration_s"] = max(
                         timing["longest_duration_s"], duration
                     )
-                    # Concurrent runs neither start nor finish in order
                     timing["first_start_s"] = min(
                         timing["first_start_s"], start - self._t0
                     )
                     timing["last_end_s"] = max(timing["last_end_s"], end - self._t0)
-                    if timing["count"] > MAX_DRAWN_INVOCATIONS:
-                        # Emptied, not truncated: a prefix of the runs would
-                        # draw as if the phase had stopped early.
-                        self.invocations[name] = []
-                    else:
+                    if name not in PER_SAMPLE_PHASES:
                         self.invocations[name].append(
                             [start - self._t0, end - self._t0]
                         )
@@ -143,12 +132,9 @@ class RoleRecorder:
             self._snapshot_ready.clear()
             with self._lock:
                 snapshot, self._snapshot = self._snapshot, None
-            # The record is written whole, so a snapshot whose phases are
-            # unchanged would rewrite the stored one with itself.
             if snapshot is not None and snapshot["phases"] != self._posted_phases:
                 self._posted_phases = snapshot["phases"]
                 status_reporter.post_item(snapshot)
-            # Checked last, so the snapshot taken as the lane closed is sent.
             if self._closed and self._snapshot is None:
                 return
 
@@ -166,8 +152,6 @@ class RoleRecorder:
             if self._gate_answer is None:
                 self._gate_answer = self._publish_gate()
             if self._gate_answer is None and force:
-                # Closing without ranks having formed: this process is the only
-                # one measuring the lane, so it is the one that writes it.
                 self._gate_answer = True
             if not self._gate_answer:
                 return
@@ -199,8 +183,6 @@ class RoleRecorder:
         }
         with self._lock:
             self._snapshot = snapshot
-            # Started holding the lock: two phases ending at once would
-            # otherwise each start a poster, and the lane joins only one.
             if self._poster is None:
                 self._poster = threading.Thread(
                     target=self._post_snapshots,
@@ -211,11 +193,6 @@ class RoleRecorder:
         self._snapshot_ready.set()
 
 
-# The lane the phases of the running code are recorded on, so that a phase timed
-# deep in the framework's call stack (a reward on its event loop thread) finds it
-# rather than being passed it. A context variable because a rollout actor can
-# have two lanes open at once -- an eval and a generate are separate async calls
-# on one actor -- and each of their phases belongs to its own.
 _ACTIVE_LANE: ContextVar[RoleRecorder | None] = ContextVar(
     "training_gym_active_lane", default=None
 )
