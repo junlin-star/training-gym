@@ -16,6 +16,9 @@
   // A contained row sits just within the row containing it, which is drawn as an
   // outline, so the two read as one bar inside another.
   const CONTAINED_INSET_PX = 2;
+  // Taken off each bar's width so phases that ran back to back read as two bars
+  // rather than one block.
+  const BAR_GAP_PX = 2;
 
   function placeRows(rows) {
     const placed = [];
@@ -240,7 +243,7 @@
                           : colorFor(bar.name)}
                         style:border-color={colorFor(bar.name)}
                         style:left={`${(bar.start / rollout.span) * 100}%`}
-                        style:width={`${Math.max(((bar.end - bar.start) / rollout.span) * 100, 0.4)}%`}
+                        style:width={`max(2px, calc(${Math.max(((bar.end - bar.start) / rollout.span) * 100, 0.4)}% - ${BAR_GAP_PX}px))`}
                         onmouseenter={(e) => showTip(e, rollout.id, bar)}
                         onmousemove={moveTip}
                         onmouseleave={hideTip}

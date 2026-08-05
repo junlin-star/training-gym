@@ -420,13 +420,18 @@
     }
   }
 
-  // The run being read, so a read slower than the poll interval doesn't queue
-  // another one for the same run, but switching runs still reads immediately.
-  let timingRunInFlight = null;
+  // The read in flight, so a read slower than the poll interval doesn't queue
+  // another one for the same run. Switching runs or tabs aborts it, and an
+  // aborted read holds nothing back.
+  let timingInFlight = null;
 
   async function loadTimings(signal) {
-    if (!runId || timingRunInFlight === runId) return;
-    timingRunInFlight = runId;
+    if (
+      !runId ||
+      (timingInFlight?.runId === runId && !timingInFlight.signal?.aborted)
+    )
+      return;
+    timingInFlight = { runId, signal };
     try {
       const timings = await fetchRunTimings(runId, { signal });
       if (signal?.aborted) return;
@@ -435,7 +440,7 @@
       // Keep the timing we have: a lane only grows, so a failed poll is stale
       // rather than wrong.
     } finally {
-      timingRunInFlight = null;
+      if (timingInFlight?.signal === signal) timingInFlight = null;
     }
   }
 

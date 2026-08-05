@@ -75,6 +75,7 @@ class RoleRecorder:
         # A snapshot replaces the lane's stored record, so only the newest one
         # is worth posting.
         self._snapshot: dict[str, object] | None = None
+        self._posted_phases: dict[str, dict[str, object]] | None = None
         self._snapshot_ready = threading.Event()
         self._poster: threading.Thread | None = None
         self._closed = False
@@ -138,7 +139,10 @@ class RoleRecorder:
             self._snapshot_ready.clear()
             with self._lock:
                 snapshot, self._snapshot = self._snapshot, None
-            if snapshot is not None:
+            # A record is written whole, so a snapshot no phase changed in
+            # would rewrite the stored one with itself.
+            if snapshot is not None and snapshot["phases"] != self._posted_phases:
+                self._posted_phases = snapshot["phases"]
                 status_reporter.post_item(snapshot)
             # Checked last, so the snapshot taken as the lane closed is sent.
             if self._closed and self._snapshot is None:
