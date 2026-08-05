@@ -17,17 +17,19 @@ from pathlib import Path
 import pytest
 
 TESTDATA = Path(__file__).parent / "testdata"
-PATCHER_PATH = (
-    Path(__file__).parents[1]
-    / "modal_training_gym"
-    / "common"
-    / "patch_scripts"
-    / "patch_substep_timing.py"
-)
+FRAMEWORKS = Path(__file__).parents[1] / "modal_training_gym" / "frameworks"
 
-# fixture, entrypoint, golden output, driver phases the loop must record.
+
+def patcher_path(framework: str) -> Path:
+    return (
+        FRAMEWORKS / framework / "modal_helpers" / "patches" / "patch_substep_timing.py"
+    )
+
+
+# framework, fixture, entrypoint, golden output, driver phases the loop records.
 DRIVERS = [
     (
+        "slime",
         "train.py.output",
         "train.py",
         "slime/train.py.timing.output",
@@ -43,6 +45,7 @@ DRIVERS = [
         },
     ),
     (
+        "miles",
         "miles/train.py.input",
         "train.py",
         "miles/train.py.timing.output",
@@ -58,6 +61,7 @@ DRIVERS = [
         },
     ),
     (
+        "miles",
         "miles/train_async.py.input",
         "train_async.py",
         "miles/train_async.py.timing.output",
@@ -73,34 +77,40 @@ DRIVERS = [
 
 
 @pytest.fixture(scope="session")
-def patcher():
-    """Load the patch script by path: it runs standalone in the image, and is
-    deliberately not importable as part of the package."""
-    spec = importlib.util.spec_from_file_location("patch_substep_timing", PATCHER_PATH)
-    assert spec and spec.loader
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module  # its dataclass resolves annotations here
-    spec.loader.exec_module(module)
-    return module
+def patchers() -> dict[str, object]:
+    """Load each framework's patch script by path: they run standalone in the
+    image, and are deliberately not importable as part of the package."""
+    loaded = {}
+    for framework in ("slime", "miles"):
+        name = f"patch_substep_timing_{framework}"
+        spec = importlib.util.spec_from_file_location(name, patcher_path(framework))
+        assert spec and spec.loader
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module  # its dataclass resolves annotations here
+        spec.loader.exec_module(module)
+        loaded[framework] = module
+    return loaded
+
+
+@pytest.fixture(scope="session")
+def miles(patchers):
+    return patchers["miles"]
 
 
 def _patched(patcher, tmp_path, fixture: str, entrypoint: str) -> str:
-    entrypoints = (
-        patcher.MILES_ENTRYPOINTS
-        if fixture.startswith("miles/")
-        else patcher.SLIME_ENTRYPOINTS
-    )
     work = tmp_path / entrypoint
     work.write_text((TESTDATA / fixture).read_text())
-    patcher._patch_file(work, entrypoints[entrypoint])
+    patcher._patch_file(work, patcher.ENTRYPOINTS[entrypoint])
     return work.read_text()
 
 
-@pytest.mark.parametrize("fixture, entrypoint, golden, expected_phases", DRIVERS)
+@pytest.mark.parametrize(
+    "framework, fixture, entrypoint, golden, expected_phases", DRIVERS
+)
 def test_patch_matches_golden(
-    patcher, tmp_path, request, fixture, entrypoint, golden, expected_phases
+    patchers, tmp_path, request, framework, fixture, entrypoint, golden, expected_phases
 ):
-    patched = _patched(patcher, tmp_path, fixture, entrypoint)
+    patched = _patched(patchers[framework], tmp_path, fixture, entrypoint)
     golden_path = TESTDATA / golden
 
     if request.config.getoption("--rewrite"):
@@ -117,29 +127,29 @@ def test_patch_matches_golden(
     compile(patched, entrypoint, "exec")
 
 
-def test_a_conditional_phase_is_timed_inside_its_branch(patcher, tmp_path):
+def test_a_conditional_phase_is_timed_inside_its_branch(patchers, tmp_path):
     """A skipped save must record nothing, not a 0s bar on every rollout.
 
     Its condition spans three lines, so the closing ``):`` sits at the ``if``'s
     own indent and must not be read as the start of another clause.
     """
-    patched = _patched(patcher, tmp_path, "train.py.output", "train.py")
+    patched = _patched(patchers["slime"], tmp_path, "train.py.output", "train.py")
     save = patched.split("if release_train or should_run_periodic_action(")[1]
     before_wrap = save.split("with _tg_rec.phase('checkpoint_save'):")[0]
     assert before_wrap.split("#")[0].rstrip().endswith("):")
 
 
-def test_patching_twice_is_a_no_op(patcher, tmp_path, capsys):
+def test_patching_twice_is_a_no_op(miles, tmp_path, capsys):
     work = tmp_path / "train.py"
     work.write_text((TESTDATA / "miles/train.py.input").read_text())
-    patcher._patch_file(work, patcher.MILES_ENTRYPOINTS["train.py"])
+    miles._patch_file(work, miles.ENTRYPOINTS["train.py"])
     once = work.read_text()
-    patcher._patch_file(work, patcher.MILES_ENTRYPOINTS["train.py"])
+    miles._patch_file(work, miles.ENTRYPOINTS["train.py"])
     assert work.read_text() == once
     assert "already patched" in capsys.readouterr().out
 
 
-def test_a_moved_anchor_fails_the_build(patcher, tmp_path):
+def test_a_moved_anchor_fails_the_build(miles, tmp_path):
     """Half-instrumented timing is worse than none: a lane would just be absent."""
     work = tmp_path / "train.py"
     source = (TESTDATA / "miles/train.py.input").read_text()
@@ -147,9 +157,9 @@ def test_a_moved_anchor_fails_the_build(patcher, tmp_path):
         source.replace("await offload_train()", "await offload_train(args)")
     )
     with pytest.raises(RuntimeError, match="expected 1 occurrence"):
-        patcher._patch_file(work, patcher.MILES_ENTRYPOINTS["train.py"])
+        miles._patch_file(work, miles.ENTRYPOINTS["train.py"])
 
 
-def test_missing_package_file_fails_the_build(patcher, tmp_path):
+def test_missing_package_file_fails_the_build(miles, tmp_path):
     with pytest.raises(RuntimeError, match="layout changed"):
-        patcher.patch_package_file(tmp_path, patcher.MILES_PACKAGE_TARGETS[0])
+        miles.patch_package_file(tmp_path, miles.PACKAGE_TARGETS[0])

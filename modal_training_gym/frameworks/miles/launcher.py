@@ -71,10 +71,8 @@ MILES_ROOT = "/root/miles"
 HARBOR_PKG_VERSION = "0.8.0"
 
 _MILES_PATCHES = Path(__file__).parent / "modal_helpers" / "patches"
-_COMMON_PATCHES = Path(__file__).parents[2] / "common" / "patch_scripts"
 _PATCH_SGLANG_ABORT_B64 = encode_patch("patch_sglang_abort", _MILES_PATCHES)
-# Shared with slime: one script owns both frameworks' timing anchors.
-_PATCH_SUBSTEP_TIMING_B64 = encode_patch("patch_substep_timing", _COMMON_PATCHES)
+_PATCH_SUBSTEP_TIMING_B64 = encode_patch("patch_substep_timing", _MILES_PATCHES)
 
 
 def _build_miles_base_image(miles: MilesRecipe) -> Image:

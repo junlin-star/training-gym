@@ -25,7 +25,11 @@ TIMING_PATH = "/api/timing-events"
 STATUS_PATH = "/api/framework-status"
 TIMING_TIMEOUT_SECONDS = 10.0
 
-MIN_PUBLISH_INTERVAL_S = 1.0
+# A publish rewrites the lane's whole record on the metadata volume, and a phase
+# per sample fires thousands of times a step, so the stream is a periodic
+# sample of the lane rather than a write per phase. Closing the lane publishes
+# regardless, so what is stored at the end is complete.
+MIN_PUBLISH_INTERVAL_S = 3.0
 
 # Past this a phase keeps its aggregate only: every publish re-posts the record.
 MAX_DRAWN_INVOCATIONS = 1024
@@ -139,8 +143,8 @@ class RoleRecorder:
             self._snapshot_ready.clear()
             with self._lock:
                 snapshot, self._snapshot = self._snapshot, None
-            # A record is written whole, so a snapshot no phase changed in
-            # would rewrite the stored one with itself.
+            # The record is written whole, so a snapshot whose phases are
+            # unchanged would rewrite the stored one with itself.
             if snapshot is not None and snapshot["phases"] != self._posted_phases:
                 self._posted_phases = snapshot["phases"]
                 status_reporter.post_item(snapshot)

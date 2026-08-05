@@ -1,7 +1,8 @@
-"""Wrap the driver loop, rollout worker and actor with measured substep timing.
+"""Wrap miles' driver loop, rollout worker and actor with measured substep timing.
 
-One script for both frameworks: slime and miles have the same lanes and phase
-names, only different source anchors.
+Slime has the same script over its own source: the lanes, phase names and record
+format are the two frameworks' shared contract, so a change to one belongs in
+the other (``frameworks/slime/modal_helpers/patches/patch_substep_timing.py``).
 
 Puts each phase of the training loop inside ``with _tg_rec.phase(...)``. The
 driver's phases all sit in one loop body, with a local (``_tg_rec``) recorder.
@@ -65,9 +66,7 @@ PREAMBLE = (
 )
 
 
-# The framework checkouts this script can patch, in the container.
-SLIME_ROOT = Path("/root/slime")
-MILES_ROOT = Path("/root/miles")
+ROOT = Path("/root/miles")
 
 
 def replace_once(source: str, old: str, new: str, path: Path) -> str:
@@ -145,153 +144,6 @@ def _wrap_driver_loop(src: str, path: Path) -> str:
     return "".join(new_lines)
 
 
-# Patches applied to the driver loop body after the rollout-status patcher has run.
-_SYNC_PHASE_WRAPS = [
-    (
-        "        if args.eval_interval is not None and rollout_id == 0 and not args.skip_eval_before_train:\n"
-        "            # PATCHED_TRAINING_GYM_EVAL_BEGIN: eval-before-train substep start\n"
-        "            _tg_report('evaluate_rollouts', args, rollout_id)\n"
-        "            ray.get(rollout_manager.eval.remote(rollout_id))\n",
-        "evaluate_rollouts",
-    ),
-    (
-        "        rollout_data_ref = ray.get(rollout_manager.generate.remote(rollout_id))\n",
-        "generate_rollouts",
-    ),
-    (
-        "        if args.offload_rollout:\n"
-        "            # PATCHED_TRAINING_GYM_OFFLOAD_ROLLOUT_STATUS: rollout offload state\n"
-        "            _tg_report('offload_rollout', args, rollout_id)\n"
-        "            ray.get(rollout_manager.offload.remote())\n",
-        "offload_rollout",
-    ),
-    (
-        "        if args.use_critic:\n"
-        "            value_refs = critic_model.async_train(rollout_id, rollout_data_ref)\n"
-        "            if actor_trains:\n"
-        "                # PATCHED_TRAINING_GYM_COMPUTE_LOG_PROBS_STATUS: compute log probs state\n"
-        "                _tg_report('compute_log_probs', args, rollout_id)\n"
-        "                ray.get(actor_model.async_train(rollout_id, rollout_data_ref, external_data=value_refs))\n"
-        "            else:\n"
-        "                ray.get(value_refs)\n"
-        "        else:\n"
-        "            # PATCHED_TRAINING_GYM_COMPUTE_LOG_PROBS_STATUS: compute log probs state\n"
-        "            _tg_report('compute_log_probs', args, rollout_id)\n"
-        "            ray.get(actor_model.async_train(rollout_id, rollout_data_ref))\n",
-        "train_models",
-    ),
-    (
-        "        if release_train or should_run_periodic_action(\n"
-        "            rollout_id, args.save_interval, num_rollout_per_epoch, args.num_rollout\n"
-        "        ):\n"
-        "            # PATCHED_TRAINING_GYM_CHECKPOINT_SAVE_STATUS: checkpoint save state\n"
-        "            _tg_report('checkpoint_save', args, rollout_id)\n"
-        "            force_sync = release_train or rollout_id == args.num_rollout - 1\n"
-        "            if actor_trains:\n"
-        "                actor_model.save_model(rollout_id, force_sync=force_sync)\n"
-        "            if args.use_critic:\n"
-        "                critic_model.save_model(rollout_id, force_sync=force_sync)\n"
-        "            if args.rollout_global_dataset:\n"
-        "                ray.get(rollout_manager.save.remote(rollout_id))\n",
-        "checkpoint_save",
-    ),
-    (
-        "        # PATCHED_TRAINING_GYM_OFFLOAD_TRAIN_STATUS: train offload state\n"
-        "        _tg_report('offload_train', args, rollout_id)\n"
-        "        offload_train(actor_trains)\n",
-        "offload_train",
-    ),
-    # The onload calls belong to the weight update, as in miles: the rollout
-    # engines cannot take new weights until they are back on the GPU.
-    (
-        "        if args.offload_rollout and not release_train:\n"
-        "            ray.get(rollout_manager.onload_weights.remote())\n"
-        "        # PATCHED_TRAINING_GYM_WEIGHT_SYNC_STATUS: weight sync state\n"
-        "        _tg_report('weight_sync', args, rollout_id)\n"
-        "        actor_model.update_weights()\n"
-        "\n"
-        "        if args.offload_rollout:\n"
-        "            ray.get(rollout_manager.onload_kv.remote())\n",
-        "weight_sync",
-    ),
-    (
-        "        if should_run_periodic_action(rollout_id, args.eval_interval, num_rollout_per_epoch):\n"
-        "            # PATCHED_TRAINING_GYM_EVAL_END: eval-after-train substep start\n"
-        "            _tg_report('evaluate_rollouts', args, rollout_id)\n"
-        "            ray.get(rollout_manager.eval.remote(rollout_id))\n",
-        "evaluate_rollouts_end",
-    ),
-]
-
-
-# train_async.py has a different loop: no eval before train, no rollout offload,
-# and the wait is on a future prefetched during the previous step.
-_ASYNC_PHASE_WRAPS = [
-    (
-        "        if rollout_data_next_future is not None:\n"
-        "            rollout_data_curr_ref = ray.get(rollout_data_next_future)\n",
-        "wait_for_rollout",
-    ),
-    (
-        "        if args.use_critic:\n"
-        "            value_refs = critic_model.async_train(rollout_id, rollout_data_curr_ref)\n"
-        "            if actor_trains:\n"
-        "                # PATCHED_TRAINING_GYM_COMPUTE_LOG_PROBS_STATUS: compute log probs state\n"
-        "                _tg_report('compute_log_probs', args, rollout_id)\n"
-        "                ray.get(actor_model.async_train(rollout_id, rollout_data_curr_ref, external_data=value_refs))\n"
-        "            else:\n"
-        "                ray.get(value_refs)\n"
-        "        else:\n"
-        "            # PATCHED_TRAINING_GYM_COMPUTE_LOG_PROBS_STATUS: compute log probs state\n"
-        "            _tg_report('compute_log_probs', args, rollout_id)\n"
-        "            ray.get(actor_model.async_train(rollout_id, rollout_data_curr_ref))\n",
-        "train_models",
-    ),
-    (
-        "        if release_train or should_run_periodic_action(\n"
-        "            rollout_id, args.save_interval, num_rollout_per_epoch, args.num_rollout\n"
-        "        ):\n"
-        "            # PATCHED_TRAINING_GYM_CHECKPOINT_SAVE_STATUS: checkpoint save state\n"
-        "            _tg_report('checkpoint_save', args, rollout_id)\n"
-        "            force_sync = release_train or rollout_id == args.num_rollout - 1\n"
-        "            if actor_trains:\n"
-        "                actor_model.save_model(rollout_id, force_sync=force_sync)\n"
-        "            if args.use_critic:\n"
-        "                critic_model.save_model(rollout_id, force_sync=force_sync)\n"
-        "            if args.rollout_global_dataset:\n"
-        "                ray.get(rollout_manager.save.remote(rollout_id))\n",
-        "checkpoint_save",
-    ),
-    # Where an async run actually waits for generation from the second step on:
-    # weights cannot be updated mid generation, so the prefetched future is
-    # consumed here. Measured apart from the weight update that follows it.
-    (
-        "            # sync generate before update weights to prevent update weight in the middle of generation\n"
-        "            rollout_data_curr_ref = ray.get(x) if (x := rollout_data_next_future) is not None else None\n"
-        "            rollout_data_next_future = None\n",
-        "wait_for_rollout",
-    ),
-    (
-        "            # PATCHED_TRAINING_GYM_WEIGHT_SYNC_STATUS: weight sync state\n"
-        "            _tg_report('weight_sync', args, rollout_id)\n"
-        "            actor_model.update_weights()\n",
-        "weight_sync",
-    ),
-    (
-        "        if should_run_periodic_action(rollout_id, args.eval_interval, num_rollout_per_epoch):\n"
-        "            # PATCHED_TRAINING_GYM_EVAL_END: eval-after-train substep start\n"
-        "            _tg_report('evaluate_rollouts', args, rollout_id)\n"
-        "            ray.get(rollout_manager.eval.remote(rollout_id))\n",
-        "evaluate_rollouts_end",
-    ),
-]
-
-SLIME_ENTRYPOINTS = {
-    "train.py": _SYNC_PHASE_WRAPS,
-    "train_async.py": _ASYNC_PHASE_WRAPS,
-}
-
-
 @dataclass(frozen=True)
 class PackageTarget:
     """One file in the framework package that measures a non-driver lane.
@@ -308,144 +160,9 @@ class PackageTarget:
     blocks: tuple[tuple[str, str], ...]
 
 
-# The rollout worker: one lane per generate call.
-ROLLOUT_TARGET = PackageTarget(
-    path="slime/ray/rollout.py",
-    scope=(
-        "    def generate(self, rollout_id):\n",
-        "        return self._split_train_data_by_dp(data)\n",
-        "with _tg_role('rollout', rollout_id):",
-    ),
-    blocks=(
-        # Named apart from the driver's ``generate_rollouts``, which is the
-        # same work seen from the caller.
-        (
-            "generate_samples",
-            "        data, metrics = self._get_rollout_data(rollout_id=rollout_id)\n",
-        ),
-        (
-            "reward_post_process",
-            "        raw_rewards, rewards = self._post_process_rewards(samples)\n",
-        ),
-    ),
-)
-
-# Rewards run on the framework's background event-loop thread, and still see the
-# rollout lane: `run_coroutine_threadsafe` schedules task creation with
-# `call_soon_threadsafe`, which copies the submitting thread's context.
-#
-# `batched_async_rm` is only reached by the group and fan-out paths; the default
-# path scores one sample at a time, which REWARD_SAMPLE_TARGET covers. Named
-# apart because a batch call awaits those per-sample calls -- under one name a
-# generate function hitting both paths would count the inner time twice.
-REWARD_BATCH_TARGET = PackageTarget(
-    path="slime/rollout/rm_hub/__init__.py",
-    scope=None,
-    blocks=(
-        (
-            "reward_batch",
-            "    if args.custom_rm_path is not None:\n"
-            "        # Ensure the custom reward function is implemented in batch mode\n"
-            "        rm_function = load_function(args.custom_rm_path)\n"
-            "        return await rm_function(args, samples, **kwargs)\n"
-            "    tasks = [async_rm(args, sample, **kwargs) for sample in samples]\n"
-            "    rewards = await asyncio.gather(*tasks)\n"
-            "    return rewards\n",
-        ),
-    ),
-)
-
-# The default reward path: one sample, scored where it was generated.
-REWARD_SAMPLE_TARGET = PackageTarget(
-    path="slime/rollout/sglang_rollout.py",
-    scope=None,
-    blocks=(
-        (
-            "reward",
-            "        if sample.reward is None:\n"
-            '            with trace_span(sample, "reward_model"):\n'
-            "                sample.reward = await async_rm(args, sample)\n",
-        ),
-    ),
-)
-
-# The actor and the critic are one class, told apart by ``self.role``, so the
-# header is an expression and one patch instruments both lanes.
-ACTOR_TARGET = PackageTarget(
-    path="slime/backends/megatron_utils/actor.py",
-    scope=(
-        "    def train(self, rollout_id: int, rollout_data_ref: Box, external_data=None):\n",
-        "        return result\n",
-        "with _tg_mrec(rollout_id, 'critic' if self.role == 'critic' else 'actor'):",
-    ),
-    blocks=(
-        # Called up to four times per step (ref, teacher, old actor, actor).
-        (
-            "compute_log_probs",
-            '        with timer(f"{store_prefix}log_probs"):\n'
-            "            return forward_only(\n"
-            "                get_log_probs_and_entropy,\n"
-            "                self.args,\n"
-            "                self.model,\n"
-            "                data_iterator,\n"
-            "                num_microbatches,\n"
-            "                store_prefix=store_prefix,\n"
-            "                use_rollout_top_p_replay=True,\n"
-            "            )\n",
-        ),
-    ),
-)
-
-# No scope: ``train_one_step`` runs inside the actor's ``train`` on the same
-# thread, so it inherits that lane.
-TRAIN_STEP_TARGET = PackageTarget(
-    path="slime/backends/megatron_utils/model.py",
-    scope=None,
-    blocks=(
-        (
-            "forward_backward",
-            "    losses_reduced = forward_backward_func(\n"
-            "        forward_step_func=_wrap_forward_step_with_microbatch_pbar(forward_step, microbatch_pbar),\n"
-            "        data_iterator=data_iterator,\n"
-            "        model=model,\n"
-            "        num_microbatches=num_microbatches,\n"
-            "        seq_length=args.seq_length,\n"
-            "        micro_batch_size=args.micro_batch_size,\n"
-            "        decoder_seq_length=args.decoder_seq_length,\n"
-            "        forward_only=False,\n"
-            "    )\n",
-        ),
-        # Body of ``if valid_step:``, so a skipped step records nothing
-        (
-            "optimizer_step",
-            "    if valid_step:\n"
-            "        # Update parameters.\n"
-            "        update_successful, grad_norm, num_zeros_in_grad = optimizer.step()\n"
-            "\n"
-            "        # Update learning rate. Use the per-step global_batch_size when dynamic\n"
-            "        # batching is on so the scheduler's samples-seen counter tracks reality.\n"
-            "        assert update_successful\n"
-            "        opt_param_scheduler.step(increment=step_global_batch_size)\n",
-        ),
-    ),
-)
-
-SLIME_PACKAGE_TARGETS: tuple[PackageTarget, ...] = (
-    ROLLOUT_TARGET,
-    REWARD_BATCH_TARGET,
-    REWARD_SAMPLE_TARGET,
-    ACTOR_TARGET,
-    TRAIN_STEP_TARGET,
-)
-
-
-# ---------- miles ----------
-#
-# Same lanes and phase names, different source: miles' driver loop is ``async``,
-# so the phases wrap ``await`` expressions rather than ``ray.get`` calls, and no
 # status patcher runs first, so the anchors are the upstream lines.
 
-_MILES_SYNC_PHASE_WRAPS = [
+_SYNC_PHASE_WRAPS = [
     (
         "        if args.eval_interval is not None and rollout_id == 0 and not args.skip_eval_before_train:\n"
         "            await rollout_manager.eval.remote(rollout_id)\n",
@@ -498,7 +215,7 @@ _MILES_SYNC_PHASE_WRAPS = [
     ),
 ]
 
-_MILES_ASYNC_PHASE_WRAPS = [
+_ASYNC_PHASE_WRAPS = [
     (
         "        if rollout_data_next_future is not None:\n"
         "            rollout_data_curr_ref = await rollout_data_next_future\n",
@@ -546,12 +263,12 @@ _MILES_ASYNC_PHASE_WRAPS = [
     ),
 ]
 
-MILES_ENTRYPOINTS = {
-    "train.py": _MILES_SYNC_PHASE_WRAPS,
-    "train_async.py": _MILES_ASYNC_PHASE_WRAPS,
+ENTRYPOINTS = {
+    "train.py": _SYNC_PHASE_WRAPS,
+    "train_async.py": _ASYNC_PHASE_WRAPS,
 }
 
-MILES_PACKAGE_TARGETS: tuple[PackageTarget, ...] = (
+PACKAGE_TARGETS: tuple[PackageTarget, ...] = (
     PackageTarget(
         path="miles/ray/rollout/rollout_manager.py",
         scope=(
@@ -746,17 +463,13 @@ def _patch_file(path: Path, wraps: list[tuple[str, str]]) -> None:
 
 
 def main() -> None:
-    """Patch whichever framework checkout this image has."""
-    for root, entrypoints, package_targets in (
-        (SLIME_ROOT, SLIME_ENTRYPOINTS, SLIME_PACKAGE_TARGETS),
-        (MILES_ROOT, MILES_ENTRYPOINTS, MILES_PACKAGE_TARGETS),
-    ):
-        if not root.is_dir():
-            continue
-        for name, wraps in entrypoints.items():
-            _patch_file(root / name, wraps)
-        for target in package_targets:
-            patch_package_file(root, target)
+    """Patch this image's framework checkout, if it has one."""
+    if not ROOT.is_dir():
+        return
+    for name, wraps in ENTRYPOINTS.items():
+        _patch_file(ROOT / name, wraps)
+    for target in PACKAGE_TARGETS:
+        patch_package_file(ROOT, target)
 
 
 if __name__ == "__main__":
