@@ -306,24 +306,16 @@
                         onmouseleave={hideTip}
                         onclick={(e) => pinTip(e, rollout.id, bar)}
                       >
-                        {#each bar.spent as work (work.name)}
-                          <span
-                            class="spent-span"
-                            style:background={colorFor(work.name)}
-                            style:left={`${((work.start - bar.start) / Math.max(bar.end - bar.start, 1e-9)) * 100}%`}
-                            style:width={`max(1px, ${((work.end - work.start) / Math.max(bar.end - bar.start, 1e-9)) * 100}%)`}
-                          ></span>
-                        {/each}
                         {#if bar.band}
                           <span
                             class="band-longest"
                             style:background={colorFor(bar.name)}
-                            style:width={`${Math.min((bar.band.longest / Math.max(bar.duration, 1e-9)) * 100, 100)}%`}
+                            style:width={`max(2px, ${Math.min((bar.band.longest / Math.max(bar.duration, 1e-9)) * 100, 100)}%)`}
                           ></span>
                           <span
                             class="band-average"
                             style:background={colorFor(bar.name)}
-                            style:left={`${Math.min((bar.band.total / bar.band.count / Math.max(bar.duration, 1e-9)) * 100, 100)}%`}
+                            style:left={`max(2px, ${Math.min((bar.band.total / bar.band.count / Math.max(bar.duration, 1e-9)) * 100, 100)}%)`}
                           ></span>
                           <span class="bar-text"
                             >{bar.band.count}× {fmtSecs(
@@ -583,13 +575,6 @@
     padding: 0;
   }
 
-  .spent-span {
-    position: absolute;
-    bottom: 1px;
-    height: 3px;
-    border-radius: 1.5px;
-    pointer-events: none;
-  }
 
   .band-longest {
     position: absolute;

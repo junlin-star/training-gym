@@ -168,21 +168,25 @@ export function rolloutTimeline(lanes) {
           nestsWithin(work, bar),
       )
       .sort((a, b) => b.depth - a.depth)[0];
-    if (container) container.spent.push(work);
-    else
-      bars.push({
-        key: `${work.role}:${work.name}`,
-        ...work,
-        duration: work.total,
-        runs: 1,
-        work: work.total,
-        depth: 0,
-        container: null,
-        inside: null,
-        contains: false,
-        band: work,
-        spent: [],
-      });
+    if (container) {
+      container.spent.push(work);
+      container.contains = true;
+    }
+    // Drawn even when nested: the span of thousands of sub-millisecond calls is
+    // where a step's time goes, and folding it into a parent hides it entirely.
+    bars.push({
+      key: `${work.role}:${work.name}`,
+      ...work,
+      duration: work.end - work.start,
+      runs: 1,
+      work: work.total,
+      depth: container ? container.depth + 1 : 0,
+      container: container ?? null,
+      inside: container ? container.name : null,
+      contains: false,
+      band: work,
+      spent: [],
+    });
   }
 
   for (const bar of bars) {
