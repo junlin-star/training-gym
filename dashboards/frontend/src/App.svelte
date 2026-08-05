@@ -1,25 +1,19 @@
 <script>
   import { onMount } from "svelte";
-  import { Book, CheckCircle2, Rocket, Zap } from "lucide-svelte";
+  import { Book, Zap } from "lucide-svelte";
   import "./app.css";
   import Sidebar from "./components/Sidebar.svelte";
   import DashboardHeader from "./components/DashboardHeader.svelte";
   import TrainingPage from "./pages/TrainingPage.svelte";
   import TrainingRunDetailPage from "./pages/TrainingRunDetailPage.svelte";
-  import DeploymentsPage from "./pages/DeploymentsPage.svelte";
-  import EvalsPage from "./pages/EvalsPage.svelte";
-  import { fetchRuns, fetchEvals, fetchDeployments, fetchEvalDetail } from "./lib/api.js";
+  import { fetchRuns } from "./lib/api.js";
   import logoSvg from "./lib/logo.svg";
-  import { fmtDuration, truncateId } from "./lib/format.js";
+  import { fmtDuration } from "./lib/format.js";
 
   const DOCS_URL = "https://gym.modal.dev";
 
   let allRuns = $state([]);
-  let allEvals = $state([]);
-  let allDeployments = $state([]);
   let loading = $state(true);
-  let loadingEvals = $state(false);
-  let loadingDeployments = $state(false);
   let error = $state(null);
   let search = $state("");
   let activeRecipes = $state(new Set());
@@ -44,28 +38,17 @@
   let runsRequestId = 0;
   let hasLoadedRuns = false;
   let initialRunsLoadStarted = false;
-  let evalsRequestId = 0;
-  let deploymentsRequestId = 0;
-  let hasLoadedEvals = $state(false);
-  let hasLoadedDeployments = $state(false);
-  let pendingDeploymentFocus = $state(null);
 
   const pageMeta = {
     training: { title: "Training runs" },
-    deployments: { title: "Deployments" },
-    evals: { title: "Evals" },
   };
 
   const pagePaths = {
     training: "/training",
-    deployments: "/deployments",
-    evals: "/evals",
   };
 
   function pageFromPath(pathname) {
     if (pathname === "/" || pathname.startsWith("/training")) return "training";
-    if (pathname.startsWith("/deployments")) return "deployments";
-    if (pathname.startsWith("/evals")) return "evals";
     return "training";
   }
 
@@ -77,8 +60,6 @@
 
   const navItems = [
     { key: "training", label: "Training runs", Icon: Zap, path: pagePaths.training },
-    { key: "deployments", label: "Deployments", Icon: Rocket, path: pagePaths.deployments },
-    { key: "evals", label: "Evals", Icon: CheckCircle2, path: pagePaths.evals },
   ];
 
   if (typeof window !== "undefined") {
@@ -155,17 +136,6 @@
     return safeText(value).toLowerCase().includes(query);
   }
 
-  function normalizePath(value) {
-    return safeText(value).replace(/\/+$/, "");
-  }
-
-  function pathMatches(left, right) {
-    const a = normalizePath(left);
-    const b = normalizePath(right);
-    if (!a || !b) return false;
-    return a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`);
-  }
-
   function getErrorMessage(value) {
     if (value instanceof Error) return value.message;
     if (typeof value === "string") return value;
@@ -186,52 +156,6 @@
           throw new Error(`${label} request timed out after ${timeoutMs}ms`);
         throw err;
       });
-  }
-
-  function deploymentLabel(deployment) {
-    return (
-      deployment?.app_name ||
-      deployment?.served_model_name ||
-      deployment?.model_name ||
-      "Deployment"
-    );
-  }
-
-  function findRunForDeployment(deployment) {
-    const deploymentAppName = safeText(deployment?.app_name || "");
-    const deploymentModelName = safeText(deployment?.model_name || "");
-    const deploymentModelPath = normalizePath(deployment?.model_path || "");
-    const deploymentCheckpointPath = normalizePath(deployment?.checkpoint_path || "");
-
-    return (
-      allRuns.find((run) => {
-        const result = run.train_result || {};
-        const runModelName = safeText(
-          result.model_name || run.config_summary?.model_name || "",
-        );
-        const runModelPath = normalizePath(result.model_path || "");
-        const runCheckpointDir = normalizePath(result.checkpoint_dir || "");
-
-        if (run.deployment_id && deploymentAppName && run.deployment_id === deploymentAppName) {
-          return true;
-        }
-        if (
-          deploymentCheckpointPath &&
-          (pathMatches(deploymentCheckpointPath, runCheckpointDir) ||
-            pathMatches(deploymentCheckpointPath, runModelPath))
-        ) {
-          return true;
-        }
-        if (
-          deploymentModelPath &&
-          (pathMatches(deploymentModelPath, runCheckpointDir) ||
-            pathMatches(deploymentModelPath, runModelPath))
-        ) {
-          return true;
-        }
-        return !!deploymentModelName && deploymentModelName === runModelName;
-      }) || null
-    );
   }
 
   async function loadRuns() {
@@ -299,51 +223,10 @@
     }
   }
 
-  async function loadEvals() {
-    const requestId = ++evalsRequestId;
-    const isStale = () => requestId !== evalsRequestId;
-
-    if (!allEvals.length) loadingEvals = true;
-    try {
-      const evals = await fetchWithTimeout(fetchEvals, 15000, "evals");
-      if (isStale()) return;
-      allEvals = evals;
-      hasLoadedEvals = true;
-    } catch (reason) {
-      if (isStale()) return;
-      if (!allEvals.length) allEvals = [];
-      console.warn(getErrorMessage(reason));
-    }
-    if (!isStale()) loadingEvals = false;
-  }
-
-  async function loadDeployments() {
-    const requestId = ++deploymentsRequestId;
-    const isStale = () => requestId !== deploymentsRequestId;
-
-    if (!allDeployments.length) loadingDeployments = true;
-    try {
-      const deployments = await fetchWithTimeout(fetchDeployments, 15000, "deployments");
-      if (isStale()) return;
-      allDeployments = deployments;
-      hasLoadedDeployments = true;
-    } catch (reason) {
-      if (isStale()) return;
-      if (!allDeployments.length) allDeployments = [];
-      console.warn(getErrorMessage(reason));
-    }
-    if (!isStale()) loadingDeployments = false;
-  }
-
   async function load() {
     refreshing = true;
     try {
       const tasks = [loadRuns()];
-      if (activePage === "evals") {
-        tasks.push(loadEvals(), loadDeployments());
-      } else if (activePage === "deployments") {
-        tasks.push(loadDeployments());
-      }
       await Promise.all(tasks);
     } finally {
       refreshing = false;
@@ -360,18 +243,6 @@
       void loadRuns();
     } else if (activeTrainingRunId && !hasLoadedRuns) {
       loading = false;
-    }
-    if (activePage === "evals" && !hasLoadedEvals) {
-      void loadEvals();
-    }
-    if (activePage === "evals" && !hasLoadedDeployments) {
-      void loadDeployments();
-    }
-    if (activePage === "deployments" && !hasLoadedEvals) {
-      void loadEvals();
-    }
-    if (activePage === "deployments" && !hasLoadedDeployments) {
-      void loadDeployments();
     }
   });
 
@@ -469,264 +340,6 @@
     allRuns.length - completedTotal - cancelledTotal - stoppedTotal - failedTotal,
   );
 
-  let deploymentRows = $derived.by(() =>
-    [...allDeployments]
-      .map((deployment) => ({
-        deployment,
-        run: findRunForDeployment(deployment),
-      }))
-      .sort((a, b) => {
-        const tsA = a.deployment.created_at || a.run?.created_at || 0;
-        const tsB = b.deployment.created_at || b.run?.created_at || 0;
-        return (tsB || 0) - (tsA || 0);
-      }),
-  );
-
-  function evalAccuracy(ev) {
-    if (typeof ev.mean === "number") return ev.mean;
-    const rows = ev.rows || [];
-    if (!rows.length) return 0;
-    return rows.reduce((sum, row) => sum + (row.score || 0), 0) / rows.length;
-  }
-
-  function evalCreatedAt(ev) {
-    const raw = ev?.created_at;
-    if (raw && typeof raw === "object" && "value" in raw) {
-      return evalCreatedAt({ created_at: raw.value });
-    }
-    if (typeof raw === "number") return Number.isFinite(raw) ? raw : 0;
-    const text = safeText(raw).trim();
-    if (!text) return 0;
-    const numeric = Number(text);
-    if (Number.isFinite(numeric)) return numeric;
-    const epochMs = Date.parse(text);
-    if (Number.isFinite(epochMs)) return Math.floor(epochMs / 1000);
-    return 0;
-  }
-
-  // Maps a raw eval status onto a coarse filter/count bucket
-  // ("Completed" | "Pending" | "Failed"), the StatusPill color/icon variant,
-  // and a human label for the four eval phases.
-  function getEvalDisplay(ev) {
-    const rawStatus = safeText(ev.status).toLowerCase();
-    if (rawStatus === "deploying_model" || rawStatus === "deploying") {
-      return { bucket: "Pending", pill: "running", label: "Deploying model" };
-    }
-    if (
-      rawStatus === "running_eval" ||
-      rawStatus === "running" ||
-      rawStatus === "pending" ||
-      rawStatus === "queued" ||
-      rawStatus === "initializing"
-    ) {
-      return { bucket: "Pending", pill: "running", label: "Running eval" };
-    }
-    if (
-      rawStatus === "completed" ||
-      rawStatus === "success" ||
-      rawStatus === "succeeded"
-    ) {
-      return { bucket: "Completed", pill: "completed", label: "Success" };
-    }
-    if (rawStatus === "failed" || rawStatus === "error") {
-      return { bucket: "Failed", pill: "failed", label: "Failed" };
-    }
-    const total = ev.total ?? (Array.isArray(ev.rows) ? ev.rows.length : 0);
-    if (total > 0) {
-      return { bucket: "Completed", pill: "completed", label: "Success" };
-    }
-    return { bucket: "Pending", pill: "running", label: "Pending" };
-  }
-
-  function getEvalStatus(ev) {
-    return getEvalDisplay(ev).bucket;
-  }
-
-  function normalizeConfigValue(value) {
-    if (value && typeof value === "object" && "value" in value) {
-      return normalizeConfigValue(value.value);
-    }
-    if (Array.isArray(value)) {
-      return value.map((item) => normalizeConfigValue(item));
-    }
-    if (value && typeof value === "object") {
-      return Object.keys(value)
-        .sort()
-        .reduce((acc, key) => {
-          acc[key] = normalizeConfigValue(value[key]);
-          return acc;
-        }, {});
-    }
-    return value ?? null;
-  }
-
-  function evalConfigKey(ev) {
-    return JSON.stringify(normalizeConfigValue(ev.config || {}));
-  }
-
-  function evalConfigMeta(config, ev = null) {
-    const evalConfig = ev?.eval_config || {};
-    const sourceConfig = ev?.config || {};
-    const dataset =
-      safeText(config?.dataset?.name) ||
-      safeText(config?.dataset?.hf_repo) ||
-      safeText(config?.dataset?.prompt_data) ||
-      safeText(config?.dataset_name) ||
-      safeText(sourceConfig?.dataset?.name) ||
-      safeText(sourceConfig?.dataset?.hf_repo) ||
-      safeText(sourceConfig?.dataset?.prompt_data) ||
-      safeText(sourceConfig?.dataset_name) ||
-      safeText(evalConfig?.dataset_name) ||
-      safeText(ev?.dataset_name) ||
-      "—";
-    const model =
-      safeText(config?.deployment?.model_name) ||
-      safeText(config?.deployment?.served_model_name) ||
-      safeText(config?.model?.model_name) ||
-      safeText(sourceConfig?.deployment?.model_name) ||
-      safeText(sourceConfig?.deployment?.served_model_name) ||
-      safeText(sourceConfig?.model?.model_name) ||
-      safeText(evalConfig?.deployment?.model_name) ||
-      safeText(evalConfig?.deployment?.served_model_name) ||
-      safeText(evalConfig?.model?.model_name) ||
-      "—";
-    const split =
-      safeText(config?.dataset?.split) ||
-      safeText(sourceConfig?.dataset?.split) ||
-      safeText(evalConfig?.dataset?.split);
-    const judge =
-      safeText(config?.judge?.model_name) ||
-      safeText(config?.judge_model_name) ||
-      safeText(sourceConfig?.judge?.model_name) ||
-      safeText(sourceConfig?.judge_model_name) ||
-      safeText(evalConfig?.judge?.model_name) ||
-      safeText(evalConfig?.judge_model_name) ||
-      "";
-    const evalFn =
-      safeText(config?.eval_fn_name) ||
-      safeText(config?.grader_name) ||
-      safeText(sourceConfig?.eval_fn_name) ||
-      safeText(sourceConfig?.grader_name) ||
-      safeText(evalConfig?.eval_fn_name) ||
-      safeText(evalConfig?.grader_name) ||
-      safeText(ev?.eval_fn_name) ||
-      "";
-    return { dataset, model, split, judge, evalFn };
-  }
-
-  let sortedEvals = $derived(
-    [...allEvals].sort((a, b) => evalCreatedAt(b) - evalCreatedAt(a)),
-  );
-
-  let evalConfigGroups = $derived.by(() => {
-    const groups = new Map();
-    for (const ev of sortedEvals) {
-      const key = safeText(ev.eval_config_id).trim() || evalConfigKey(ev);
-      if (!groups.has(key)) {
-        groups.set(key, {
-          key,
-          evalConfigId: key,
-          config: ev.config || {},
-          runs: [],
-          latestCreatedAt: 0,
-        });
-      }
-      const group = groups.get(key);
-      const createdAt = evalCreatedAt(ev);
-      if (
-        (!group.config || Object.keys(group.config).length === 0) &&
-        ev.config &&
-        Object.keys(ev.config).length > 0
-      ) {
-        group.config = ev.config;
-      }
-      const avgScore = evalAccuracy(ev);
-      const totalRows = ev.total ?? (ev.rows || []).length;
-      const display = getEvalDisplay(ev);
-      group.runs.push({
-        eval: ev,
-        avgScore,
-        totalRows,
-        status: display.bucket,
-        pillStatus: display.pill,
-        statusLabel: display.label,
-        createdAt,
-      });
-      group.latestCreatedAt = Math.max(group.latestCreatedAt, createdAt);
-    }
-
-    return [...groups.values()]
-      .map((group) => {
-        const sortedRuns = [...group.runs].sort(
-          (a, b) =>
-            b.createdAt - a.createdAt ||
-            b.avgScore - a.avgScore,
-        );
-        const totalEvals = sortedRuns.length;
-        const totalExamples = sortedRuns.reduce(
-          (sum, run) => sum + run.totalRows,
-          0,
-        );
-        const weightedScoreTotal = sortedRuns.reduce(
-          (sum, run) => sum + run.avgScore * run.totalRows,
-          0,
-        );
-        const bestScore = sortedRuns[0]?.avgScore ?? 0;
-        const avgAccuracy =
-          totalExamples > 0
-            ? weightedScoreTotal / totalExamples
-            : totalEvals > 0
-              ? sortedRuns.reduce((sum, run) => sum + run.avgScore, 0) / totalEvals
-              : 0;
-        const completedCount = sortedRuns.filter(
-          (run) => run.status === "Completed",
-        ).length;
-        const pendingCount = sortedRuns.filter(
-          (run) => run.status === "Pending",
-        ).length;
-        const failedCount = sortedRuns.filter((run) => run.status === "Failed").length;
-        const deploymentCount = new Set(
-          sortedRuns
-            .map(
-              (run) =>
-                safeText(
-                  run.eval.deployment_id ||
-                  run.eval.config?.deployment?.url ||
-                    run.eval.config?.deployment?.model_name ||
-                    run.eval.config?.deployment?.served_model_name,
-                ) || null,
-            )
-            .filter(Boolean),
-        ).size;
-        return {
-          ...group,
-          meta: evalConfigMeta(group.config, sortedRuns[0]?.eval),
-          bestScore,
-          totalEvals,
-          avgAccuracy,
-          completedCount,
-          pendingCount,
-          failedCount,
-          deploymentCount,
-          runs: sortedRuns,
-        };
-      })
-      .sort(
-        (a, b) =>
-          (b.latestCreatedAt || 0) - (a.latestCreatedAt || 0) ||
-          b.runs.length - a.runs.length,
-      );
-  });
-
-  let evalCompletedTotal = $derived(
-    allEvals.filter((ev) => getEvalStatus(ev) === "Completed").length,
-  );
-  let evalPendingTotal = $derived(
-    allEvals.filter((ev) => getEvalStatus(ev) === "Pending").length,
-  );
-  let evalFailedTotal = $derived(
-    allEvals.filter((ev) => getEvalStatus(ev) === "Failed").length,
-  );
   let activeTrainingRun = $derived(
     allRuns.find((run) => run.run_id === activeTrainingRunId) || null,
   );
@@ -734,13 +347,7 @@
   let statusText = $derived.by(() => {
     if (activePage === "training" && activeTrainingRunId) return "run details";
     if (activePage === "training" && loading) return "loading...";
-    if (activePage === "evals" && loadingEvals) return "loading...";
-    if (activePage === "deployments" && loadingDeployments) return "loading...";
     if (error) return "error";
-    if (activePage === "evals")
-      return `${allEvals.length} eval${allEvals.length === 1 ? "" : "s"}`;
-    if (activePage === "deployments")
-      return `${allDeployments.length} deployment${allDeployments.length === 1 ? "" : "s"}`;
     if (!allRuns.length) return "0 runs";
     return `${filteredRuns.length} of ${allRuns.length} runs`;
   });
@@ -835,23 +442,6 @@
   function closeTrainingDrawer() {
     drawerRunId = null;
   }
-
-  function openTrainingRun(runId) {
-    search = runId;
-    setActivePage("training");
-  }
-
-  function openDeployment(deploymentRef) {
-    const value = safeText(deploymentRef).trim();
-    if (!value) return;
-    pendingDeploymentFocus = value;
-    setActivePage("deployments");
-    if (!hasLoadedDeployments) void loadDeployments();
-  }
-
-  function clearDeploymentFocus() {
-    pendingDeploymentFocus = null;
-  }
 </script>
 
 <div class="h-[100dvh] grid grid-rows-[auto_1fr] bg-(--bg) overflow-x-hidden">
@@ -935,36 +525,6 @@
         onToggleGroup={toggleGroup}
         onSelectAllGroups={selectAllGroups}
         onClearGroups={clearGroups}
-      />
-    {:else if activePage === "deployments"}
-      <DeploymentsPage
-        {allDeployments}
-        {allEvals}
-        loading={loadingDeployments}
-        {error}
-        {deploymentRows}
-        {deploymentLabel}
-        {truncateId}
-        {getStatus}
-        focusDeploymentRef={pendingDeploymentFocus}
-        onFocusResolved={clearDeploymentFocus}
-        onOpenTrainingRun={openTrainingRun}
-      />
-    {:else if activePage === "evals"}
-      <EvalsPage
-        {allEvals}
-        {deploymentRows}
-        {evalCompletedTotal}
-        {evalPendingTotal}
-        {evalFailedTotal}
-        loading={loadingEvals}
-        {error}
-        {evalConfigGroups}
-        {fetchEvalDetail}
-        {getEvalDisplay}
-        {evalConfigMeta}
-        onOpenTrainingRun={openTrainingRun}
-        onOpenDeployment={openDeployment}
       />
     {/if}
     </main>
