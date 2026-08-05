@@ -34,13 +34,20 @@ Then, output your first artifact, which is a file called `model_setup.md`, conta
 
 ### Phase 2: Implementation
 
+If it's possible to not patch, do not patch. We don’t want to patch slime if it’s not possible because it may lead to us not being able to bump slime or ensure we are on parity with the repo in the future.
+
+When thinking about patching:
+1. Why do we need this patch (what bug is this patch trying to fix)?
+2. Is someone trying to fix this bug up stream? Is the fix merged (is this something bumping slime image will just fix)? If not, should we flag to the slime team instead of patching ourselves?
+3. Is the patch going to break any models or recipes outside of our config? If possible, constrain model-specific patches to be applied to just a particular recipe or model (see the Qwen3 ASR patches).
+
 Output a slime config you believe will work, and kick off a run with 1 single step. Check this step works e2e. Output the config in `configs` folder directly, and keep track of progress in `progress_log_[attempt_count].md`.
 
 While tracking the progress, also make sure the timing lines up with your expectations in the `model_setup.md` artifact.
 
 If this step does not work, go back to phase 1: what assumptions did you make in phase 1 that were incorrect and caused this? Output an artifact if it fails with `failure_analysis_[attempt_count].md`.
 
-Record how long the step took, and how long each substep took. Make sure the model parser works and it is not generating gibberish.
+Record how long the step took, and how long each substep took. Make sure the model parser works and it is not generating gibberish. Make sure the reward curve is improving.
 
 ### Phase 3: Validation
 
@@ -50,7 +57,7 @@ Record how long the step took, and how long each substep took. Make sure the mod
 
 ### Phase 4: Productionize
 
-Create a doc describing the slime config changes, and justify any patches you have made. If it's possible to not patch, do not patch.
+Create a doc describing the slime config changes, and justify any patches you have made. 
 
 
 # Common gotchas

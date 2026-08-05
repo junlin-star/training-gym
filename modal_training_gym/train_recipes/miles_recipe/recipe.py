@@ -55,6 +55,15 @@ _MILES_SKIP = {
     "rollout_function",
     "custom_megatron_before_log_prob_hook",
     "custom_megatron_before_train_step_hook",
+    # Conversion-only parallelism + local-disk staging: launcher-side, never
+    # forwarded to the miles CLI.
+    "conversion_tensor_model_parallel_size",
+    "conversion_pipeline_model_parallel_size",
+    "conversion_expert_model_parallel_size",
+    "conversion_expert_tensor_parallel_size",
+    "convert_via_local_staging",
+    "convert_ephemeral_disk_mb",
+    "train_ephemeral_disk_mb",
 }
 
 YAML_CONFIG_FIELDS = ("eval_config", "extra_config", "sglang_config")
@@ -456,8 +465,34 @@ class MilesRecipe(BaseTrainRecipe):
     load: str = ""
     ref_load: str = ""
     megatron_to_hf_mode: str = "bridge"
+    # Selects miles' megatron→HF weight mapping (e.g. "inkling"); when empty miles
+    # infers it from the HF config's class name.
+    model_name: str = ""
     save_interval: int = 10
     no_save_optim: bool = False
+
+    # ── Checkpoint conversion ───────────────────────────────────────────────
+    # Conversion-only parallelism overrides. Launcher instructions, not CLI flags
+    # (see _MILES_SKIP): torch_dist reshards on load, so the conversion layout is
+    # independent of the training layout.
+    conversion_tensor_model_parallel_size: int | None = None
+    conversion_pipeline_model_parallel_size: int | None = None
+    conversion_expert_model_parallel_size: int | None = None
+    conversion_expert_tensor_parallel_size: int | None = None
+    # Run HF -> torch_dist against container-local disk and copy the result onto the
+    # checkpoints Volume afterwards. torch_dist's writer does positional writes that
+    # desync on a Volume once the per-file data is large (see the comment in
+    # frameworks/miles/launcher.py: convert_checkpoint). Costs one extra local copy;
+    # set False only if the container lacks disk for a second copy of the checkpoint.
+    convert_via_local_staging: bool = True
+    # Ephemeral disk (MiB) for the conversion container. Local staging needs room for
+    # the whole torch_dist checkpoint plus the Volume's write buffer for the shard in
+    # flight; the default container disk is not enough for a 276B model.
+    convert_ephemeral_disk_mb: int | None = None
+    # Ephemeral disk (MiB) for the training containers. A Modal Volume buffers writes
+    # to container-local disk and nothing commits mid-save, so a checkpoint save needs
+    # roughly its own per-node size in local scratch on top of normal usage.
+    train_ephemeral_disk_mb: int | None = None
 
     # ── Fault tolerance and health checks ───────────────────────────────────
     # Miles' own argparse default; slime defaults this on instead.
@@ -577,6 +612,8 @@ class MilesRecipe(BaseTrainRecipe):
     sglang_config: dict | str | None = None
     apply_chat_template_kwargs: str | dict = ""
     train_env_vars: dict | str | None = None
+    # {modality: media_column}; normally inherited from a MultimodalDataset rather
+    # than set here. JSON-encoded by cli_args (JSON_CONFIG_FIELDS).
     multimodal_keys: dict | str | None = None
 
     # ── Custom functions and hooks ──────────────────────────────────────────
@@ -603,6 +640,9 @@ class MilesRecipe(BaseTrainRecipe):
     @classmethod
     def _dataset_to_fields(cls, ds: "DatasetConfig") -> dict[str, Any]:
         fields = super()._dataset_to_fields(ds)
+        # miles splits the prompt on the modality placeholder ("<image>", "<audio>",
+        # "<video>") and pops items from the named list column, so naming the column
+        # is the whole handoff for a MultimodalDataset.
         if getattr(ds, "multimodal_keys", None):
             fields["multimodal_keys"] = ds.multimodal_keys
         return fields

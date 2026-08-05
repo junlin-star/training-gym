@@ -56,7 +56,7 @@ from modal_training_gym.train_recipes.miles_recipe.recipe import (
     HF_CACHE_PATH,
     MilesRecipe,
 )
-from modal_training_gym.common.patches import encode_patch
+from modal_training_gym.common.patches import MEGATRON_PATCHES, encode_patch
 from modal_training_gym.frameworks.miles.modal_helpers.utils import (
     build_train_cmd,
     get_checkpoint_conversion_policy,
@@ -73,6 +73,39 @@ HARBOR_PKG_VERSION = "0.8.0"
 _MILES_PATCHES = Path(__file__).parent / "modal_helpers" / "patches"
 _PATCH_SGLANG_ABORT_B64 = encode_patch("patch_sglang_abort", _MILES_PATCHES)
 
+# Megatron-level torch_dist save fixes, shared with the slime image. Only needed on
+# the HF -> torch_dist path (megatron_to_hf_mode != "bridge"), which no miles recipe
+# exercised before Inkling-Small: without them the async dist-checkpoint writer dies
+# in inline_container.cc with "unexpected pos". Both are guarded no-ops when their
+# target source doesn't match, so they are safe for every miles image.
+_PATCH_DIST_CKPT_QUANTIZED_B64 = encode_patch(
+    "patch_dist_ckpt_quantized", MEGATRON_PATCHES
+)
+_PATCH_CHECKPOINT_SAVE_B64 = encode_patch("patch_checkpoint_save", MEGATRON_PATCHES)
+
+
+def _is_complete_torch_dist_checkpoint(path: str) -> bool:
+    """Whether ``path`` holds a *finished* torch_dist checkpoint.
+
+    ``.metadata`` is written last, by ``save_state_dict_async_finalize``, so its
+    presence is what separates a completed save from a crashed one. Without this
+    check ``torch_dist_resume_checkpoint``'s ``iter_*`` scan accepts any directory
+    (its default ``is_complete`` is ``os.path.isdir``), so a conversion that died
+    mid-write is reported as a cache hit and silently skips re-conversion — which
+    then feeds partial weights to training. A crashed conversion does leave
+    ``common.pt`` and the ``.distcp`` shards behind, so those alone are not enough
+    to tell the two apart.
+    """
+    try:
+        names = os.listdir(path)
+    except OSError:
+        return False
+    return (
+        ".metadata" in names
+        and "common.pt" in names
+        and any(name.endswith(".distcp") for name in names)
+    )
+
 
 def _build_miles_base_image(miles: MilesRecipe) -> Image:
     image = (
@@ -81,6 +114,8 @@ def _build_miles_base_image(miles: MilesRecipe) -> Image:
         .run_commands(
             f"rm -rf {HF_CACHE_PATH} 2>/dev/null || true",
             f"echo {_PATCH_SGLANG_ABORT_B64} | base64 -d | python3",
+            f"echo {_PATCH_DIST_CKPT_QUANTIZED_B64} | base64 -d | python3",
+            f"echo {_PATCH_CHECKPOINT_SAVE_B64} | base64 -d | python3",
         )
     )
     if miles.image_env:
@@ -313,7 +348,9 @@ def build_miles_app(
         checkpoints_volume.reload()
 
         save_path = str(miles.ref_load)
-        if has_torch_dist_checkpoint(save_path):
+        if has_torch_dist_checkpoint(
+            save_path, is_complete=_is_complete_torch_dist_checkpoint
+        ):
             print(
                 f"Found existing torch_dist checkpoint at {save_path}; "
                 "skipping conversion."
@@ -321,6 +358,15 @@ def build_miles_app(
             if training_run_id:
                 flush_status_reporter(timeout_seconds=2.0)
             return None
+
+        # Anything already at save_path failed the completeness check above, so it is
+        # a partial write from an earlier crash. Clear it here — the single-container
+        # step that decides to convert — so the conversion cannot end up mixing fresh
+        # shards with stale ones from a different parallelism.
+        if os.path.isdir(save_path):
+            print(f"Removing incomplete torch_dist checkpoint at {save_path}")
+            shutil.rmtree(save_path, ignore_errors=True)
+            checkpoints_volume.commit()
 
         conversion_hf_checkpoint = (
             getattr(miles, "megatron_conversion_hf_checkpoint", None)
@@ -336,6 +382,7 @@ def build_miles_app(
         volumes=all_volumes,
         timeout=4 * 60 * 60,
         secrets=proxy_auth_secrets() or None,
+        ephemeral_disk=miles.convert_ephemeral_disk_mb,
         experimental_options={"efa_enabled": True} if convert_multi_node else {},
         serialized=True,
         name="convert_checkpoint",
@@ -355,6 +402,28 @@ def build_miles_app(
         num_nodes, nproc_per_node, extra_args = get_checkpoint_conversion_policy(
             miles, model=model
         )
+
+        # torch_dist's async writer torch.save()s each tensor into a .distcp stream and
+        # asserts the stream position matches the offset miniz asks for. Writing those
+        # positional/seeky streams straight onto a Modal Volume desyncs once the
+        # per-file data gets large, and the save dies with
+        #   [enforce fail at inline_container.cc] . unexpected pos <a> vs <b>
+        # Bisected on Inkling-Small (276B): identical command, flags, and writer
+        # succeed at 4 and 8 layers but fail at 42 when --save points at the volume,
+        # and succeed at 42 when it points at container-local disk. Sequential bulk
+        # writes to a Volume are fine (the 550GB HF download lands on one), so the
+        # fix is to let the writer work on local disk and copy the finished
+        # checkpoint over afterwards.
+        staging_path = ""
+        if miles.convert_via_local_staging:
+            staging_path = os.path.join(
+                "/tmp", "training_gym_convert", os.path.basename(save_path.rstrip("/"))
+            )
+            shutil.rmtree(staging_path, ignore_errors=True)
+            os.makedirs(staging_path, exist_ok=True)
+            write_path = staging_path
+        else:
+            write_path = save_path
 
         if num_nodes == 1:
             node_rank, master_addr, nnodes = 0, "127.0.0.1", 1
@@ -393,13 +462,13 @@ def build_miles_app(
                 f"source {MILES_ROOT}/{miles.miles_model_script} && "
                 f"torchrun {' '.join(torchrun_args)} {convert_script} "
                 f"${{MODEL_ARGS[@]}} {' '.join(extra_args)} "
-                f"--hf-checkpoint {shlex.quote(hf_path)} --save {shlex.quote(save_path)}"
+                f"--hf-checkpoint {shlex.quote(hf_path)} --save {shlex.quote(write_path)}"
             )
         else:
             cmd = (
                 f"torchrun {' '.join(torchrun_args)} {convert_script} "
                 f"{' '.join(extra_args)} "
-                f"--hf-checkpoint {shlex.quote(hf_path)} --save {shlex.quote(save_path)}"
+                f"--hf-checkpoint {shlex.quote(hf_path)} --save {shlex.quote(write_path)}"
             )
 
         env = {**os.environ, **miles.environment}
@@ -412,10 +481,44 @@ def build_miles_app(
         )
         print(f"Running: bash -c {cmd!r}")
         subprocess.run(["bash", "-c", cmd], check=True, env=env)
+
+        if staging_path:
+            # Move file by file, committing after each, rather than copytree: the
+            # Volume buffers writes to local disk before a commit, so copying wants
+            # the whole checkpoint on local disk twice and a 276B model hits ENOSPC.
+            # Moving drains the staging copy as the destination fills and each commit
+            # flushes the Volume's buffer, keeping peak local usage at ~1x.
+            # Every node moves only its own rank-specific shards, so multi-node
+            # conversions still assemble additively.
+            print(f"Moving converted checkpoint {staging_path} -> {save_path}")
+            move_start = time.time()
+            moved = 0
+            for root, _dirs, files in os.walk(staging_path):
+                rel = os.path.relpath(root, staging_path)
+                dst_dir = save_path if rel == "." else os.path.join(save_path, rel)
+                os.makedirs(dst_dir, exist_ok=True)
+                for filename in sorted(files):
+                    shutil.move(
+                        os.path.join(root, filename), os.path.join(dst_dir, filename)
+                    )
+                    moved += 1
+                    checkpoints_volume.commit()
+            print(f"Moved {moved} files in {time.time() - move_start:.0f}s")
+            shutil.rmtree(staging_path, ignore_errors=True)
+
         checkpoints_volume.commit()
 
         if node_rank == 0:
             print(f"Saved Megatron torch_dist checkpoint to {save_path}")
+            # Fail loudly here rather than leaving a partial checkpoint for a later
+            # run to mistake for a cache hit.
+            if not has_torch_dist_checkpoint(
+                save_path, is_complete=_is_complete_torch_dist_checkpoint
+            ):
+                raise RuntimeError(
+                    f"Conversion finished but {save_path} holds no complete "
+                    "torch_dist checkpoint (missing .metadata)."
+                )
 
         if training_run_id:
             flush_status_reporter(timeout_seconds=2.0)
@@ -429,6 +532,7 @@ def build_miles_app(
         cloud=miles.cloud,
         region=miles.region,
         volumes=all_volumes,
+        ephemeral_disk=miles.train_ephemeral_disk_mb,
         secrets=[
             *(
                 []
@@ -658,7 +762,9 @@ def build_miles_app(
             original_save = miles.save
             original_load = miles.load
             miles.save = save_root
-            resume_checkpoint = torch_dist_resume_checkpoint(save_root)
+            resume_checkpoint = torch_dist_resume_checkpoint(
+                save_root, is_complete=_is_complete_torch_dist_checkpoint
+            )
             record_resume_checkpoint(run_record, resume_checkpoint)
             await run_record.save(is_async=True)
 

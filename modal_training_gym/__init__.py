@@ -36,6 +36,15 @@ _EXPORTS = {
     "ModelArchitecture": ("modal_training_gym.common.models", "ModelArchitecture"),
     "ModelConfig": ("modal_training_gym.common.models", "ModelConfig"),
     "ModelDeployment": ("modal_training_gym.common.deployment", "ModelDeployment"),
+    "Inkling_Small": ("modal_training_gym.common.models", "Inkling_Small"),
+    "Inkling_Small_Recipe": (
+        "modal_training_gym.train_recipes.miles_recipe",
+        "Inkling_Small_Recipe",
+    ),
+    "Inkling_Small_LoRA_Recipe": (
+        "modal_training_gym.train_recipes.miles_recipe",
+        "Inkling_Small_LoRA_Recipe",
+    ),
     "Kimi_K2_5": ("modal_training_gym.common.models", "Kimi_K2_5"),
     "Kimi_K2_6": ("modal_training_gym.common.models", "Kimi_K2_6"),
     "Kimi_K2_5_LoRA_Recipe": (
@@ -92,6 +101,9 @@ _EXPORTS = {
 }
 
 __all__ = [
+    "Inkling_Small",
+    "Inkling_Small_Recipe",
+    "Inkling_Small_LoRA_Recipe",
     "Kimi_K2_6_LoRA_Recipe",
     "Kimi_K2_5_LoRA_Recipe",
     "DatasetConfig",
