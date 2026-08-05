@@ -62,7 +62,6 @@ def cleanup(*, older_than_days: int = 7, dry_run: bool = False) -> None:
     deleted_runs = 0
     deleted_rollouts = 0
     deleted_tokens = 0
-
     for r in targets:
         rid = r.training_run_id
         if vol_remove(MetadataStore.TRAINING_RUNS, rid):
@@ -90,6 +89,10 @@ def cleanup(*, older_than_days: int = 7, dry_run: bool = False) -> None:
         vol_put_summary_items(
             MetadataStore.TRAINING_ROLLOUTS_SUMMARY, kept_rollout_items
         )
+    
+    timing_store = RoleTimingRecord.store(rid)
+    for record in vol_list_prefix(timing_store, ""):
+        vol_remove(timing_store, RoleTimingRecord(**record).storage_key)
 
     run_summary = vol_get_summary_items(MetadataStore.TRAINING_RUNS_SUMMARY) or []
     kept_run_items = [

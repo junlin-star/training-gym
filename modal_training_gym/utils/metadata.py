@@ -11,7 +11,7 @@ from typing import Any
 
 METADATA_VOLUME_NAME = "training-gym-metadata"
 STEP_TIMES_DICT_NAME = "training-gym-step-times"
-
+SUBSTEP_TIMING = "substep-timing"
 
 class MetadataStore(Enum):
     TRAINING_RUNS = "training-runs"

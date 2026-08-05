@@ -34,6 +34,14 @@ _STEP_EVENT_TIMEOUT_SECONDS = 5.0
 _ROLLOUT_TIMEOUT_SECONDS = 10.0
 
 
+# Separate substep timing queue to not block or evict status reports
+_TIMING_QUEUE: "Queue[dict[str, Any] | None]" = Queue(maxsize=256)
+_TIMING_WORKER_STARTED = False
+_TIMING_LOCK = threading.Lock()
+_TIMING_PATH = "/api/timing-events"
+TIMING_MODE_ENV = "TRAINING_GYM_SUBSTEP_TIMING"
+_TIMING_TIMEOUT_SECONDS = 5.0
+
 def _arg_value(args: Any, key: str) -> Any:
     value = getattr(args, key, None)
     if value not in (None, ""):
