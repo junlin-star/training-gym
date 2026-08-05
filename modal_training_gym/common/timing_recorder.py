@@ -244,15 +244,21 @@ def recording_lane(
         _ACTIVE_LANE.reset(token)
 
 
-def _rank_zero_publishes() -> bool | None:
-    """Whether this rank writes its lane; ``None`` until ranks are known."""
+def _lowest_rank_publishes() -> bool | None:
+    """Whether this rank writes its lane; ``None`` until ranks are known.
+
+    The lane is measured on every rank of the model and stored under one key,
+    so the lowest rank of the model's process group is the one that writes it.
+    Read as the group's own lowest rank rather than as ``rank == 0``, so a
+    model whose ranks start above zero still writes its lane.
+    """
     try:
         import torch.distributed as dist
     except ImportError:
         return True
     if not dist.is_initialized():
         return None
-    return dist.get_rank() == 0
+    return dist.get_rank() == min(dist.get_process_group_ranks(dist.group.WORLD))
 
 
 @contextmanager
@@ -260,7 +266,7 @@ def recording_lane_on_reporting_rank(
     rollout_id: int, role: str = "actor"
 ) -> Iterator[RoleRecorder]:
     """An actor/critic lane measured on every rank, written by one of them."""
-    with recording_lane(role, rollout_id, _rank_zero_publishes) as rec:
+    with recording_lane(role, rollout_id, _lowest_rank_publishes) as rec:
         yield rec
 
 
