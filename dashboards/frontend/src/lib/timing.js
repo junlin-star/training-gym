@@ -58,7 +58,13 @@ export function colorFor(name) {
  * `forward_backward` inside `train_models` -- is nested one level under it, so
  * the sync path reads as one timeline of thin bars inside their step. A bar
  * gets a row of its own only when it overlaps something it is not inside, which
- * is real concurrency: an async rollout generating while the actor trains.
+ * is real concurrency: an async rollout generating while the actor trains. Each
+ * bar carries the relationship it was drawn with -- `inside` and `overlaps` --
+ * so hovering says why it sits where it does rather than leaving the reader to
+ * guess whether an overlap is intended.
+ *
+ * A band is not a container: it covers the span its runs were scattered over
+ * rather than one continuous run, so work drawn beneath it is not part of it.
  */
 export function rolloutTimeline(lanes) {
   const roles = Object.entries(lanes?.roles || {});
@@ -117,8 +123,29 @@ export function rolloutTimeline(lanes) {
     while (enclosing.length && enclosing[enclosing.length - 1].end < bar.end) {
       enclosing.pop();
     }
+    const container = enclosing[enclosing.length - 1];
     bar.depth = enclosing.length;
-    enclosing.push(bar);
+    bar.inside = container ? container.name : null;
+    if (!bar.banded) enclosing.push(bar);
+  }
+
+  // Work that ran at the same time without either side containing the other:
+  // the only shape that should read as concurrency.
+  for (const bar of bars) {
+    bar.overlaps = [
+      ...new Set(
+        bars
+          .filter(
+            (other) =>
+              other !== bar &&
+              other.start < bar.end &&
+              bar.start < other.end &&
+              !(other.start <= bar.start && bar.end <= other.end) &&
+              !(bar.start <= other.start && other.end <= bar.end),
+          )
+          .map((other) => other.name),
+      ),
+    ];
   }
 
   // One row per nesting depth, and another at that depth for a bar that
@@ -142,6 +169,8 @@ export function fmtSecs(s) {
   const n = Number(s);
   if (!Number.isFinite(n)) return "—";
   const trim = (x) => x.toFixed(3).replace(/\.?0+$/, "");
+  // A per-sample phase averages well under a millisecond; seconds would read 0s.
+  if (n > 0 && n < 0.01) return `${trim(n * 1000)}ms`;
   if (n >= 60) {
     const m = Math.floor(n / 60);
     return `${m}m ${trim(n - m * 60)}s`;

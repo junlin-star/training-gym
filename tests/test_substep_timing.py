@@ -170,9 +170,17 @@ def _lane_item(sequence_marker: int) -> dict:
     }
 
 
+def _accept(posted: list[dict]):
+    def post(item: dict) -> bool:
+        posted.append(item)
+        return True
+
+    return post
+
+
 def test_worker_posts_only_the_newest_snapshot_of_a_lane(queue, monkeypatch):
     posted: list[dict] = []
-    monkeypatch.setattr(status_reporter, "_post", posted.append)
+    monkeypatch.setattr(status_reporter, "_post", _accept(posted))
 
     status_reporter.enqueue_item(_lane_item(1))
     status_reporter.enqueue_item(_lane_item(2))
@@ -184,7 +192,7 @@ def test_worker_posts_only_the_newest_snapshot_of_a_lane(queue, monkeypatch):
 
 def test_full_queue_drops_the_snapshot_without_silencing_the_lane(queue, monkeypatch):
     posted: list[dict] = []
-    monkeypatch.setattr(status_reporter, "_post", posted.append)
+    monkeypatch.setattr(status_reporter, "_post", _accept(posted))
 
     for _ in range(queue.maxsize):
         queue.put_nowait({"_url": "http://test/other"})
@@ -198,6 +206,24 @@ def test_full_queue_drops_the_snapshot_without_silencing_the_lane(queue, monkeyp
     status_reporter._worker()
 
     assert [item["count"] for item in posted if "count" in item] == [2]
+
+
+def test_worker_retries_a_lane_snapshot_the_dashboard_did_not_accept(
+    queue, monkeypatch
+):
+    attempts: list[dict] = []
+
+    def post(item: dict) -> bool:
+        attempts.append(item)
+        return len(attempts) > 1
+
+    monkeypatch.setattr(status_reporter, "_post", post)
+
+    status_reporter.enqueue_item(_lane_item(1))
+    queue.put(None)
+    status_reporter._worker()
+
+    assert [item["count"] for item in attempts] == [1, 1]
 
 
 # ---------- capability probe ----------

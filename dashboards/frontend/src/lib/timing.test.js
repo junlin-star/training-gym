@@ -182,3 +182,33 @@ describe("rolloutTimeline", () => {
     expect(rolloutTimeline(null)).toEqual({ rows: [], span: 0 });
   });
 });
+
+it("says what a bar ran inside and what it ran alongside", () => {
+  const { rows } = rolloutTimeline({
+    roles: {
+      driver: {
+        role: "driver",
+        lane_start_unix_s: 1000,
+        phases: { train_models: phase([[0, 4]]) },
+      },
+      actor: {
+        role: "actor",
+        lane_start_unix_s: 1000,
+        phases: { forward_backward: phase([[1, 2]]) },
+      },
+      rollout: {
+        role: "rollout",
+        lane_start_unix_s: 1000,
+        phases: { generate_samples: phase([[3, 6]]) },
+      },
+    },
+  });
+
+  const bars = rows.flat();
+  const inside = bars.find((bar) => bar.name === "forward_backward");
+  const alongside = bars.find((bar) => bar.name === "generate_samples");
+  expect(inside.inside).toBe("train_models");
+  expect(inside.overlaps).toEqual([]);
+  expect(alongside.inside).toBe(null);
+  expect(alongside.overlaps).toEqual(["train_models"]);
+});

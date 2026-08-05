@@ -11,8 +11,6 @@
   const MAX_ZOOM = 64;
   const ZOOM_BTN_FACTOR = 1.5;
   const WHEEL_SENSITIVITY = 0.0015;
-  // Below this share of the visible width a bar has no room for its name.
-  const MIN_LABEL_WIDTH_PCT = 6;
 
   let rollouts = $derived.by(() =>
     Object.entries(timings || {})
@@ -186,6 +184,7 @@
                   {#each row as bar (bar.key)}
                     <button
                       class="bar"
+                      aria-label={`${labelFor(bar.name)} ${fmtSecs(bar.duration)}`}
                       class:banded={bar.banded}
                       class:active={pinned && isActive(rollout.id, bar)}
                       style:background={colorFor(bar.name)}
@@ -195,11 +194,7 @@
                       onmousemove={moveTip}
                       onmouseleave={hideTip}
                       onclick={(e) => pinTip(e, rollout.id, bar)}
-                    >
-                      {#if bar.depth === 0 && ((bar.end - bar.start) / rollout.span) * 100 * zoom > MIN_LABEL_WIDTH_PCT}
-                        <span class="bar-label">{labelFor(bar.name)}</span>
-                      {/if}
-                    </button>
+                    ></button>
                   {/each}
                 </div>
               {/each}
@@ -209,9 +204,10 @@
       </div>
     </div>
     <div class="hint">
-      Scroll to zoom · shift-scroll or drag to pan · click a bar to pin its details. Bars
-      share one clock per rollout: a thin bar ran inside the bar above it, and a bar on a
-      row of its own overlapped work it is not part of.
+      Hover a bar for its phase and exact times · scroll to zoom · shift-scroll or drag to
+      pan · click a bar to pin its details. Bars share one clock per rollout: a thin bar
+      ran inside the bar above it, and a bar on a row of its own overlapped work it is not
+      part of.
     </div>
   {/if}
 </div>
@@ -232,6 +228,17 @@
       <span class="tg-tip-when">
         {tip.bar.count} runs · average {fmtSecs(tip.bar.average)} · longest
         {fmtSecs(tip.bar.longest)}
+      </span>
+      <span class="tg-tip-when">
+        spread over {fmtSecs(tip.bar.end - tip.bar.start)}, not one run
+      </span>
+    {/if}
+    {#if tip.bar.inside}
+      <span class="tg-tip-when">ran inside {labelFor(tip.bar.inside)}</span>
+    {/if}
+    {#if tip.bar.overlaps.length}
+      <span class="tg-tip-when">
+        ran at the same time as {tip.bar.overlaps.map(labelFor).join(", ")}
       </span>
     {/if}
   </div>
@@ -437,16 +444,6 @@
       transparent 3px,
       transparent 6px
     );
-  }
-
-  .bar-label {
-    display: block;
-    font-size: 9px;
-    line-height: 16px;
-    color: rgba(0, 0, 0, 0.75);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
   }
 
   .hint {

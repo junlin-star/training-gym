@@ -91,12 +91,18 @@ def _worker() -> None:
                     superseded = _LATEST_BY_KEY.get(key) != sequence
                 if superseded:
                     continue
+                # The last snapshot of a lane has no successor to carry its
+                # phases, so a timed-out POST would drop the tail of the step.
+                if not _post(dict(item)):
+                    _post(item)
+                continue
             _post(item)
         finally:
             _QUEUE.task_done()
 
 
-def _post(item: dict[str, Any]) -> None:
+def _post(item: dict[str, Any]) -> bool:
+    """POST one item; returns whether the dashboard accepted it."""
     url = item.pop("_url", "")
     timeout = float(
         item.pop("_timeout", _DEFAULT_TIMEOUT_SECONDS) or _DEFAULT_TIMEOUT_SECONDS
@@ -105,7 +111,7 @@ def _post(item: dict[str, Any]) -> None:
     # enqueue_item callers); don't re-resolve it here.
     token = str(item.pop("_token", "") or "").strip()
     if not url:
-        return
+        return False
     body = json.dumps(item, default=str).encode("utf-8")
 
     from modal_training_gym.common.config import modal_proxy_auth_headers
@@ -127,7 +133,8 @@ def _post(item: dict[str, Any]) -> None:
         with urlopen(request, timeout=timeout) as response:
             response.read()
     except (OSError, URLError):
-        return
+        return False
+    return True
 
 
 def enqueue_item(item: dict[str, Any]) -> None:
