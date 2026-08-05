@@ -3,27 +3,30 @@
 
 # # On-policy distillation: Teacher model trains a student model
 #
-# In this tutorial, we take two models, Qwen3-8B and Qwen3-4B, and use 
+# In this tutorial, we take two models, Qwen3-8B and Qwen3-4B, and use
 # the larger 8B model to teach the smaller 4B model on its generation logprobs.
 #
-# Using the Slime framework and Modal Training Gym, we can easily self-host the
-# teacher model on a H100 machine, hit the /generate endpoint with "return_logprob=True",
-# and penalize the student model's logprobs per token in input sequence using reverse KL divergence.
+# OPD needs **prompt** log-probs over the student's tokens (prefill with
+# `max_new_tokens=0`). That is SGLang's native `/generate` API
+# (`return_logprob=True`, `logprob_start_len=0`). Managed Modal Endpoints only
+# expose OpenAI-compatible `/v1` and cannot score an existing sequence that way,
+# so the teacher and student checks use small custom Modal `@app.server`
+# wrappers around SGLang.
 #
 # The tutorial follows these steps:
 #
-# 1. **Deploy the teacher** (Qwen3-8B) on an SGLang server with `DeploymentConfig`.
-# 2. **Load a math dataset** (`dapo-math-17k`) and define a verifiable eval that checks `Answer: \boxed{N}`.
-# 3. **Evaluate the base student** (Qwen3-4B) to get a baseline accuracy.
-# 4. **Define a reward function** that calls the teacher's `/generate` endpoint with `return_logprob=True` and combines the teacher log-probs with a math correctness score.
+# 1. **Serve the teacher** (Qwen3-8B) with a custom Modal SGLang Server that exposes `/generate`.
+# 2. **Load a math dataset** (`dapo-math-17k`) and define a verifiable check for `Answer: \boxed{N}`.
+# 3. **Check the base student** (Qwen3-4B) to get a baseline accuracy.
+# 4. **Define a reward function** that POSTs the student tokens to the teacher's `/generate` with `return_logprob=True` and combines the teacher log-probs with a math correctness score.
 # 5. **Train with GRPO + OPD** using `SlimeRecipe` — slime applies a per-token reverse KL penalty from the teacher log-probs on top of the GRPO advantage.
-# 6. **Evaluate the trained student** and compare accuracy before vs after.
+# 6. **Check the trained student** and compare accuracy before vs after.
 #
 # ### How OPD works
 #
 # During each rollout step:
 # 1. The student generates a response (math reasoning).
-# 2. The student's token IDs are sent to the teacher's SGLang server.
+# 2. The student's token IDs are sent to the teacher's SGLang `/generate` route.
 # 3. The teacher returns per-token log-probabilities.
 # 4. Slime modifies the advantage at each token:
 #
@@ -40,7 +43,7 @@
 # We use [`zhuzilin/dapo-math-17k`](https://huggingface.co/datasets/zhuzilin/dapo-math-17k),
 # the same math dataset used by slime's own OPD examples. Each row is a math
 # problem with a ground-truth integer answer. The model is prompted to
-# respond with `Answer: \boxed{N}` — evaluation just checks whether the
+# respond with `Answer: \boxed{N}` — the check only verifies whether the
 # number matches.
 # Run with:
 # ```
@@ -56,25 +59,133 @@ import modal
 
 import re
 
+import aiohttp
+import modal
+
 from modal_training_gym import (
-    DeploymentConfig,
-    EvalConfig,
-    EvalRowResult,
     HuggingFaceDataset,
-    ModelDeployment,
     Qwen3_4B,
     Qwen3_8B,
+    Sample,
     SlimeRecipe,
     TrainConfig,
-    list_checkpoints,
+    endpoint_chat,
+    wait_for_server_url,
 )
-from modal_training_gym.deploy_recipes.sglang_recipe import SglangRecipe
+from modal_training_gym.common.config import modal_proxy_auth_headers
+
+# ## Serve the teacher on SGLang `/generate`
+#
+# Managed Modal Endpoints speak OpenAI `/v1` only. OPD's reward path needs
+# SGLang's native `/generate` so the teacher can return prompt log-probs for
+# the student's tokens without decoding new ones. The block below is ordinary
+# Modal user code: `@app.server` + `sglang.launch_server`, then
+# `TEACHER_GENERATE_URL = f"{url}/generate"`.
+#
+# Custom `@app.server` endpoints here use `unauthenticated=False`. Run
+# `training-gym set-proxy-auth` or export `MODAL_KEY`/`MODAL_SECRET` before
+# calling `wait_for_server_url` / `endpoint_chat` with `proxy_auth=True`.
+# The OPD remote reward path receives the same pair from the training launcher.
+
+teacher_model = Qwen3_8B()
+TEACHER_MODEL_ID = teacher_model.model_name
+TEACHER_APP_NAME = "gym-opd-teacher-qwen3-8b"
+TEACHER_PORT = 8000
+TEACHER_STARTUP_TIMEOUT = 20 * 60
+
+teacher_image = (
+    modal.Image.from_registry("lmsysorg/sglang:v0.5.12")
+    .entrypoint([])
+    .run_commands("rm -rf /root/.cache/huggingface")
+    .env(
+        {
+            "HF_HUB_CACHE": "/root/.cache/huggingface",
+            "HF_XET_HIGH_PERFORMANCE": "1",
+        }
+    )
+)
+teacher_app = modal.App(TEACHER_APP_NAME)
+
+_teacher_model_id = TEACHER_MODEL_ID
+_teacher_port = TEACHER_PORT
+_teacher_startup = TEACHER_STARTUP_TIMEOUT
+
+@teacher_app.server(
+    image=teacher_image,
+    gpu="H100",
+    volumes={
+        "/root/.cache/huggingface": modal.Volume.from_name(
+            "huggingface-cache", create_if_missing=True
+        ),
+    },
+    port=_teacher_port,
+    startup_timeout=_teacher_startup,
+    scaledown_window=10 * 60,
+    exit_grace_period=25,
+    target_concurrency=8,
+    unauthenticated=False,
+    serialized=True,
+)
+class TeacherServer:
+    @modal.enter()
+    def start(self):
+        import subprocess as _sp
+        import time as _time
+        import urllib.error as _ue
+        import urllib.request as _ur
+
+        cmd = [
+            "python",
+            "-m",
+            "sglang.launch_server",
+            "--model-path",
+            _teacher_model_id,
+            "--served-model-name",
+            _teacher_model_id,
+            "--host",
+            "0.0.0.0",
+            "--port",
+            str(_teacher_port),
+            "--context-length",
+            "32768",
+            "--mem-fraction-static",
+            "0.82",
+            "--chunked-prefill-size",
+            "8192",
+            "--max-running-requests",
+            "16",
+            "--trust-remote-code",
+        ]
+        self.proc = _sp.Popen(cmd)
+        deadline = _time.monotonic() + _teacher_startup
+        health = f"http://127.0.0.1:{_teacher_port}/health"
+        while True:
+            if self.proc.poll() is not None:
+                raise RuntimeError(
+                    f"SGLang exited with code {self.proc.returncode} before healthy"
+                )
+            try:
+                with _ur.urlopen(health, timeout=5) as resp:
+                    if resp.status == 200:
+                        return
+            except (_ue.URLError, TimeoutError, OSError):
+                pass
+            if _time.monotonic() >= deadline:
+                raise TimeoutError(f"Teacher SGLang not healthy at {health}")
+            _time.sleep(2)
+
+    @modal.exit()
+    def stop(self):
+        proc = getattr(self, "proc", None)
+        if proc is not None and proc.poll() is None:
+            proc.terminate()
+            proc.wait(timeout=30)
 
 # ## Dataset
 #
 # We use a simple math dataset containing competition problems that the LLM is tasked
 # with answering via a `Answer: \boxed{N}` response. This simple format allows
-# for deterministic evaluation!
+# for deterministic checking!
 #
 # [Here's the link to `zhuzilin/dapo-math-17k`](https://huggingface.co/datasets/zhuzilin/dapo-math-17k)
 #
@@ -82,7 +193,7 @@ from modal_training_gym.deploy_recipes.sglang_recipe import SglangRecipe
 #
 # [Thinking Machines](https://thinkingmachines.ai/blog/on-policy-distillation/) demonstrates that 
 # using a small number of samples with a larger number of rollouts can be sufficient for OPD.
-# For this tutorial, we take 100 training samples and hold out 20 for evaluation.
+# For this tutorial, we take 100 training samples and hold out 20 for checking.
 
 class MathDataset(HuggingFaceDataset):
     hf_repo = "zhuzilin/dapo-math-17k"
@@ -90,6 +201,8 @@ class MathDataset(HuggingFaceDataset):
     output_column = "label"
     output_format = "jsonl"
     apply_chat_template = False
+
+check_dataset = MathDataset(hf_split="train[100:120]")
 
 def _normalize_answer(answer: str) -> str:
     answer = str(answer).strip()
@@ -112,26 +225,122 @@ def _check_math(response: str, label: str) -> bool:
         pass
     return pred == gt
 
-def math_eval_fn(deployment: ModelDeployment, example: dict) -> EvalRowResult:
+def score_math_example(base_url: str, model_id: str, example: dict) -> Sample:
     prompt = example.get("prompt", "")
     if isinstance(prompt, list):
         prompt = prompt[0]["content"] if prompt else ""
     label = example.get("label", "")
 
-    response = deployment.generate(
-        prompt,
-        ensure_ready=False,
-        chat_template_kwargs={"enable_thinking": True},
+    response = endpoint_chat(
+        base_url,
+        model=model_id,
+        messages=[{"role": "user", "content": prompt}],
+        extra_body={"chat_template_kwargs": {"enable_thinking": True}},
+        proxy_auth=True,
     )
 
     correct = _check_math(response, label)
     pred = _normalize_answer(_extract_answer(response))
 
-    return EvalRowResult(
+    return Sample(
         score=1.0 if correct else 0.0,
+        prompt=prompt,
         response=response,
         metadata={"correct": correct, "pred": pred, "label": label},
     )
+
+def run_math_check(base_url: str, model_id: str) -> list[Sample]:
+    return [
+        score_math_example(base_url, model_id, example)
+        for example in check_dataset.load()
+    ]
+
+def mean_score(rows: list[Sample]) -> float:
+    return sum(row.score for row in rows) / len(rows) if rows else float("nan")
+
+def serve_student(
+    model_path: str,
+    served_model_name: str,
+    app_name: str,
+    checkpoints_volume_name: str | None = None,
+) -> str:
+    student_app = modal.App(app_name)
+    volumes = {
+        "/root/.cache/huggingface": modal.Volume.from_name(
+            "huggingface-cache", create_if_missing=True
+        )
+    }
+    if checkpoints_volume_name:
+        volumes["/checkpoints"] = modal.Volume.from_name(
+            checkpoints_volume_name, create_if_missing=True
+        )
+
+    @student_app.server(
+        image=teacher_image,
+        gpu="H100",
+        volumes=volumes,
+        port=TEACHER_PORT,
+        startup_timeout=TEACHER_STARTUP_TIMEOUT,
+        scaledown_window=10 * 60,
+        exit_grace_period=25,
+        target_concurrency=4,
+        unauthenticated=False,
+        serialized=True,
+    )
+    class StudentServer:
+        @modal.enter()
+        def start(self):
+            import subprocess as _sp
+            import time as _time
+            import urllib.error as _ue
+            import urllib.request as _ur
+
+            self.proc = _sp.Popen(
+                [
+                    "python",
+                    "-m",
+                    "sglang.launch_server",
+                    "--model-path",
+                    model_path,
+                    "--served-model-name",
+                    served_model_name,
+                    "--host",
+                    "0.0.0.0",
+                    "--port",
+                    str(TEACHER_PORT),
+                    "--mem-fraction-static",
+                    "0.80",
+                    "--trust-remote-code",
+                ]
+            )
+            deadline = _time.monotonic() + TEACHER_STARTUP_TIMEOUT
+            health = f"http://127.0.0.1:{TEACHER_PORT}/health"
+            while True:
+                if self.proc.poll() is not None:
+                    raise RuntimeError(
+                        f"SGLang exited with code {self.proc.returncode} "
+                        "before healthy"
+                    )
+                try:
+                    with _ur.urlopen(health, timeout=5) as response:
+                        if response.status == 200:
+                            return
+                except (_ue.URLError, TimeoutError, OSError):
+                    pass
+                if _time.monotonic() >= deadline:
+                    raise TimeoutError(f"Student SGLang not healthy at {health}")
+                _time.sleep(2)
+
+        @modal.exit()
+        def stop(self):
+            proc = getattr(self, "proc", None)
+            if proc is not None and proc.poll() is None:
+                proc.terminate()
+                proc.wait(timeout=30)
+
+    with modal.enable_output():
+        student_app.deploy()
+    return wait_for_server_url(StudentServer, label="OPD student", proxy_auth=True)
 
 # ## Reward function
 #
@@ -147,14 +356,26 @@ def math_eval_fn(deployment: ModelDeployment, example: dict) -> EvalRowResult:
 # Now, the student model only gets penalized on modes relevant to itself.
 
 async def math_opd_rm(args, sample, **kwargs):
-    """Collect teacher log-probs AND compute math correctness reward.
-
-    The teacher log-prob collection is handled by slime's built-in OPD
-    reward function. We call it, then add our scalar math reward.
-    """
-    from slime.rollout.on_policy_distillation import reward_func as _opd_reward
-
-    teacher_response = await _opd_reward(args, sample, **kwargs)
+    payload = {
+        "input_ids": sample.tokens,
+        "sampling_params": {
+            "temperature": 0,
+            "max_new_tokens": 0,
+            "skip_special_tokens": False,
+        },
+        "return_logprob": True,
+        "logprob_start_len": 0,
+    }
+    headers = modal_proxy_auth_headers()
+    async with aiohttp.ClientSession() as session:
+        async with session.post(
+            args.rm_url,
+            json=payload,
+            headers=headers,
+            allow_redirects=False,
+        ) as response:
+            response.raise_for_status()
+            teacher_response = await response.json()
 
     label = getattr(sample, "label", "") or ""
     correct = _check_math(sample.response, label)
@@ -185,7 +406,7 @@ def math_opd_post_process(args, samples, **kwargs):
 # Some cool ways to extend and improve this example:
 # 1. Use a bigger teacher: Qwen3 offers models in the 32B parameter range. 
 # This model will fit on a 4xH100 GPU setup and can show measurable improvements
-# on the student model evaluation delta.
+# on the student model's held-out delta.
 # 2. Tweak the composite reward signal: Try applying a coefficient like *2* to the
 # binary integer reward signal used in the custom reward function to value correct answers
 # over student-teacher alignment.
@@ -207,45 +428,35 @@ def _main_impl() -> None:
             "https://modal.com/secrets with an HF_TOKEN entry, then re-run."
         ) from e
 
-    # ## Deploy the teacher model
+    with modal.enable_output():
+        teacher_app.deploy()
+    teacher_url = wait_for_server_url(TeacherServer, label="OPD teacher", proxy_auth=True)
+    print(f"Teacher URL: {teacher_url}")
+
+    # Managed Endpoints stop at /v1. This Server exposes full SGLang, including /generate.
+    TEACHER_GENERATE_URL = f"{teacher_url}/generate"
+
+    train_dataset = MathDataset(hf_split="train[:100]")
+
+    # ## Baseline check
     #
-    # We borrow a recipe from Modal's Training Gym repo to deploy our teacher model on an SGLang server.
-
-    teacher_model = Qwen3_8B()
-    teacher_deployment = DeploymentConfig(
-        model=teacher_model,
-        recipe=SglangRecipe(gpu="H100"),
-        app_name="opd-teacher-qwen3-8b",
-        served_model_name="qwen3-8b-teacher",
-        unauthenticated=True,
-    ).serve()
-    print(f"Teacher URL: {teacher_deployment.url}")
-
-    TEACHER_GENERATE_URL = f"{teacher_deployment.url}/generate"
-
-    train_dataset = MathDataset(n_rows=100)
-    eval_dataset = MathDataset(n_rows=20)
-
-    # ## Baseline Eval
-    #
-    # Let's run the math eval on our base serving model. Thankfully, our dataset requires
+    # Qwen3-4B is not in the managed Endpoint catalog, so the student check uses
+    # the same `@app.server` + SGLang pattern as the teacher and ASR tutorials.
+    # Thankfully, our dataset requires
     # simple-enough answers that a tiny, 4B model should not cause issues for our deterministic parser.
-    # In our own experience, requiring a strict JSON output format can cause evaluation issues!
-    # See [this LoRA adapter for making Qwen3-4B successful at structured output](https://huggingface.co/uchkw/qwen3-4b-structured-output-lora).
+    # In our own experience, requiring a strict JSON output format can hurt parser reliability.
 
     base_model = Qwen3_4B()
-    base_deployment = DeploymentConfig(
-        model=base_model,
-        unauthenticated=True,
-    ).serve()
-    print(f"Student URL: {base_deployment.url}")
+    STUDENT_MODEL_ID = base_model.model_name
 
-    eval_config = EvalConfig(dataset=eval_dataset, eval_fn=math_eval_fn)
-    print("--- Evaluating base student... ---")
-    base_eval = eval_config.evaluate(base_deployment, debug=True)
-    n_correct = sum(1 for r in base_eval.rows if r.metadata.get("correct"))
-    print(f"Base accuracy: {n_correct}/{len(base_eval.rows)} "
-          f"({base_eval.mean:.1%})")
+    base_url = serve_student(STUDENT_MODEL_ID, STUDENT_MODEL_ID, "gym-opd-student-qwen3-4b-check-base")
+    print(f"Student URL: {base_url}")
+
+    print("--- Checking base student... ---")
+    base_rows = run_math_check(base_url, STUDENT_MODEL_ID)
+    base_mean = mean_score(base_rows)
+    n_correct = sum(1 for row in base_rows if row.metadata.get("correct"))
+    print(f"Base accuracy: {n_correct}/{len(base_rows)} ({base_mean:.1%})")
 
     # ## Training
     #
@@ -300,46 +511,45 @@ def _main_impl() -> None:
     )
 
     print("--- Starting OPD training... ---")
-    print(f"  Teacher: {teacher_deployment.url}")
+    print(f"  Teacher: {teacher_url}")
     print(f"  Student: Qwen3-4B")
     print(f"  Dataset: dapo-math-17k (100 problems)")
     train_result = training_run.train()
     print(f"Training run id: {train_result.training_run_id}")
     print("--- Training complete ---")
 
-    # ## Evaluate the trained student
+    # ## Check the trained student
     #
-    # Let's run the evaluation on our trained model and compare it
-    # to the baseline evaluation from earlier.
+    # Redeploy the custom student server with the checkpoint Volume mounted, then
+    # run the same scoring loop used for the base student.
 
-    checkpoint = list_checkpoints(train_result.training_run_id)[-1]
-    print(f"Checkpoint: {checkpoint.path}")
+    trained_model = train_result.hf_model()
+    print(f"Checkpoint: {trained_model.model_path}")
 
-    trained_deployment = DeploymentConfig(
-        model=Qwen3_4B(),
-        checkpoint=checkpoint,
-        app_name="qwen3-4b-opd-trained-serve",
-        served_model_name="qwen3-4b-opd",
-        unauthenticated=True,
-    ).serve()
-    print(f"Trained student URL: {trained_deployment.url}")
+    trained_url = serve_student(
+        trained_model.model_path,
+        trained_model.model_name,
+        "gym-opd-student-qwen3-4b-check-trained",
+        train_result.checkpoints_volume,
+    )
+    print(f"Trained student URL: {trained_url}")
 
-    print("--- Evaluating trained student... ---")
-    trained_eval = eval_config.evaluate(trained_deployment, debug=True)
-    n_correct = sum(1 for r in trained_eval.rows if r.metadata.get("correct"))
-    print(f"Trained accuracy: {n_correct}/{len(trained_eval.rows)} "
-          f"({trained_eval.mean:.1%})")
+    print("--- Checking trained student... ---")
+    trained_rows = run_math_check(trained_url, trained_model.model_name)
+    trained_mean = mean_score(trained_rows)
+    n_correct = sum(1 for row in trained_rows if row.metadata.get("correct"))
+    print(f"Trained accuracy: {n_correct}/{len(trained_rows)} ({trained_mean:.1%})")
 
     # ## Results
     #
-    # Let's hope you see a positive delta on your eval performance!
+    # Let's hope you see a positive delta on held-out performance!
 
-    base_correct = sum(1 for r in base_eval.rows if r.metadata.get("correct"))
-    trained_correct = sum(1 for r in trained_eval.rows if r.metadata.get("correct"))
-    total = len(base_eval.rows)
-    print(f"Base student:    {base_correct}/{total} ({base_eval.mean:.1%})")
-    print(f"Trained student: {trained_correct}/{total} ({trained_eval.mean:.1%})")
-    print(f"Delta:           {trained_eval.mean - base_eval.mean:+.1%}")
+    base_correct = sum(1 for row in base_rows if row.metadata.get("correct"))
+    trained_correct = sum(1 for row in trained_rows if row.metadata.get("correct"))
+    total = len(base_rows)
+    print(f"Base student:    {base_correct}/{total} ({base_mean:.1%})")
+    print(f"Trained student: {trained_correct}/{total} ({trained_mean:.1%})")
+    print(f"Delta:           {trained_mean - base_mean:+.1%}")
 
 @tutorial_cli_app.local_entrypoint()
 def main() -> None:

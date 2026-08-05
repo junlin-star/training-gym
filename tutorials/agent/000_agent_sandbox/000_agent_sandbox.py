@@ -11,10 +11,9 @@
 # isolated container with its own filesystem.
 #
 # What you'll learn:
-# 1. Deploy a model with `DeploymentConfig` and get an
+# 1. Serve Qwen3-8B with a custom Modal `@app.server` and get an
 #    OpenAI-compatible endpoint.
-# 2. Use the OpenAI Python SDK pointed at your self-hosted
-#    endpoint (no API key needed).
+# 2. Call that endpoint with `endpoint_chat_message` (including tools).
 # 3. Create a Modal Sandbox with files pre-loaded via
 #    `filesystem.write_text`.
 # 4. Define tools that run shell commands inside the sandbox
@@ -27,24 +26,20 @@
 # ```
 # uv run tutorials/misc/000_agent_sandbox/000_agent_sandbox.py
 # ```
-# ## Prerequisites
-#
-# This tutorial requires a Modal Secret named `huggingface-secret` containing your
-# `HF_TOKEN`. Create one at [modal.com/secrets](https://modal.com/secrets) if you
-# haven't already — the cell below fails fast with instructions otherwise.
-
-import modal
 
 import json
+import subprocess
+import time
+import urllib.error
+import urllib.request
 
 import modal
-import openai
 
 from modal_training_gym import (
-    DeploymentConfig,
     Qwen3_8B,
+    endpoint_chat_message,
+    wait_for_server_url,
 )
-from modal_training_gym.deploy_recipes import SglangRecipe
 
 def dispatch_tool(sb, name: str, arguments: str) -> str:
     args = json.loads(arguments)
@@ -63,6 +58,107 @@ def dispatch_tool(sb, name: str, arguments: str) -> str:
         return stdout if proc.returncode == 0 else f"Error: {stderr}"
 
     return f"Unknown tool: {name}"
+
+# ## Serve the model
+#
+# Qwen3-8B is not in the managed Endpoint catalog, so we launch SGLang
+# directly with `@app.server`. The server exposes an **OpenAI-compatible**
+# `/v1/chat/completions` endpoint used by `endpoint_chat_message`.
+#
+# We pass `--tool-call-parser qwen25` so the server parses Qwen3's tool-call
+# format into structured `tool_calls` in the response. Without this, the
+# model emits tool calls as raw text.
+#
+# Custom `@app.server` endpoints here use `unauthenticated=False`. Run
+# `training-gym set-proxy-auth` or export `MODAL_KEY`/`MODAL_SECRET` before
+# calling `wait_for_server_url` / `endpoint_chat_message` with
+# `proxy_auth=True`.
+
+MODEL_ID = Qwen3_8B().model_name
+SERVER_APP_NAME = "gym-qwen3-8b-agent"
+SERVER_PORT = 8000
+SERVER_STARTUP_TIMEOUT = 20 * 60
+
+server_image = (
+    modal.Image.from_registry("lmsysorg/sglang:v0.5.12")
+    .entrypoint([])
+    .run_commands("rm -rf /root/.cache/huggingface")
+    .env({"HF_HUB_CACHE": "/root/.cache/huggingface"})
+)
+
+def serve_model() -> str:
+    app = modal.App(SERVER_APP_NAME)
+
+    @app.server(
+        image=server_image,
+        gpu="H100",
+        volumes={
+            "/root/.cache/huggingface": modal.Volume.from_name(
+                "huggingface-cache", create_if_missing=True
+            )
+        },
+        port=SERVER_PORT,
+        startup_timeout=SERVER_STARTUP_TIMEOUT,
+        scaledown_window=10 * 60,
+        exit_grace_period=25,
+        target_concurrency=4,
+        unauthenticated=False,
+        serialized=True,
+    )
+    class ModelServer:
+        @modal.enter()
+        def start(self):
+            command = [
+                "python",
+                "-m",
+                "sglang.launch_server",
+                "--model-path",
+                MODEL_ID,
+                "--served-model-name",
+                MODEL_ID,
+                "--host",
+                "0.0.0.0",
+                "--port",
+                str(SERVER_PORT),
+                "--mem-fraction-static",
+                "0.82",
+                "--context-length",
+                "32768",
+                "--tool-call-parser",
+                "qwen25",
+                "--trust-remote-code",
+            ]
+            print(" ".join(command), flush=True)
+            self.proc = subprocess.Popen(command)
+
+            deadline = time.monotonic() + SERVER_STARTUP_TIMEOUT
+            health = f"http://127.0.0.1:{SERVER_PORT}/health"
+            while time.monotonic() < deadline:
+                if self.proc.poll() is not None:
+                    raise RuntimeError(
+                        f"SGLang exited with code {self.proc.returncode}"
+                    )
+                try:
+                    with urllib.request.urlopen(health, timeout=5) as response:
+                        if response.status == 200:
+                            return
+                except (urllib.error.URLError, TimeoutError, OSError):
+                    pass
+                time.sleep(2)
+            raise TimeoutError(f"SGLang not healthy at {health}")
+
+        @modal.exit()
+        def stop(self):
+            process = getattr(self, "proc", None)
+            if process is not None and process.poll() is None:
+                process.terminate()
+                process.wait(timeout=30)
+
+    with modal.enable_output():
+        app.deploy()
+    return wait_for_server_url(
+        ModelServer, label="Qwen3-8B agent server", proxy_auth=True
+    )
 
 # ## Next steps
 #
@@ -88,14 +184,6 @@ import modal
 tutorial_cli_app = modal.App()
 
 def _main_impl() -> None:
-    try:
-        modal.Secret.from_name("huggingface-secret").hydrate()
-    except modal.exception.NotFoundError as e:
-        raise RuntimeError(
-            "Missing Modal Secret 'huggingface-secret'. Create one at "
-            "https://modal.com/secrets with an HF_TOKEN entry, then re-run."
-        ) from e
-
     # ## Define the tools
     #
     # We define two tools and a dispatcher function. Each tool runs a
@@ -146,33 +234,8 @@ def _main_impl() -> None:
         },
     ]
 
-    # ## Deploy the model
-    #
-    # `DeploymentConfig.serve()` launches an sglang-backed inference
-    # server on Modal and returns a `ModelDeployment` with a live URL.
-    # The server exposes an **OpenAI-compatible** `/v1/chat/completions`
-    # endpoint, so we point the standard OpenAI Python SDK at it.
-    #
-    # We pass `extra_server_args={"--tool-call-parser": "qwen25"}` to
-    # the `SglangRecipe` so the server parses Qwen3's tool-call
-    # format into structured `tool_calls` in the response. Without
-    # this, the model emits tool calls as raw text.
-
-    recipe = SglangRecipe(
-        extra_server_args={"--tool-call-parser": "qwen25"},
-    )
-    deployment = DeploymentConfig(
-        model=Qwen3_8B(),
-        recipe=recipe,
-        unauthenticated=True,
-    ).serve()
-    deployment.wait_until_ready()
-    print(f"Model URL: {deployment.url}")
-
-    client = openai.OpenAI(
-        base_url=f"{deployment.url}/v1",
-        api_key="not-needed",
-    )
+    model_url = serve_model()
+    print(f"Model URL: {model_url}")
 
     # ## Create a sandbox with sample files
     #
@@ -236,7 +299,8 @@ def _main_impl() -> None:
 
     # ## The agent loop
     #
-    # The loop uses the OpenAI SDK's tool-calling protocol:
+    # The loop uses the OpenAI-compatible tool-calling protocol via
+    # `endpoint_chat_message`:
     # 1. Send messages + tool definitions to the self-hosted model.
     # 2. If the model returns `tool_calls`, execute each one in the
     #    sandbox and append the results as `tool` messages.
@@ -247,7 +311,6 @@ def _main_impl() -> None:
     # skips its internal chain-of-thought block and responds
     # directly — this keeps tool-call parsing clean.
 
-    MODEL = deployment.deployment_config.served_model_name
     MAX_ITERATIONS = 10
 
     messages = [
@@ -265,34 +328,40 @@ def _main_impl() -> None:
     print("Starting agent loop...\n")
 
     for i in range(MAX_ITERATIONS):
-        response = client.chat.completions.create(
-            model=MODEL,
-            max_tokens=4096,
-            tools=TOOL_DEFINITIONS,
+        message = endpoint_chat_message(
+            model_url,
+            model=MODEL_ID,
             messages=messages,
+            tools=TOOL_DEFINITIONS,
+            max_tokens=4096,
             extra_body={"chat_template_kwargs": {"enable_thinking": False}},
+            proxy_auth=True,
         )
+        messages.append(message)
+        tool_calls = message.get("tool_calls") or []
 
-        choice = response.choices[0]
-
-        if choice.finish_reason == "stop":
-            print(f"Agent response:\n{choice.message.content}")
+        if not tool_calls:
+            content = message.get("content") or message.get("reasoning_content") or ""
+            print(f"Agent response:\n{content}")
             break
 
-        messages.append(choice.message)
-
-        if choice.message.tool_calls:
-            for tc in choice.message.tool_calls:
-                print(f"  [{i+1}] Calling {tc.function.name}({tc.function.arguments})")
-                result = dispatch_tool(sandbox, tc.function.name, tc.function.arguments)
-                print(f"       → {len(result)} chars returned")
-                messages.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": tc.id,
-                        "content": result,
-                    }
-                )
+        for tool_call in tool_calls:
+            function = tool_call["function"]
+            print(
+                f"  [{i + 1}] Calling {function['name']}"
+                f"({function.get('arguments', '{}')})"
+            )
+            result = dispatch_tool(
+                sandbox, function["name"], function.get("arguments") or "{}"
+            )
+            print(f"       → {len(result)} chars returned")
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": tool_call["id"],
+                    "content": result,
+                }
+            )
 
     else:
         print("Reached max iterations without a final response.")

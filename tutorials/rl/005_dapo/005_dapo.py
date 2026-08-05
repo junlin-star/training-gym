@@ -47,16 +47,16 @@ import modal
 import re
 from typing import Any
 
+import modal
+
 from modal_training_gym import (
-    DeploymentConfig,
-    EvalConfig,
-    EvalRowResult,
     HuggingFaceDataset,
-    ModelDeployment,
     Qwen3_4B,
+    Sample,
     SlimeRecipe,
     TrainConfig,
-    list_checkpoints,
+    endpoint_chat,
+    wait_for_server_url,
 )
 
 # ## Dataset
@@ -72,7 +72,7 @@ from modal_training_gym import (
 # the model's chat template during training.
 #
 # For this tutorial, we train on 2,000 prompts and hold out 100 prompts for
-# evaluation, using a row offset so the two splits never overlap.
+# checking, using a row offset so the two splits never overlap.
 
 class MathDataset(HuggingFaceDataset):
     hf_repo = "zhuzilin/dapo-math-17k"
@@ -90,6 +90,8 @@ class MathDataset(HuggingFaceDataset):
         start = min(self.row_offset, len(ds))
         stop = len(ds) if not self.n_rows else min(start + self.n_rows, len(ds))
         return ds.select(range(start, stop))
+
+check_dataset = MathDataset(n_rows=100, row_offset=16_000)
 
 def _normalize_answer(answer: str) -> str:
     answer = str(answer).strip()
@@ -112,26 +114,132 @@ def _check_math(response: str, label: str) -> bool:
         pass
     return pred == gt
 
-def math_eval_fn(deployment: ModelDeployment, example: dict) -> EvalRowResult:
+def score_math_example(base_url: str, model_id: str, example: dict) -> Sample:
     prompt = example.get("prompt", "")
     if isinstance(prompt, list):
         prompt = prompt[0]["content"] if prompt else ""
     label = example.get("label", "")
 
-    response = deployment.generate(
-        prompt,
-        ensure_ready=False,
-        chat_template_kwargs={"enable_thinking": True},
+    response = endpoint_chat(
+        base_url,
+        model=model_id,
+        messages=[{"role": "user", "content": prompt}],
+        extra_body={"chat_template_kwargs": {"enable_thinking": True}},
+        proxy_auth=True,
     )
 
     correct = _check_math(response, label)
     pred = _normalize_answer(_extract_answer(response))
 
-    return EvalRowResult(
+    return Sample(
         score=1.0 if correct else 0.0,
+        prompt=prompt,
         response=response,
         metadata={"correct": correct, "pred": pred, "label": label},
     )
+
+def run_math_check(base_url: str, model_id: str) -> list[Sample]:
+    return [
+        score_math_example(base_url, model_id, example)
+        for example in check_dataset.load()
+    ]
+
+def mean_score(rows: list[Sample]) -> float:
+    return sum(row.score for row in rows) / len(rows) if rows else float("nan")
+
+SERVER_PORT = 8000
+SERVER_STARTUP_TIMEOUT = 20 * 60
+
+server_image = (
+    modal.Image.from_registry("lmsysorg/sglang:v0.5.12")
+    .entrypoint([])
+    .run_commands("rm -rf /root/.cache/huggingface")
+    .env({"HF_HUB_CACHE": "/root/.cache/huggingface"})
+)
+
+def serve_model(
+    model_path: str,
+    served_model_name: str,
+    app_name: str,
+    checkpoints_volume_name: str | None = None,
+) -> str:
+    app = modal.App(app_name)
+    volumes = {
+        "/root/.cache/huggingface": modal.Volume.from_name(
+            "huggingface-cache", create_if_missing=True
+        )
+    }
+    if checkpoints_volume_name:
+        volumes["/checkpoints"] = modal.Volume.from_name(
+            checkpoints_volume_name, create_if_missing=True
+        )
+
+    @app.server(
+        image=server_image,
+        gpu="H100",
+        volumes=volumes,
+        port=SERVER_PORT,
+        startup_timeout=SERVER_STARTUP_TIMEOUT,
+        scaledown_window=10 * 60,
+        exit_grace_period=25,
+        target_concurrency=4,
+        unauthenticated=False,
+        serialized=True,
+    )
+    class ModelServer:
+        @modal.enter()
+        def start(self):
+            import subprocess as _sp
+            import time as _time
+            import urllib.error as _ue
+            import urllib.request as _ur
+
+            self.proc = _sp.Popen(
+                [
+                    "python",
+                    "-m",
+                    "sglang.launch_server",
+                    "--model-path",
+                    model_path,
+                    "--served-model-name",
+                    served_model_name,
+                    "--host",
+                    "0.0.0.0",
+                    "--port",
+                    str(SERVER_PORT),
+                    "--mem-fraction-static",
+                    "0.80",
+                    "--trust-remote-code",
+                ]
+            )
+            deadline = _time.monotonic() + SERVER_STARTUP_TIMEOUT
+            health = f"http://127.0.0.1:{SERVER_PORT}/health"
+            while True:
+                if self.proc.poll() is not None:
+                    raise RuntimeError(
+                        f"SGLang exited with code {self.proc.returncode} "
+                        "before healthy"
+                    )
+                try:
+                    with _ur.urlopen(health, timeout=5) as response:
+                        if response.status == 200:
+                            return
+                except (_ue.URLError, TimeoutError, OSError):
+                    pass
+                if _time.monotonic() >= deadline:
+                    raise TimeoutError(f"SGLang not healthy at {health}")
+                _time.sleep(2)
+
+        @modal.exit()
+        def stop(self):
+            proc = getattr(self, "proc", None)
+            if proc is not None and proc.poll() is None:
+                proc.terminate()
+                proc.wait(timeout=30)
+
+    with modal.enable_output():
+        app.deploy()
+    return wait_for_server_url(ModelServer, label="Qwen3-4B check server", proxy_auth=True)
 
 # ## Reward function
 #
@@ -187,25 +295,28 @@ def _main_impl() -> None:
         ) from e
 
     train_dataset = MathDataset(n_rows=2_000)
-    eval_dataset = MathDataset(n_rows=100, row_offset=16_000)
 
-    # ## Baseline Eval
+    # ## Baseline check
     #
-    # Let's run the math eval on our base serving model before training.
+    # Qwen3-4B is not in the managed Endpoint catalog, so this follows the ASR
+    # tutorial's pattern: Modal `@app.server` code launches SGLang, then a plain
+    # Python loop scores the held-out rows.
+    #
+    # Custom `@app.server` endpoints here use `unauthenticated=False`. Run
+    # `training-gym set-proxy-auth` or export `MODAL_KEY`/`MODAL_SECRET` before
+    # calling `wait_for_server_url` / `endpoint_chat` with `proxy_auth=True`.
 
     base_model = Qwen3_4B()
-    base_deployment = DeploymentConfig(
-        model=base_model,
-        unauthenticated=True,
-    ).serve()
-    print(f"Base model URL: {base_deployment.url}")
+    MODEL_ID = base_model.model_name
 
-    eval_config = EvalConfig(dataset=eval_dataset, eval_fn=math_eval_fn)
-    print("--- Evaluating base model... ---")
-    base_eval = eval_config.evaluate(base_deployment, debug=True)
-    n_correct = sum(1 for r in base_eval.rows if r.metadata.get("correct"))
-    print(f"Base accuracy: {n_correct}/{len(base_eval.rows)} "
-          f"({base_eval.mean:.1%})")
+    base_url = serve_model(MODEL_ID, MODEL_ID, "gym-qwen3-4b-dapo-check-base")
+    print(f"Base model URL: {base_url}")
+
+    print("--- Checking base model... ---")
+    base_rows = run_math_check(base_url, MODEL_ID)
+    base_mean = mean_score(base_rows)
+    n_correct = sum(1 for row in base_rows if row.metadata.get("correct"))
+    print(f"Base accuracy: {n_correct}/{len(base_rows)} ({base_mean:.1%})")
 
     # ## Training
     #
@@ -293,38 +404,38 @@ def _main_impl() -> None:
     train_result = training_run.train()
     print(f"Training run id: {train_result.training_run_id}")
 
-    # ## Evaluate the trained model
+    # ## Check the trained model
     #
-    # Let's run the same eval on the trained checkpoint.
+    # Redeploy the custom SGLang server with the checkpoint Volume mounted and
+    # run the same scoring loop.
 
-    checkpoint = list_checkpoints(train_result.training_run_id)[-1]
-    print(f"Checkpoint: {checkpoint.path}")
+    trained_model = train_result.hf_model()
+    print(f"Checkpoint: {trained_model.model_path}")
 
-    trained_deployment = DeploymentConfig(
-        model=Qwen3_4B(),
-        checkpoint=checkpoint,
-        app_name="qwen3-4b-dapo-serve",
-        served_model_name="qwen3-4b-dapo",
-        unauthenticated=True,
-    ).serve()
-    print(f"Trained model URL: {trained_deployment.url}")
+    trained_url = serve_model(
+        trained_model.model_path,
+        trained_model.model_name,
+        "gym-qwen3-4b-dapo-check-trained",
+        train_result.checkpoints_volume,
+    )
+    print(f"Trained model URL: {trained_url}")
 
-    print("--- Evaluating trained model... ---")
-    trained_eval = eval_config.evaluate(trained_deployment, debug=True)
-    n_correct = sum(1 for r in trained_eval.rows if r.metadata.get("correct"))
-    print(f"Trained accuracy: {n_correct}/{len(trained_eval.rows)} "
-          f"({trained_eval.mean:.1%})")
+    print("--- Checking trained model... ---")
+    trained_rows = run_math_check(trained_url, trained_model.model_name)
+    trained_mean = mean_score(trained_rows)
+    n_correct = sum(1 for row in trained_rows if row.metadata.get("correct"))
+    print(f"Trained accuracy: {n_correct}/{len(trained_rows)} ({trained_mean:.1%})")
 
     # ## Results
     #
     # Let's see if our model works better!
 
-    base_correct = sum(1 for r in base_eval.rows if r.metadata.get("correct"))
-    trained_correct = sum(1 for r in trained_eval.rows if r.metadata.get("correct"))
-    total = len(base_eval.rows)
-    print(f"Base model:    {base_correct}/{total} ({base_eval.mean:.1%})")
-    print(f"Trained model: {trained_correct}/{total} ({trained_eval.mean:.1%})")
-    print(f"Delta:         {trained_eval.mean - base_eval.mean:+.1%}")
+    base_correct = sum(1 for row in base_rows if row.metadata.get("correct"))
+    trained_correct = sum(1 for row in trained_rows if row.metadata.get("correct"))
+    total = len(base_rows)
+    print(f"Base model:    {base_correct}/{total} ({base_mean:.1%})")
+    print(f"Trained model: {trained_correct}/{total} ({trained_mean:.1%})")
+    print(f"Delta:         {trained_mean - base_mean:+.1%}")
 
 @tutorial_cli_app.local_entrypoint()
 def main() -> None:

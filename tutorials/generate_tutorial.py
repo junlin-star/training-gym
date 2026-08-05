@@ -269,20 +269,33 @@ def _secret_check_code(required_modal_secrets: tuple[dict[str, str], ...]) -> st
 def _inject_secret_check(
     cells: list[Cell], required_modal_secrets: tuple[dict[str, str], ...]
 ) -> list[Cell]:
-    """Insert the Modal secret precheck right before the first code cell."""
+    """Insert Modal secret/GPU prereqs right before the first code cell.
+
+    The notebook-only no-GPU note is always injected. Secret markdown/code cells
+    are added only when ``required_modal_secrets`` is non-empty.
+    """
     both = frozenset({_PY, _NB})
     nb_only = frozenset({_NB})
-    prereq = [
-        Cell(
-            kind="markdown",
-            source=_secret_check_markdown(required_modal_secrets),
-            targets=both,
-        ),
-        Cell(kind="markdown", source=_NOTEBOOK_GPU_NOTE_MARKDOWN, targets=nb_only),
-        Cell(
-            kind="code", source=_secret_check_code(required_modal_secrets), targets=both
-        ),
-    ]
+    prereq: list[Cell] = []
+    if required_modal_secrets:
+        prereq.append(
+            Cell(
+                kind="markdown",
+                source=_secret_check_markdown(required_modal_secrets),
+                targets=both,
+            )
+        )
+    prereq.append(
+        Cell(kind="markdown", source=_NOTEBOOK_GPU_NOTE_MARKDOWN, targets=nb_only)
+    )
+    if required_modal_secrets:
+        prereq.append(
+            Cell(
+                kind="code",
+                source=_secret_check_code(required_modal_secrets),
+                targets=both,
+            )
+        )
     for i, cell in enumerate(cells):
         if cell.kind == "code":
             return cells[:i] + prereq + cells[i:]
@@ -349,7 +362,8 @@ def _py_globals_used_by_definitions(cells: list[Cell]) -> set[str]:
     if not py_code:
         return set()
 
-    table = symtable.symtable("\n\n".join(py_code), "<generated_tutorial>", "exec")
+    joined = "\n\n".join(py_code)
+    table = symtable.symtable(joined, "<generated_tutorial>", "exec")
     refs: set[str] = set()
 
     def _walk(child_table: symtable.SymbolTable) -> None:
@@ -361,6 +375,11 @@ def _py_globals_used_by_definitions(cells: list[Cell]) -> set[str]:
             _walk(nested)
 
     _walk(table)
+
+    for stmt in ast.parse(joined).body:
+        if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            refs.update(_module_scope_references(stmt))
+
     return refs
 
 
@@ -460,10 +479,10 @@ def _module_scope_references(stmt: ast.stmt) -> set[str]:
         return _referenced_names(nodes)
 
     if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
-        nodes = [*stmt.decorator_list, *stmt.args.defaults, *stmt.args.kw_defaults]
+        nodes = [*stmt.decorator_list, stmt.args]
         if stmt.returns is not None:
             nodes.append(stmt.returns)
-        return _referenced_names([node for node in nodes if node is not None])
+        return _referenced_names(nodes)
 
     if isinstance(stmt, ast.ClassDef):
         return _referenced_names([*stmt.decorator_list, *stmt.bases, *stmt.keywords])
@@ -619,12 +638,14 @@ def _extract_metadata(source: str) -> dict | None:
 
 
 def _required_modal_secrets(metadata: dict) -> tuple[dict[str, str], ...]:
-    extra_secrets = metadata.get("required_modal_secrets", ())
-    if not isinstance(extra_secrets, (list, tuple)):
+    configured_secrets = metadata.get(
+        "required_modal_secrets", _DEFAULT_REQUIRED_MODAL_SECRETS
+    )
+    if not isinstance(configured_secrets, (list, tuple)):
         raise ValueError("required_modal_secrets must be a list of {name, key} dicts")
 
-    secrets = list(_DEFAULT_REQUIRED_MODAL_SECRETS)
-    for secret in extra_secrets:
+    secrets = []
+    for secret in configured_secrets:
         if not isinstance(secret, dict):
             raise ValueError("required_modal_secrets must contain {name, key} dicts")
         name = secret.get("name")

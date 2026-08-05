@@ -8,15 +8,14 @@ TUTORIAL_METADATA = {
     "difficulty": "Advanced",
     "order": 45,
     "api_classes": [
+        "MultimodalDataset",
         "Qwen3_VL_8B",
         "Qwen3_VL_8b_Recipe",
-        "MultimodalDataset",
-        "DeploymentConfig",
-        "EvalConfig",
-        "ModelDeployment",
+        "Sample",
         "TrainConfig",
         "WandbConfig",
-        "list_checkpoints",
+        "endpoint_chat",
+        "wait_for_server_url",
     ],
     "required_modal_secrets": [
         {"name": "wandb-secret", "key": "WANDB_API_KEY"},
@@ -40,7 +39,7 @@ def _intro():
     element. This is a foundational capability for computer-use agents.
 
     We use the [ScreenSpot](https://huggingface.co/datasets/rootsautomation/ScreenSpot)
-    benchmark — a standard GUI grounding evaluation set covering iOS, Android,
+    benchmark — a standard GUI grounding set covering iOS, Android,
     macOS, Windows, and Web screenshots with annotated bounding boxes.
 
     The reward is bbox-aware: a click that lands anywhere inside the target
@@ -79,17 +78,17 @@ def _install():
 def _imports():
     import re
 
+    import modal
+
     from modal_training_gym import (
-        DeploymentConfig,
-        EvalConfig,
-        ImageEvalRowResult,
-        ModelDeployment,
         MultimodalDataset,
         Qwen3_VL_8B,
         Qwen3_VL_8b_Recipe,
+        Sample,
         TrainConfig,
         WandbConfig,
-        list_checkpoints,
+        endpoint_chat,
+        wait_for_server_url,
     )
 
 
@@ -110,7 +109,7 @@ def _dataset_intro():
     inside it counts as a hit) and ask the model to output a single `(x, y)`
     click point.
 
-    For this tutorial we train on 800 samples and hold out 200 for evaluation.
+    For this tutorial we train on 800 samples and hold out 200 for checking.
     """
 
 
@@ -191,13 +190,13 @@ def _dataset():
 @code
 def _make_datasets():
     train_dataset = ScreenSpotDataset(n_rows=800)
-    eval_dataset = ScreenSpotDataset(n_rows=200, row_offset=800)
+    check_dataset = ScreenSpotDataset(n_rows=200, row_offset=800)
 
 
 @notebook_only
 @code
 def _dataset_peek():
-    rows = eval_dataset.load()
+    rows = check_dataset.load()
     for row in rows[:2]:
         print(f"prompt: {row['prompt'][:100]}...")
         print(f"  label (left, top, right, bottom): {row['label']}")
@@ -289,37 +288,29 @@ def _reward():
 
 
 @markdown
-def _eval_base_intro():
+def _check_base_intro():
     """
-    ## Baseline Eval
+    ## Baseline check
 
-    Let's evaluate the base Qwen3-VL-8B model on our held-out set before
+    Let's check the base Qwen3-VL-8B model on our held-out set before
     training to see how well it grounds UI elements out of the box.
 
-    Returning an `ImageEvalRowResult` folds a thumbnail of the screenshot into the row.
+    The custom loop returns one `Sample` per screenshot with parsed coordinate
+    details in `Sample.metadata`.
+
+    Custom `@app.server` endpoints here use `unauthenticated=False`. Run
+    `training-gym set-proxy-auth` or export `MODAL_KEY`/`MODAL_SECRET` before
+    calling `wait_for_server_url` / `endpoint_chat` with `proxy_auth=True`.
     """
 
 
 @code
-def _eval_helpers():
-    def _thumbnail(data_uri: str, max_dim: int = 512) -> str:
-        # Downscale the screenshot to a dashboard-sized thumbnail so the eval
-        # summary stays small (we score on the full-res image, below).
-        import base64
-        import io
-
-        from PIL import Image
-
-        _, _, b64 = data_uri.partition(",")
-        img = Image.open(io.BytesIO(base64.b64decode(b64))).convert("RGB")
-        img.thumbnail((max_dim, max_dim))
-        buf = io.BytesIO()
-        img.save(buf, format="PNG")
-        return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
-
-    def grounding_eval_fn(
-        deployment: ModelDeployment, example: dict
-    ) -> ImageEvalRowResult:
+def _check_helpers():
+    def score_grounding_example(
+        base_url: str,
+        model_id: str,
+        example: dict,
+    ) -> Sample:
         # Eval sends the screenshot as a separate image_url, so drop the marker.
         prompt = example.get("prompt", "").replace("<image>", "").strip()
         label = example.get("label", "")
@@ -330,7 +321,12 @@ def _eval_helpers():
             {"type": "text", "text": prompt},
             *({"type": "image_url", "image_url": {"url": img}} for img in images),
         ]
-        response = deployment.generate(content, ensure_ready=False)
+        response = endpoint_chat(
+            base_url,
+            model=model_id,
+            messages=[{"role": "user", "content": content}],
+            proxy_auth=True,
+        )
 
         pred = _parse_coordinates(response)
         box = _parse_bbox(label)
@@ -341,11 +337,10 @@ def _eval_helpers():
             outside = _distance_outside_box(pred[0], pred[1], box)
             inside = outside == 0.0
 
-        return ImageEvalRowResult(
+        return Sample(
             score=1.0 if inside else 0.0,
             response=response,
             prompt=prompt,
-            image=_thumbnail(images[0]) if images else None,
             metadata={
                 "inside_box": inside,
                 "dist_outside": round(outside, 4),
@@ -354,30 +349,131 @@ def _eval_helpers():
             },
         )
 
+    def run_grounding_check(base_url: str, model_id: str) -> list[Sample]:
+        return [
+            score_grounding_example(base_url, model_id, example)
+            for example in check_dataset.load()
+        ]
+
+    def mean_score(rows: list[Sample]) -> float:
+        return sum(row.score for row in rows) / len(rows) if rows else float("nan")
+
 
 @code
-def _eval_base():
+def _check_base():
     base_model = Qwen3_VL_8B()
-    base_deployment = DeploymentConfig(
-        model=base_model,
-        unauthenticated=True,
-    ).serve()
-    print(f"Base model URL: {base_deployment.url}")
+    MODEL_ID = base_model.model_name
+    SERVER_PORT = 8000
+    SERVER_STARTUP_TIMEOUT = 20 * 60
 
-    eval_config = EvalConfig(dataset=eval_dataset, eval_fn=grounding_eval_fn)
-    print("--- Evaluating base model... ---")
-    base_eval = eval_config.evaluate(base_deployment, debug=True)
-    n_hits = sum(1 for r in base_eval.rows if r.metadata.get("inside_box"))
+    server_image = (
+        modal.Image.from_registry("lmsysorg/sglang:v0.5.12")
+        .entrypoint([])
+        .run_commands("rm -rf /root/.cache/huggingface")
+        .env({"HF_HUB_CACHE": "/root/.cache/huggingface"})
+    )
+
+    def serve_model(
+        model_path: str,
+        served_model_name: str,
+        app_name: str,
+        checkpoints_volume_name: str | None = None,
+    ) -> str:
+        app = modal.App(app_name)
+        volumes = {
+            "/root/.cache/huggingface": modal.Volume.from_name(
+                "huggingface-cache", create_if_missing=True
+            )
+        }
+        if checkpoints_volume_name:
+            volumes["/checkpoints"] = modal.Volume.from_name(
+                checkpoints_volume_name, create_if_missing=True
+            )
+
+        @app.server(
+            image=server_image,
+            gpu="H100",
+            volumes=volumes,
+            port=SERVER_PORT,
+            startup_timeout=SERVER_STARTUP_TIMEOUT,
+            scaledown_window=10 * 60,
+            exit_grace_period=25,
+            target_concurrency=4,
+            unauthenticated=False,
+            serialized=True,
+        )
+        class ModelServer:
+            @modal.enter()
+            def start(self):
+                import subprocess as _sp
+                import time as _time
+                import urllib.error as _ue
+                import urllib.request as _ur
+
+                self.proc = _sp.Popen(
+                    [
+                        "python",
+                        "-m",
+                        "sglang.launch_server",
+                        "--model-path",
+                        model_path,
+                        "--served-model-name",
+                        served_model_name,
+                        "--host",
+                        "0.0.0.0",
+                        "--port",
+                        str(SERVER_PORT),
+                        "--mem-fraction-static",
+                        "0.80",
+                        "--trust-remote-code",
+                    ]
+                )
+                deadline = _time.monotonic() + SERVER_STARTUP_TIMEOUT
+                health = f"http://127.0.0.1:{SERVER_PORT}/health"
+                while True:
+                    if self.proc.poll() is not None:
+                        raise RuntimeError(
+                            f"SGLang exited with code {self.proc.returncode} "
+                            "before healthy"
+                        )
+                    try:
+                        with _ur.urlopen(health, timeout=5) as response:
+                            if response.status == 200:
+                                return
+                    except (_ue.URLError, TimeoutError, OSError):
+                        pass
+                    if _time.monotonic() >= deadline:
+                        raise TimeoutError(f"SGLang not healthy at {health}")
+                    _time.sleep(2)
+
+            @modal.exit()
+            def stop(self):
+                proc = getattr(self, "proc", None)
+                if proc is not None and proc.poll() is None:
+                    proc.terminate()
+                    proc.wait(timeout=30)
+
+        with modal.enable_output():
+            app.deploy()
+        return wait_for_server_url(ModelServer, label="Qwen3-VL check server", proxy_auth=True)
+
+    base_url = serve_model(MODEL_ID, MODEL_ID, "gym-qwen3-vl-8b-grounding-check-base")
+    print(f"Base model URL: {base_url}")
+
+    print("--- Checking base model... ---")
+    base_rows = run_grounding_check(base_url, MODEL_ID)
+    base_mean = mean_score(base_rows)
+    n_hits = sum(1 for row in base_rows if row.metadata.get("inside_box"))
     print(
         f"Base accuracy (clicks inside element): "
-        f"{n_hits}/{len(base_eval.rows)} ({base_eval.mean:.1%})"
+        f"{n_hits}/{len(base_rows)} ({base_mean:.1%})"
     )
 
 
 @notebook_only
 @code
 def _base_examples():
-    for r in base_eval.rows[:3]:
+    for r in base_rows[:3]:
         status = "HIT" if r.metadata["inside_box"] else "MISS"
         print(f"[{status}] label={r.metadata['label']}, pred={r.metadata['pred']}")
         print(f"  dist_outside={r.metadata['dist_outside']:.4f}")
@@ -449,41 +545,42 @@ def _train():
 
 
 @markdown
-def _eval_trained_intro():
+def _check_trained_intro():
     """
-    ## Evaluate the trained model
+    ## Check the trained model
 
-    Let's run the same eval on the trained checkpoint and compare accuracy.
+    Redeploy the custom SGLang server with the checkpoint Volume mounted, then
+    run the same custom loop and compare accuracy.
     """
 
 
 @code
-def _eval_trained():
-    checkpoint = list_checkpoints(train_result.training_run_id)[-1]
-    print(f"Checkpoint: {checkpoint.path}")
+def _check_trained():
+    trained_model = train_result.hf_model()
+    print(f"Checkpoint: {trained_model.model_path}")
 
-    trained_deployment = DeploymentConfig(
-        model=Qwen3_VL_8B(),
-        checkpoint=checkpoint,
-        app_name="qwen3-vl-8b-grounding-serve",
-        served_model_name="qwen3-vl-8b-grounding",
-        unauthenticated=True,
-    ).serve()
-    print(f"Trained model URL: {trained_deployment.url}")
+    trained_url = serve_model(
+        trained_model.model_path,
+        trained_model.model_name,
+        "gym-qwen3-vl-8b-grounding-check-trained",
+        train_result.checkpoints_volume,
+    )
+    print(f"Trained model URL: {trained_url}")
 
-    print("--- Evaluating trained model... ---")
-    trained_eval = eval_config.evaluate(trained_deployment, debug=True)
-    n_hits = sum(1 for r in trained_eval.rows if r.metadata.get("inside_box"))
+    print("--- Checking trained model... ---")
+    trained_rows = run_grounding_check(trained_url, trained_model.model_name)
+    trained_mean = mean_score(trained_rows)
+    n_hits = sum(1 for row in trained_rows if row.metadata.get("inside_box"))
     print(
         f"Trained accuracy (clicks inside element): "
-        f"{n_hits}/{len(trained_eval.rows)} ({trained_eval.mean:.1%})"
+        f"{n_hits}/{len(trained_rows)} ({trained_mean:.1%})"
     )
 
 
 @notebook_only
 @code
 def _trained_examples():
-    for base_r, trained_r in zip(base_eval.rows[:3], trained_eval.rows[:3]):
+    for base_r, trained_r in zip(base_rows[:3], trained_rows[:3]):
         label = base_r.metadata["label"]
         b_status = "HIT" if base_r.metadata["inside_box"] else "MISS"
         t_status = "HIT" if trained_r.metadata["inside_box"] else "MISS"
@@ -508,9 +605,9 @@ def _compare_intro():
 
 @code
 def _compare():
-    base_hits = sum(1 for r in base_eval.rows if r.metadata.get("inside_box"))
-    trained_hits = sum(1 for r in trained_eval.rows if r.metadata.get("inside_box"))
-    total = len(base_eval.rows)
-    print(f"Base model:    {base_hits}/{total} ({base_eval.mean:.1%})")
-    print(f"Trained model: {trained_hits}/{total} ({trained_eval.mean:.1%})")
-    print(f"Delta:         {trained_eval.mean - base_eval.mean:+.1%}")
+    base_hits = sum(1 for row in base_rows if row.metadata.get("inside_box"))
+    trained_hits = sum(1 for row in trained_rows if row.metadata.get("inside_box"))
+    total = len(base_rows)
+    print(f"Base model:    {base_hits}/{total} ({base_mean:.1%})")
+    print(f"Trained model: {trained_hits}/{total} ({trained_mean:.1%})")
+    print(f"Delta:         {trained_mean - base_mean:+.1%}")

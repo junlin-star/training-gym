@@ -20,32 +20,30 @@
 # The Training Gym takes care of the nitty gritty compatibility matching--
 # you just pick `model=Qwen3_ASR_1_7B()` and `recipe=Qwen3_ASR_1_7b_Recipe(...)`,
 # and bring the reward.
-# Run with (the eval step decodes audio locally, so bring the audio libs):
+# Run with:
 # ```
-# uv run --with soundfile --with librosa --with jiwer --with datasets \
+# uv run --with soundfile --with jiwer --with datasets \
 #   python tutorials/rl/006_audio_asr/006_audio_asr.py
 # ```
 # ## Prerequisites
 #
-# This tutorial requires these Modal Secrets:
-# - `huggingface-secret` containing `HF_TOKEN`
-# - `wandb-secret` containing `WANDB_API_KEY`
-#
-# Create them at [modal.com/secrets](https://modal.com/secrets) if you haven't already — the cell below fails fast with instructions otherwise.
+# This tutorial requires a Modal Secret named `wandb-secret` containing your
+# `WANDB_API_KEY`. Create one at [modal.com/secrets](https://modal.com/secrets) if you
+# haven't already — the cell below fails fast with instructions otherwise.
+
+import modal
 
 import modal
 
 from modal_training_gym import (
-    AudioEvalRowResult,
-    DeploymentConfig,
-    EvalConfig,
-    ModelDeployment,
     MultimodalDataset,
     Qwen3_ASR_1_7B,
     Qwen3_ASR_1_7b_Recipe,
+    Sample,
     TrainConfig,
-    list_checkpoints,
+    wait_for_server_url,
 )
+from modal_training_gym.common.config import modal_proxy_auth_headers
 
 # ## Load LibriSpeech audio
 #
@@ -149,28 +147,35 @@ async def word_error_rate_reward(args, sample, **kwargs) -> float:
         return 0.0
     return -float(jiwer.wer(reference, response))
 
-# ## Evaluate and watch it on the dashboard
+# ## Check the trained model
 #
-# Evaluation is the same `DeploymentConfig` → `EvalConfig` flow every gym example
-# uses. `DeploymentConfig.serve()` serves the trained checkpoint on SGLang
-# (converting the Megatron checkpoint to HuggingFace first, audio tower included),
-# and `EvalConfig.evaluate()` runs our `eval_fn` over the held-out clips.
+# Qwen3-ASR only answers on `/v1/audio/transcriptions`, and managed
+# [Modal Endpoints](https://modal.com/docs/guide/endpoints) serve the OpenAI
+# *chat* API under `/v1` — nothing else. So the check serves the checkpoint
+# itself: a small `@app.server` running SGLang against the checkpoints Volume,
+# the same shape the on-policy-distillation tutorials use for their teachers.
 #
-# The eval_fn is the read-side twin of the reward: it POSTs each clip to the
-# deployment's `/v1/audio/transcriptions` endpoint, scores word accuracy
-# (`1 − WER`), and returns an `AudioEvalRowResult` carrying a downsampled audio
-# clip + reference + WER. The dashboard's **Evals** panel auto-detects the audio
-# result and renders a player next to the reference and score (run
-# `training-gym setup` to get the dashboard URL).
+# Serving reads HuggingFace-format weights, while slime writes
+# Megatron/torch_dist, so `train_result.hf_model()` converts the newest
+# checkpoint to `<name>_hf` on the same Volume before the server mounts it.
+#
+# The scoring function is the read-side twin of the reward. It scores word
+# accuracy (`1 - WER`) and keeps the reference and WER in `Sample.metadata`.
+#
+# Custom `@app.server` endpoints here use `unauthenticated=False`. Run
+# `training-gym set-proxy-auth` or export `MODAL_KEY`/`MODAL_SECRET` before
+# calling `wait_for_server_url` (and attach `modal_proxy_auth_headers()` on
+# direct HTTP transcription calls).
 
 def transcribe_and_score(
-    deployment: ModelDeployment, example: dict
-) -> AudioEvalRowResult:
+    base_url: str,
+    model_id: str,
+    example: dict,
+) -> Sample:
     import base64
     import io
 
     import jiwer
-    import librosa
     import requests
     import soundfile as sf
 
@@ -184,58 +189,135 @@ def transcribe_and_score(
     sf.write(buf, arr, sr, format="WAV")
     buf.seek(0)
     resp = requests.post(
-        f"{deployment.url}/v1/audio/transcriptions",
+        f"{base_url}/v1/audio/transcriptions",
         files={"file": ("clip.wav", buf, "audio/wav")},
         data={
-            "model": deployment.deployment_config.served_model_name,
+            "model": model_id,
             "temperature": "0.0",
         },
+        headers=modal_proxy_auth_headers(),
         timeout=120,
+        allow_redirects=False,
     )
     resp.raise_for_status()
     hypothesis = (resp.json().get("text") or "").lower().strip()
     wer = float(jiwer.wer(reference, hypothesis)) if reference else 0.0
 
-    # Light, downsampled clip (8 kHz mono) for the dashboard audio player.
-    small = librosa.resample(arr.astype("float32"), orig_sr=sr, target_sr=8000)
-    sbuf = io.BytesIO()
-    sf.write(sbuf, small, 8000, format="WAV", subtype="PCM_16")
-    audio_uri = "data:audio/wav;base64," + base64.b64encode(
-        sbuf.getvalue()
-    ).decode()
-
-    # Score is word accuracy (1 − WER) in [0, 1] — higher is better, matching
-    # the dashboard's score model. AudioEvalRowResult folds audio/reference/metrics
-    # into metadata (tagged _metadata_type="audio") so the dashboard renders an
-    # audio cell; the hypothesis stays on `response`, not duplicated. `metrics`
-    # is yours — swap WER for CER/BLEU/MOS/etc. as the task needs.
-    return AudioEvalRowResult(
+    return Sample(
         score=max(0.0, 1.0 - wer),
         response=hypothesis,
         prompt=example["prompt"],
-        audio=audio_uri,
-        reference=reference,
-        metrics={"wer": wer},
+        metadata={
+            "reference": reference,
+            "metrics": {"wer": wer},
+        },
     )
+
+ASR_APP_NAME = "gym-qwen3-asr-1-7b-check"
+ASR_PORT = 8000
+ASR_STARTUP_TIMEOUT = 20 * 60
+
+asr_image = (
+    modal.Image.from_registry("lmsysorg/sglang:v0.5.12")
+    .entrypoint([])
+    .env({"HF_HUB_CACHE": "/root/hf-cache"})
+)
+
+def serve_asr_transcriptions(
+    model_path: str,
+    served_model_name: str,
+    checkpoints_volume_name: str,
+    checkpoints_mount_path: str = "/checkpoints",
+) -> str:
+    asr_app = modal.App(ASR_APP_NAME)
+    port = ASR_PORT
+    startup_timeout = ASR_STARTUP_TIMEOUT
+
+    @asr_app.server(
+        image=asr_image,
+        gpu="H100",
+        volumes={
+            "/root/hf-cache": modal.Volume.from_name(
+                "huggingface-cache", create_if_missing=True
+            ),
+            checkpoints_mount_path: modal.Volume.from_name(
+                checkpoints_volume_name, create_if_missing=True
+            ),
+        },
+        port=port,
+        startup_timeout=startup_timeout,
+        scaledown_window=10 * 60,
+        exit_grace_period=25,
+        target_concurrency=4,
+        unauthenticated=False,
+        serialized=True,
+    )
+    class AsrServer:
+        @modal.enter()
+        def start(self):
+            import subprocess as _sp
+            import time as _time
+            import urllib.error as _ue
+            import urllib.request as _ur
+
+            cmd = [
+                "python",
+                "-m",
+                "sglang.launch_server",
+                "--model-path",
+                model_path,
+                "--served-model-name",
+                served_model_name,
+                "--host",
+                "0.0.0.0",
+                "--port",
+                str(port),
+                "--mem-fraction-static",
+                "0.80",
+                "--trust-remote-code",
+            ]
+            self.proc = _sp.Popen(cmd)
+            deadline = _time.monotonic() + startup_timeout
+            health = f"http://127.0.0.1:{port}/health"
+            while True:
+                if self.proc.poll() is not None:
+                    raise RuntimeError(
+                        f"SGLang exited with code {self.proc.returncode} "
+                        "before healthy"
+                    )
+                try:
+                    with _ur.urlopen(health, timeout=5) as resp:
+                        if resp.status == 200:
+                            return
+                except (_ue.URLError, TimeoutError, OSError):
+                    pass
+                if _time.monotonic() >= deadline:
+                    raise TimeoutError(f"Qwen3-ASR not healthy at {health}")
+                _time.sleep(2)
+
+        @modal.exit()
+        def stop(self):
+            proc = getattr(self, "proc", None)
+            if proc is not None and proc.poll() is None:
+                proc.terminate()
+                proc.wait(timeout=30)
+
+    with modal.enable_output():
+        asr_app.deploy()
+    return wait_for_server_url(AsrServer, label="Qwen3-ASR check server", proxy_auth=True)
 
 import modal
 
 tutorial_cli_app = modal.App()
 
 def _main_impl() -> None:
-    for secret_name, required_key in [
-        ("huggingface-secret", "HF_TOKEN"),
-        ("wandb-secret", "WANDB_API_KEY"),
-    ]:
-        try:
-            modal.Secret.from_name(
-                secret_name, required_keys=[required_key]
-            ).hydrate()
-        except modal.exception.NotFoundError as e:
-            raise RuntimeError(
-                f"Missing Modal Secret '{secret_name}'. Create one at "
-                f"https://modal.com/secrets with a {required_key} entry, then re-run."
-            ) from e
+    try:
+        modal.Secret.from_name("wandb-secret", required_keys=["WANDB_API_KEY"]).hydrate()
+    except modal.exception.NotFoundError as e:
+        raise RuntimeError(
+            "Missing Modal Secret 'wandb-secret'. Create one at "
+            "https://modal.com/secrets with a WANDB_API_KEY entry, then re-run."
+        ) from e
 
     dataset = LibriSpeechASRDataset(n_rows=8)
 
@@ -252,7 +334,8 @@ def _main_impl() -> None:
     # `wandb-secret` Modal secret.
     #
     # `TrainConfig.train()` builds the Modal app, runs GRPO, and saves the trained
-    # model as a Megatron checkpoint (exported to HuggingFace on demand at deploy).
+    # model as a Megatron checkpoint, which `train_result.hf_model()` converts to
+    # HuggingFace format when the check needs to serve it.
 
     training_run = TrainConfig(
         model=Qwen3_ASR_1_7B(),
@@ -263,22 +346,25 @@ def _main_impl() -> None:
     train_result = training_run.train()
     print(f"Training run id: {train_result.training_run_id}")
 
-    checkpoint = list_checkpoints(train_result.training_run_id)[-1]
-    deployment = DeploymentConfig(
-        model=Qwen3_ASR_1_7B(),
-        checkpoint=checkpoint,
-        unauthenticated=True,
-    ).serve()
-    print(f"Serving trained model at {deployment.url}")
+    trained_model = train_result.hf_model()
+    print(f"Checkpoint: {trained_model.model_path}")
 
-    eval_config = EvalConfig(dataset=dataset, eval_fn=transcribe_and_score)
-    eval_result = eval_config.evaluate(deployment, debug=True)
-    mean_wer = sum(r.metadata["metrics"]["wer"] for r in eval_result.rows) / len(
-        eval_result.rows
+    trained_url = serve_asr_transcriptions(
+        model_path=trained_model.model_path,
+        served_model_name=trained_model.model_name,
+        checkpoints_volume_name=train_result.checkpoints_volume,
     )
+    print(f"Serving trained model at {trained_url}")
+
+    rows = [
+        transcribe_and_score(trained_url, trained_model.model_name, example)
+        for example in dataset.load()
+    ]
+    mean_wer = sum(row.metadata["metrics"]["wer"] for row in rows) / len(rows)
+    mean_accuracy = sum(row.score for row in rows) / len(rows)
     print(
-        f"Eval: mean WER {mean_wer:.3f} "
-        f"(accuracy {eval_result.mean:.3f}) over {eval_result.total} clips"
+        f"Check: mean WER {mean_wer:.3f} "
+        f"(accuracy {mean_accuracy:.3f}) over {len(rows)} clips"
     )
 
 @tutorial_cli_app.local_entrypoint()
