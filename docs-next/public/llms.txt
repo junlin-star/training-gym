@@ -23,8 +23,8 @@ Repo: https://github.com/modal-projects/training-gym
 
 ### Reinforcement Learning
 
-- [000_rl_basics](https://gym.modal.dev/tutorials/rl/000_rl_basics/): Haiku evaluation with verifiable rewards
-- [001_sandboxes](https://gym.modal.dev/tutorials/rl/001_sandboxes/): Code RL with Harbor sandboxed evals
+- [000_rl_basics](https://gym.modal.dev/tutorials/rl/000_rl_basics/): Qwen3-4B haiku scoring with a custom SGLang server and slime train
+- [001_sandboxes](https://gym.modal.dev/tutorials/rl/001_sandboxes/): Code RL with Harbor sandboxes
 - [002_multiturn](https://gym.modal.dev/tutorials/rl/002_multiturn/): Multi-turn number-guessing RL with custom generate and reward functions
 - [003_on_policy_distillation](https://gym.modal.dev/tutorials/rl/003_on_policy_distillation/): On-policy distillation on math
 - [005_dapo](https://gym.modal.dev/tutorials/rl/005_dapo/): DAPO on math
@@ -35,7 +35,7 @@ Repo: https://github.com/modal-projects/training-gym
 
 ### Agents
 
-- [000_agent_sandbox](https://gym.modal.dev/tutorials/agent/000_agent_sandbox/): Build an LLM agent harness with a self-hosted model and Modal Sandbox tool execution
+- [000_agent_sandbox](https://gym.modal.dev/tutorials/agent/000_agent_sandbox/): Build a tool-calling Qwen3 agent with custom SGLang serving and Modal Sandboxes
 
 ### Tools
 

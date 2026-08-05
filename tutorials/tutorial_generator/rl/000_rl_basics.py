@@ -3,14 +3,13 @@
 TUTORIAL_METADATA = {
     "framework": "`slime`",
     "cluster_shape": "1 × 1×H100",
-    "summary": "Haiku evaluation with verifiable rewards",
+    "summary": "Qwen3-4B haiku scoring with a custom SGLang server and slime train",
     "difficulty": "Beginner",
     "order": 10,
     "api_classes": [
         "Qwen3_4B",
-        "DeploymentConfig",
-        "EvalConfig",
-        "EvalRowResult",
+        "endpoint_chat",
+        "wait_for_server_url",
         "TrainConfig",
         "SlimeRecipe",
         "TrainResult",
@@ -29,12 +28,12 @@ def _intro():
     This tutorial uses Qwen3-4B and haiku poems to introduce the
     **verifiable reward** pattern that underpins RL post-training:
 
-    1. Serve the base model.
+    1. Serve the base model with a small Modal `@app.server`.
     2. Define a scoring function with a verifiable reward (syllable structure).
-    3. Evaluate the base model against that scorer.
+    3. Run that scorer yourself over a small check set in custom code.
     4. GRPO-train the model with [slime](https://github.com/THUDM/slime) using the reward function.
-    5. Serve the trained checkpoint.
-    6. Evaluate it with the same scorer and compare.
+    5. Point the same server code at the trained checkpoint volume.
+    6. Re-run the same custom scorer and compare.
 
     **Why haikus?** A haiku has two attributes you can score
     automatically — whether it follows the 5-7-5 syllable format
@@ -73,15 +72,15 @@ def _install():
 def _imports():
     import re
 
+    import modal
+
     from modal_training_gym import (
-        DeploymentConfig,
-        EvalConfig,
-        EvalRowResult,
         HuggingFaceDataset,
         Qwen3_4B,
         SlimeRecipe,
         TrainConfig,
-        list_checkpoints,
+        endpoint_chat,
+        wait_for_server_url,
     )
 
 
@@ -93,40 +92,129 @@ def _serve_base_intro():
     So, how does Qwen3-4B currently fare at writing haikus? We can
     serve the base model and find out.
 
-    The training gym has several config classes so you can define deployment, training, and evaluation configurations,
-    and reuse them across different runs for parameter sweeps.
-
-    Let's start by initializing a `DeploymentConfig`.
-
-    Calling `DeploymentConfig.serve()` builds and deploys an SGLang app, then
-    returns a `ModelDeployment` with the endpoint URL. Pass
-    `unauthenticated=True` so the endpoint is reachable without Modal
-    proxy-auth tokens.
+    Qwen3-4B is not in the managed Endpoint catalog, so this follows the ASR
+    tutorial's pattern: ordinary Modal `@app.server` code launches SGLang and
+    exposes its OpenAI-compatible `/v1` API.
     """
 
 
 @code
 def _serve_base_model():
     base_model = Qwen3_4B()
-    base_model_deployment = DeploymentConfig(
-        model=base_model,
-        unauthenticated=True,
-    ).serve()
-    print(f"Base model deployed to {base_model_deployment.url}")
+    MODEL_ID = base_model.model_name
+    SERVER_APP_NAME = "gym-qwen3-4b-haiku-check"
+    SERVER_PORT = 8000
+    SERVER_STARTUP_TIMEOUT = 20 * 60
+
+    server_image = (
+        modal.Image.from_registry("lmsysorg/sglang:v0.5.12")
+        .entrypoint([])
+        .run_commands("rm -rf /root/.cache/huggingface")
+        .env({"HF_HUB_CACHE": "/root/.cache/huggingface"})
+    )
+
+    def serve_model(
+        model_path: str,
+        served_model_name: str,
+        checkpoints_volume_name: str | None = None,
+    ) -> str:
+        app = modal.App(SERVER_APP_NAME)
+        volumes = {
+            "/root/.cache/huggingface": modal.Volume.from_name(
+                "huggingface-cache", create_if_missing=True
+            )
+        }
+        if checkpoints_volume_name:
+            volumes["/checkpoints"] = modal.Volume.from_name(
+                checkpoints_volume_name, create_if_missing=True
+            )
+
+        @app.server(
+            image=server_image,
+            gpu="H100",
+            volumes=volumes,
+            port=SERVER_PORT,
+            startup_timeout=SERVER_STARTUP_TIMEOUT,
+            scaledown_window=10 * 60,
+            exit_grace_period=25,
+            target_concurrency=4,
+            unauthenticated=True,
+            serialized=True,
+        )
+        class ModelServer:
+            @modal.enter()
+            def start(self):
+                import subprocess as _sp
+                import time as _time
+                import urllib.error as _ue
+                import urllib.request as _ur
+
+                self.proc = _sp.Popen(
+                    [
+                        "python",
+                        "-m",
+                        "sglang.launch_server",
+                        "--model-path",
+                        model_path,
+                        "--served-model-name",
+                        served_model_name,
+                        "--host",
+                        "0.0.0.0",
+                        "--port",
+                        str(SERVER_PORT),
+                        "--mem-fraction-static",
+                        "0.80",
+                        "--trust-remote-code",
+                    ]
+                )
+                deadline = _time.monotonic() + SERVER_STARTUP_TIMEOUT
+                health = f"http://127.0.0.1:{SERVER_PORT}/health"
+                while True:
+                    if self.proc.poll() is not None:
+                        raise RuntimeError(
+                            f"SGLang exited with code {self.proc.returncode} "
+                            "before healthy"
+                        )
+                    try:
+                        with _ur.urlopen(health, timeout=5) as response:
+                            if response.status == 200:
+                                return
+                    except (_ue.URLError, TimeoutError, OSError):
+                        pass
+                    if _time.monotonic() >= deadline:
+                        raise TimeoutError(f"SGLang not healthy at {health}")
+                    _time.sleep(2)
+
+            @modal.exit()
+            def stop(self):
+                proc = getattr(self, "proc", None)
+                if proc is not None and proc.poll() is None:
+                    proc.terminate()
+                    proc.wait(timeout=30)
+
+        with modal.enable_output():
+            app.deploy()
+        return wait_for_server_url(ModelServer, label="Qwen3-4B check server")
+
+    base_url = serve_model(MODEL_ID, MODEL_ID)
+    print(f"Base model server: {base_url}")
 
 @notebook_only
 @markdown
-def _qualitative_eval_of_base_model():
+def _qualitative_check_of_base_model():
     """
-    The model will take a moment to download and spin up, but once it's ready, we can request it to write a haiku about a topic.
+    The server will take a moment to provision, but once it's ready, we can
+    request it to write a haiku about a topic.
     """
 
 @notebook_only
 @code
-def _qualitative_eval_of_base_model_code():
-    response = base_model_deployment.generate(
-        "Write a haiku about cat.",
-        chat_template_kwargs={"enable_thinking": False},
+def _qualitative_check_of_base_model_code():
+    response = endpoint_chat(
+        base_url,
+        model=MODEL_ID,
+        messages=[{"role": "user", "content": "Write a haiku about cat."}],
+        extra_body={"chat_template_kwargs": {"enable_thinking": False}},
     )
     print(response)
 
@@ -134,12 +222,10 @@ def _qualitative_eval_of_base_model_code():
 @markdown
 def _scoring_intro():
     """
-    Let's now cover the evaluation part of the tutorial.
+    Write post-train checks in custom code. A good check assigns
+    a score to an outcome: binary or continuous, deterministic or subjective.
 
-    A good eval takes a particular outcome and assigns a score to it. It can be binary (pass/fail) or continuous (0-100),
-    deterministic or subjective, and cheap or expensive to compute.
-
-    In our case, we want our model to be good at writing haiku poems, so how do we evaluate if an llm response was a good haiku or not?
+    In our case, we want our model to be good at writing haiku poems, so how do we score whether an LLM response is a good haiku?
     
     Well, a haiku must follow the 5-7-5 syllable format, so we can count syllables using NLTK's CMU Pronouncing Dictionary
     (with a regex fallback for words not in the dictionary)
@@ -187,9 +273,11 @@ def _score_haiku():
 @notebook_only
 @code
 def _score_haiku_demo():
-    response = base_model_deployment.generate(
-        "Write a haiku about cat.",
-        chat_template_kwargs={"enable_thinking": False},
+    response = endpoint_chat(
+        base_url,
+        model=MODEL_ID,
+        messages=[{"role": "user", "content": "Write a haiku about cat."}],
+        extra_body={"chat_template_kwargs": {"enable_thinking": False}},
     )
     print(response)
     print(f"Score: {score_haiku(response)}")
@@ -219,66 +307,64 @@ def _define_dataset_code():
             "Use the 5-7-5 syllable format across three lines."
         )
         prompt_template = "Write a haiku about {input}."
-        always_prepare = True # For the purpose of this tutorial, we want to prepare the dataset every time we run it, in case there is stale data from a previous run.
+        always_prepare = True
 
-    train_dataset = HaikuDataset(n_rows=10)
-    eval_dataset = HaikuDataset(n_rows=5)
+    train_dataset = HaikuDataset(hf_split="train[:10]")
+    check_dataset = HaikuDataset(hf_split="train[10:15]")
 
 @notebook_only
 @markdown
-def _eval_dataset_head():
+def _check_dataset_head():
     """
-    Let's take a look at the eval set. Each row has a `keywords`
+    Let's take a look at the held-out set. Each row has a `keywords`
     topic and a reference `text` haiku.
     """
 
 @notebook_only
 @code
-def _eval_dataset_head_code():
-    df = eval_dataset.to_pandas()
+def _check_dataset_head_code():
+    df = check_dataset.to_pandas()
     print(len(df))
     df.head(5)
 
 @markdown
-def _grade_haiku_into_eval():
+def _custom_scoring_intro():
     """
-    Seems straightforward enough, right? How do we run an eval on our base model with this dataset?
-    We can transform our scoring function above into an Eval Configuration.
+    ## Custom scoring loop
 
-    First, to explain, an Eval Configuration is a class that owns the model-calling loop.
-    The task-specific part is a scoring function passed to `.evaluate(...)`, which must
-    return `EvalRowResult`.
-
-    The very simple form of an eval is given a dataset, and the corresponding model response, return its score. That can be configured using
-    `EvalConfig.eval_response_fn`.
-
-    For more complex evals (e.g. multi-turn), you can also define a custom `EvalConfig.eval_fn` that takes a `ModelDeployment` and a dataset row and returns a score.
+    Loop the dataset: call the server, score, aggregate. Keep the scorer as a
+    plain function so training can reuse it as `custom_rm_function`.
     """
 
-
-
-@notebook_only
-@markdown
-def _eval_base_intro():
-    """
-    ## Evaluate the base model
-
-    """
 
 @code
-def _eval_base_model():
-    def eval_response_fn(_example: dict, response: str) -> EvalRowResult:
-        return EvalRowResult(score=score_haiku(response), response=response)
-
-    eval_config = EvalConfig(
-        dataset=eval_dataset,
-        eval_response_fn=eval_response_fn,
-        generate_kwargs={"chat_template_kwargs": {"enable_thinking": False}},
+def _check_base_model():
+    def run_custom_check(url: str) -> float:
+        scores = []
+        for example in check_dataset.load():
+            topic = example[check_dataset.input_column]
+            messages = [
+                {"role": "system", "content": check_dataset.system_prompt},
+                {
+                    "role": "user",
+                    "content": check_dataset.prompt_template.format(input=topic),
+                },
+            ]
+            response = endpoint_chat(
+                url,
+                model=MODEL_ID,
+                messages=messages,
+                extra_body={"chat_template_kwargs": {"enable_thinking": False}},
     )
-    print("——— Running base model evaluation... ———")
-    base_eval = eval_config.evaluate(base_model_deployment, debug=True)
-    print(f"Average haiku score: {base_eval.mean:.1f}")
-    print("——— Base model evaluation complete ———")
+            score = score_haiku(response)
+            print(f"score={score:.1f} response={response!r}", flush=True)
+            scores.append(score)
+        return sum(scores) / len(scores) if scores else float("nan")
+
+    print("——— Running base model custom check... ———")
+    base_mean = run_custom_check(base_url)
+    print(f"Average haiku score: {base_mean:.1f}")
+    print("——— Base model custom check complete ———")
 
 @markdown
 def _train_intro():
@@ -344,47 +430,36 @@ def _invoke_train():
 
 
 @markdown
-def _trained_eval_intro():
+def _trained_endpoint_intro():
     """
-    ## Serve and evaluate the trained checkpoint
+    ## Serve the trained checkpoint
 
-    The returned `TrainResult` has the checkpoint path and volume
-    metadata attached. You can pass an explicit `checkpoint=` to
-    `DeploymentConfig` to pin a specific checkpoint, or omit it to use
-    the model's default path.
-    """
-
-
-@code
-def _serve_and_eval_trained():
-    checkpoint = list_checkpoints(train_result.training_run_id)[-1]
-    print(checkpoint.path)
-
-    trained_model_deployment = DeploymentConfig(
-        model=Qwen3_4B(),
-        checkpoint=checkpoint,
-        app_name="qwen3-4b-haiku-serve",
-        served_model_name="qwen3-4b-haiku",
-        unauthenticated=True,
-    ).serve()
-    print(f"Trained model deployed to {trained_model_deployment.url}")
-
-
-@markdown
-def _trained_eval_section():
-    """
-    ## Evaluate the first checkpoint
-
-    Now let's run the same eval on the trained model and compare.
+    Reuse the SGLang `@app.server` code with the checkpoint Volume mounted.
+    SGLang loads HuggingFace-format directories, while slime writes
+    Megatron/torch_dist checkpoints, so `train_result.hf_model()` converts the
+    newest checkpoint to `<name>_hf` on the same Volume first.
     """
 
 
 @code
-def _eval_trained():
-    print("——— Running trained model evaluation... ———")
-    trained_eval = eval_config.evaluate(trained_model_deployment, debug=True)
-    print(f"Trained haiku score: {trained_eval.mean:.1f}")
-    print("——— Trained model evaluation complete ———")
+def _serve_trained():
+    trained_model = train_result.hf_model()
+    print(trained_model.model_path)
+
+    trained_url = serve_model(
+        trained_model.model_path,
+        trained_model.model_name,
+        train_result.checkpoints_volume,
+    )
+    print(f"Trained model server: {trained_url}")
+
+
+@code
+def _check_trained():
+    print("——— Running trained model custom check... ———")
+    trained_mean = run_custom_check(trained_url)
+    print(f"Trained haiku score: {trained_mean:.1f}")
+    print("——— Trained model custom check complete ———")
 
 @markdown
 def _continue_to_train_off_of_a_checkpoint():
@@ -431,29 +506,27 @@ def _continue_to_train_off_of_a_checkpoint_code():
     print("——— New training complete ———")
 
 @markdown
-def _trained_eval_off_of_a_checkpoint():
+def _trained_check_off_of_a_checkpoint():
     """
-    ## Evaluate the continued checkpoint
+    ## Score the continued checkpoint
 
-    Now let's run the same eval on the newly trained model and compare.
+    Redeploy the custom server with the new checkpoint and re-run the custom check.
     """
 
 @code
-def _trained_eval_off_of_a_checkpoint_code():
-    new_checkpoint = list_checkpoints(new_train_result.training_run_id)[-1]
-    print(new_checkpoint.path)
-    
-    new_model_deployment = DeploymentConfig(
-        model=Qwen3_4B(),
-        checkpoint=new_checkpoint,
-        app_name="qwen3-4b-haiku-serve-new",
-        served_model_name="qwen3-4b-haiku",
-        unauthenticated=True,
-    ).serve()
-    print(f"Newly trained model deployed to {new_model_deployment.url}")
+def _trained_check_off_of_a_checkpoint_code():
+    new_trained_model = new_train_result.hf_model()
+    print(new_trained_model.model_path)
+
+    new_url = serve_model(
+        new_trained_model.model_path,
+        new_trained_model.model_name,
+        new_train_result.checkpoints_volume,
+    )
+    print(f"Newly trained model server: {new_url}")
 
 @markdown
-def _trained_eval_off_of_a_checkpoint_results():
+def _trained_check_off_of_a_checkpoint_results():
     """
     ## Compare second-run results
 
@@ -461,11 +534,11 @@ def _trained_eval_off_of_a_checkpoint_results():
     """
 
 @code
-def _trained_eval_off_of_a_checkpoint_results_code():
-    print("——— Running trained model evaluation... ———")
-    new_eval = eval_config.evaluate(new_model_deployment, debug=True)
-    print(f"Trained model (new) haiku score: {new_eval.mean:.1f}")
-    print("——— Trained model (new) evaluation complete ———")
+def _trained_check_off_of_a_checkpoint_results_code():
+    print("——— Running trained model custom check... ———")
+    new_mean = run_custom_check(new_url)
+    print(f"Trained model (new) haiku score: {new_mean:.1f}")
+    print("——— Trained model (new) custom check complete ———")
 
 @markdown
 def _compare_results():
@@ -477,6 +550,6 @@ def _compare_results():
 
 @code
 def _compare_results_code():
-    print(f"Base model haiku score: {base_eval.mean:.1f}")
-    print(f"Trained model haiku score: {trained_eval.mean:.1f}")
-    print(f"Trained model (new) haiku score: {new_eval.mean:.1f}")
+    print(f"Base model haiku score: {base_mean:.1f}")
+    print(f"Trained model haiku score: {trained_mean:.1f}")
+    print(f"Trained model (new) haiku score: {new_mean:.1f}")

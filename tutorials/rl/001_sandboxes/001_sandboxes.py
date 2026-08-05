@@ -11,10 +11,10 @@
 #
 # Workflow:
 # 1. Pull the hello-world task from Harbor Hub via `HarborDataset`.
-# 2. Score model outputs with `HarborEval` — it extracts code,
-#    runs it in a Modal sandbox, and compares stdout automatically.
-# 3. Reuse the same `score_in_sandbox` helper as a SLIME `custom_rm_function`.
-# 4. Train and compare base vs. trained behavior.
+# 2. Serve the base model with a small Modal `@app.server`.
+# 3. Score model outputs yourself: `endpoint_chat` → `extract_code` → `score_in_sandbox`.
+# 4. Reuse the same `score_in_sandbox` helper as a SLIME `custom_rm_function`.
+# 5. Train and compare base vs. trained behavior with the same custom check.
 # Run with:
 # ```
 # uv run tutorials/rl/001_sandboxes/001_sandboxes.py
@@ -27,16 +27,17 @@
 
 import modal
 
+import modal
+
 from modal_training_gym import (
-    DeploymentConfig,
     HarborDataset,
-    HarborEval,
     Qwen3_4B,
     SlimeRecipe,
     TrainConfig,
+    endpoint_chat,
     extract_code,
-    list_checkpoints,
     score_in_sandbox,
+    wait_for_server_url,
 )
 
 # ## Load hello-world from Harbor Hub
@@ -49,38 +50,156 @@ from modal_training_gym import (
 #
 # The hello-world task uses pytest-based verification rather than
 # `*.in`/`*.out` file pairs, so we define stdin/stdout test cases
-# inline and pass them to `HarborEval` via the `test_cases` field.
+# inline and pass them to `score_in_sandbox`.
 #
-# A single dataset instance handles both training and eval —
-# `prepare()` writes train and eval splits to the volume,
-# while `load()` returns all tasks for offline evaluation.
+# A single dataset instance handles training and held-out checks.
+# `prepare()` writes both splits to the volume,
+# while `load()` returns all tasks for offline checking.
 
 HELLO_WORLD_TESTS = [{"input": "", "expected_output": "Hello, world!\n"}]
 
-# ## Evaluate with HarborEval
+dataset = HarborDataset(
+    dataset_name="harbor/hello-world",
+    label_metadata_path="task.toml",
+    train_repeats=20,
+    always_prepare=True, # For the purpose of this tutorial, we want to prepare the dataset every time we run it, in case there is stale data from a previous run.
+    system_prompt=(
+        "You are an expert Python programmer. "
+        "Solve the given problem by writing a complete Python program. "
+        "Your program must print the answer to stdout using print(). "
+        "Do not create or write any files. "
+        "Put your solution in a ```python code fence."
+    ),
+)
+
+# ## Custom scoring loop
 #
-# `HarborEval` automates the sandbox scoring loop. It:
-# 1. Sends each task's prompt to the deployed model.
-# 2. Extracts Python code from the response (stripping thinking tags,
-#    chat-template artifacts, and code fences via `extract_code`).
-# 3. Runs the extracted code in a Modal sandbox against the test cases.
-# 4. Returns a score = fraction of test cases passed.
-#
-# Since hello-world doesn't ship `*.in`/`*.out` file pairs, we pass
-# `test_cases` directly — `HarborEval` uses them as a fallback when
-# the dataset label doesn't contain test cases.
-#
-# Passing `model=Qwen3_4B()` enables model-aware response parsing,
-# which populates `parsed_response` on each result row for richer
-# dashboard display.
+# Qwen3-4B is not in the managed Endpoint catalog. As in the ASR tutorial,
+# ordinary Modal `@app.server` code launches SGLang; the check then runs
+# `endpoint_chat` → `extract_code` → `score_in_sandbox`.
 
 base_model = Qwen3_4B()
+MODEL_ID = base_model.model_name
+SERVER_APP_NAME = "gym-qwen3-4b-hello-world-check"
+SERVER_PORT = 8000
+SERVER_STARTUP_TIMEOUT = 20 * 60
+
+server_image = (
+    modal.Image.from_registry("lmsysorg/sglang:v0.5.12")
+    .entrypoint([])
+    .run_commands("rm -rf /root/.cache/huggingface")
+    .env({"HF_HUB_CACHE": "/root/.cache/huggingface"})
+)
+
+def serve_model(
+    model_path: str,
+    served_model_name: str,
+    checkpoints_volume_name: str | None = None,
+) -> str:
+    app = modal.App(SERVER_APP_NAME)
+    volumes = {
+        "/root/.cache/huggingface": modal.Volume.from_name(
+            "huggingface-cache", create_if_missing=True
+        )
+    }
+    if checkpoints_volume_name:
+        volumes["/checkpoints"] = modal.Volume.from_name(
+            checkpoints_volume_name, create_if_missing=True
+        )
+
+    @app.server(
+        image=server_image,
+        gpu="H100",
+        volumes=volumes,
+        port=SERVER_PORT,
+        startup_timeout=SERVER_STARTUP_TIMEOUT,
+        scaledown_window=10 * 60,
+        exit_grace_period=25,
+        target_concurrency=4,
+        unauthenticated=True,
+        serialized=True,
+    )
+    class ModelServer:
+        @modal.enter()
+        def start(self):
+            import subprocess as _sp
+            import time as _time
+            import urllib.error as _ue
+            import urllib.request as _ur
+
+            self.proc = _sp.Popen(
+                [
+                    "python",
+                    "-m",
+                    "sglang.launch_server",
+                    "--model-path",
+                    model_path,
+                    "--served-model-name",
+                    served_model_name,
+                    "--host",
+                    "0.0.0.0",
+                    "--port",
+                    str(SERVER_PORT),
+                    "--mem-fraction-static",
+                    "0.80",
+                    "--trust-remote-code",
+                ]
+            )
+            deadline = _time.monotonic() + SERVER_STARTUP_TIMEOUT
+            health = f"http://127.0.0.1:{SERVER_PORT}/health"
+            while True:
+                if self.proc.poll() is not None:
+                    raise RuntimeError(
+                        f"SGLang exited with code {self.proc.returncode} "
+                        "before healthy"
+                    )
+                try:
+                    with _ur.urlopen(health, timeout=5) as response:
+                        if response.status == 200:
+                            return
+                except (_ue.URLError, TimeoutError, OSError):
+                    pass
+                if _time.monotonic() >= deadline:
+                    raise TimeoutError(f"SGLang not healthy at {health}")
+                _time.sleep(2)
+
+        @modal.exit()
+        def stop(self):
+            proc = getattr(self, "proc", None)
+            if proc is not None and proc.poll() is None:
+                proc.terminate()
+                proc.wait(timeout=30)
+
+    with modal.enable_output():
+        app.deploy()
+    return wait_for_server_url(ModelServer, label="Qwen3-4B check server")
+
+def run_custom_check(url: str) -> float:
+    scores = []
+    for example in dataset.load():
+        messages = []
+        if dataset.system_prompt:
+            messages.append({"role": "system", "content": dataset.system_prompt})
+        messages.append({"role": "user", "content": example["instruction"]})
+        response = endpoint_chat(
+            url,
+            model=MODEL_ID,
+            messages=messages,
+            extra_body={"chat_template_kwargs": {"enable_thinking": False}},
+)
+        code = extract_code(response, model=base_model)
+        reward, meta = score_in_sandbox(code, test_cases=HELLO_WORLD_TESTS)
+        print(f"score={reward:.4f} code={code!r}", flush=True)
+        if meta.get("stderr"):
+            print(f"  sandbox stderr={meta['stderr']!r}", flush=True)
+        scores.append(reward)
+    return sum(scores) / len(scores) if scores else float("nan")
 
 # ## Train with SLIME and sandbox reward
 #
 # For training, we reuse the same `score_in_sandbox` and `extract_code`
-# helpers that `HarborEval` uses internally — wrapped in an async
-# reward function for SLIME's `custom_rm_function`.
+# helpers from the custom check — wrapped in an async reward function for
+# SLIME's `custom_rm_function`.
 #
 # `score_in_sandbox` enforces `sandbox_cpu`/`sandbox_memory` with a
 # `"limit"` policy by default: rather than reserving that capacity up
@@ -113,37 +232,16 @@ def _main_impl() -> None:
             "https://modal.com/secrets with an HF_TOKEN entry, then re-run."
         ) from e
 
-    dataset = HarborDataset(
-        dataset_name="harbor/hello-world",
-        label_metadata_path="task.toml",
-        train_repeats=20,
-        always_prepare=True, # For the purpose of this tutorial, we want to prepare the dataset every time we run it, in case there is stale data from a previous run.
-        system_prompt=(
-            "You are an expert Python programmer. "
-            "Solve the given problem by writing a complete Python program. "
-            "Your program must print the answer to stdout using print(). "
-            "Do not create or write any files. "
-            "Put your solution in a ```python code fence."
-        ),
-    )
+    base_url = serve_model(MODEL_ID, MODEL_ID)
+    print(f"Base model server: {base_url}")
 
-    base_deployment = DeploymentConfig(
-        model=base_model,
-        unauthenticated=True,
-    ).serve()
-    print(f"Base model URL: {base_deployment.url}")
-
-    eval_config = HarborEval(
-        dataset=dataset,
-        model=base_model,
-        test_cases=HELLO_WORLD_TESTS,
-    )
-    print("Running base eval...")
-    base_eval = eval_config.evaluate(base_deployment, debug=True)
-    print(f"Base mean reward: {base_eval.mean:.4f}")
+    print("——— Running base model custom check... ———")
+    base_mean = run_custom_check(base_url)
+    print(f"Base mean reward: {base_mean:.4f}")
+    print("——— Base model custom check complete ———")
 
     training_run = TrainConfig(
-        model=Qwen3_4B(),
+        model=base_model,
         dataset=dataset,
         recipe=SlimeRecipe(
             custom_rm_function=sandbox_rm,
@@ -174,21 +272,26 @@ def _main_impl() -> None:
     train_result = training_run.train()
     print(f"Training run id: {train_result.training_run_id}")
 
-    # ## Evaluate the trained checkpoint
+    # ## Serve and check the trained checkpoint
+    #
+    # Reuse the SGLang `@app.server` code with the checkpoint Volume mounted,
+    # then run the same custom check.
 
-    checkpoint = list_checkpoints(train_result.training_run_id)[-1]
-    trained_deployment = DeploymentConfig(
-        model=Qwen3_4B(),
-        checkpoint=checkpoint,
-        app_name="qwen3-4b-hello-world-serve",
-        served_model_name="qwen3-4b-hello-world",
-        unauthenticated=True,
-    ).serve()
-    print(f"Trained model URL: {trained_deployment.url}")
+    trained_model = train_result.hf_model()
+    print(trained_model.model_path)
 
-    trained_eval = eval_config.evaluate(trained_deployment, debug=True)
-    print(f"Trained mean reward: {trained_eval.mean:.4f}")
-    print(f"Base mean reward:    {base_eval.mean:.4f}")
+    trained_url = serve_model(
+        trained_model.model_path,
+        trained_model.model_name,
+        train_result.checkpoints_volume,
+    )
+    print(f"Trained model server: {trained_url}")
+
+    print("——— Running trained model custom check... ———")
+    trained_mean = run_custom_check(trained_url)
+    print(f"Trained mean reward: {trained_mean:.4f}")
+    print(f"Base mean reward:    {base_mean:.4f}")
+    print("——— Trained model custom check complete ———")
 
 @tutorial_cli_app.local_entrypoint()
 def main() -> None:
