@@ -140,7 +140,10 @@ DASHBOARD_PASSWORD_SECRET_NAME = "_training-gym-dashboard-password"
 
 # Routes that must bypass Basic Auth. Write endpoints authenticate with their
 # own per-run bearer token; the proxy-auth status route must report only the
-# Modal-layer setting, independent of dashboard password protection.
+# Modal-layer setting, independent of dashboard password protection. Exemption
+# is by path, so ``GET /api/timing-events`` -- which answers with the timing
+# protocol name and nothing else -- is reachable without the password too, as a
+# launcher checks it before it has one.
 PASSWORD_EXEMPT_PATHS = frozenset(
     {
         DASHBOARD_PROXY_AUTH_PATH,
