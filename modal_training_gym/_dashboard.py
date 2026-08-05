@@ -340,14 +340,19 @@ def _run_compact_sync() -> None:
         compact_summary_store(summary_store)
 
 
-@app.function(schedule=modal.Cron("*/30 * * * *"))
+@app.function(schedule=modal.Cron("*/30 * * * *"), retries=3, timeout=1800)
 def compact_summaries() -> None:
     """Scheduled compaction of summary stores (every 30 min)."""
     _run_compact_sync()
     print("Compaction complete.")
 
 
-@app.function(schedule=modal.Cron("*/30 * * * *"), secrets=_function_secrets())
+@app.function(
+    schedule=modal.Cron("*/30 * * * *"),
+    secrets=_function_secrets(),
+    retries=3,
+    timeout=1800,
+)
 def reconcile() -> None:
     """Reconcile orphaned training runs and deployments every 30 minutes."""
     from modal_training_gym.common.reconcile import reconcile as _reconcile
