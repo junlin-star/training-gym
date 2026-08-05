@@ -10,18 +10,22 @@
 #
 # This tutorial uses SimCT, a novel technique for aligning tokenizers, to train a Qwen3.6-35B-A3B student model using a DeepSeek-V4 Flash teacher model.
 # Our target capability is multi-turn tool calling on Berkeley Function-Calling Leaderboard (https://gorilla.cs.berkeley.edu/blogs/13_bfcl_v3_multi_turn.html). 
-# We'll first measure the accuracy of the teacher on our baseline eval and compare its accuracy to the base student model. After the teacher proves it
+# We'll first measure the teacher on a baseline check and compare its accuracy to the base student model. After the teacher proves it
 # can outperform the student, training will begin with a reverse-K learning cirriculum. We want to initialize the student model's
 # context up to the Kth tool call in the conversation, where K is initialized to N calls - 1. As the student model completes a task,
 # K is decremented until the student is given the starter prompt or rollouts have completed.
 #
 # ### Steps
-# 1. Deploy DeepSeek V4 Flash as the teacher.
-# 2. Load BFCL multi_turn_base, carve a train/eval split, and define reverse-K curriculum + shaped reward.
-# 3. Evaluate the base student and teacher models on the held-out eval.
+# 1. Serve DeepSeek V4 Flash as a custom Modal SGLang teacher (`/generate` for prompt logprobs).
+# 2. Load BFCL multi_turn_base, carve training and held-out splits, and define reverse-K curriculum + shaped reward.
+# 3. Check the base student and teacher models on the held-out split.
 # 4. Define SimCT alignment, reward function, and OPD-adjustment.
 # 5. Train with reverse-K curriculum + GRPO + cross-tokenizer OPD.
-# 6. Evaluate the trained student with the same eval function.
+# 6. Check the trained student with the same function.
+#
+# Managed Modal Endpoints only expose OpenAI `/v1`. Cross-tokenizer OPD still
+# needs SGLang native `/generate` for prefill logprobs, so the teacher is
+# custom `@app.server` code rather than `ensure_endpoint`.
 # Run with:
 # ```
 # uv run tutorials/rl/009_cross_tokenizer_distillation/009_cross_tokenizer_distillation.py
@@ -38,17 +42,19 @@ import modal
 import asyncio
 import json
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+import modal
 
 from modal_training_gym import (
-    DeploymentConfig,
-    EvalConfig,
-    EvalRowResult,
-    ModelDeployment,
     Qwen3_6_35B,
+    Sample,
     TrainConfig,
-    list_checkpoints,
+    endpoint_chat_message,
+    ensure_endpoint,
+    wait_for_server_url,
 )
-from modal_training_gym.common.models.base import HFModelConfiguration, ToolCall
+from modal_training_gym.common.models.base import ToolCall
 
 from modal_training_gym.common.environments import (
     BfclMultiTurnConfig,
@@ -60,19 +66,146 @@ from modal_training_gym.common.environments import (
     run_bfcl_episode,
     to_json_schema,
 )
-from modal_training_gym.deploy_recipes.sglang_recipe import (
-    DeepSeek_V4_Flash_SglangRecipe,
-    Qwen3_6_35b_SglangRecipe,
-)
 from modal_training_gym.train_recipes.slime_recipe import Qwen3_6_35b_Recipe
+
+# ## Serve the DeepSeek-V4 Flash teacher on SGLang `/generate`
+#
+# OPD teacher scoring is prefill-bound: POST the student trajectory to SGLang
+# `/generate` with `return_logprob=True` and `max_new_tokens=0`. Managed Modal
+# Endpoints only expose OpenAI `/v1`, so they cannot drive that path. The
+# teacher below is custom Modal user code (`@app.server` + SGLang on 4×B200).
+# Student checks still use `ensure_endpoint` + OpenAI chat.
+
+TEACHER_MODEL_ID = "deepseek-ai/DeepSeek-V4-Flash"
+TEACHER_APP_NAME = "gym-deepseek-v4-flash-teacher"
+TEACHER_PORT = 8000
+TEACHER_STARTUP_TIMEOUT = 20 * 60
+
+teacher_image = (
+    modal.Image.from_registry("lmsysorg/sglang:v0.5.12.post1-cu130")
+    .entrypoint([])
+    .run_commands("rm -rf /root/.cache/huggingface")
+    .env(
+        {
+            "HF_HUB_CACHE": "/root/.cache/huggingface",
+            "HF_XET_HIGH_PERFORMANCE": "1",
+            "NCCL_CUMEM_ENABLE": "1",
+            "SGLANG_OPT_DEEPGEMM_MEGA_MOE_NUM_MAX_TOKENS_PER_RANK": "8320",
+            "SGLANG_OPT_DEEPGEMM_MEGA_MOE_USE_FP4_ACTS": "1",
+            "SGLANG_OPT_DEEPGEMM_MEGA_MOE_USE_MXF4_KIND": "1",
+        }
+    )
+)
+teacher_app = modal.App(TEACHER_APP_NAME)
+
+_teacher_model_id = TEACHER_MODEL_ID
+_teacher_port = TEACHER_PORT
+_teacher_startup = TEACHER_STARTUP_TIMEOUT
+
+@teacher_app.server(
+    image=teacher_image,
+    gpu="B200:4",
+    volumes={
+        "/root/.cache/huggingface": modal.Volume.from_name(
+            "huggingface-cache", create_if_missing=True
+        ),
+    },
+    port=_teacher_port,
+    startup_timeout=_teacher_startup,
+    scaledown_window=10 * 60,
+    exit_grace_period=25,
+    target_concurrency=8,
+    unauthenticated=True,
+    serialized=True,
+)
+class TeacherServer:
+    @modal.enter()
+    def start(self):
+        import subprocess as _sp
+        import time as _time
+        import urllib.error as _ue
+        import urllib.request as _ur
+
+        cmd = [
+            "python",
+            "-m",
+            "sglang.launch_server",
+            "--model-path",
+            _teacher_model_id,
+            "--served-model-name",
+            _teacher_model_id,
+            "--host",
+            "0.0.0.0",
+            "--port",
+            str(_teacher_port),
+            "--tp",
+            "4",
+            "--dp-size",
+            "4",
+            "--enable-dp-attention",
+            "--context-length",
+            "262144",
+            "--mem-fraction-static",
+            "0.85",
+            "--chunked-prefill-size",
+            "4096",
+            "--max-running-requests",
+            "16",
+            "--trust-remote-code",
+            "--moe-a2a-backend",
+            "megamoe",
+            "--enable-breakable-cuda-graph",
+            "--enable-mixed-chunk",
+            "--piecewise-cuda-graph-max-tokens",
+            "4096",
+            "--tool-call-parser",
+            "deepseekv4",
+            "--reasoning-parser",
+            "deepseek-v4",
+        ]
+        self.proc = _sp.Popen(cmd)
+        deadline = _time.monotonic() + _teacher_startup
+        health = f"http://127.0.0.1:{_teacher_port}/health"
+        while True:
+            if self.proc.poll() is not None:
+                raise RuntimeError(
+                    f"SGLang exited with code {self.proc.returncode} before healthy"
+                )
+            try:
+                with _ur.urlopen(health, timeout=5) as resp:
+                    if resp.status == 200:
+                        return
+            except (_ue.URLError, TimeoutError, OSError):
+                pass
+            if _time.monotonic() >= deadline:
+                raise TimeoutError(f"Teacher SGLang not healthy at {health}")
+            _time.sleep(2)
+
+    @modal.exit()
+    def stop(self):
+        proc = getattr(self, "proc", None)
+        if proc is not None and proc.poll() is None:
+            proc.terminate()
+            proc.wait(timeout=30)
 
 base_model = Qwen3_6_35B()
 
+# ## Loading BFCL V3 and Defining Training and Held-Out Splits
+#
+# The Berkeley Function Calling Leaderboard contains human-verified, multi-turn tasks with sufficient context to complete
+# tasks. Each tool call is processed locally, and BFCL verifies the final trajectory.
+# We save 30 out of the 200 multi-turn base tasks for the held-out split.
+
+BFCL_HELD_OUT_TAIL = 30
 MAX_TURNS = 16
 CURRICULUM_TAIL_MIN = 1
-EVAL_TAIL_STEPS = CURRICULUM_TAIL_MIN
+CHECK_TAIL_STEPS = CURRICULUM_TAIL_MIN
 STUDENT_ENABLE_THINKING = False
 OPD_SKIP_ON_TEACHER_FAILURE = True
+
+dataset_config = BfclMultiTurnConfig(eval_tail=BFCL_HELD_OUT_TAIL)
+
+check_dataset = BfclMultiTurnDataset(split="eval", config=dataset_config)
 
 # ## Custom Student Training Curriculum
 #
@@ -113,7 +246,7 @@ def curriculum_rollout(args, rollout_id, data_source, evaluation=False):
 # - mean_partial: average partial credit over all student tool calls.
 # - first_call: partial credit on the first tool call, providing extra credit for getting the first step right.
 # - exec_score: fraction of tool calls that executed without error.
-# - terminal_pass: 1 if the task is passed by BFCL's terminal evaluation, 0 otherwise.
+# - terminal_pass: 1 if the task passes BFCL's terminal verifier, 0 otherwise.
 #
 # Per-call partial credit in [0, 1]:
 # 1. +0.20 if the call parses (has a name)
@@ -234,21 +367,26 @@ def trajectory_reward(
         )
     return mean_partial
 
-# ## Baseline eval
+# ## Baseline custom check
 #
 # Before training, we score both DeepSeek-V4 Flash (teacher) and Qwen3.6-35B-A3B (student) on the
 # held-out BFCL split. Using our K curriculum, we initialize the agent context and the task's
 # class instances to the Kth ground-truth call, where K is set to N calls - 1. The teacher returns
 # OpenAI-style structured `tool_calls` (SGLang `--tool-call-parser deepseekv4`); the student uses
 # Qwen's `<tool_call>` wire format via `base_model.parse_response`.
+#
+# Every check row is a whole multi-turn episode, so scoring them one at a time
+# leaves the endpoint idle between turns. `run_bfcl_check` fans out over rows
+# with a `ThreadPoolExecutor`, prints each row as it lands, and sorts back to
+# dataset order at the end.
 
 SERVED_CONTEXT_LEN = 16384
 RESPONSE_TOKEN_CAP = 8192
 CONTEXT_SAFETY_MARGIN = 512
 
-EVAL_MAX_TURNS = EVAL_TAIL_STEPS * 2
+CHECK_MAX_TURNS = CHECK_TAIL_STEPS * 2
 MAX_CONSECUTIVE_TOOL_ERRORS = 3
-DEPLOYMENT_READY_TIMEOUT = 1200
+CHECK_MAX_CONCURRENCY = 4
 
 def _prompt_token_count(messages, tools=None) -> int:
     try:
@@ -260,7 +398,40 @@ def _prompt_token_count(messages, tools=None) -> int:
     except Exception:
         return sum(len(str(m.get("content", ""))) for m in messages) // 3
 
-def _chat(deployment, messages, tools=None, max_tokens=None, max_attempts=12, *, qwen_thinking=False):
+def _messages_for_endpoint(messages: list[dict]) -> list[dict]:
+    wire_messages = []
+    for message in messages:
+        wire_message = dict(message)
+        tool_calls = message.get("tool_calls")
+        if isinstance(tool_calls, list):
+            wire_tool_calls = []
+            for tool_call in tool_calls:
+                if not isinstance(tool_call, dict):
+                    wire_tool_calls.append(tool_call)
+                    continue
+                wire_tool_call = dict(tool_call)
+                function = tool_call.get("function")
+                if isinstance(function, dict):
+                    wire_function = dict(function)
+                    arguments = function.get("arguments")
+                    if isinstance(arguments, dict):
+                        wire_function["arguments"] = json.dumps(arguments)
+                    wire_tool_call["function"] = wire_function
+                wire_tool_calls.append(wire_tool_call)
+            wire_message["tool_calls"] = wire_tool_calls
+        wire_messages.append(wire_message)
+    return wire_messages
+
+def _chat(
+    url: str,
+    model_id: str,
+    messages,
+    tools=None,
+    max_tokens=None,
+    max_attempts=12,
+    *,
+    qwen_thinking=False,
+):
     if max_tokens is None:
         max_tokens = RESPONSE_TOKEN_CAP
     remaining = SERVED_CONTEXT_LEN - _prompt_token_count(messages, tools) - CONTEXT_SAFETY_MARGIN
@@ -274,12 +445,18 @@ def _chat(deployment, messages, tools=None, max_tokens=None, max_attempts=12, *,
     }
     if tools is not None:
         kwargs["tools"] = tools
-    if qwen_thinking is not None:
-        kwargs["chat_template_kwargs"] = {"enable_thinking": qwen_thinking}
-    return deployment.chat(
-        messages,
-        ensure_ready=False,
+    extra_body = (
+        {"chat_template_kwargs": {"enable_thinking": qwen_thinking}}
+        if qwen_thinking is not None
+        else None
+    )
+    return endpoint_chat_message(
+        url,
+        model=model_id,
+        messages=_messages_for_endpoint(messages),
+        timeout=180,
         max_attempts=max_attempts,
+        extra_body=extra_body,
         **kwargs,
     )
 
@@ -306,30 +483,31 @@ def _actions_from_message(msg: dict) -> tuple[str, list[ToolCall]]:
     parsed = base_model.parse_response(content)
     return parsed.content, parsed.tool_calls
 
-def bfcl_eval_fn(deployment: ModelDeployment, example: dict) -> EvalRowResult:
+def bfcl_check_row(
+    url: str,
+    model_id: str,
+    is_student: bool,
+    example: dict,
+) -> Sample:
     label = json.loads(example.get("label", "{}"))
     task_id = label.get("task_id", "")
     N = label.get("total_steps", 1)
     flattened_calls = label.get("flattened_calls", [])
-    K = max(0, N - EVAL_TAIL_STEPS)
+    K = max(0, N - CHECK_TAIL_STEPS)
     expert_call = flattened_calls[K] if K < len(flattened_calls) else {}
-
-    served = deployment.deployment_config.served_model_name
-    is_student = served != "deepseek-v4-flash"
-
-    deployment.wait_until_ready(timeout=DEPLOYMENT_READY_TIMEOUT)
 
     episode = run_bfcl_episode(
         label,
         start_step=K,
         generate=lambda messages, tools: _chat(
-            deployment,
+            url,
+            model_id,
             messages,
             tools=tools,
             qwen_thinking=STUDENT_ENABLE_THINKING if is_student else None,
         ),
         parse_response=_actions_from_message,
-        max_turns=EVAL_MAX_TURNS,
+        max_turns=CHECK_MAX_TURNS,
         max_consecutive_errors=MAX_CONSECUTIVE_TOOL_ERRORS,
     )
     first_call = episode.first_call
@@ -343,16 +521,17 @@ def bfcl_eval_fn(deployment: ModelDeployment, example: dict) -> EvalRowResult:
         expert_calls,
         label.get("tool_schemas", {}),
         bool(task_passed),
-        EVAL_TAIL_STEPS,
+        CHECK_TAIL_STEPS,
     )
 
-    return EvalRowResult(
+    return Sample(
         score=shaped_score,
+        prompt=example.get("prompt", ""),
         response=episode.final_response,
         metadata={
             "task": task_id,
             "step_K": K,
-            "eval_tail": EVAL_TAIL_STEPS,
+            "check_tail": CHECK_TAIL_STEPS,
             "task_passed": bool(task_passed),
             "terminal_score": 1.0 if task_passed else 0.0,
             "shaped_reward": shaped_score,
@@ -363,21 +542,48 @@ def bfcl_eval_fn(deployment: ModelDeployment, example: dict) -> EvalRowResult:
         },
     )
 
-def _print_eval_summary(name: str, result) -> None:
+def run_bfcl_check(
+    url: str,
+    model_id: str,
+    *,
+    is_student: bool,
+) -> list[Sample]:
+    rows_by_index = {}
+    with ThreadPoolExecutor(max_workers=CHECK_MAX_CONCURRENCY) as executor:
+        index_by_future = {
+            executor.submit(
+                bfcl_check_row, url, model_id, is_student, example
+            ): index
+            for index, example in enumerate(check_dataset.load(split="eval"))
+        }
+        for future in as_completed(index_by_future):
+            row = future.result()
+            rows_by_index[index_by_future[future]] = row
+            print(
+                f"task={row.metadata['task']} score={row.score:.3f} "
+                f"passed={row.metadata['task_passed']}",
+                flush=True,
+            )
+    return [rows_by_index[index] for index in sorted(rows_by_index)]
+
+def _mean_score(rows: list[Sample]) -> float:
+    return sum(row.score for row in rows) / len(rows) if rows else float("nan")
+
+def _print_check_summary(name: str, rows: list[Sample]) -> None:
     def _frac(rows, key):
         if not rows:
             return 0.0
-        return sum(1 for r in rows if r.metadata.get(key)) / len(rows)
+        return sum(1 for row in rows if row.metadata.get(key)) / len(rows)
 
-    n = len(result.rows)
+    n = len(rows)
     print(f"{'Metric':<25} {name:>10}")
     print("-" * 37)
-    print(f"{'Eval rows':<25} {n:>10d}")
-    print(f"{'Shaped reward':<25} {result.mean:>10.3f}")
-    print(f"{'Terminal pass rate':<25} {_frac(result.rows, 'task_passed'):>10.1%}")
+    print(f"{'Check rows':<25} {n:>10d}")
+    print(f"{'Shaped reward':<25} {_mean_score(rows):>10.3f}")
+    print(f"{'Terminal pass rate':<25} {_frac(rows, 'task_passed'):>10.1%}")
     if n:
-        print(f"{'Parsed tool call':<25} {_frac(result.rows, 'parsed_call'):>10.1%}")
-        print(f"{'First-call tool match':<25} {_frac(result.rows, 'tool_match'):>10.1%}")
+        print(f"{'Parsed tool call':<25} {_frac(rows, 'parsed_call'):>10.1%}")
+        print(f"{'First-call tool match':<25} {_frac(rows, 'tool_match'):>10.1%}")
 
 # ## Cross-tokenizer alignment via SimCT Minimally Aligned Units (MTUs)
 #
@@ -487,14 +693,13 @@ def _get_teacher_rm_sem(limit: int) -> asyncio.Semaphore:
 async def cross_tokenizer_reward(args, sample, **kwargs):
     """Collect teacher log-probs over the student's response (same context, no privileged info).
 
-    Returns the teacher /generate JSON (logprobs for OPD). The BFCL *task* reward is
-    computed later in ``cross_tokenizer_post_process`` — slime's rollout dump of
-    ``reward: {'text': '', ...}`` is this payload, not a zero task score.
+    Returns the teacher SGLang ``/generate`` JSON (prompt logprobs for OPD).
+    The BFCL *task* reward is computed later in ``cross_tokenizer_post_process``
+    — slime's rollout dump of ``reward: {'text': '', ...}`` is this payload,
+    not a zero task score.
     """
     import aiohttp
     import random
-
-    from modal_training_gym.common.deployment import _modal_proxy_auth_headers
 
     tokenizer = _get_student_tokenizer()
 
@@ -528,8 +733,9 @@ async def cross_tokenizer_reward(args, sample, **kwargs):
             try:
                 async with aiohttp.ClientSession() as session:
                     async with session.post(
-                        args.rm_url, json=payload,
-                        headers=_modal_proxy_auth_headers(),
+                        args.rm_url,
+                        json=payload,
+                        allow_redirects=False,
                         timeout=aiohttp.ClientTimeout(total=request_timeout),
                     ) as resp:
                         resp.raise_for_status()
@@ -561,7 +767,7 @@ async def tool_step_generate(args, sample, sampling_params):
     flattened_calls = label.get("flattened_calls", [])
     tool_schemas = label.get("tool_schemas", {})
 
-    T = int(getattr(args, "curriculum_tail", EVAL_TAIL_STEPS))
+    T = int(getattr(args, "curriculum_tail", CHECK_TAIL_STEPS))
     K = max(0, N - T)
     max_turns = min(int(getattr(args, "max_turns", MAX_TURNS)), max(T * 2, 4))
     expert_call = flattened_calls[K] if K < len(flattened_calls) else {}
@@ -749,9 +955,10 @@ async def tool_step_generate(args, sample, sampling_params):
 
 # ## Cross-tokenizer post-process
 # Upon successful completion of a response from the student trainer node, we take the raw prompt prefix + response
-# token IDs and decode these (Qwen tokenizer) into the raw text. This raw text is posted to the teacher /generate endpoint
-# for logprob computation. Upon successful logprob computation, the student receives a response from the teacher that contains
-# the logprob, token ID, and decoded text (DeepSeek tokenizer).
+# token IDs and decode these (Qwen tokenizer) into the raw text. This raw text is posted to the
+# custom teacher SGLang ``/generate`` route for logprob computation. Upon successful logprob
+# computation, the student receives a response from the teacher that contains the logprob,
+# token ID, and decoded text (DeepSeek tokenizer).
 #
 # To align the text, we create two arrays that contain the start and end character boundaries for teacher and student tokens.
 # The intersection of start and end boundaries between the teacher and student arrays is the aligned text, and any tokens that
@@ -875,13 +1082,13 @@ def cross_tokenizer_post_process(args, samples, **kwargs):
 def _frac(rows, key):
     if not rows:
         return 0.0
-    return sum(1 for r in rows if r.metadata.get(key)) / len(rows)
+    return sum(1 for row in rows if row.metadata.get(key)) / len(rows)
 
 # ## Example results
 #
 # <table style="border-collapse: separate; border-spacing: 1.25rem 0.35rem; white-space: nowrap;">
 #   <tr><th align="left">Metric</th><th align="right">Base</th><th align="right">Trained</th><th align="right">Delta</th></tr>
-#   <tr><td>Eval rows</td><td align="right">30</td><td align="right">30</td><td align="right">—</td></tr>
+#   <tr><td>Check rows</td><td align="right">30</td><td align="right">30</td><td align="right">—</td></tr>
 #   <tr><td>Shaped reward</td><td align="right">0.707</td><td align="right"><strong>0.789</strong></td><td align="right"><strong>+0.082</strong></td></tr>
 #   <tr><td>Terminal pass rate</td><td align="right">53.3%</td><td align="right"><strong>63.3%</strong></td><td align="right"><strong>+10.0 pp</strong></td></tr>
 #   <tr><td>Parsed tool call</td><td align="right">90.0%</td><td align="right"><strong>96.7%</strong></td><td align="right"><strong>+6.7 pp</strong></td></tr>
@@ -896,7 +1103,7 @@ def _frac(rows, key):
 #
 # <table style="border-collapse: separate; border-spacing: 1.25rem 0.35rem; white-space: nowrap;">
 #   <tr><th align="left">Metric</th><th align="right">Teacher</th></tr>
-#   <tr><td>Eval rows</td><td align="right">30</td></tr>
+#   <tr><td>Check rows</td><td align="right">30</td></tr>
 #   <tr><td>Shaped reward</td><td align="right">0.751</td></tr>
 #   <tr><td>Terminal pass rate</td><td align="right"><strong>83.3%</strong></td></tr>
 #   <tr><td>Parsed tool call</td><td align="right">100.0%</td></tr>
@@ -932,82 +1139,67 @@ def _main_impl() -> None:
             "https://modal.com/secrets with an HF_TOKEN entry, then re-run."
         ) from e
 
-    # ## Deploy DeepSeek-V4 Flash Teacher Model
-    # Modal training gym provides a production SGLang recipe for the 284B-A13B FP4 checkpoint on
-    # 4×B200. The teacher model assigns its own logprobs to student token outputs, which is a prefill-bound process.
-    # Training-gym ships MegaMoE DeepGEMM kernels and DP attention (`dp=4`) for DSV4 to increase prefill speed on lengthy trajectories.
-
-    TEACHER_READY_TIMEOUT = 30 * 60
-    # OPD fires one /generate prefill per trajectory. With 16×8=128 traj/step, the
-    # default max_running_requests=16 saturates and returns 503s for minutes — raise
-    # the teacher queue and throttle client-side (see TEACHER_RM_CONCURRENCY below).
-    teacher_deployment = DeploymentConfig(
-        model=HFModelConfiguration(model_name="deepseek-ai/DeepSeek-V4-Flash"),
-        recipe=DeepSeek_V4_Flash_SglangRecipe(
-            context_length=16384,
-            startup_timeout=TEACHER_READY_TIMEOUT,
-            max_running_requests=64,
-        ),
-        app_name="dsv4-teacher-model",
-        served_model_name="deepseek-v4-flash",
-    ).serve()
-    print(f"Teacher URL: {teacher_deployment.url}")
-
-    teacher_deployment.wait_until_ready(timeout=TEACHER_READY_TIMEOUT)
-
-    TEACHER_GENERATE_URL = f"{teacher_deployment.url}/generate"
     TEACHER_RM_CONCURRENCY = 24
 
-    # ## Loading BFCL V3 and Defining Train/Eval Split
-    #
-    # The Berkeley Function Calling Leaderboard contains human-verified, multi-turn tasks with sufficient context to complete
-    # tasks. Each tool-call gets processed locally, and the final trajectory is verified against BFCL's terminal evaluation.
-    # We save 30 out of the 200 multi-turn base tasks for the held-out evaluation split.
+    with modal.enable_output():
+        teacher_app.deploy()
+    teacher_url = wait_for_server_url(TeacherServer, label="DSV4 teacher")
+    print(f"Teacher URL: {teacher_url}")
 
-    BFCL_EVAL_TAIL = 30
+    # Managed Endpoints stop at /v1. This Server exposes full SGLang, including /generate.
+    TEACHER_GENERATE_URL = f"{teacher_url}/generate"
 
-    dataset_config = BfclMultiTurnConfig(eval_tail=BFCL_EVAL_TAIL)
     dataset = BfclMultiTurnDataset(split="train", config=dataset_config)
-    eval_dataset = BfclMultiTurnDataset(split="eval", config=dataset_config)
 
-    student_recipe = Qwen3_6_35b_SglangRecipe(context_length=SERVED_CONTEXT_LEN)
-    base_deployment = DeploymentConfig(model=base_model, recipe=student_recipe).serve()
-    print(f"Student URL: {base_deployment.url}")
+    STUDENT_MODEL_ID = base_model.model_name
+    base_url = ensure_endpoint(
+        name="gym-qwen3-6-35b-bfcl-base",
+        model=STUDENT_MODEL_ID,
+    )
+    print(f"Student URL: {base_url}")
 
-    eval_config = EvalConfig(dataset=eval_dataset, eval_fn=bfcl_eval_fn)
-
-    teacher_eval = None
-    print("--- Evaluating teacher (DeepSeek V4 Flash)... ---")
+    teacher_rows = None
+    print("--- Checking teacher (DeepSeek V4 Flash)... ---")
     try:
-        teacher_eval = eval_config.evaluate(teacher_deployment, max_concurrency=4)
-        print(f"Teacher shaped reward: {teacher_eval.mean:.3f}")
-        _print_eval_summary("Teacher", teacher_eval)
+        teacher_rows = run_bfcl_check(
+            teacher_url,
+            TEACHER_MODEL_ID,
+            is_student=False,
+        )
+        print(f"Teacher shaped reward: {_mean_score(teacher_rows):.3f}")
+        _print_check_summary("Teacher", teacher_rows)
     except Exception as e:
         print(
-            f"[teacher-eval] FAILED ({e!r}) — continuing with student baseline",
+            f"[teacher-check] FAILED ({e!r}) — continuing with student baseline",
             flush=True,
         )
 
-    print("--- Evaluating base student (shaped live reward + terminal verdict metadata)... ---")
+    print("--- Checking base student (shaped live reward + terminal verdict metadata)... ---")
     try:
-        base_eval = eval_config.evaluate(base_deployment, max_concurrency=4)
-        print(f"Base shaped reward: {base_eval.mean:.3f}")
-        _print_eval_summary("Base", base_eval)
+        base_rows = run_bfcl_check(
+            base_url,
+            STUDENT_MODEL_ID,
+            is_student=True,
+        )
+        base_mean = _mean_score(base_rows)
+        print(f"Base shaped reward: {base_mean:.3f}")
+        _print_check_summary("Base", base_rows)
     except Exception as e:
         print(
-            f"[base-eval] FAILED ({e!r}) — skipping baseline, proceeding to training",
+            f"[base-check] FAILED ({e!r}) — skipping baseline, proceeding to training",
             flush=True,
         )
-        base_eval = None
+        base_rows = None
+        base_mean = float("nan")
 
-    if teacher_eval is not None and base_eval is not None:
+    if teacher_rows is not None and base_rows is not None:
         def _frac(rows, key):
             if not rows:
                 return 0.0
-            return sum(1 for r in rows if r.metadata.get(key)) / len(rows)
+            return sum(1 for row in rows if row.metadata.get(key)) / len(rows)
 
-        t_pass = _frac(teacher_eval.rows, "task_passed")
-        b_pass = _frac(base_eval.rows, "task_passed")
+        t_pass = _frac(teacher_rows, "task_passed")
+        b_pass = _frac(base_rows, "task_passed")
         print(
             f"[baseline] teacher pass={t_pass:.1%} student pass={b_pass:.1%} "
             f"(gap={t_pass - b_pass:+.1%})",
@@ -1096,58 +1288,63 @@ def _main_impl() -> None:
     print(f"Training run id: {train_result.training_run_id}")
     print("--- Training complete ---")
 
-    # ## Evaluate the trained student
+    # ## Check the trained student
     #
-    # Deploy the last checkpoint and re-run the held-out BFCL ids with the same evaluator from our earlier baseline.
+    # Point a Modal Endpoint at the last checkpoint and re-run the held-out BFCL
+    # ids with the same custom check from the baseline.
 
-    checkpoint = list_checkpoints(train_result.training_run_id)[-1]
-    print(f"Checkpoint: {checkpoint.path}")
+    trained_model = train_result.hf_model()
+    print(f"Checkpoint: {trained_model.model_path}")
 
-    trained_deployment = DeploymentConfig(
-        model=Qwen3_6_35B(),
-        recipe=student_recipe,
-        checkpoint=checkpoint,
-        app_name="qwen3-6-35b-bfcl-trained",
-        served_model_name="qwen3-6-35b-bfcl-trained",
-    ).serve()
-    print(f"Trained student URL: {trained_deployment.url}")
+    trained_url = ensure_endpoint(
+        name=f"gym-qwen3-6-35b-bfcl-trained-{train_result.training_run_id}",
+        model=trained_model.model_name,
+        custom_volume_name=train_result.checkpoints_volume,
+        custom_volume_path=trained_model.model_path,
+    )
+    print(f"Trained student URL: {trained_url}")
 
-    print("--- Evaluating trained student (shaped live reward + terminal verdict metadata)... ---")
-    trained_eval = eval_config.evaluate(trained_deployment, max_concurrency=4)
-    print(f"Trained shaped reward: {trained_eval.mean:.3f}")
+    print("--- Checking trained student (shaped live reward + terminal verdict metadata)... ---")
+    trained_rows = run_bfcl_check(
+        trained_url,
+        trained_model.model_name,
+        is_student=True,
+    )
+    trained_mean = _mean_score(trained_rows)
+    print(f"Trained shaped reward: {trained_mean:.3f}")
 
-    if base_eval is None:
-        n_trained = len(trained_eval.rows)
+    if base_rows is None:
+        n_trained = len(trained_rows)
         print(f"{'Metric':<25} {'Trained':>10}")
         print("-" * 37)
-        print(f"{'Eval rows':<25} {n_trained:>10d}")
-        print(f"{'Shaped reward':<25} {trained_eval.mean:>10.3f}")
-        print(f"{'Terminal pass rate':<25} {_frac(trained_eval.rows, 'task_passed'):>10.1%}")
-        print("(baseline eval was skipped — trained metrics only)")
+        print(f"{'Check rows':<25} {n_trained:>10d}")
+        print(f"{'Shaped reward':<25} {trained_mean:>10.3f}")
+        print(f"{'Terminal pass rate':<25} {_frac(trained_rows, 'task_passed'):>10.1%}")
+        print("(baseline check was skipped — trained metrics only)")
         return
 
-    n_base = len(base_eval.rows)
-    n_trained = len(trained_eval.rows)
+    n_base = len(base_rows)
+    n_trained = len(trained_rows)
 
     print(f"{'Metric':<25} {'Base':>10} {'Trained':>10} {'Delta':>10}")
     print("-" * 57)
-    print(f"{'Eval rows':<25} {n_base:>10d} {n_trained:>10d} {'':>10}")
-    print(f"{'Shaped reward':<25} {base_eval.mean:>10.3f} {trained_eval.mean:>10.3f} {trained_eval.mean - base_eval.mean:>+10.3f}")
+    print(f"{'Check rows':<25} {n_base:>10d} {n_trained:>10d} {'':>10}")
+    print(f"{'Shaped reward':<25} {base_mean:>10.3f} {trained_mean:>10.3f} {trained_mean - base_mean:>+10.3f}")
 
-    base_pass_rate = _frac(base_eval.rows, "task_passed")
-    trained_pass_rate = _frac(trained_eval.rows, "task_passed")
+    base_pass_rate = _frac(base_rows, "task_passed")
+    trained_pass_rate = _frac(trained_rows, "task_passed")
     print(f"{'Terminal pass rate':<25} {base_pass_rate:>10.1%} {trained_pass_rate:>10.1%} {trained_pass_rate - base_pass_rate:>+10.1%}")
 
     if n_base and n_trained:
-        base_parse = _frac(base_eval.rows, "parsed_call")
-        trained_parse = _frac(trained_eval.rows, "parsed_call")
+        base_parse = _frac(base_rows, "parsed_call")
+        trained_parse = _frac(trained_rows, "parsed_call")
         print(f"{'Parsed tool call':<25} {base_parse:>10.1%} {trained_parse:>10.1%} {trained_parse - base_parse:>+10.1%}")
 
-        base_match = _frac(base_eval.rows, "tool_match")
-        trained_match = _frac(trained_eval.rows, "tool_match")
+        base_match = _frac(base_rows, "tool_match")
+        trained_match = _frac(trained_rows, "tool_match")
         print(f"{'First-call tool match':<25} {base_match:>10.1%} {trained_match:>10.1%} {trained_match - base_match:>+10.1%}")
     else:
-        print("(no eval rows — check the eval dataset / deployment)")
+        print("(no check rows — check the dataset / Endpoint)")
 
 @tutorial_cli_app.local_entrypoint()
 def main() -> None:

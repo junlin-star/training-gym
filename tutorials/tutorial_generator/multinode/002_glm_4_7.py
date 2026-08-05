@@ -9,8 +9,8 @@ TUTORIAL_METADATA = {
     "api_classes": [
         "GLM_4_7",
         "GLM_4_7_Recipe",
-        "GLM_4_7_SglangRecipe",
-        "DeploymentConfig",
+        "ensure_endpoint",
+        "endpoint_chat",
         "TrainConfig",
         "TrainResult",
     ],
@@ -69,14 +69,13 @@ def _install():
 @code
 def _imports():
     from modal_training_gym import (
-        DeploymentConfig,
         GLM_4_7,
         HuggingFaceDataset,
         TrainConfig,
-        list_checkpoints,
+        endpoint_chat,
+        ensure_endpoint,
     )
     from modal_training_gym.train_recipes.slime_recipe import GLM_4_7_Recipe
-    from modal_training_gym.deploy_recipes.sglang_recipe import GLM_4_7_SglangRecipe
 
 
 @markdown
@@ -167,41 +166,50 @@ def _serve_intro():
     """
     ## Serve the trained checkpoint
 
-    After training, serve the checkpoint with SGLang for inference.
-    `GLM_4_7_SglangRecipe` defaults to 8xH200 with TP=8 — enough
-    to hold the full 355B model in BF16.
+    Point a [Modal Endpoint](https://modal.com/docs/guide/endpoints) at the
+    checkpoint via `ensure_endpoint`. Size it for the full 355B MoE in BF16
+    (e.g. 8×H200).
     """
 
 
 @code
 def _serve_checkpoint():
-    checkpoint = list_checkpoints(train_result.training_run_id)[-1]
-    print(f"Checkpoint: {checkpoint.path}")
+    trained_model = train_result.hf_model()
+    MODEL_ID = trained_model.model_name
+    print(f"Checkpoint: {trained_model.model_path}")
 
-    deployment = DeploymentConfig(
-        model=GLM_4_7(),
-        checkpoint=checkpoint,
-        recipe=GLM_4_7_SglangRecipe(),
-        app_name="glm-4-7-serve",
-        served_model_name="glm-4-7",
-        unauthenticated=True,
-    ).serve()
-    print(f"Deployed to {deployment.url}")
+    trained_url = ensure_endpoint(
+        name=f"gym-glm-4-7-trained-{train_result.training_run_id}",
+        model=MODEL_ID,
+        custom_volume_name=train_result.checkpoints_volume,
+        custom_volume_path=trained_model.model_path,
+    )
+    print(f"Trained model endpoint: {trained_url}")
 
 
 @notebook_only
 @markdown
 def _try_it():
     """
-    Let's test the trained model with a math problem.
+    Call `endpoint_chat` against the Endpoint and score locally.
     """
 
 
 @notebook_only
 @code
 def _try_generation():
-    response = deployment.generate(
-        "Let $p$ be a prime number. Find the number of integers $n$ "
-        "with $1 \\le n \\le p^2$ such that $n^{p-1} \\equiv 1 \\pmod{p^2}$.",
+    response = endpoint_chat(
+        trained_url,
+        model=MODEL_ID,
+        messages=[
+            {
+                "role": "user",
+                "content": (
+                    "Let $p$ be a prime number. Find the number of integers $n$ "
+                    "with $1 \\le n \\le p^2$ such that "
+                    "$n^{p-1} \\equiv 1 \\pmod{p^2}$."
+                ),
+            }
+        ],
     )
     print(response)
