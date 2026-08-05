@@ -11,11 +11,11 @@
   const ZOOM_BTN_FACTOR = 1.5;
   const WHEEL_SENSITIVITY = 0.0015;
 
-  const ROW_HEIGHT_PX = 34;
-  const ROW_GAP_PX = 10;
+  const ROW_HEIGHT_PX = 16;
+  const ROW_GAP_PX = 4;
   // A contained row sits just within the row containing it, which is drawn as an
   // outline, so the two read as one bar inside another.
-  const CONTAINED_INSET_PX = 5;
+  const CONTAINED_INSET_PX = 2;
 
   function placeRows(rows) {
     const placed = [];
@@ -416,14 +416,14 @@
 
   .track {
     display: flex;
-    gap: 10px;
+    gap: 20px;
     min-width: 100%;
   }
 
   .rollout {
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 5px;
     flex-basis: 0;
     min-width: 2px;
   }
@@ -462,7 +462,7 @@
   }
 
   .row-empty {
-    border-radius: 2px;
+    border-radius: 1.5px;
     background: var(--color-c-gray-5, #242424);
   }
 
@@ -474,7 +474,7 @@
     padding: 0 3px;
     border: none;
     /* Scaled to the bar, so a sliver isn't a pill */
-    border-radius: min(2px, 10%);
+    border-radius: min(1.5px, 10%);
     overflow: hidden;
     cursor: pointer;
     pointer-events: auto;

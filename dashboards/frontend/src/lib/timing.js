@@ -17,26 +17,27 @@ export const TIMING_LABELS = {
   optimizer_step: "Optimizer step",
 };
 
-// The substep chart's colors. Generating is red, training is blue/green, and a
-// phase drawn inside one of them is a neighbouring hue rather than a shade of
-// its container, so the two edges read apart.
+// One dataviz slot per family — generation desert orange, training blue,
+// movement teal, checkpoint pink, eval mint, reward burgundy — and a phase
+// drawn inside one of them is a step of its family's slot, so a nested bar
+// reads as part of the section it sits in.
 export const TIMING_COLORS = {
-  generate_rollouts: "#f87171",
-  wait_for_rollout: "#fb7185",
-  generate_samples: "#fb923c",
-  reward: "#fbbf24",
-  reward_batch: "#facc15",
-  reward_post_process: "#fde047",
-  train_models: "#60a5fa",
-  compute_log_probs: "#34d399",
-  forward_backward: "#22d3ee",
-  optimizer_step: "#818cf8",
-  weight_sync: "#5eead4",
-  offload_rollout: "#a78bfa",
-  offload_train: "#c084fc",
-  checkpoint_save: "#f472b6",
-  evaluate_rollouts: "#38bdf8",
-  evaluate_rollouts_end: "#e879f9",
+  generate_rollouts: "#D9866B",
+  wait_for_rollout: "#B96A51",
+  generate_samples: "#EBAE97",
+  reward: "#8D324C",
+  reward_batch: "#A94B65",
+  reward_post_process: "#C4687F",
+  train_models: "#648FE0",
+  compute_log_probs: "#96B4EE",
+  forward_backward: "#456DBB",
+  optimizer_step: "#BDCFF6",
+  weight_sync: "#4AA19D",
+  offload_rollout: "#74BEBA",
+  offload_train: "#357A77",
+  checkpoint_save: "#FFC1F7",
+  evaluate_rollouts: "#ADEAAB",
+  evaluate_rollouts_end: "#DECB6C",
 };
 
 // Work a step waits on but isn't: a checkpoint or an eval lands on one rollout
