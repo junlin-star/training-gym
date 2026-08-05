@@ -17,26 +17,27 @@ export const TIMING_LABELS = {
   optimizer_step: "Optimizer step",
 };
 
-// Generating is red, training is blue, and a phase drawn inside one of them is a
-// neighbouring hue rather than a shade of its container, so the two edges read
-// apart at a glance.
+// Generating is red, training is blue/green, and a phase drawn inside one of
+// them is a neighbouring hue rather than a shade of its container, so the two
+// edges read apart. All from the dashboard's own ramps, mid-steps so a screen of
+// bars stays quiet.
 export const TIMING_COLORS = {
-  generate_rollouts: "#f87171",
-  generate_samples: "#fb923c",
-  reward: "#fbbf24",
-  reward_batch: "#facc15",
-  reward_post_process: "#fde047",
-  train_models: "#60a5fa",
-  compute_log_probs: "#34d399",
-  forward_backward: "#22d3ee",
-  optimizer_step: "#818cf8",
-  weight_sync: "#a78bfa",
-  offload_rollout: "#c084fc",
-  offload_train: "#e879f9",
-  checkpoint_save: "#f472b6",
-  evaluate_rollouts: "#2dd4bf",
-  evaluate_rollouts_end: "#5eead4",
-  wait_for_rollout: "#94a3b8",
+  generate_rollouts: "var(--color-c-red-60, #9e4d4d)",
+  wait_for_rollout: "var(--color-c-red-40, #723c3c)",
+  generate_samples: "var(--color-c-orange-70, #ba7f49)",
+  reward: "var(--color-c-yellow-60, #a3964d)",
+  reward_batch: "var(--color-c-yellow-50, #8b8145)",
+  reward_post_process: "var(--color-c-yellow-70, #baab56)",
+  train_models: "var(--color-c-blue-60, #608199)",
+  compute_log_probs: "var(--color-c-green-60, #569846)",
+  forward_backward: "var(--color-c-blue-80, #79a4c4)",
+  optimizer_step: "var(--color-c-pale-green-50, #7c9878)",
+  weight_sync: "var(--color-c-pale-green-40, #677d64)",
+  offload_rollout: "var(--color-c-gray-40, #747474)",
+  offload_train: "var(--color-c-gray-30, #5d5d5d)",
+  checkpoint_save: "var(--color-c-pink-60, #a35e94)",
+  evaluate_rollouts: "var(--color-c-pink-40, #74476a)",
+  evaluate_rollouts_end: "var(--color-c-pink-50, #8b537f)",
 };
 
 // Work a step waits on but isn't: a checkpoint or an eval lands on one rollout

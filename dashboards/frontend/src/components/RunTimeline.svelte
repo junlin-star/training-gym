@@ -11,11 +11,11 @@
   const ZOOM_BTN_FACTOR = 1.5;
   const WHEEL_SENSITIVITY = 0.0015;
 
-  const ROW_HEIGHT_PX = 20;
-  const ROW_GAP_PX = 3;
+  const ROW_HEIGHT_PX = 30;
+  const ROW_GAP_PX = 4;
   // A contained row sits just within the row containing it, which is drawn as an
   // outline, so the two read as one bar inside another.
-  const CONTAINED_INSET_PX = 3;
+  const CONTAINED_INSET_PX = 4;
 
   function placeRows(rows) {
     const placed = [];
@@ -27,7 +27,6 @@
         row.parentIndex == null || row.concurrent ? null : placed[row.parentIndex];
       const placedRow = {
         ...row,
-        within: container != null,
         top: container ? container.top + CONTAINED_INSET_PX : nextTop,
         height: container
           ? container.height - 2 * CONTAINED_INSET_PX
@@ -227,7 +226,6 @@
                 {#each rollout.rows as row, index (index)}
                   <div
                     class="row"
-                    class:within={row.within}
                     style:top={`${row.top}px`}
                     style:height={`${row.height}px`}
                   >
@@ -237,7 +235,9 @@
                         aria-label={`${labelFor(bar.name)} ${fmtSecs(bar.duration)}`}
                         class:active={pinned && isActive(rollout.id, bar)}
                         class:outlined={bar.contains}
-                        style:background={bar.contains ? "none" : colorFor(bar.name)}
+                        style:background={bar.contains
+                          ? `color-mix(in srgb, ${colorFor(bar.name)} 22%, transparent)`
+                          : colorFor(bar.name)}
                         style:border-color={colorFor(bar.name)}
                         style:left={`${(bar.start / rollout.span) * 100}%`}
                         style:width={`${Math.max(((bar.end - bar.start) / rollout.span) * 100, 0.4)}%`}
@@ -406,7 +406,9 @@
   .viewport {
     overflow-x: auto;
     overflow-y: hidden;
-    padding-bottom: 6px;
+    padding-bottom: 10px;
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-c-gray-20, #464646) transparent;
     overscroll-behavior-x: contain;
     touch-action: pan-x;
     -webkit-overflow-scrolling: touch;
@@ -450,21 +452,18 @@
     position: relative;
   }
 
+  /* Only the bars take the pointer, so the empty space within an outline still
+     hovers the phase outlined rather than the row drawn over it. */
   .row {
     position: absolute;
     left: 0;
     right: 0;
-    border-radius: 3px;
-    background: var(--color-c-gray-08, #1c1c1c);
-  }
-
-  /* Drawn within the row that contains it, so the containing phase reads first */
-  .row.within {
-    background: none;
+    pointer-events: none;
   }
 
   .row-empty {
-    background: var(--color-c-gray-10, #2f2f2f);
+    border-radius: 3px;
+    background: var(--color-c-gray-5, #242424);
   }
 
   .bar {
@@ -474,9 +473,11 @@
     min-width: 2px;
     padding: 0 3px;
     border: none;
-    border-radius: 3px;
+    /* Scaled to the bar, so a sliver isn't a pill */
+    border-radius: min(4px, 20%);
     overflow: hidden;
     cursor: pointer;
+    pointer-events: auto;
     transition: filter 0.1s ease;
   }
 
