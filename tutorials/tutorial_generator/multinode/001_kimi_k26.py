@@ -119,7 +119,10 @@ def _build_and_run():
     app = training_run._build_app()
 
     with modal.enable_output():
-        with app.run():
+        # detach=True keeps the app (and the spawned train call) alive on Modal
+        # after this script exits — a plain app.run() stops the app on exit,
+        # which cancels the spawned call remotely.
+        with app.run(detach=True):
             modal_app_id = app.app_id or ""
             function_call = app.train.spawn(
                 modal_app_id=modal_app_id,
