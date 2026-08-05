@@ -156,6 +156,12 @@ class _KimiK2Recipe(MilesRecipe):
 
     rollout_num_gpus_per_engine: int = 8
     sglang_mem_fraction_static: float = 0.7
+    # sglang's 'auto' MoE runner picks the marlin kernel for this INT4
+    # checkpoint, and marlin's LoRA MoE path (lora_moe_runner_marlin.py ->
+    # moe_wna16_marlin.cuh:812) hits an illegal memory access while capturing
+    # decode CUDA graphs, at every batch size. Triton is the backend miles uses
+    # for MoE LoRA elsewhere and captures cleanly.
+    sglang_moe_runner_backend: str | None = "triton"
     sglang_ep_size: int = 8
     sglang_server_concurrency: int = 1024
     use_rollout_routing_replay: bool = True

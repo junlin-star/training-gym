@@ -401,6 +401,9 @@ class MilesRecipe(BaseTrainRecipe):
         Fall back to NCCL all-reduce instead of sglang's custom kernel.
     sglang_cuda_graph_bs : list[int] | None
         Batch sizes to capture CUDA graphs for.
+    sglang_moe_runner_backend : str | None
+        MoE GEMM runner for the engines, e.g. ``"triton"``. ``None`` leaves
+        sglang's ``auto`` selection in place.
     sglang_max_running_requests : int | None
         Cap on concurrent in-flight requests per engine.
     sglang_server_concurrency : int | None
@@ -567,6 +570,7 @@ class MilesRecipe(BaseTrainRecipe):
     sglang_enable_dp_lm_head: bool = False
     sglang_disable_custom_all_reduce: bool = False
     sglang_cuda_graph_bs: list[int] | None = None
+    sglang_moe_runner_backend: str | None = None
     sglang_max_running_requests: int | None = None
     sglang_server_concurrency: int | None = None
     sglang_tool_call_parser: str | None = None
