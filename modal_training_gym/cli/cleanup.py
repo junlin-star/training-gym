@@ -10,7 +10,6 @@ from modal_training_gym.common.step_timing import RoleTimingRecord
 from modal_training_gym.utils.metadata import (
     MetadataStore,
     vol_get_summary_items,
-    vol_list_prefix,
     vol_put_summary_items,
     vol_remove,
     vol_remove_keys_with_prefix,
@@ -73,9 +72,7 @@ def cleanup(*, older_than_days: int = 7, dry_run: bool = False) -> None:
             MetadataStore.ADVANTAGE_DISTRIBUTIONS,
             AdvantageDistribution.run_prefix(rid),
         )
-        timing_store = RoleTimingRecord.store(rid)
-        for record in vol_list_prefix(timing_store, ""):
-            vol_remove(timing_store, RoleTimingRecord(**record).storage_key)
+        vol_remove_keys_with_prefix(RoleTimingRecord.store(rid), "")
         deleted_tokens += 1
 
     rollout_summary = (

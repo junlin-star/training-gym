@@ -605,7 +605,9 @@ MILES_PACKAGE_TARGETS: tuple[PackageTarget, ...] = (
                 "        # Ensure the custom reward function is implemented in batch mode\n"
                 "        rm_function = load_function(args.custom_rm_path)\n"
                 "        return await rm_function(args, samples, **kwargs)\n"
-                "    tasks = [async_rm(args, sample, **kwargs) for sample in samples]\n",
+                "    tasks = [async_rm(args, sample, **kwargs) for sample in samples]\n"
+                "    rewards = await asyncio.gather(*tasks)\n"
+                "    return rewards\n",
             ),
         ),
     ),
@@ -681,13 +683,25 @@ def wrap_scope(src: str, scope: tuple[str, str, str], path: Path) -> str:
     the phases inside it have already been rewritten by the time this runs.
     """
     signature, last_line, header = scope
-    head, sep, rest = src.partition(signature)
+    if src.count(signature) != 1:
+        raise RuntimeError(
+            f"{path}: expected 1 occurrence of {signature.strip()!r}, "
+            f"found {src.count(signature)}"
+        )
+    head, _, rest = src.partition(signature)
+    body, sep, tail = rest.partition(last_line)
     if not sep:
-        raise RuntimeError(f"{path}: scope signature not found: {signature.strip()!r}")
-    body, sep2, tail = rest.partition(last_line)
-    if not sep2:
         raise RuntimeError(f"{path}: scope end not found: {last_line.strip()!r}")
     indent = " " * (len(signature) - len(signature.lstrip(" ")) + 4)
+    # The match has to be the function's own last line: an earlier line with
+    # the same text would close the lane early, and the rest of the function
+    # would keep running, measured by nothing.
+    after = next((ln for ln in tail.splitlines() if ln.strip()), "")
+    if after.startswith(indent):
+        raise RuntimeError(
+            f"{path}: {last_line.strip()!r} is not the end of "
+            f"{signature.strip()!r}; {after.strip()!r} follows it"
+        )
     return (
         head
         + signature

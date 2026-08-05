@@ -115,6 +115,43 @@ describe("rolloutTimeline", () => {
     expect(reward.end - reward.start).toBe(2.5);
   });
 
+  it("nests a run that happened inside another instead of giving it a row", () => {
+    const { rows } = rolloutTimeline({
+      roles: {
+        driver: {
+          role: "driver",
+          lane_start_unix_s: 1000,
+          phases: { train_models: phase([[0, 4]]) },
+        },
+        actor: {
+          role: "actor",
+          lane_start_unix_s: 1000,
+          phases: {
+            forward_backward: phase([
+              [0.1, 1.5],
+              [2, 3.4],
+            ]),
+            optimizer_step: phase([
+              [1.5, 2],
+              [3.4, 3.9],
+            ]),
+          },
+        },
+      },
+    });
+
+    // The step, then the four runs it contains on one nested row beneath it.
+    expect(rows).toHaveLength(2);
+    expect(rows[0].map((bar) => [bar.name, bar.depth])).toEqual([["train_models", 0]]);
+    expect(rows[1].map((bar) => bar.depth)).toEqual([1, 1, 1, 1]);
+    expect(rows[1].map((bar) => bar.name)).toEqual([
+      "forward_backward",
+      "optimizer_step",
+      "forward_backward",
+      "optimizer_step",
+    ]);
+  });
+
   it("shifts lanes recorded in different processes onto one axis", () => {
     const { rows } = rolloutTimeline({
       roles: {

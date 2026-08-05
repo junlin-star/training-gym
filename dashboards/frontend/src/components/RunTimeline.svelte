@@ -181,8 +181,8 @@
             {#if rollout.rows.length === 0}
               <div class="row row-empty"></div>
             {:else}
-              {#each rollout.rows as row, depth (depth)}
-                <div class="row">
+              {#each rollout.rows as row, index (index)}
+                <div class="row" class:nested={row[0].depth > 0}>
                   {#each row as bar (bar.key)}
                     <button
                       class="bar"
@@ -196,7 +196,7 @@
                       onmouseleave={hideTip}
                       onclick={(e) => pinTip(e, rollout.id, bar)}
                     >
-                      {#if ((bar.end - bar.start) / rollout.span) * 100 * zoom > MIN_LABEL_WIDTH_PCT}
+                      {#if bar.depth === 0 && ((bar.end - bar.start) / rollout.span) * 100 * zoom > MIN_LABEL_WIDTH_PCT}
                         <span class="bar-label">{labelFor(bar.name)}</span>
                       {/if}
                     </button>
@@ -210,14 +210,19 @@
     </div>
     <div class="hint">
       Scroll to zoom · shift-scroll or drag to pan · click a bar to pin its details. Bars
-      share one clock per rollout, so two side by side really ran at the same time.
+      share one clock per rollout: a thin bar ran inside the bar above it, and a bar on a
+      row of its own overlapped work it is not part of.
     </div>
   {/if}
 </div>
 
 {#if tip}
   <div class="tg-tip" class:pinned style:left={`${tip.x}px`} style:top={`${tip.y}px`}>
-    <span class="tg-tip-head">Rollout {tip.rolloutId} · {tip.bar.role}</span>
+    <span class="tg-tip-head">
+      Rollout {tip.rolloutId}
+      <!-- The driver is where a phase lives unless it says otherwise. -->
+      {#if tip.bar.role !== "driver"}· measured on the {tip.bar.role}{/if}
+    </span>
     <span class="tg-tip-name">{labelFor(tip.bar.name)}</span>
     <span class="tg-tip-dur">{fmtSecs(tip.bar.duration)}</span>
     <span class="tg-tip-when">
@@ -386,6 +391,13 @@
     height: 16px;
     border-radius: 3px;
     background: var(--color-c-gray-08, #1c1c1c);
+  }
+
+  /* Bars that ran inside the bar above them, drawn thin so the containing
+     phase stays the one you read first. */
+  .row.nested {
+    height: 7px;
+    background: none;
   }
 
   .row-empty {

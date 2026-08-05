@@ -421,15 +421,18 @@
       if (signal?.aborted) return;
       rolloutSummaries = rows;
       rolloutsError = "";
-      runTimings = await fetchRunTimingsBatch(
-        runId,
-        rows.map((r) => r.rollout_id),
-      );
-
       // Reveal the first rollout
       if (wasEmpty && rolloutSummaries.length > 0 && expandedRolloutId === null) {
         toggleRolloutDetail(rolloutSummaries[0].rollout_id);
       }
+
+      const timings = await fetchRunTimingsBatch(
+        runId,
+        rows.map((r) => r.rollout_id),
+        { signal },
+      );
+      if (signal?.aborted) return;
+      runTimings = timings;
     } catch (err) {
       if (signal?.aborted) return;
       // Keep the rollouts we already have on a transient poll failure — only

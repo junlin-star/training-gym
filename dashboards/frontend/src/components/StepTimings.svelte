@@ -240,7 +240,8 @@
             <span class="phase-name" style:color={colorFor(phase.name)}>
               {labelFor(phase.name)}
             </span>
-            <span class="phase-role">{phase.role}</span>
+            <!-- The driver is where a phase lives unless it says otherwise. -->
+            <span class="phase-role">{phase.role === "driver" ? "" : phase.role}</span>
             <span class="phase-track">
               {#each phase.bars as bar (bar.key)}
                 <span

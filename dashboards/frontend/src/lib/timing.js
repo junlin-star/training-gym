@@ -54,9 +54,11 @@ export function colorFor(name) {
  * (rewards, one run per sample) contributes a single band over the span it
  * covered, carrying `count`, `average` and `longest` instead.
  *
- * Bars are packed into as few rows as fit without two of them overlapping, so a
- * row of a rendered timeline never implies concurrency that did not happen, and
- * anything drawn beside something else really did run beside it.
+ * Rows follow what the times mean. A bar that ran entirely inside another --
+ * `forward_backward` inside `train_models` -- is nested one level under it, so
+ * the sync path reads as one timeline of thin bars inside their step. A bar
+ * gets a row of its own only when it overlaps something it is not inside, which
+ * is real concurrency: an async rollout generating while the actor trains.
  */
 export function rolloutTimeline(lanes) {
   const roles = Object.entries(lanes?.roles || {});
@@ -107,14 +109,30 @@ export function rolloutTimeline(lanes) {
       }
     }
   }
-  bars.sort((a, b) => a.start - b.start || a.end - b.end);
+  // Enclosing bars first, so a bar meets its container before itself.
+  bars.sort((a, b) => a.start - b.start || b.end - a.end);
 
+  const enclosing = [];
+  for (const bar of bars) {
+    while (enclosing.length && enclosing[enclosing.length - 1].end < bar.end) {
+      enclosing.pop();
+    }
+    bar.depth = enclosing.length;
+    enclosing.push(bar);
+  }
+
+  // One row per nesting depth, and another at that depth for a bar that
+  // overlaps a bar it is not inside.
   const rows = [];
   for (const bar of bars) {
-    const row = rows.find((r) => r[r.length - 1].end <= bar.start);
+    const row = rows.find(
+      (r) => r[0].depth === bar.depth && r[r.length - 1].end <= bar.start,
+    );
     if (row) row.push(bar);
     else rows.push([bar]);
   }
+  rows.sort((a, b) => a[0].depth - b[0].depth || a[0].start - b[0].start);
+
   const span = bars.length ? Math.max(...bars.map((bar) => bar.end)) : 0;
   return { rows, span };
 }
