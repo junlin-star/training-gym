@@ -179,6 +179,13 @@ API_REFERENCE_MANIFEST = [
         "sidebar_label": "TrainConfig",
     },
     {
+        "class_name": "TrainingRun",
+        "module": "modal_training_gym.common.run",
+        "group": "training",
+        "class_type": "behavior",
+        "sidebar_label": "TrainingRun",
+    },
+    {
         "class_name": "TrainingGroup",
         "module": "modal_training_gym.common.training_group",
         "group": "training",

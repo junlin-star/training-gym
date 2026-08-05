@@ -75,6 +75,29 @@ class TrainingRunStatus(Enum):
 
 
 class TrainingRun(BaseModel):
+    """Handle to one launched training run — the record *and* the way to wait on it.
+
+    ``TrainConfig.launch()`` returns a ``TrainingRun`` as soon as training is
+    spawned, and persists it to the metadata volume (which is what the
+    dashboard reads). Because the Modal app is started detached and the
+    ``train`` function-call id is persisted on the record, a run outlives the
+    process that launched it and can be picked back up by id from anywhere:
+
+    ```python
+    run = TrainConfig(...).launch()
+    print(run.training_run_id, run.modal_app_url)
+
+    # ...later, from any other process:
+    run = TrainingRun.from_id("<training_run_id>")
+    train_result = run.result()   # block for the TrainResult
+    run.function_call.cancel(terminate_containers=True)   # or stop it early
+    ```
+
+    Never hand-roll ``_build_app()`` + ``app.train.spawn()`` to get this: that
+    nested ``app.run()`` is ephemeral, so leaving the block (or Ctrl-C) stops
+    the app and kills the run.
+    """
+
     training_run_id: str
     modal_app_id: str = ""
     modal_app_url: str = ""

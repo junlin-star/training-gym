@@ -87,6 +87,7 @@ _EXPORTS = {
     ),
     "TrainingGymError": ("modal_training_gym.common.errors", "TrainingGymError"),
     "TrainingGroup": ("modal_training_gym.common.training_group", "TrainingGroup"),
+    "TrainingRun": ("modal_training_gym.common.run", "TrainingRun"),
     "TrainResult": ("modal_training_gym.common.train_result", "TrainResult"),
     "WandbConfig": ("modal_training_gym.common.wandb", "WandbConfig"),
 }
@@ -141,6 +142,7 @@ __all__ = [
     "TrainingGymConfigError",
     "TrainingGymError",
     "TrainingGroup",
+    "TrainingRun",
     "TrainResult",
     "WandbConfig",
 ]
