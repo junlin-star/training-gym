@@ -9,13 +9,12 @@ TUTORIAL_METADATA = {
     "order": 30,
     "api_classes": [
         "DatasetConfig",
-        "DeploymentConfig",
-        "EvalConfig",
-        "EvalRowResult",
-        "ModelDeployment",
         "Qwen3_4B",
+        "Sample",
         "SlimeRecipe",
         "TrainConfig",
+        "endpoint_chat",
+        "wait_for_server_url",
     ],
 }
 
@@ -72,16 +71,16 @@ def _imports():
     import json
     import re
 
+    import modal
+
     from modal_training_gym import (
         DatasetConfig,
-        DeploymentConfig,
-        EvalConfig,
-        EvalRowResult,
-        ModelDeployment,
         Qwen3_4B,
+        Sample,
         SlimeRecipe,
         TrainConfig,
-        list_checkpoints,
+        endpoint_chat,
+        wait_for_server_url,
     )
 
 
@@ -92,7 +91,7 @@ def _dataset_intro():
 
     Keep it simple:
     - train on odd targets
-    - evaluate on even targets
+    - check on even targets
     """
 
 
@@ -137,16 +136,16 @@ def _dataset():
                 }
 
             train_rows = [_row(target) for target in TRAIN_TARGETS for _ in range(20)]
-            eval_rows = [_row(target) for target in TEST_TARGETS]
+            check_rows = [_row(target) for target in TEST_TARGETS]
 
             Dataset.from_list(train_rows).to_parquet(path)
             if eval_paths:
                 for eval_path in eval_paths.values():
                     os.makedirs(os.path.dirname(eval_path), exist_ok=True)
-                    Dataset.from_list(eval_rows).to_parquet(eval_path)
+                    Dataset.from_list(check_rows).to_parquet(eval_path)
 
     train_dataset = NumberGuessDataset()
-    eval_dataset = NumberGuessDataset()
+    check_dataset = NumberGuessDataset()
 
 
 @markdown
@@ -298,19 +297,21 @@ def _rollout_and_rm():
 
 
 @markdown
-def _eval_intro():
+def _check_intro():
     """
-    ## Offline multi-turn trajectory evaluator
+    ## Custom multi-turn trajectory check
 
-    `EvalConfig` supports `eval_fn`, so we can plug in a full
-    multi-turn evaluator per row while still using the standard eval runner.
+    The check is plain Python. It calls a custom Modal SGLang server for each turn,
+    applies the environment feedback, and returns one `Sample` per held-out
+    target.
     """
 
 
 @code
-def _eval_helpers():
+def _check_helpers():
     def run_guessing_trajectory(
-        deployment: ModelDeployment,
+        base_url: str,
+        model_id: str,
         *,
         target: int,
         max_turns: int = _MAX_TURNS,
@@ -318,10 +319,12 @@ def _eval_helpers():
         trace = ""
         for turn in range(max_turns):
             prompt = f"{_PROMPT}\n{trace}".strip()
-            response = deployment.generate(
-                prompt,
-                chat_template_kwargs={"enable_thinking": False},
-            )
+            response = endpoint_chat(
+                base_url,
+                model=model_id,
+                messages=[{"role": "user", "content": prompt}],
+                extra_body={"chat_template_kwargs": {"enable_thinking": False}},
+    )
             guess = _extract_answer(response)
             if guess is None:
                 return {
@@ -361,13 +364,15 @@ def _eval_helpers():
             return int(payload.get("answer", 1))
         return 1
 
-    def guessing_eval_fn(
-        deployment: ModelDeployment,
+    def score_guessing_example(
+        base_url: str,
+        model_id: str,
         example: dict,
-    ) -> EvalRowResult:
+    ) -> Sample:
         target = _resolve_target(example)
         trajectory = run_guessing_trajectory(
-            deployment,
+            base_url,
+            model_id,
             target=target,
             max_turns=_MAX_TURNS,
         )
@@ -376,8 +381,9 @@ def _eval_helpers():
             format_error=trajectory["format_error"],
             turns_taken=trajectory["turns_taken"],
         )
-        return EvalRowResult(
+        return Sample(
             score=reward,
+            prompt=example.get("prompt", _PROMPT),
             response=trajectory["response"],
             metadata={
                 "success": trajectory["success"],
@@ -387,8 +393,13 @@ def _eval_helpers():
             },
         )
 
-    def summarize_eval(eval_result) -> dict:
-        rows = eval_result.rows
+    def run_guessing_check(base_url: str, model_id: str) -> list[Sample]:
+        return [
+            score_guessing_example(base_url, model_id, example)
+            for example in check_dataset.load()
+        ]
+
+    def summarize_rows(rows: list[Sample]) -> dict:
         success_rate = sum(1 for row in rows if row.metadata.get("success")) / max(
             len(rows), 1
         )
@@ -398,31 +409,126 @@ def _eval_helpers():
         return {
             "success_rate": float(success_rate),
             "mean_turns": float(mean_turns),
+            "mean_reward": (
+                sum(row.score for row in rows) / len(rows) if rows else float("nan")
+            ),
         }
 
 
 @markdown
 def _serve_base_intro():
     """
-    ## Serve and evaluate the base model
+    ## Check the base model
+
+    Qwen3-4B is not in the managed Endpoint catalog, so this uses the ASR
+    tutorial's `@app.server` + SGLang pattern and runs the trajectory loop.
     """
 
 
 @code
 def _serve_base():
-    base_deployment = DeploymentConfig(
-        model=Qwen3_4B(),
-        unauthenticated=True,
-    ).serve()
-    print(f"Base model URL: {base_deployment.url}")
-    eval_config = EvalConfig(
-        dataset=eval_dataset,
-        eval_fn=guessing_eval_fn,
+    base_model = Qwen3_4B()
+    MODEL_ID = base_model.model_name
+    SERVER_APP_NAME = "gym-qwen3-4b-guessing-check"
+    SERVER_PORT = 8000
+    SERVER_STARTUP_TIMEOUT = 20 * 60
+
+    server_image = (
+        modal.Image.from_registry("lmsysorg/sglang:v0.5.12")
+        .entrypoint([])
+        .run_commands("rm -rf /root/.cache/huggingface")
+        .env({"HF_HUB_CACHE": "/root/.cache/huggingface"})
     )
-    base_eval = eval_config.evaluate(base_deployment, debug=True)
-    base_summary = summarize_eval(base_eval)
+
+    def serve_model(
+        model_path: str,
+        served_model_name: str,
+        checkpoints_volume_name: str | None = None,
+    ) -> str:
+        app = modal.App(SERVER_APP_NAME)
+        volumes = {
+            "/root/.cache/huggingface": modal.Volume.from_name(
+                "huggingface-cache", create_if_missing=True
+            )
+        }
+        if checkpoints_volume_name:
+            volumes["/checkpoints"] = modal.Volume.from_name(
+                checkpoints_volume_name, create_if_missing=True
+            )
+
+        @app.server(
+            image=server_image,
+            gpu="H100",
+            volumes=volumes,
+            port=SERVER_PORT,
+            startup_timeout=SERVER_STARTUP_TIMEOUT,
+            scaledown_window=10 * 60,
+            exit_grace_period=25,
+            target_concurrency=4,
+            unauthenticated=True,
+            serialized=True,
+        )
+        class ModelServer:
+            @modal.enter()
+            def start(self):
+                import subprocess as _sp
+                import time as _time
+                import urllib.error as _ue
+                import urllib.request as _ur
+
+                self.proc = _sp.Popen(
+                    [
+                        "python",
+                        "-m",
+                        "sglang.launch_server",
+                        "--model-path",
+                        model_path,
+                        "--served-model-name",
+                        served_model_name,
+                        "--host",
+                        "0.0.0.0",
+                        "--port",
+                        str(SERVER_PORT),
+                        "--mem-fraction-static",
+                        "0.80",
+                        "--trust-remote-code",
+                    ]
+                )
+                deadline = _time.monotonic() + SERVER_STARTUP_TIMEOUT
+                health = f"http://127.0.0.1:{SERVER_PORT}/health"
+                while True:
+                    if self.proc.poll() is not None:
+                        raise RuntimeError(
+                            f"SGLang exited with code {self.proc.returncode} "
+                            "before healthy"
+                        )
+                    try:
+                        with _ur.urlopen(health, timeout=5) as response:
+                            if response.status == 200:
+                                return
+                    except (_ue.URLError, TimeoutError, OSError):
+                        pass
+                    if _time.monotonic() >= deadline:
+                        raise TimeoutError(f"SGLang not healthy at {health}")
+                    _time.sleep(2)
+
+            @modal.exit()
+            def stop(self):
+                proc = getattr(self, "proc", None)
+                if proc is not None and proc.poll() is None:
+                    proc.terminate()
+                    proc.wait(timeout=30)
+
+        with modal.enable_output():
+            app.deploy()
+        return wait_for_server_url(ModelServer, label="Qwen3-4B check server")
+
+    base_url = serve_model(MODEL_ID, MODEL_ID)
+    print(f"Base model URL: {base_url}")
+    base_rows = run_guessing_check(base_url, MODEL_ID)
+    base_summary = summarize_rows(base_rows)
     print(f"Base success rate: {base_summary['success_rate']:.2%}")
-    print(f"Base mean reward: {base_eval.mean:.3f}")
+    print(f"Base mean reward: {base_summary['mean_reward']:.3f}")
     print(f"Base mean turns:  {base_summary['mean_turns']:.2f}")
 
 
@@ -465,7 +571,7 @@ def _train_intro():
 @code
 def _train():
     training_run = TrainConfig(
-        model=Qwen3_4B(),
+        model=base_model,
         dataset=train_dataset,
         recipe=SlimeRecipe(
             custom_generate_function=number_guess_generate,
@@ -498,29 +604,30 @@ def _train():
 
 
 @markdown
-def _trained_eval_intro():
+def _trained_check_intro():
     """
-    ## Evaluate trained checkpoint
+    ## Check the trained checkpoint
+
+    Redeploy the custom SGLang server with the checkpoint Volume mounted and
+    reuse the same trajectory loop.
     """
 
 
 @code
-def _trained_eval():
-    checkpoint = list_checkpoints(train_result.training_run_id)[-1]
-    trained_deployment = DeploymentConfig(
-        model=Qwen3_4B(),
-        checkpoint=checkpoint,
-        app_name="qwen3-4b-guessing-multiturn-serve",
-        served_model_name="qwen3-4b-guessing-multiturn",
-        unauthenticated=True,
-    ).serve()
-    print(f"Trained model URL: {trained_deployment.url}")
+def _trained_check():
+    trained_model = train_result.hf_model()
+    trained_url = serve_model(
+        trained_model.model_path,
+        trained_model.model_name,
+        train_result.checkpoints_volume,
+    )
+    print(f"Trained model URL: {trained_url}")
 
-    trained_eval = eval_config.evaluate(trained_deployment, debug=True)
-    trained_summary = summarize_eval(trained_eval)
+    trained_rows = run_guessing_check(trained_url, trained_model.model_name)
+    trained_summary = summarize_rows(trained_rows)
     print(f"Trained success rate: {trained_summary['success_rate']:.2%}")
-    print(f"Trained mean reward: {trained_eval.mean:.3f}")
+    print(f"Trained mean reward: {trained_summary['mean_reward']:.3f}")
     print(f"Trained mean turns:  {trained_summary['mean_turns']:.2f}")
     print(f"Base success rate:    {base_summary['success_rate']:.2%}")
-    print(f"Base mean reward:     {base_eval.mean:.3f}")
+    print(f"Base mean reward:     {base_summary['mean_reward']:.3f}")
     print(f"Base mean turns:      {base_summary['mean_turns']:.2f}")
