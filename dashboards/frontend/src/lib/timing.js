@@ -235,6 +235,10 @@ export function rolloutTimeline(lanes) {
   return {
     rows,
     span,
+    // Where this rollout sits on the run's wall clock. Async overlaps across
+    // rollouts rather than inside one, so a rollout drawn only against itself
+    // cannot show that its generation ran during the previous one's training.
+    originUnix: earliestLaneStart,
     stepDuration,
     beside: beside.map((bar) => ({ name: bar.name, duration: bar.duration })),
   };

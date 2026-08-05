@@ -368,3 +368,19 @@ it("says what a bar ran inside and what it ran alongside", () => {
   expect(alongside.inside).toBe(null);
   expect(alongside.overlaps).toEqual(["train_models"]);
 });
+
+it("keeps each rollout's place on the run's clock, not just its own", () => {
+  const generation = (start) =>
+    rolloutTimeline({
+      roles: {
+        rollout: {
+          role: "rollout",
+          lane_start_unix_s: start,
+          phases: { generate_samples: phase([[0, 5]]) },
+        },
+      },
+    });
+
+  expect(generation(1000).originUnix).toBe(1000);
+  expect(generation(1003).originUnix).toBe(1003);
+});

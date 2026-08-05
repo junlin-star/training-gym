@@ -30,7 +30,7 @@ def patcher_path(framework: str) -> Path:
 DRIVERS = [
     (
         "slime",
-        "train.py.output",
+        "slime/train.py.status.output",
         "train.py",
         "slime/train.py.timing.output",
         {
@@ -65,6 +65,19 @@ DRIVERS = [
         "miles/train_async.py.input",
         "train_async.py",
         "miles/train_async.py.timing.output",
+        {
+            "wait_for_rollout",
+            "train_models",
+            "checkpoint_save",
+            "weight_sync",
+            "evaluate_rollouts_end",
+        },
+    ),
+    (
+        "slime",
+        "slime/train_async.py.status.output",
+        "train_async.py",
+        "slime/train_async.py.timing.output",
         {
             "wait_for_rollout",
             "train_models",
@@ -133,7 +146,9 @@ def test_a_conditional_phase_is_timed_inside_its_branch(patchers, tmp_path):
     Its condition spans three lines, so the closing ``):`` sits at the ``if``'s
     own indent and must not be read as the start of another clause.
     """
-    patched = _patched(patchers["slime"], tmp_path, "train.py.output", "train.py")
+    patched = _patched(
+        patchers["slime"], tmp_path, "slime/train.py.status.output", "train.py"
+    )
     save = patched.split("if release_train or should_run_periodic_action(")[1]
     before_wrap = save.split("with _tg_rec.phase('checkpoint_save'):")[0]
     assert before_wrap.split("#")[0].rstrip().endswith("):")

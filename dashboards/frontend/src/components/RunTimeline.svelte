@@ -33,6 +33,9 @@
     return { rows: placed, rowsHeight: Math.max(nextTop - ROW_GAP_PX, ROW_HEIGHT_PX) };
   }
 
+  const ROLLOUT_GAP_PX = 20;
+  const ROLLOUT_HEAD_PX = 19;
+
   let rollouts = $derived.by(() =>
     Object.entries(timings || {})
       .map(([id, lanes]) => {
@@ -40,6 +43,51 @@
         return { id: Number(id), ...timeline, ...placeRows(timeline.rows) };
       })
       .sort((a, b) => a.id - b.id),
+  );
+
+  // Rollouts are laid out on the run's own clock rather than packed end to
+  // end, so a rollout that began before the previous one finished is drawn
+  // over that stretch instead of after it. Async is overlap between rollouts:
+  // the next generation runs during this step's training, which a rollout
+  // measured only against itself has no way to show. Ones that overlap take
+  // separate bands; a run without overlap keeps a single band, as it did.
+  let placedRollouts = $derived.by(() => {
+    // Without a wall clock on every rollout there is nothing to align them
+    // by, so they fall back to running one after another as they used to.
+    const clocked = rollouts.every((r) => Number.isFinite(r.originUnix));
+    let packed = 0;
+    const spans = rollouts.map((rollout) => {
+      const start = clocked ? rollout.originUnix : packed;
+      packed += rollout.span;
+      return { rollout, start, end: start + rollout.span };
+    });
+    const runStart = Math.min(...spans.map((s) => s.start));
+    const runSpan = Math.max(Math.max(...spans.map((s) => s.end)) - runStart, 1e-6);
+    const bandEnds = [];
+    return spans.map(({ rollout, start, end }) => {
+      let band = bandEnds.findIndex((bandEnd) => bandEnd <= start);
+      if (band === -1) band = bandEnds.push(0) - 1;
+      bandEnds[band] = end;
+      return {
+        rollout,
+        band,
+        offset: (start - runStart) / runSpan,
+        extent: Math.max(rollout.span / runSpan, 0.001),
+      };
+    });
+  });
+
+  let bandStride = $derived(
+    ROLLOUT_HEAD_PX +
+      placedRollouts.reduce(
+        (tallest, p) => Math.max(tallest, p.rollout.rowsHeight),
+        ROW_HEIGHT_PX,
+      ) +
+      ROLLOUT_GAP_PX,
+  );
+  let trackHeight = $derived(
+    placedRollouts.reduce((most, p) => Math.max(most, p.band + 1), 1) * bandStride -
+      ROLLOUT_GAP_PX,
   );
 
   let measured = $derived(rollouts.filter((r) => r.rows.length > 0));
@@ -191,9 +239,18 @@
     </div>
 
     <div class="viewport" bind:this={viewport} use:wheelZoom>
-      <div class="track" style:width={`${zoom * 100}%`}>
-        {#each rollouts as rollout (rollout.id)}
-          <div class="rollout" style:flex-grow={Math.max(rollout.span, 0.001)}>
+      <div
+        class="track"
+        style:width={`${zoom * 100}%`}
+        style:height={`${trackHeight}px`}
+      >
+        {#each placedRollouts as { rollout, band, offset, extent } (rollout.id)}
+          <div
+            class="rollout"
+            style:left={`${offset * 100}%`}
+            style:width={`calc(${extent * 100}% - ${ROLLOUT_GAP_PX}px)`}
+            style:top={`${band * bandStride}px`}
+          >
             <div class="rollout-head">
               <span class="rollout-name">Rollout {rollout.id}</span>
               <span
@@ -250,9 +307,10 @@
     </div>
     <div class="hint">
       Hover a bar for its phase and exact times · click to pin · scroll to zoom · drag to
-      pan. Bars share one clock per rollout: a bar drawn inside an outline ran within the
-      phase outlined, and a bar on a row of its own overlapped work it is not part of. A
-      gap is time no phase was measured in, not time nothing ran.
+      pan. Everything shares the run's clock, so a rollout drawn under another one began
+      before that one finished. A bar inside an outline ran within the phase outlined, and
+      a bar on a row of its own overlapped work it is not part of. A gap is time no phase
+      was measured in, not time nothing ran.
     </div>
   {/if}
 </div>
@@ -416,16 +474,15 @@
   }
 
   .track {
-    display: flex;
-    gap: 20px;
+    position: relative;
     min-width: 100%;
   }
 
   .rollout {
+    position: absolute;
     display: flex;
     flex-direction: column;
     gap: 5px;
-    flex-basis: 0;
     min-width: 2px;
   }
 
