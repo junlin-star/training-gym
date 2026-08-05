@@ -17,8 +17,9 @@ export const CATEGORIES = {
 // telling them apart matters, the second takes a neighbouring tone of the same
 // family -- still "this is training", but with a visible seam.
 const TONES = {
-  optimizer_step: slot("primary-5"),
   compute_log_probs: slot("paired-1"),
+  forward_backward: slot("primary-1"),
+  optimizer_step: slot("primary-5"),
   offload_train: slot("primary-4"),
   offload_rollout: slot("primary-4"),
 };
@@ -157,21 +158,48 @@ function collect(timings) {
         const count = Number(phase?.count) || 0;
         const total = Number(phase?.total_duration_s) || 0;
         if (!count || total < NEGLIGIBLE_WORK_S) continue;
-        const start = laneStart + (Number(phase?.first_start_s) || 0);
-        const end = laneStart + (Number(phase?.last_end_s) || 0);
-        spans.push({
+        const where = {
           rolloutId,
           role,
           group: GROUP_OF_ROLE.get(role) ?? "step",
           name,
           category: categoryOf(name),
-          kind: SAMPLED.has(name)
-            ? "sampled"
-            : STALLS.has(name)
-              ? "stall"
-              : "work",
-          start,
-          end,
+        };
+        // Per-sample phases are aggregated even when an older record still
+        // carries their runs: thousands of sub-millisecond slivers say less
+        // than one span with a count and an average on it.
+        const runs =
+          !SAMPLED.has(name) && Array.isArray(phase?.invocations)
+            ? phase.invocations
+            : [];
+        // A phase that ran more than once is drawn as the runs themselves. Its
+        // first start to its last end is not an interval it was ever inside:
+        // an async step's two waits straddle the training between them.
+        if (runs.length) {
+          for (const [from, to] of runs) {
+            const start = laneStart + (Number(from) || 0);
+            const end = laneStart + (Number(to) || 0);
+            spans.push({
+              ...where,
+              kind: STALLS.has(name) ? "stall" : "work",
+              start,
+              end,
+              count: 1,
+              total: end - start,
+              longest: end - start,
+            });
+          }
+          continue;
+        }
+        // Per-sample phases (and records written before runs were kept) have
+        // only the aggregate, so they are drawn as the span the calls are
+        // spread over, carrying their count and average rather than posing as
+        // one continuous run.
+        spans.push({
+          ...where,
+          kind: SAMPLED.has(name) || count > 1 ? "sampled" : "work",
+          start: laneStart + (Number(phase?.first_start_s) || 0),
+          end: laneStart + (Number(phase?.last_end_s) || 0),
           count,
           total,
           longest: Number(phase?.longest_duration_s) || 0,
@@ -253,25 +281,37 @@ function nest(spans) {
   return ordered;
 }
 
-// One row per depth, split further only when same-depth spans genuinely run at
-// the same time -- which in async is the next rollout generating during this
-// one's training, and in sync never happens.
-function rowsOf(spans) {
+// One row per worker per depth, split again only when two spans of the same
+// worker and depth genuinely overlap -- which in async is the next rollout
+// generating during this one's training, and in sync never happens.
+function rowsOf(spans, roles) {
   const rows = [];
+  const order = (span) => roles.indexOf(span.role);
   for (const span of [...spans].sort(
-    (a, b) => a.depth - b.depth || a.start - b.start,
+    (a, b) => order(a) - order(b) || a.depth - b.depth || a.start - b.start,
   )) {
     let row = rows.find(
       (candidate) =>
+        candidate.role === span.role &&
         candidate.depth === span.depth &&
         candidate.spans[candidate.spans.length - 1].end <= span.start,
     );
     if (!row) {
-      row = { depth: span.depth, spans: [] };
+      row = { role: span.role, depth: span.depth, spans: [], label: "" };
       rows.push(row);
     }
     row.spans.push(span);
     span.row = rows.indexOf(row);
+  }
+  // A row is named for the worker it belongs to, and a nested row for the phase
+  // its spans ran inside, so depth reads as containment rather than as a gap.
+  for (const row of rows) {
+    if (!row.depth) {
+      row.label = roleLabel(row.role);
+      continue;
+    }
+    const parents = [...new Set(row.spans.map((span) => span.inside))];
+    row.label = parents.length === 1 ? `inside ${labelFor(parents[0])}` : "nested";
   }
   return rows;
 }
@@ -297,7 +337,7 @@ export function runTimeline(timings) {
 
   const groups = GROUPS.map((group) => {
     const mine = spans.filter((span) => span.group === group.key);
-    return { ...group, rows: rowsOf(mine), roleNames: [...new Set(mine.map((s) => s.role))] };
+    return { ...group, rows: rowsOf(mine, group.roles) };
   }).filter((group) => group.rows.length);
 
   return {

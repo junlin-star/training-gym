@@ -1,5 +1,5 @@
 <script>
-  import { Download, ZoomIn, ZoomOut } from "lucide-svelte";
+  import { ChevronDown, ChevronRight, Download, ZoomIn, ZoomOut } from "lucide-svelte";
   import {
     CATEGORIES,
     categoryOf,
@@ -19,18 +19,19 @@
 
   const ROW_HEIGHT_PX = 16;
   const ROW_GAP_PX = 3;
-  const GROUP_GAP_PX = 14;
-  const LABEL_PX = 46;
+  const HEADER_PX = 15;
+  const GROUP_GAP_PX = 10;
+  const STEP_LABEL_PX = 18;
 
-  // What each wait is actually waiting for, in rollouts rather than futures.
+  // What each wait is actually waiting for, in steps rather than futures.
   const WAITS_ON = {
-    generate_rollouts: () => "the engines generating this rollout's samples",
+    generate_rollouts: () => "the engines generating this step's samples",
     wait_for_rollout: (id) =>
       id > 0
-        ? `this rollout's samples, generated during rollout ${id - 1}`
-        : "this rollout's samples, generation started before the loop",
+        ? `this step's samples, generated during step ${id - 1}`
+        : "this step's samples, generation started before the loop",
     wait_for_next_rollout: (id) =>
-      `rollout ${id + 1}'s samples, drained before the weights change`,
+      `step ${id + 1}'s samples, drained before the weights change`,
     evaluate_rollouts: () => "the engines running eval",
     evaluate_rollouts_end: () => "the engines running eval",
   };
@@ -39,15 +40,22 @@
   let groups = $derived(
     timeline.groups.map((group) => ({
       ...group,
-      height: Math.max(
-        group.rows.length * (ROW_HEIGHT_PX + ROW_GAP_PX) - ROW_GAP_PX,
-        ROW_HEIGHT_PX,
-      ),
+      height: HEADER_PX + group.rows.length * (ROW_HEIGHT_PX + ROW_GAP_PX),
     })),
   );
+  let showDetails = $state(false);
+  let visibleGroups = $derived(
+    groups.map((group) => {
+      const rows = showDetails ? group.rows : group.rows.filter((row) => row.depth === 0);
+      return {
+        ...group,
+        rows,
+        height: HEADER_PX + rows.length * (ROW_HEIGHT_PX + ROW_GAP_PX),
+      };
+    }),
+  );
   let trackHeight = $derived(
-    groups.reduce((total, group) => total + group.height + GROUP_GAP_PX, 0) -
-      GROUP_GAP_PX,
+    visibleGroups.reduce((total, group) => total + group.height + GROUP_GAP_PX, 0),
   );
 
   const pct = (seconds) => (seconds / timeline.span) * 100;
@@ -199,20 +207,46 @@
           <Download size={13} />
           Download JSON
         </button>
+        <button
+          class="dl-btn"
+          onclick={() => (showDetails = !showDetails)}
+          aria-pressed={showDetails}
+          title={showDetails ? "Hide phase details" : "Show phase details"}
+        >
+          {#if showDetails}
+            <ChevronDown size={13} />
+            Hide phase details
+          {:else}
+            <ChevronRight size={13} />
+            Show phase details
+          {/if}
+        </button>
       </div>
     </div>
 
     <div class="chart">
       <div class="gutter" style:padding-top={`${ROW_HEIGHT_PX + 6}px`}>
-        {#each groups as group (group.key)}
-          <div
-            class="gutter-label"
-            style:height={`${group.height}px`}
-            style:margin-bottom={`${GROUP_GAP_PX}px`}
-            title={`${group.label} — ${group.hint}`}
-          >
-            <span class="gutter-name">{group.label}</span>
-            <span class="gutter-hint">{group.hint}</span>
+        {#each visibleGroups as group (group.key)}
+          <div style:margin-bottom={`${GROUP_GAP_PX}px`}>
+            <div
+              class="gutter-head"
+              style:height={`${HEADER_PX}px`}
+              title={`${group.label} — ${group.hint}`}
+            >
+              {group.label}
+            </div>
+            {#each group.rows as row, index (index)}
+              <div
+                class="gutter-row"
+                class:nested={row.depth > 0}
+                style:height={`${ROW_HEIGHT_PX}px`}
+                style:margin-bottom={`${ROW_GAP_PX}px`}
+                style:padding-left={`${row.depth * 7}px`}
+                title={row.label}
+              >
+                {row.label}
+              </div>
+            {/each}
           </div>
         {/each}
       </div>
@@ -240,7 +274,7 @@
           </div>
 
           <div class="groups" style:height={`${trackHeight}px`}>
-            {#each groups as group (group.key)}
+            {#each visibleGroups as group (group.key)}
               <div
                 class="group"
                 style:height={`${group.height}px`}
@@ -249,7 +283,7 @@
                 {#each group.rows as row, index (index)}
                   <div
                     class="row"
-                    style:top={`${index * (ROW_HEIGHT_PX + ROW_GAP_PX)}px`}
+                    style:top={`${HEADER_PX + index * (ROW_HEIGHT_PX + ROW_GAP_PX)}px`}
                     style:height={`${ROW_HEIGHT_PX}px`}
                   >
                     {#each row.spans as bar (bar.key)}
@@ -275,15 +309,9 @@
                             style:left={`${Math.min((bar.average / bar.duration) * 100, 100)}%`}
                           ></span>
                         {/if}
-                        {#if widthPx(bar) > LABEL_PX}
+                        {#if bar.rolloutId != null && widthPx(bar) > STEP_LABEL_PX}
                           <span class="bar-text" class:on-dark={bar.kind === "work"}>
-                            {#if bar.kind === "sampled"}
-                              {bar.count}× {fmtSecs(bar.average)}
-                            {:else if bar.kind === "untracked"}
-                              untracked {fmtSecs(bar.duration)}
-                            {:else}
-                              {labelFor(bar.name)} · {fmtSecs(bar.duration)}
-                            {/if}
+                            {bar.rolloutId}
                           </span>
                         {/if}
                       </button>
@@ -311,7 +339,7 @@
 {#if tip}
   <div class="tg-tip" class:pinned style:left={`${tip.x}px`} style:top={`${tip.y}px`}>
     <span class="tg-tip-head">
-      {#if tip.bar.rolloutId != null}Rollout {tip.bar.rolloutId} ·{/if}
+      {#if tip.bar.rolloutId != null}Step {tip.bar.rolloutId} ·{/if}
       {roleLabel(tip.bar.role)}
       {#if tip.bar.kind !== "untracked"}
         · {CATEGORIES[categoryOf(tip.bar.name)].label.toLowerCase()}{/if}
@@ -476,28 +504,27 @@
     width: 108px;
   }
 
-  .gutter-label {
-    display: flex;
-    flex-direction: column;
-    justify-content: flex-start;
-    gap: 1px;
-    overflow: hidden;
-    border-left: 2px solid var(--border, #2f2f2f);
-    padding-left: 6px;
-  }
-
-  .gutter-name {
+  .gutter-head {
     font-size: 10px;
-    line-height: 13px;
+    line-height: 15px;
     color: var(--text-bright, #fff);
     font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
-  .gutter-hint {
+  .gutter-row {
     font-size: 9px;
-    line-height: 11px;
+    line-height: 16px;
     color: var(--muted);
-    opacity: 0.75;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .gutter-row.nested {
+    opacity: 0.65;
   }
 
   .viewport {
@@ -547,6 +574,7 @@
 
   .group {
     position: relative;
+    border-top: 1px solid var(--border, #2f2f2f);
   }
 
   .row {
@@ -608,7 +636,7 @@
   .bar-text {
     position: relative;
     display: block;
-    padding: 0 4px;
+    padding: 0 3px;
     font-size: 9px;
     line-height: 16px;
     color: var(--muted);
