@@ -332,10 +332,13 @@ class TrainConfig:
         ``False`` to run the recipe exactly as written, with no preset
         defaults. Default ``True``.
     detach : bool
-        Run the training app detached so it keeps running on Modal even if
-        the local client disconnects (terminal closed, laptop asleep). Set
-        ``False`` for an attached run that stops on Ctrl-C. Default
-        ``True``.
+        Whether the training app should outlive the local client. The Modal
+        app is always started detached so a dropped connection can't kill a
+        multi-hour run; ``detach`` controls what ``train()`` does when its
+        wait for the result is interrupted (Ctrl-C, a crashed driver):
+        ``True`` leaves the run going on Modal, ``False`` stops the app on
+        the way out. ``launch()`` always leaves the run going, since it
+        returns before training finishes. Default ``True``.
     group_id : str | None
         Shared sweep id. Set by ``TrainingGroup`` so every run in a sweep
         carries the same id, letting the dashboard group variants together.
@@ -358,11 +361,10 @@ class TrainConfig:
     checkpoint: Checkpoint | None = None
     # Known-model recipes are presets by default; complete recipes can opt out.
     merge_model_recipe: bool = True
-    # Run the training app detached so it keeps running on Modal even if the
-    # local client disconnects (terminal closed, laptop asleep). The CLI's
-    # ``modal run --detach`` only detaches the entrypoint, not the nested
-    # ``app.run()`` the driver opens — so we detach it here. Set False for an
-    # attached run that Ctrl-C stops.
+    # Whether a run outlives the local client. The app itself is always started
+    # detached (the CLI's ``modal run --detach`` only detaches the entrypoint,
+    # not the nested ``app.run()`` the driver opens), so this only decides
+    # whether an interrupted ``train()`` stops the app on its way out.
     detach: bool = True
     # Set by TrainingGroup so every run in a sweep shares one id — written into
     # the TrainingRun record so the dashboard can group variants together.
@@ -560,8 +562,15 @@ class TrainConfig:
 
     def train(self, *, show_output: bool = True) -> TrainResult:
         """Build the app, run training, and return the TrainResult."""
+        from modal_training_gym.common.modal_lifecycle import stop_app
+
         launch = self.launch(show_output=show_output, prepare_inputs=True)
-        return launch.result(stop_app_on_success=self.detach)
+        try:
+            return launch.result(stop_app_on_success=True)
+        except BaseException:
+            if not self.detach and launch.modal_app_id:
+                stop_app(launch.modal_app_id)
+            raise
 
     def launch(
         self,
@@ -618,7 +627,7 @@ class TrainConfig:
         app = self._build_app(training_run_id)
         output_context = modal.enable_output() if show_output else nullcontext()
         with output_context:
-            with app.run(detach=self.detach):
+            with app.run(detach=True):
                 modal_app_id = app.app_id or ""
                 modal_app_url = modal_app_dashboard_url(modal_app_id)
                 if show_output:
