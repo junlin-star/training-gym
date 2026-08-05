@@ -153,3 +153,38 @@ def test_num_experts_validation_skips_dense_models() -> None:
     model = SimpleNamespace(architecture=SimpleNamespace(num_experts=0))
 
     validate_num_experts_divisible_by_expert_parallel_size(config, model)
+
+
+def test_num_experts_validation_skips_unset_expert_parallel_size() -> None:
+    # An unset EP falls back to the framework default of 1, which always divides.
+    config = SimpleNamespace(expert_model_parallel_size=None)
+    model = SimpleNamespace(architecture=SimpleNamespace(num_experts=160))
+
+    validate_num_experts_divisible_by_expert_parallel_size(config, model)
+
+
+def _moe_model(num_experts: int) -> SimpleNamespace:
+    return SimpleNamespace(architecture=SimpleNamespace(num_experts=num_experts))
+
+
+def test_miles_validates_num_experts_against_expert_parallel_size() -> None:
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        recipe = MilesRecipe(expert_model_parallel_size=4)
+
+    with pytest.raises(
+        GpuAllocationError,
+        match=r"num_experts=10.*expert_model_parallel_size=4",
+    ):
+        recipe.validate_model_parallelism(_moe_model(10))
+
+    recipe.validate_model_parallelism(_moe_model(8))
+
+
+def test_miles_num_experts_validation_allows_unset_expert_parallel_size() -> None:
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        recipe = MilesRecipe()
+
+    assert recipe.expert_model_parallel_size is None
+    recipe.validate_model_parallelism(_moe_model(160))

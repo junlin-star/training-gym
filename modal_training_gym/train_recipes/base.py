@@ -1,8 +1,11 @@
+import dataclasses as _dc
 import json
+import os
 from abc import ABC
+from collections.abc import Callable
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from modal_training_gym.train_recipes.gpu_allocation import (
     GpuAllocation,
@@ -31,6 +34,67 @@ class RecipeType(Enum):
 
 class BaseTrainRecipe(ABC):
     recipe_type: RecipeType
+
+    # Fields consumed by the Modal launcher (image build, cluster topology,
+    # callable shipping) and never forwarded to the framework CLI. Every
+    # framework recipe overrides this; a name missing from it leaks onto the
+    # command line and the framework's argparse aborts with "unrecognized
+    # arguments".
+    _SKIP_FIELDS: ClassVar[frozenset[str]] = frozenset()
+
+    # Field holding the inline-YAML escape-hatch dict. ``_emit_fields`` renames
+    # it to ``_ESCAPE_HATCH_FLAG`` on the command line, and keys inside it always
+    # win over same-named top-level fields.
+    _ESCAPE_HATCH_FIELD: ClassVar[str] = "extra_config"
+    _ESCAPE_HATCH_FLAG: ClassVar[str] = "custom_config_path"
+
+    # ── Callable → import path ────────────────────────────────────────────────
+
+    @staticmethod
+    def _callable_path(fn: Callable) -> str:
+        """Dotted import path a container can resolve this callable by.
+
+        A function defined in a ``__main__`` tutorial script has no importable
+        module name, so fall back to its file stem — which is what the launcher
+        mounts it as. ``__pending__`` marks a callable with no readable source
+        file, for the launcher to fill in when it ships it.
+        """
+        mod = getattr(fn, "__module__", None) or ""
+        name = getattr(fn, "__qualname__", None) or fn.__name__
+        if mod == "__main__":
+            import inspect
+
+            try:
+                src_file = inspect.getfile(fn)
+                mod = Path(src_file).stem if os.path.isfile(src_file) else "__pending__"
+            except (TypeError, OSError):
+                mod = "__pending__"
+        return f"{mod}.{name}"
+
+    @classmethod
+    def _path_or_callable_path(cls, value: "Callable | str | None") -> str | None:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            return value
+        return cls._callable_path(value)
+
+    # ── Model presets ─────────────────────────────────────────────────────────
+
+    # TOOD(joy): Remove merge_model_recipe logic everywhere.
+    @classmethod
+    def get_base_recipe(cls, model_config: "ModelConfig") -> "BaseTrainRecipe | None":
+        """Known-model preset recipe for ``model_config``, or ``None``.
+
+        ``TrainConfig.merge_model_recipe`` merges the returned preset onto the
+        fields a user left unset. ``None`` means "no preset for this model" and
+        the user's recipe is used as written.
+
+        A framework that only supports an explicit allow-list of models (e.g.
+        slime) may instead raise ``TrainingGymConfigError`` for a model it has
+        no preset for, rather than returning ``None``.
+        """
+        return None
 
     # ── Container → framework flag converters ────────────────────────────────
 
@@ -76,6 +140,42 @@ class BaseTrainRecipe(ABC):
         }
 
     # ── CLI serialization ─────────────────────────────────────────────────────
+
+    def _field_values(self) -> dict[str, Any]:
+        """Every declared field's current value, as the starting point for CLI emission."""
+        return {f.name: getattr(self, f.name) for f in _dc.fields(self)}
+
+    def _escape_hatch_keys(self) -> tuple[str, ...]:
+        """Keys set in the inline-YAML escape hatch, on either side of materialization.
+
+        ``prepare_launch_config`` replaces the dict with a path to the YAML it
+        wrote *before* the launcher calls ``cli_args``, so reading the field
+        alone would see a ``str`` and silently skip the precedence rule in
+        ``_emit_fields``. It records the keys on the recipe as it materializes;
+        fall back to those.
+        """
+        val = getattr(self, self._ESCAPE_HATCH_FIELD, None)
+        if isinstance(val, dict):
+            return tuple(val)
+        return tuple(getattr(self, "_materialized_config_keys", ()) or ())
+
+    def _emit_fields(self, fields: dict[str, Any]) -> dict[str, Any]:
+        """Drop launcher-only fields and let the escape hatch win over same-named flags.
+
+        The escape hatch is an explicit per-recipe override, but the frameworks
+        resolve ``--<flag>`` CLI args *over* the YAML custom-config — so a key a
+        recipe sets in both places would be clobbered by the field's own flag
+        (e.g. a ``qkv_format="thd"`` default overriding an ``extra_config``
+        ``"bshd"``). Drop any such flag so the YAML value stands.
+        """
+        out = {k: v for k, v in fields.items() if k not in self._SKIP_FIELDS}
+        hatch = self._ESCAPE_HATCH_FIELD
+        for key in self._escape_hatch_keys():
+            if key != hatch:
+                out.pop(key, None)
+        if hatch in out:
+            out[self._ESCAPE_HATCH_FLAG] = out.pop(hatch)
+        return out
 
     def _fields(
         self,
