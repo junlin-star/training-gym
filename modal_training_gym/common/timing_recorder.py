@@ -30,6 +30,9 @@ MIN_PUBLISH_INTERVAL_S = 3.0
 
 PER_SAMPLE_PHASES = frozenset({"reward"})
 
+FINAL_POST_ATTEMPTS = 3
+FINAL_POST_RETRY_S = 0.5
+
 _CLOSED_POSTERS: list[threading.Thread] = []
 
 
@@ -154,7 +157,14 @@ class RoleRecorder:
                 snapshot, self._snapshot = self._snapshot, None
             if snapshot is not None and snapshot["phases"] != self._posted_phases:
                 self._posted_phases = snapshot["phases"]
-                status_reporter.post_item(snapshot)
+                # A lane that has closed has no successor snapshot to carry its
+                # phases, so its last one is retried rather than dropped.
+                attempts = FINAL_POST_ATTEMPTS if self._closed else 1
+                for attempt in range(attempts):
+                    if status_reporter.post_item(dict(snapshot)):
+                        break
+                    if attempt + 1 < attempts:
+                        time.sleep(FINAL_POST_RETRY_S * (attempt + 1))
             if self._closed and self._snapshot is None:
                 if self._poster in _CLOSED_POSTERS:
                     _CLOSED_POSTERS.remove(self._poster)

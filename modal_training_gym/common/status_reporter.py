@@ -78,7 +78,7 @@ def _worker() -> None:
             _QUEUE.task_done()
 
 
-def _post(item: dict[str, Any]) -> None:
+def _post(item: dict[str, Any]) -> bool:
     url = item.pop("_url", "")
     timeout = float(
         item.pop("_timeout", _DEFAULT_TIMEOUT_SECONDS) or _DEFAULT_TIMEOUT_SECONDS
@@ -87,7 +87,7 @@ def _post(item: dict[str, Any]) -> None:
     # enqueue_item callers); don't re-resolve it here.
     token = str(item.pop("_token", "") or "").strip()
     if not url:
-        return
+        return False
     body = json.dumps(item, default=str).encode("utf-8")
 
     from modal_training_gym.common.config import modal_proxy_auth_headers
@@ -109,7 +109,8 @@ def _post(item: dict[str, Any]) -> None:
         with urlopen(request, timeout=timeout) as response:
             response.read()
     except (OSError, URLError):
-        return
+        return False
+    return True
 
 
 def enqueue_item(item: dict[str, Any]) -> None:
@@ -125,10 +126,12 @@ def enqueue_item(item: dict[str, Any]) -> None:
         pass
 
 
-def post_item(item: dict[str, Any]) -> None:
+def post_item(item: dict[str, Any]) -> bool:
     """Synchronously POST a pre-resolved item (same shape as ``enqueue_item``),
-    blocking up to the item's ``_timeout``. Failures are swallowed."""
-    _post(item)
+    blocking up to the item's ``_timeout``. Returns whether it was accepted;
+    failures are swallowed. Consumes the item's ``_url``/``_token`` keys, so a
+    caller that retries must pass a copy."""
+    return _post(item)
 
 
 def enqueue_framework_status(
