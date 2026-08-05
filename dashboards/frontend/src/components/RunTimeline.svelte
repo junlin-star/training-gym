@@ -17,10 +17,10 @@
   const ZOOM_BTN_FACTOR = 1.5;
   const WHEEL_SENSITIVITY = 0.0015;
 
-  const ROW_HEIGHT_PX = 16;
-  const ROW_GAP_PX = 3;
-  const HEADER_PX = 15;
-  const GROUP_GAP_PX = 10;
+  const ROW_HEIGHT_PX = 20;
+  const ROW_GAP_PX = 6;
+  const HEADER_PX = 18;
+  const GROUP_GAP_PX = 20;
   const STEP_LABEL_PX = 18;
 
   // What each wait is actually waiting for, in steps rather than futures.
@@ -515,8 +515,8 @@
   }
 
   .gutter-row {
-    font-size: 9px;
-    line-height: 16px;
+    font-size: 10px;
+    line-height: 20px;
     color: var(--muted);
     white-space: nowrap;
     overflow: hidden;
@@ -562,7 +562,7 @@
     display: block;
     padding: 0 4px;
     font-size: 10px;
-    line-height: 16px;
+    line-height: 20px;
     color: var(--muted);
     white-space: nowrap;
     font-variant-numeric: tabular-nums;
@@ -637,8 +637,8 @@
     position: relative;
     display: block;
     padding: 0 3px;
-    font-size: 9px;
-    line-height: 16px;
+    font-size: 10px;
+    line-height: 20px;
     color: var(--muted);
     white-space: nowrap;
     pointer-events: none;
