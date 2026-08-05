@@ -201,10 +201,17 @@ _SYNC_PHASE_WRAPS = [
         "        offload_train(actor_trains)\n",
         "offload_train",
     ),
+    # The onload calls belong to the weight update, as in miles: the rollout
+    # engines cannot take new weights until they are back on the GPU.
     (
+        "        if args.offload_rollout and not release_train:\n"
+        "            ray.get(rollout_manager.onload_weights.remote())\n"
         "        # PATCHED_TRAINING_GYM_WEIGHT_SYNC_STATUS: weight sync state\n"
         "        _tg_report('weight_sync', args, rollout_id)\n"
-        "        actor_model.update_weights()\n",
+        "        actor_model.update_weights()\n"
+        "\n"
+        "        if args.offload_rollout:\n"
+        "            ray.get(rollout_manager.onload_kv.remote())\n",
         "weight_sync",
     ),
     (

@@ -21,7 +21,7 @@ PATCHER_PATH = (
     Path(__file__).parents[1]
     / "modal_training_gym"
     / "common"
-    / "patches"
+    / "patch_scripts"
     / "patch_substep_timing.py"
 )
 

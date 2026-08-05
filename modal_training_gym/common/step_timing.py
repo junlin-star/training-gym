@@ -51,7 +51,8 @@ class RoleTimingRecord(BaseModel):
     Single writer per key, whole-file overwrite, last write wins.
     """
 
-    training_run_id: str = Field(pattern=r"^[A-Za-z0-9._-]+$")
+    # A path component of the record's key, so it must not be "." or ".."
+    training_run_id: str = Field(pattern=r"^[A-Za-z0-9_-][A-Za-z0-9._-]*$")
     rollout_id: int = Field(ge=0)
     role: Role
     created_at: int = 0

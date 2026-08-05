@@ -17,27 +17,26 @@ export const TIMING_LABELS = {
   optimizer_step: "Optimizer step",
 };
 
-// The substep chart's hues, pastel and all at one lightness and saturation, so
-// no phase shouts over its neighbours. Generating is red, training is
-// blue/green, and a phase drawn inside one of them is a neighbouring hue rather
-// than a shade of its container, so the two edges read apart.
+// The substep chart's colors. Generating is red, training is blue/green, and a
+// phase drawn inside one of them is a neighbouring hue rather than a shade of
+// its container, so the two edges read apart.
 export const TIMING_COLORS = {
-  generate_rollouts: "hsl(2 52% 75%)",
-  wait_for_rollout: "hsl(342 45% 76%)",
-  generate_samples: "hsl(26 48% 75%)",
-  reward: "hsl(45 45% 74%)",
-  reward_batch: "hsl(52 42% 74%)",
-  reward_post_process: "hsl(38 45% 77%)",
-  train_models: "hsl(210 48% 76%)",
-  compute_log_probs: "hsl(158 40% 73%)",
-  forward_backward: "hsl(190 45% 75%)",
-  optimizer_step: "hsl(235 45% 80%)",
-  weight_sync: "hsl(172 40% 73%)",
-  offload_rollout: "hsl(262 35% 79%)",
-  offload_train: "hsl(282 32% 79%)",
-  checkpoint_save: "hsl(320 45% 79%)",
-  evaluate_rollouts: "hsl(200 45% 77%)",
-  evaluate_rollouts_end: "hsl(300 38% 79%)",
+  generate_rollouts: "#f87171",
+  wait_for_rollout: "#fb7185",
+  generate_samples: "#fb923c",
+  reward: "#fbbf24",
+  reward_batch: "#facc15",
+  reward_post_process: "#fde047",
+  train_models: "#60a5fa",
+  compute_log_probs: "#34d399",
+  forward_backward: "#22d3ee",
+  optimizer_step: "#818cf8",
+  weight_sync: "#5eead4",
+  offload_rollout: "#a78bfa",
+  offload_train: "#c084fc",
+  checkpoint_save: "#f472b6",
+  evaluate_rollouts: "#38bdf8",
+  evaluate_rollouts_end: "#e879f9",
 };
 
 // Work a step waits on but isn't: a checkpoint or an eval lands on one rollout

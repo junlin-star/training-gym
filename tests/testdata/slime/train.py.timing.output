@@ -163,16 +163,16 @@ def train(args):
                 # PATCHED_TRAINING_GYM_OFFLOAD_TRAIN_STATUS: train offload state
                 _tg_report('offload_train', args, rollout_id)
                 offload_train(actor_trains)
-            if args.offload_rollout and not release_train:
-                ray.get(rollout_manager.onload_weights.remote())
             # PATCHED_TRAINING_GYM_TIMING_WEIGHT_SYNC
             with _tg_rec.phase('weight_sync'):
+                if args.offload_rollout and not release_train:
+                    ray.get(rollout_manager.onload_weights.remote())
                 # PATCHED_TRAINING_GYM_WEIGHT_SYNC_STATUS: weight sync state
                 _tg_report('weight_sync', args, rollout_id)
                 actor_model.update_weights()
 
-            if args.offload_rollout:
-                ray.get(rollout_manager.onload_kv.remote())
+                if args.offload_rollout:
+                    ray.get(rollout_manager.onload_kv.remote())
 
             if should_run_periodic_action(rollout_id, args.eval_interval, num_rollout_per_epoch):
                 # PATCHED_TRAINING_GYM_TIMING_EVALUATE_ROLLOUTS_END

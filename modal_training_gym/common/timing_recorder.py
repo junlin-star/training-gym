@@ -83,12 +83,13 @@ class RoleRecorder:
         return self
 
     def __exit__(self, *exc: object) -> None:
-        # The poster stops first, so the final snapshot is not overtaken.
+        # Handed to the poster rather than sent here: a lane closes on the
+        # framework's event loop, which a post would hold for its whole timeout.
+        self._publish(force=True)
         self._closed = True
         self._snapshot_ready.set()
         if self._poster is not None:
             self._poster.join(timeout=TIMING_TIMEOUT_SECONDS)
-        self._publish(force=True)
 
     @contextmanager
     def phase(self, name: str) -> Iterator[None]:
@@ -132,13 +133,16 @@ class RoleRecorder:
             self._publish()
 
     def _post_snapshots(self) -> None:
-        while not self._closed:
+        while True:
             self._snapshot_ready.wait()
             self._snapshot_ready.clear()
             with self._lock:
                 snapshot, self._snapshot = self._snapshot, None
             if snapshot is not None:
                 status_reporter.post_item(snapshot)
+            # Checked last, so the snapshot taken as the lane closed is sent.
+            if self._closed and self._snapshot is None:
+                return
 
     def _publish(self, force: bool = False) -> None:
         """Snapshot the record so far; the dashboard overwrites the stored lane."""
@@ -185,10 +189,6 @@ class RoleRecorder:
             "lane_start_unix_s": self.lane_start_unix_s,
             "phases": phases,
         }
-        if force:
-            # The lane is closing, so no later snapshot carries these phases.
-            status_reporter.post_item(snapshot)
-            return
         with self._lock:
             self._snapshot = snapshot
             # Started holding the lock: two phases ending at once would
