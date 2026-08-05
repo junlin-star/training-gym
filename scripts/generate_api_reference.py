@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import dataclasses
 import importlib
 import inspect
@@ -15,6 +16,7 @@ from pathlib import Path
 from typing import Any, get_type_hints
 
 from api_reference_manifest import API_REFERENCE_MANIFEST, GROUPS
+from generate_tutorial_pages import BUCKETS
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUTPUT_DIR = ROOT / "docs-next" / "src" / "content" / "docs" / "reference"
@@ -548,13 +550,10 @@ def generate_index_page(manifest: list[dict]) -> str:
 
 def _build_tutorial_backlinks() -> dict[str, list[tuple[str, str]]]:
     """Scan tutorial sources for api_classes and build class→tutorials map."""
-    import ast as _ast
-
     tutorial_src = ROOT / "tutorials" / "tutorial_generator"
     backlinks: dict[str, list[tuple[str, str]]] = {}
-    buckets = ["intro", "rl", "sft", "misc"]
 
-    for bucket in buckets:
+    for bucket in BUCKETS:
         bucket_dir = tutorial_src / bucket
         if not bucket_dir.is_dir():
             continue
@@ -562,18 +561,18 @@ def _build_tutorial_backlinks() -> dict[str, list[tuple[str, str]]]:
             if src.name.startswith("_") or src.name == "__init__.py":
                 continue
             try:
-                tree = _ast.parse(src.read_text())
+                tree = ast.parse(src.read_text())
             except SyntaxError:
                 continue
-            for node in _ast.walk(tree):
-                if isinstance(node, _ast.Assign):
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Assign):
                     for target in node.targets:
                         if (
-                            isinstance(target, _ast.Name)
+                            isinstance(target, ast.Name)
                             and target.id == "TUTORIAL_METADATA"
                         ):
                             try:
-                                metadata = _ast.literal_eval(node.value)
+                                metadata = ast.literal_eval(node.value)
                             except (ValueError, TypeError):
                                 continue
                             summary = metadata.get("summary", src.stem)
@@ -659,7 +658,8 @@ def main() -> None:
                 lines += [sig_str, ""]
             if doc:
                 lines += [doc, ""]
-            content = "\n".join(lines) + "\n"
+            lines.extend(_page_footer(entry, backlinks))
+            content = "\n".join(lines)
         else:
             content = generate_behavior_page(cls, entry, backlinks=backlinks)
 
