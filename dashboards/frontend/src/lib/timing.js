@@ -17,27 +17,27 @@ export const TIMING_LABELS = {
   optimizer_step: "Optimizer step",
 };
 
-// One dataviz slot per family — generation desert orange, training blue,
-// movement teal, checkpoint pink, eval mint, reward burgundy — and a phase
-// drawn inside one of them is a step of its family's slot, so a nested bar
-// reads as part of the section it sits in.
+// Dataviz slots, assigned along the step rather than by family: a phase and the
+// one it runs next to are neighbouring slots (mint → teal → blue through
+// generation and training, warm only for the work beside the step), so nothing
+// clashes edge to edge and no phase is told apart by a shade of another.
 export const TIMING_COLORS = {
-  generate_rollouts: "#D9866B",
-  wait_for_rollout: "#B96A51",
-  generate_samples: "#EBAE97",
-  reward: "#8D324C",
-  reward_batch: "#A94B65",
-  reward_post_process: "#C4687F",
+  generate_rollouts: "#ADEAAB",
+  generate_samples: "#4AA19D",
+  reward: "#C4687F",
+  reward_batch: "#B0566C",
+  reward_post_process: "#8D324C",
+  wait_for_rollout: "#DECB6C",
+  offload_rollout: "#4AA19D",
   train_models: "#648FE0",
-  compute_log_probs: "#96B4EE",
-  forward_backward: "#456DBB",
-  optimizer_step: "#BDCFF6",
-  weight_sync: "#4AA19D",
-  offload_rollout: "#74BEBA",
-  offload_train: "#357A77",
-  checkpoint_save: "#FFC1F7",
-  evaluate_rollouts: "#ADEAAB",
-  evaluate_rollouts_end: "#DECB6C",
+  compute_log_probs: "#648FE0",
+  forward_backward: "#FFC1F7",
+  optimizer_step: "#DECB6C",
+  offload_train: "#4AA19D",
+  weight_sync: "#8D324C",
+  checkpoint_save: "#D9866B",
+  evaluate_rollouts: "#FFC1F7",
+  evaluate_rollouts_end: "#D9866B",
 };
 
 // Work a step waits on but isn't: a checkpoint or an eval lands on one rollout
