@@ -25,7 +25,7 @@ from .advantage_reporting import (
     report_advantage_distribution as report_advantage_distribution,
 )
 from .reporting import (
-    _STEP_EVENT_TIMEOUT_SECONDS,
+    _STATUS_BOUNDARY_TIMEOUT_SECONDS,
     _enqueue,
     _enqueue_rollout,
     _post_framework_status,
@@ -42,6 +42,7 @@ from .reporting import (
     _report_token as _report_token,
     _rollout_url as _rollout_url,
     _total_steps as _total_steps,
+    flush_timing as flush_timing,
 )
 from .sample_extraction import (
     _image_sample_limit,
@@ -81,6 +82,12 @@ from .sample_extraction import (
     _parsed_response_dict as _parsed_response_dict,
     _trace_attrs as _trace_attrs,
     _trace_scalar as _trace_scalar,
+)
+from .timing import (
+    RoleRecorder as RoleRecorder,
+    recording_lane as recording_lane,
+    recording_lane_on_reporting_rank as recording_lane_on_reporting_rank,
+    time_phase as time_phase,
 )
 
 CUSTOM_ROLLOUT_LOG_FUNCTION_PATH_KEY = "training_gym_custom_rollout_log_function_path"
@@ -274,16 +281,19 @@ def before_train_step_hook(
     )
 
 
-def report_step_event(
+def report_rollout_phase(
     status: SlimeStatus | str,
     args: Any = None,
     rollout_id: int | None = None,
-    step_event: str = "",
+    sync: bool = False,
 ) -> None:
-    """Report one step/substep event tagged with the ``status`` phase.
+    """Report one rollout phase to the dashboard's Stage column.
 
     ``status`` may be a plain string — the patched slime train.py passes phase
     names as literals so the injected code stays stdlib-only.
+
+    ``sync=True`` posts inline and is used for step-boundary transitions that the
+    dashboard shows as the current step; everything else is queued.
     """
     payload = {
         **_run_context(args),
@@ -292,25 +302,24 @@ def report_step_event(
         "rollout_id": rollout_id,
         "event_ts": time.time(),
     }
-    if step_event:
-        payload["step_event"] = step_event
-    match step_event:
-        case "start":
-            _post_framework_status(payload, _STEP_EVENT_TIMEOUT_SECONDS)
-        case "finish":
-            if rollout_id is not None:
-                _post_framework_status(payload, _STEP_EVENT_TIMEOUT_SECONDS)
-        case _:
-            _enqueue(payload)
+    if sync:
+        _post_framework_status(payload, _STATUS_BOUNDARY_TIMEOUT_SECONDS)
+    else:
+        _enqueue(payload)
 
 
 __all__ = [
     "before_log_prob_hook",
     "before_train_step_hook",
-    "report_advantage_distribution",
-    "report_phase",
-    "report_rollout_samples",
-    "report_step_event",
+    "flush_timing",
     "log_eval_rollout_data",
     "log_rollout_data",
+    "recording_lane",
+    "recording_lane_on_reporting_rank",
+    "report_advantage_distribution",
+    "report_phase",
+    "report_rollout_phase",
+    "report_rollout_samples",
+    "RoleRecorder",
+    "time_phase",
 ]

@@ -55,6 +55,13 @@ from modal_training_gym.common.training_rollout import (
     TrainingRolloutSummary,
     _apply_parsed,
 )
+from modal_training_gym.common.step_timing import (
+    PROTOCOL as TIMING_PROTOCOL,
+    RoleTimingRecord,
+    legacy_run_to_records,
+    load_step,
+    rollout_lanes,
+)
 
 SummaryLoader = Callable[[], Awaitable[list[JsonDict]]]
 
@@ -140,6 +147,7 @@ PASSWORD_EXEMPT_PATHS = frozenset(
         "/api/framework-status",
         "/api/training-rollouts",
         "/api/advantage-distributions",
+        "/api/timing-events",
     }
 )
 
@@ -446,6 +454,10 @@ def fastapi_app():
     cache_entries: dict[str, tuple[float, list[JsonDict], float]] = {
         key: (0.0, [], 0.0) for key in cache_keys
     }
+
+    TIMING_CACHE_MAX_ENTRIES = 2048
+    TIMING_MAX_BATCH = 200
+    timing_cache: dict[tuple[str, int], tuple[float, JsonDict]] = {}
     cache_locks = {key: asyncio.Lock() for key in cache_keys}
     # Hold strong refs to background refresh tasks so they aren't GC'd mid-flight.
     refresh_tasks: set[asyncio.Task[list[JsonDict]]] = set()
@@ -846,21 +858,21 @@ def fastapi_app():
                 ),
             )
         return JSONResponse(merged)
-    
+
     # ── Measured substep timing ──────────────────────────────────────────
 
     @web.get("/api/timing-events")
     async def timing_events_capability():
-        """Capability probe to see if timing events are enabled."""
-        return JSONResponse(
-            {"protocol": TIMING_PROTOCOL, "schema_version": TIMING_SCHEMA_VERSION}
-        )
+        """Determines if step timing code is available.
+        Unauthenticated, so a launcher can check it before allocating GPUs."""
+        return JSONResponse({"protocol": TIMING_PROTOCOL})
 
     @web.post("/api/timing-events")
     async def timing_event(
         record: RoleTimingRecord,
         authorization: str | None = Header(default=None),
     ):
+        """Writes RoleTimingRecords to metadata volume and timing cache."""
         await _get_run_or_404(record.training_run_id)
         await _require_framework_status_token(record.training_run_id, authorization)
 
@@ -869,12 +881,7 @@ def fastapi_app():
         return JSONResponse({"status": "ok"})
 
     async def _timings_for(training_run_id: str, rollout_ids: list[int]) -> JsonDict:
-        """Lanes for an explicit list of rollouts: <=4 file reads each.
-
-        Every route into timing takes the ids it wants, so cost is bounded by
-        the caller. A run-level route would read four files per rollout with no
-        summary shard to read instead -- 40k reads for a 10k-rollout run.
-        """
+        """Reads stored RoleTimingRecords or cache and normalizes into separate rollout lanes for viewing."""
         now = time.monotonic()
         out: JsonDict = {}
         misses: list[int] = []
@@ -891,17 +898,12 @@ def fastapi_app():
             if records:
                 found[rollout_id] = records
 
-        if len(found) < len(misses):
-            # Pre-cutover run: convert what it stored into the same shape, so
-            # the frontend has one renderer and no legacy branch. Converted
-            # once per request, not once per rollout.
+        if misses and not found:
             run = await _get_run_or_404(training_run_id)
-            legacy: dict[int, list[JsonDict]] = {}
             for record in legacy_run_to_records(run.substep_times):
-                legacy.setdefault(int(record["rollout_id"]), []).append(record)
-            for rollout_id in misses:
-                if rollout_id not in found:
-                    found[rollout_id] = legacy.get(rollout_id, [])
+                rollout_id = int(record["rollout_id"])
+                if rollout_id in misses:
+                    found.setdefault(rollout_id, []).append(record)
 
         for rollout_id in misses:
             payload = rollout_lanes(found.get(rollout_id, []))
@@ -916,23 +918,16 @@ def fastapi_app():
 
     @web.get("/api/runs/{training_run_id}/timings/{rollout_id}")
     async def get_run_timing(training_run_id: str, rollout_id: int):
-        """One rollout's lanes, for the expanded rollout row."""
         timings = await _timings_for(training_run_id, [int(rollout_id)])
         return JSONResponse(timings[str(int(rollout_id))])
 
     @web.get("/api/runs/{training_run_id}/timings")
     async def get_run_timings(training_run_id: str, rollout_ids: str = ""):
-        """Lanes for the rollouts named in ``?rollout_ids=0,1,2``.
-
-        Powers the whole-run timeline without a scan: the frontend asks for the
-        rollouts it has already listed. Capped so a bad URL cannot
-        turn into an unbounded read.
-        """
         wanted: list[int] = []
-        for part in rollout_ids.split(","):
-            part = part.strip()
-            if part.lstrip("-").isdigit() and int(part) not in wanted:
-                wanted.append(int(part))
+        for section in rollout_ids.split(","):
+            section = section.strip()
+            if section.lstrip("-").isdigit() and int(section) not in wanted:
+                wanted.append(int(section))
         if not wanted:
             return JSONResponse({})
         if len(wanted) > TIMING_MAX_BATCH:

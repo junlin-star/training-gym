@@ -16,8 +16,6 @@ COMPUTE_LOG_PROBS_MARKER = "PATCHED_TRAINING_GYM_COMPUTE_LOG_PROBS_STATUS"
 OFFLOAD_ROLLOUT_MARKER = "PATCHED_TRAINING_GYM_OFFLOAD_ROLLOUT_STATUS"
 OFFLOAD_TRAIN_MARKER = "PATCHED_TRAINING_GYM_OFFLOAD_TRAIN_STATUS"
 CHECKPOINT_SAVE_MARKER = "PATCHED_TRAINING_GYM_CHECKPOINT_SAVE_STATUS"
-SUBSTEP_FINISH_MARKER = "PATCHED_TRAINING_GYM_SUBSTEP_FINISH"
-SUBSTEP_START_MARKER = "PATCHED_TRAINING_GYM_SUBSTEP_START"
 EVAL_BEGIN_MARKER = "PATCHED_TRAINING_GYM_EVAL_BEGIN"
 EVAL_END_MARKER = "PATCHED_TRAINING_GYM_EVAL_END"
 
@@ -28,10 +26,10 @@ PREAMBLE = (
     "    _tg_sys.path.insert(0, '/root')\n"
     "try:\n"
     "    from modal_training_gym.frameworks.slime.phase_reporting import (\n"
-    "        report_step_event as _tg_report,\n"
+    "        report_rollout_phase as _tg_report,\n"
     "    )\n"
     "except ImportError:\n"
-    "    def _tg_report(status, args=None, rollout_id=None, step_event=''): pass\n"
+    "    def _tg_report(status, args=None, rollout_id=None, sync=False): pass\n"
     "\n"
 )
 
@@ -52,8 +50,6 @@ def _patch_file(path: Path) -> None:
     needs_offload_rollout = OFFLOAD_ROLLOUT_MARKER not in src
     needs_offload_train = OFFLOAD_TRAIN_MARKER not in src
     needs_checkpoint_save = CHECKPOINT_SAVE_MARKER not in src
-    needs_substep_finish = SUBSTEP_FINISH_MARKER not in src
-    needs_substep_start = SUBSTEP_START_MARKER not in src
     needs_eval_begin = EVAL_BEGIN_MARKER not in src
     needs_eval_end = EVAL_END_MARKER not in src
 
@@ -68,8 +64,6 @@ def _patch_file(path: Path) -> None:
         or needs_offload_rollout
         or needs_offload_train
         or needs_checkpoint_save
-        or needs_substep_finish
-        or needs_substep_start
         or needs_eval_begin
         or needs_eval_end
     ):
@@ -78,17 +72,17 @@ def _patch_file(path: Path) -> None:
 
     if needs_preamble:
         src = PREAMBLE + src
-    elif "report_step_event" not in src:
+    elif "report_rollout_phase" not in src:
         src = src.replace(
             "    from modal_training_gym.frameworks.slime.phase_reporting import (\n",
             "    from modal_training_gym.frameworks.slime.phase_reporting import (\n"
-            "        report_step_event as _tg_report,\n",
+            "        report_rollout_phase as _tg_report,\n",
             1,
         )
         src = src.replace(
             "except ImportError:\n",
             "except ImportError:\n"
-            "    def _tg_report(status, args=None, rollout_id=None, step_event=''): pass\n",
+            "    def _tg_report(status, args=None, rollout_id=None, sync=False): pass\n",
             1,
         )
 
@@ -125,7 +119,7 @@ def _patch_file(path: Path) -> None:
             return "\n".join(
                 [
                     f"{indent}# {STEP_START_MARKER}: training step start",
-                    f"{indent}_tg_report('generate_rollouts', args, {rollout_id}, 'start')",
+                    f"{indent}_tg_report('generate_rollouts', args, {rollout_id}, sync=True)",
                     f"{indent}{line}",
                 ]
             )
@@ -219,47 +213,6 @@ def _patch_file(path: Path) -> None:
             _checkpoint_save_replacement, src, count=1
         )
 
-    substep_finish_count = 0
-    if needs_substep_finish:
-        substep_finish_pattern = re.compile(
-            r"^(?P<indent>[ \t]*)if should_run_periodic_action\("
-            r"rollout_id, args\.eval_interval, num_rollout_per_epoch\):[ \t]*\n"
-            r"(?P<body>[ \t]+ray\.get\(rollout_manager\.eval\.remote\(rollout_id\)\)[ \t]*\n)",
-            re.M,
-        )
-
-        def _substep_finish_replacement(match: re.Match[str]) -> str:
-            indent = match.group("indent")
-            return (
-                f"{match.group(0)}"
-                f"{indent}# {SUBSTEP_FINISH_MARKER}: end-of-iteration substep boundary\n"
-                f"{indent}_tg_report('weight_sync', args, rollout_id, 'substep_finish')\n"
-            )
-
-        src, substep_finish_count = substep_finish_pattern.subn(
-            _substep_finish_replacement, src, count=1
-        )
-
-    substep_start_count = 0
-    if needs_substep_start:
-        substep_start_pattern = re.compile(
-            r"^(?P<indent>[ \t]*)if args\.eval_interval is not None and "
-            r"rollout_id == 0 and not args\.skip_eval_before_train:[ \t]*$",
-            re.M,
-        )
-
-        def _substep_start_replacement(match: re.Match[str]) -> str:
-            indent = match.group("indent")
-            return (
-                f"{indent}# {SUBSTEP_START_MARKER}: substep window start (before eval)\n"
-                f"{indent}_tg_report('generate_rollouts', args, rollout_id, 'substep_start')\n"
-                f"{match.group(0)}"
-            )
-
-        src, substep_start_count = substep_start_pattern.subn(
-            _substep_start_replacement, src, count=1
-        )
-
     eval_begin_count = 0
     if needs_eval_begin:
         eval_begin_pattern = re.compile(
@@ -276,7 +229,7 @@ def _patch_file(path: Path) -> None:
             return (
                 f"{guard}"
                 f"{body_indent}# {EVAL_BEGIN_MARKER}: eval-before-train substep start\n"
-                f"{body_indent}_tg_report('evaluate_rollouts', args, rollout_id, 'eval_begin')\n"
+                f"{body_indent}_tg_report('evaluate_rollouts', args, rollout_id)\n"
                 f"{body}"
             )
 
@@ -300,7 +253,7 @@ def _patch_file(path: Path) -> None:
             return (
                 f"{guard}"
                 f"{body_indent}# {EVAL_END_MARKER}: eval-after-train substep start\n"
-                f"{body_indent}_tg_report('evaluate_rollouts', args, rollout_id, 'eval_end')\n"
+                f"{body_indent}_tg_report('evaluate_rollouts', args, rollout_id)\n"
                 f"{body}"
             )
 
@@ -385,7 +338,7 @@ def _patch_file(path: Path) -> None:
             indent = match.group("indent")
             return (
                 f"{indent}# {STEP_FINISH_MARKER}: training step finish\n"
-                f"{indent}_tg_report('weight_sync', args, rollout_id, 'finish')\n"
+                f"{indent}_tg_report('weight_sync', args, rollout_id, sync=True)\n"
                 f"{indent}{match.group('guard')}"
             )
 
@@ -412,10 +365,6 @@ def _patch_file(path: Path) -> None:
         failed.append("offload train")
     if needs_checkpoint_save and checkpoint_save_count != 1:
         failed.append("checkpoint save")
-    if needs_substep_finish and substep_finish_count != 1:
-        failed.append("substep finish")
-    if needs_substep_start and substep_start_count != 1:
-        failed.append("substep start")
     if needs_eval_begin and eval_begin_count != 1:
         failed.append("eval begin")
     if needs_eval_end and eval_end_count != 1:

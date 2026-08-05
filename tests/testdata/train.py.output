@@ -4,10 +4,10 @@ if '/root' not in _tg_sys.path:
     _tg_sys.path.insert(0, '/root')
 try:
     from modal_training_gym.frameworks.slime.phase_reporting import (
-        report_step_event as _tg_report,
+        report_rollout_phase as _tg_report,
     )
 except ImportError:
-    def _tg_report(status, args=None, rollout_id=None, step_event=''): pass
+    def _tg_report(status, args=None, rollout_id=None, sync=False): pass
 
 import ray
 
@@ -60,15 +60,13 @@ def train(args):
 
     # train loop.
     for rollout_id in range(args.start_rollout_id, args.num_rollout):
-        # PATCHED_TRAINING_GYM_SUBSTEP_START: substep window start (before eval)
-        _tg_report('generate_rollouts', args, rollout_id, 'substep_start')
         if args.eval_interval is not None and rollout_id == 0 and not args.skip_eval_before_train:
             # PATCHED_TRAINING_GYM_EVAL_BEGIN: eval-before-train substep start
-            _tg_report('evaluate_rollouts', args, rollout_id, 'eval_begin')
+            _tg_report('evaluate_rollouts', args, rollout_id)
             ray.get(rollout_manager.eval.remote(rollout_id))
 
         # PATCHED_TRAINING_GYM_STEP_START: training step start
-        _tg_report('generate_rollouts', args, rollout_id, 'start')
+        _tg_report('generate_rollouts', args, rollout_id, sync=True)
         # PATCHED_TRAINING_GYM_GENERATE_ROLLOUT_STATUS: rollout generation state
         _tg_report('generate_rollouts', args, rollout_id)
         rollout_data_ref = ray.get(rollout_manager.generate.remote(rollout_id))
@@ -96,7 +94,7 @@ def train(args):
             ray.get(actor_model.async_train(rollout_id, rollout_data_ref))
 
         # PATCHED_TRAINING_GYM_STEP_FINISH: training step finish
-        _tg_report('weight_sync', args, rollout_id, 'finish')
+        _tg_report('weight_sync', args, rollout_id, sync=True)
         if release_train or should_run_periodic_action(
             rollout_id, args.save_interval, num_rollout_per_epoch, args.num_rollout
         ):
@@ -124,10 +122,8 @@ def train(args):
 
         if should_run_periodic_action(rollout_id, args.eval_interval, num_rollout_per_epoch):
             # PATCHED_TRAINING_GYM_EVAL_END: eval-after-train substep start
-            _tg_report('evaluate_rollouts', args, rollout_id, 'eval_end')
+            _tg_report('evaluate_rollouts', args, rollout_id)
             ray.get(rollout_manager.eval.remote(rollout_id))
-        # PATCHED_TRAINING_GYM_SUBSTEP_FINISH: end-of-iteration substep boundary
-        _tg_report('weight_sync', args, rollout_id, 'substep_finish')
 
     ray.get(rollout_manager.dispose.remote())
     finish_tracking(args)

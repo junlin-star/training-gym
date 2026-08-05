@@ -1,9 +1,11 @@
 <script>
   import { Download, ZoomIn, ZoomOut } from "lucide-svelte";
+  import { colorFor, fmtSecs, labelFor } from "../lib/timing.js";
 
   let {
     stepTimes = null,
     substepTimes = null,
+    lanes = null,
     layout = "rows",
     downloadName = "step_substep_times.json",
   } = $props();
@@ -20,18 +22,6 @@
     evaluate_rollouts_end: "Eval (after)",
   };
 
-  const SUBSTEP_COLORS = {
-    evaluate_rollouts: "#60a5fa",
-    generate_rollouts: "#34d399",
-    offload_rollout: "#a78bfa",
-    compute_log_probs: "#fbbf24",
-    optimizer_step: "#f87171",
-    weight_sync: "#22d3ee",
-    checkpoint_save: "#f472b6",
-    offload_train: "#c084fc",
-    evaluate_rollouts_end: "#818cf8",
-  };
-
   const ORDER = Object.keys(SUBSTEP_LABELS);
 
   // Timeline zoom bounds: 1 = fit-to-width, MAX_ZOOM = deepest magnification.
@@ -39,27 +29,6 @@
   const MAX_ZOOM = 64;
   const ZOOM_BTN_FACTOR = 1.5;
   const WHEEL_SENSITIVITY = 0.0015;
-
-  function labelFor(name) {
-    return SUBSTEP_LABELS[name] || name.replace(/_/g, " ");
-  }
-
-  function colorFor(name) {
-    return SUBSTEP_COLORS[name] || "var(--color-c-gray-40, #5e5e5e)";
-  }
-
-  // Durations are float seconds; keep up to 3 decimals (trailing zeros trimmed).
-  function fmtSecs(s) {
-    if (s == null) return "—";
-    const n = Number(s);
-    if (!Number.isFinite(n)) return "—";
-    const trim = (x) => x.toFixed(3).replace(/\.?0+$/, "");
-    if (n >= 60) {
-      const m = Math.floor(n / 60);
-      return `${m}m ${trim(n - m * 60)}s`;
-    }
-    return `${trim(n)}s`;
-  }
 
   function downloadJson() {
     const payload = { step_times: stepTimes || {}, substep_times: substepTimes || {} };
@@ -98,6 +67,22 @@
   });
 
   let hasData = $derived(steps.length > 0);
+
+  let laneList = $derived.by(() => {
+    const roles = lanes?.roles || {};
+    return Object.entries(roles).map(([role, lane]) => {
+      const folded = [];
+      for (const [name, intervals] of Object.entries(lane?.phases || {})) {
+        const counted = Number(lane?.totals?.[name]?.count);
+        if (Number.isFinite(counted) && counted > (intervals || []).length) {
+          folded.push(`${labelFor(name)} ${(intervals || []).length} of ${counted}`);
+        }
+      }
+      return { ...lane, role, folded: folded.join(", ") };
+    });
+  });
+
+  let hasLaneData = $derived(laneList.length > 0);
 
   let legend = $derived.by(() => {
     const seen = new Set();
@@ -214,7 +199,38 @@
   ></div>
 {/snippet}
 
-{#if hasData}
+{#if hasLaneData}
+  <div class="step-timings lanes">
+    {#each laneList as lane (lane.role)}
+      <div class="lane">
+        <div class="lane-header">
+          <span class="lane-role">{lane.role}</span>
+          {#if lane.folded}
+            <span
+              class="lane-folded"
+              title="Measured in full — every total and count includes them, only the individual bars are not drawn."
+            >
+              bars: {lane.folded}
+            </span>
+          {/if}
+        </div>
+        {#if Object.keys(lane.phases || {}).length === 0}
+          <div class="no-timing">no timing recorded for this rollout</div>
+        {:else}
+          <div class="lane-phases">
+            {#each Object.entries(lane.phases || {}) as [name, intervals] (name)}
+              <div class="phase-row">
+                <span class="phase-name" style:color={colorFor(name)}>{labelFor(name)}</span>
+                <span class="phase-total">{fmtSecs(lane.totals?.[name]?.total_duration_s)}</span>
+                <span class="phase-count">({lane.totals?.[name]?.count ?? intervals.length})</span>
+              </div>
+            {/each}
+          </div>
+        {/if}
+      </div>
+    {/each}
+  </div>
+{:else if hasData}
   <div class="step-timings">
     {#if legend.length || layout === "timeline"}
       <div class="legend-row">
@@ -327,6 +343,60 @@
     display: flex;
     flex-direction: column;
     gap: 10px;
+  }
+
+  .lane {
+    border: 1px solid var(--border, #2f2f2f);
+    border-radius: 6px;
+    padding: 8px 12px;
+  }
+
+  .lane-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 6px;
+  }
+
+  .lane-role {
+    font-weight: 600;
+    text-transform: capitalize;
+  }
+
+  .lane-folded {
+    font-size: 0.75rem;
+    color: var(--color-c-gray-45, #6e6e6e);
+  }
+
+  .no-timing {
+    color: var(--color-c-gray-45, #6e6e6e);
+    font-size: 0.85rem;
+    padding: 4px 0;
+  }
+
+  .lane-phases {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .phase-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.85rem;
+  }
+
+  .phase-name {
+    min-width: 10rem;
+  }
+
+  .phase-total {
+    font-variant-numeric: tabular-nums;
+  }
+
+  .phase-count {
+    color: var(--color-c-gray-45, #6e6e6e);
   }
 
   .legend-row {

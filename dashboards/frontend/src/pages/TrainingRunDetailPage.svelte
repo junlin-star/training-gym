@@ -19,6 +19,7 @@
     fetchRun,
     fetchRunRollouts,
     fetchRollout,
+    fetchRunTimings,
     fetchRunAdvantages,
     fetchRunAdvantageStep,
     fetchRunLogs,
@@ -502,22 +503,30 @@
     };
   });
 
+  let expandedTimings = $state(null);
+
   async function toggleRolloutDetail(rolloutId) {
     if (!runId) return;
     if (expandedRolloutId === rolloutId) {
       expandedRolloutId = null;
       expandedRollout = null;
+      expandedTimings = null;
       closeBucket();
       return;
     }
     expandedRolloutId = rolloutId;
     expandedRollout = null;
+    expandedTimings = null;
     closeBucket();
     expandedRolloutLoading = true;
     try {
-      const detail = await fetchRollout(runId, rolloutId);
+      const [detail, timings] = await Promise.all([
+        fetchRollout(runId, rolloutId),
+        fetchRunTimings(runId, rolloutId),
+      ]);
       if (expandedRolloutId === rolloutId) {
         expandedRollout = detail;
+        expandedTimings = timings;
         // Preselect the first populated bucket so a rollout is shown right away.
         const d = sampleDist;
         const first = d ? d.buckets.findIndex((b) => b.length > 0) : -1;
@@ -1540,13 +1549,14 @@
                       <div class="detail-empty">No rollouts recorded.</div>
                     {:else}
                       {@const stepTiming = stepTimingForRollout(r.rollout_id)}
-                      {#if stepTiming}
+                      {#if stepTiming || expandedTimings}
                         <div class="rollout-chart">
                           <div class="rollout-chart-title">Step timing</div>
                           <div class="chart-scroll">
                             <StepTimings
-                              stepTimes={stepTiming.stepTimes}
-                              substepTimes={stepTiming.substepTimes}
+                              stepTimes={stepTiming?.stepTimes}
+                              substepTimes={stepTiming?.substepTimes}
+                              lanes={expandedTimings}
                               layout="rows"
                             />
                           </div>

@@ -10,8 +10,7 @@ from functools import partial
 from typing import Any
 
 METADATA_VOLUME_NAME = "training-gym-metadata"
-STEP_TIMES_DICT_NAME = "training-gym-step-times"
-SUBSTEP_TIMING = "substep-timing"
+
 
 class MetadataStore(Enum):
     TRAINING_RUNS = "training-runs"
@@ -33,6 +32,7 @@ class MetadataStore(Enum):
     EVAL_CONFIGS = "eval-configs"
     DEPLOYMENTS = "deployments"
     DEPLOYMENTS_SUMMARY = "deployments-summary"
+    SUBSTEP_TIMING = "substep-timing"
 
 
 SUMMARY_KEY = "summary"
@@ -123,12 +123,6 @@ def _metadata_volume():
     import modal
 
     return modal.Volume.from_name(METADATA_VOLUME_NAME, create_if_missing=True)
-
-
-def _step_times_dict():
-    import modal
-
-    return modal.Dict.from_name(STEP_TIMES_DICT_NAME, create_if_missing=True)
 
 
 def _safe_reload(vol, *, is_async: bool = False):

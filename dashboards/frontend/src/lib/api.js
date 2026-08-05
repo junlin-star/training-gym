@@ -211,6 +211,15 @@ export async function fetchRunAdvantages(trainingRunId, { signal } = {}) {
     .sort((a, b) => a.rollout_id - b.rollout_id);
 }
 
+// Per-rollout measured substep timing lanes.
+export async function fetchRunTimings(trainingRunId, rolloutId) {
+  const res = await fetch(
+    `${SERVER}/runs/${encodeURIComponent(trainingRunId)}/timings/${encodeURIComponent(rolloutId)}`,
+  );
+  if (!res.ok) return null;
+  return await res.json();
+}
+
 // One step's full per-group advantage distribution (for drill-in).
 export async function fetchRunAdvantageStep(trainingRunId, rolloutId) {
   const res = await fetch(
