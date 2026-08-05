@@ -11,6 +11,7 @@ runs a step.
 
 from __future__ import annotations
 
+import atexit
 import os
 import threading
 import time
@@ -28,6 +29,17 @@ TIMING_TIMEOUT_SECONDS = 10.0
 MIN_PUBLISH_INTERVAL_S = 3.0
 
 PER_SAMPLE_PHASES = frozenset({"reward"})
+
+_CLOSED_POSTERS: list[threading.Thread] = []
+
+
+def _drain_closed_posters() -> None:
+    deadline = time.monotonic() + TIMING_TIMEOUT_SECONDS
+    for poster in list(_CLOSED_POSTERS):
+        poster.join(timeout=max(0.0, deadline - time.monotonic()))
+
+
+atexit.register(_drain_closed_posters)
 
 
 def timing_url() -> str:
@@ -80,11 +92,19 @@ class RoleRecorder:
         return self
 
     def __exit__(self, *exc: object) -> None:
+        """Hand the final snapshot over without waiting for it to be sent.
+
+        A lane closes on the framework's own loop, which in the async
+        entrypoints is the loop the next rollout runs on, so waiting here for a
+        POST would stall training on an unresponsive dashboard. The sender is
+        joined at process exit instead, the only point the snapshot could
+        otherwise be lost at.
+        """
         self._publish(force=True)
+        if self._poster is not None:
+            _CLOSED_POSTERS.append(self._poster)
         self._closed = True
         self._snapshot_ready.set()
-        if self._poster is not None:
-            self._poster.join(timeout=TIMING_TIMEOUT_SECONDS)
 
     @contextmanager
     def phase(self, name: str) -> Iterator[None]:
@@ -136,6 +156,8 @@ class RoleRecorder:
                 self._posted_phases = snapshot["phases"]
                 status_reporter.post_item(snapshot)
             if self._closed and self._snapshot is None:
+                if self._poster in _CLOSED_POSTERS:
+                    _CLOSED_POSTERS.remove(self._poster)
                 return
 
     def _publish(self, force: bool = False) -> None:
@@ -228,10 +250,10 @@ def recording_lane(
 def _lowest_rank_publishes() -> bool | None:
     """Whether this rank writes its lane; ``None`` until ranks are known.
 
-    The lane is measured on every rank of the model and stored under one key,
-    so the lowest rank of the model's process group is the one that writes it.
-    Read as the group's own lowest rank rather than as ``rank == 0``, so a
-    model whose ranks start above zero still writes its lane.
+    The lane is measured on every rank of the model and stored under one key, so
+    one rank writes it. Slime and miles give each model's train group its own
+    ``init_process_group``, so a rank's world is its model's group and that
+    group's lowest rank is this process's rank 0.
     """
     try:
         import torch.distributed as dist
