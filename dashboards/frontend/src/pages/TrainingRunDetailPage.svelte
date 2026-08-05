@@ -419,14 +419,13 @@
     }
   }
 
-  let timingsInFlight = false;
+  // The run being read, so a read slower than the poll interval doesn't queue
+  // another one for the same run, but switching runs still reads immediately.
+  let timingRunInFlight = null;
 
-  // Loaded beside the rollout rows rather than after them, so the table is not
-  // waiting on timing to paint.
   async function loadTimings(signal) {
-    // A read slower than the poll interval would otherwise queue another one.
-    if (!runId || timingsInFlight) return;
-    timingsInFlight = true;
+    if (!runId || timingRunInFlight === runId) return;
+    timingRunInFlight = runId;
     try {
       const timings = await fetchRunTimings(runId, { signal });
       if (signal?.aborted) return;
@@ -435,7 +434,7 @@
       // Keep the timing we have: a lane only grows, so a failed poll is stale
       // rather than wrong.
     } finally {
-      timingsInFlight = false;
+      timingRunInFlight = null;
     }
   }
 
