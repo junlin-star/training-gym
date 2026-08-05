@@ -882,9 +882,8 @@ def fastapi_app():
         await record.save(is_async=True)
         cached = timing_cache.get(record.training_run_id)
         if cached is not None:
-            # A lane re-posts its whole record about once a second, so the run's
-            # other lanes have nothing new to read: put this one straight into
-            # the cache rather than making the next poll list the run again.
+            # A lane posts its whole record, so the cache can take it as it is
+            # rather than the next poll re-reading the run for it.
             lanes = cached[1].setdefault(str(record.rollout_id), {"roles": {}})
             lanes["roles"].update(
                 rollout_lanes([record.model_dump(mode="json")])["roles"]
@@ -898,7 +897,7 @@ def fastapi_app():
             return cached[1]
 
         # The tab polls this while a run is active, so without a lock every poll
-        # that arrives during a read starts its own listing of the run's records.
+        # during a read starts its own listing of the run's records.
         lock = timing_locks.setdefault(training_run_id, asyncio.Lock())
         if lock.locked() and cached is not None:
             return cached[1]

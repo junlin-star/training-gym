@@ -37,16 +37,14 @@ export const TIMING_COLORS = {
 };
 
 // Work a step waits on but isn't: a checkpoint or an eval lands on one rollout
-// and would otherwise make that step read as many times slower than its peers.
+// and would make that step read as many times slower than its peers.
 export const PHASES_BESIDE_THE_STEP = [
   "checkpoint_save",
   "evaluate_rollouts",
   "evaluate_rollouts_end",
 ];
 
-// A phase whose runs did no measurable work (a rule based reward that returns on
-// its first line) is still recorded, but drawing it puts a bar the reader has to
-// dismiss next to the work that matters.
+// Below this a phase did no measurable work, so it is recorded but not drawn.
 const NEGLIGIBLE_WORK_S = 0.0005;
 
 export function labelFor(name) {
@@ -92,9 +90,9 @@ export function rolloutTimeline(lanes) {
       const first = (Number(phase?.first_start_s) || 0) + shift;
       const last = (Number(phase?.last_end_s) || 0) + shift;
       if (!count || total < NEGLIGIBLE_WORK_S) continue;
-      // A phase scored per sample runs too briefly each time to draw as a bar of
-      // its own, and past the recorder's cap it keeps no runs at all: either way
-      // it reads as work spent inside the phase it ran in.
+      // A phase scored per sample reads as work spent inside the phase it ran
+      // in: its runs are too brief to draw, and past the recorder's cap it
+      // keeps none of them.
       if (total / count < NEGLIGIBLE_WORK_S || (!runs.length && count > 1)) {
         perSample.push({
           role,
@@ -107,12 +105,10 @@ export function rolloutTimeline(lanes) {
         });
         continue;
       }
-      // A phase that ran once spans exactly its one run, so a record without
-      // runs to draw (a pre-cutover one) still draws as the run it measured.
+      // A phase that ran once spans exactly its one run, so a pre-cutover
+      // record still draws as the run it measured.
       const drawn = runs.length ? runs : [[first - shift, last - shift]];
-      // Runs of one phase that overlap are one block of work: the samples of a
-      // batch are scored concurrently, and 64 slivers read as noise where the
-      // block they add up to reads as the time scoring took.
+      // Runs of one phase that overlap are one block of work.
       const blocks = [];
       for (const [start, end] of [...drawn].sort((a, b) => a[0] - b[0])) {
         const block = blocks[blocks.length - 1];
@@ -156,15 +152,14 @@ export function rolloutTimeline(lanes) {
     const container = enclosing[enclosing.length - 1];
     bar.depth = enclosing.length;
     bar.inside = container ? container.name : null;
-    // A bar with work inside it is drawn as an outline around that work rather
-    // than as a block over the top of it.
+    // A bar with work inside it is drawn as an outline around that work.
     if (container) container.contains = true;
     enclosing.push(bar);
   }
 
-  // Attach a per-sample phase to the innermost bar it ran within, so its work
-  // reads on that bar ("generation spent 32ms scoring 227 samples"). One that
-  // nothing contains keeps a bar of its own rather than going unshown.
+  // A per-sample phase's work reads on the innermost bar it ran within
+  // ("generation spent 32ms scoring 227 samples"); one nothing contains keeps a
+  // bar of its own rather than going unshown.
   for (const work of perSample) {
     const container = bars
       .filter((bar) => bar.start <= work.start && work.end <= bar.end)
@@ -184,8 +179,7 @@ export function rolloutTimeline(lanes) {
       });
   }
 
-  // Work that ran at the same time without either side containing the other:
-  // the only shape that should read as concurrency.
+  // Work that ran at the same time without either side containing the other.
   for (const bar of bars) {
     bar.overlaps = [
       ...new Set(
@@ -235,9 +229,8 @@ export function rolloutTimeline(lanes) {
   const stepEnd = stepBars.length
     ? Math.max(...stepBars.map((bar) => bar.end))
     : 0;
-  // A checkpoint runs in the middle of the step it belongs to, so its time comes
-  // back out of the span rather than only off the ends of it, and time two of
-  // them shared comes out once.
+  // A checkpoint runs in the middle of its step, so its time comes back out of
+  // the span rather than only off the ends of it, and shared time comes out once.
   let waitedOn = 0;
   let takenTo = stepStart;
   for (const bar of [...beside].sort((a, b) => a.start - b.start)) {

@@ -28,10 +28,8 @@ TIMING_TIMEOUT_SECONDS = 10.0
 # Rate limiting, mostly for per-sample reward phases
 MIN_PUBLISH_INTERVAL_S = 1.0
 
-# Past this, a phase keeps its aggregate only: a per-sample phase runs tens of
-# thousands of times a step, and the whole record is re-posted on every publish.
-# The timeline reads such a phase as work spent inside the phase containing it.
-# High enough that a phase running once per micro batch is still drawn.
+# Past this, a phase keeps its aggregate only: the whole record is re-posted on
+# every publish.
 MAX_DRAWN_INVOCATIONS = 1024
 
 
@@ -76,9 +74,8 @@ class RoleRecorder:
         self._last_publish_t = float("-inf")
         # Rewards are scored concurrently on the same lane
         self._lock = threading.Lock()
-        # A snapshot replaces the lane's stored record, so only the newest one is
-        # worth posting: the poster takes whatever is here when it wakes, and a
-        # snapshot written while it was busy supersedes the ones it skipped.
+        # A snapshot replaces the lane's stored record, so only the newest one
+        # is worth posting.
         self._snapshot: dict[str, object] | None = None
         self._snapshot_ready = threading.Event()
         self._poster: threading.Thread | None = None
@@ -88,8 +85,7 @@ class RoleRecorder:
         return self
 
     def __exit__(self, *exc: object) -> None:
-        # The poster stops first, so the final snapshot cannot be overtaken by
-        # an older one still in flight.
+        # The poster stops first, so the final snapshot is not overtaken.
         self._closed = True
         self._snapshot_ready.set()
         if self._poster is not None:
