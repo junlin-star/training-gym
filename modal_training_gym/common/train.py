@@ -489,9 +489,13 @@ class TrainConfig:
             combined = _resolve_recipe(
                 model, recipe, merge_model_recipe=self.merge_model_recipe
             )
-            summary["recipe"] = serialize_recipe_params(
-                combined, dataset=dataset, model=model
-            )
+            summary["recipe"] = {
+                # gpu_type is a launcher-only field (in _MILES_SKIP) so it is
+                # absent from serialize_recipe_params for miles; the dashboard
+                # cluster column reads recipe.gpu_type, so keep it here too.
+                "gpu_type": getattr(combined, "gpu_type", None),
+                **serialize_recipe_params(combined, dataset=dataset, model=model),
+            }
 
         return summary
 

@@ -684,7 +684,6 @@ class MilesRecipe(BaseTrainRecipe):
                     # The model script already sources the arch args.
                     continue
                 fields[k] = v
-                fields[k] = v
         if dataset is not None:
             fields.update(self._dataset_to_fields(dataset))
         if self.wandb is not None:
