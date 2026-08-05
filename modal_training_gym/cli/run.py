@@ -476,10 +476,12 @@ def _print_kill_preview(runs: list[_KillRunReport]) -> None:
 
 
 def _print_kill_result(runs: list[_KillRunReport]) -> None:
-    killed_count = sum(run["action"] == "killed" for run in runs)
-    if killed_count:
-        run_word = "run" if killed_count == 1 else "runs"
-        click.echo(f"Terminated {killed_count} {run_word}.")
+    killed_runs = [run for run in runs if run["action"] == "killed"]
+    if killed_runs:
+        run_word = "run" if len(killed_runs) == 1 else "runs"
+        click.echo(f"Terminated {len(killed_runs)} {run_word}:")
+        for run in killed_runs:
+            click.echo(f"  {run['run_id']}")
     else:
         click.echo("No active runs to terminate.")
     _print_kill_skips(runs)
