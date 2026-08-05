@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import json
 from collections.abc import Awaitable, Callable
+from concurrent.futures import ThreadPoolExecutor
 from enum import Enum
 from functools import partial
 from typing import Any
@@ -278,7 +279,7 @@ def vol_list_prefix(
 
     vol = _metadata_volume()
     _safe_reload(vol)
-    results: list[dict[str, Any]] = []
+    paths: list[str] = []
     try:
         for entry in vol.iterdir(_store_path(store)):
             if not entry.path.endswith(".json"):
@@ -286,10 +287,17 @@ def vol_list_prefix(
             name = entry.path.rsplit("/", 1)[-1][: -len(".json")]
             if not name.startswith(prefix):
                 continue
-            results.append(json.loads(b"".join(vol.read_file(entry.path))))
+            paths.append(entry.path)
     except (FileNotFoundError, NotFoundError):
-        return results
-    return results
+        return []
+
+    def read(path: str) -> dict[str, Any]:
+        return json.loads(b"".join(vol.read_file(path)))
+
+    # A read is a round trip of its own (~0.5s), so a dashboard page waits on
+    # the slowest file rather than on their sum.
+    with ThreadPoolExecutor(max_workers=16) as pool:
+        return list(pool.map(read, paths))
 
 
 def vol_remove_keys_with_prefix(store: MetadataStore | str, prefix: str) -> int:
