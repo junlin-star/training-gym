@@ -11,11 +11,11 @@
   const ZOOM_BTN_FACTOR = 1.5;
   const WHEEL_SENSITIVITY = 0.0015;
 
-  const ROW_HEIGHT_PX = 30;
-  const ROW_GAP_PX = 4;
+  const ROW_HEIGHT_PX = 22;
+  const ROW_GAP_PX = 3;
   // A contained row sits just within the row containing it, which is drawn as an
   // outline, so the two read as one bar inside another.
-  const CONTAINED_INSET_PX = 4;
+  const CONTAINED_INSET_PX = 3;
 
   function placeRows(rows) {
     const placed = [];
@@ -268,7 +268,7 @@
   <div class="tg-tip" class:pinned style:left={`${tip.x}px`} style:top={`${tip.y}px`}>
     <span class="tg-tip-head">
       Rollout {tip.rolloutId}
-      {#if tip.bar.role !== "driver"}· measured on the {tip.bar.role}{/if}
+      · {tip.bar.role}
     </span>
     <span class="tg-tip-name">{labelFor(tip.bar.name)}</span>
     <span class="tg-tip-dur">{fmtSecs(tip.bar.duration)}</span>
@@ -474,7 +474,7 @@
     padding: 0 3px;
     border: none;
     /* Scaled to the bar, so a sliver isn't a pill */
-    border-radius: min(4px, 20%);
+    border-radius: min(3px, 15%);
     overflow: hidden;
     cursor: pointer;
     pointer-events: auto;

@@ -17,27 +17,27 @@ export const TIMING_LABELS = {
   optimizer_step: "Optimizer step",
 };
 
-// From the design system's dataviz ramp, the way the other charts pick colors.
-// Generating is red, training is blue/green, and a phase drawn inside one of
-// them is a neighbouring hue rather than a shade of its container, so the two
-// edges read apart.
+// The substep chart's hues, pastel and all at one lightness and saturation, so
+// no phase shouts over its neighbours. Generating is red, training is
+// blue/green, and a phase drawn inside one of them is a neighbouring hue rather
+// than a shade of its container, so the two edges read apart.
 export const TIMING_COLORS = {
-  generate_rollouts: "var(--color-c-dataviz-paired-2, #e06161)",
-  wait_for_rollout: "var(--color-c-dataviz-primary-8, #8d324c)",
-  generate_samples: "var(--color-c-dataviz-paired-8, #c86a3a)",
-  reward: "var(--color-c-dataviz-paired-5, #e6b687)",
-  reward_batch: "var(--color-c-dataviz-primary-2, #d9866b)",
-  reward_post_process: "var(--color-c-dataviz-primary-5, #decb6c)",
-  train_models: "var(--color-c-dataviz-paired-4, #6cabc1)",
-  compute_log_probs: "var(--color-c-dataviz-primary-6, #4fbe5f)",
-  forward_backward: "var(--color-c-dataviz-primary-7, #648fe0)",
-  optimizer_step: "var(--color-c-dataviz-primary-1, #adeaab)",
-  weight_sync: "var(--color-c-dataviz-primary-4, #4aa19d)",
-  offload_rollout: "var(--color-c-dataviz-primary-other, #6d6161)",
-  offload_train: "var(--color-c-gray-50, #8b8b8b)",
-  checkpoint_save: "var(--color-c-dataviz-primary-3, #ffc1f7)",
-  evaluate_rollouts: "var(--color-c-dataviz-paired-3, #ca70ad)",
-  evaluate_rollouts_end: "var(--color-c-dataviz-paired-7, #8956fa)",
+  generate_rollouts: "hsl(2 52% 75%)",
+  wait_for_rollout: "hsl(342 45% 76%)",
+  generate_samples: "hsl(26 48% 75%)",
+  reward: "hsl(45 45% 74%)",
+  reward_batch: "hsl(52 42% 74%)",
+  reward_post_process: "hsl(38 45% 77%)",
+  train_models: "hsl(210 48% 76%)",
+  compute_log_probs: "hsl(158 40% 73%)",
+  forward_backward: "hsl(190 45% 75%)",
+  optimizer_step: "hsl(235 45% 80%)",
+  weight_sync: "hsl(172 40% 73%)",
+  offload_rollout: "hsl(262 35% 79%)",
+  offload_train: "hsl(282 32% 79%)",
+  checkpoint_save: "hsl(320 45% 79%)",
+  evaluate_rollouts: "hsl(200 45% 77%)",
+  evaluate_rollouts_end: "hsl(300 38% 79%)",
 };
 
 // Work a step waits on but isn't: a checkpoint or an eval lands on one rollout
