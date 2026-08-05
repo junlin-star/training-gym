@@ -153,9 +153,10 @@ def _wait_intro():
     ## Wait for the result (optional)
 
     `run.result()` blocks until training finishes and returns the
-    `TrainResult`. Interrupting the wait does **not** stop the run — with
-    `TrainConfig.detach=True` (the default) an interrupted wait leaves training
-    going on Modal; set `detach=False` if you'd rather Ctrl-C tear the app down.
+    `TrainResult`. Interrupting the wait does **not** stop the run: a launched
+    run always lives in a detached Modal app, so Ctrl-C here only stops
+    waiting. To actually stop training, cancel the call:
+    `run.function_call.cancel(terminate_containers=True)`.
 
     Skip this cell entirely if you just want to launch and walk away.
     """
