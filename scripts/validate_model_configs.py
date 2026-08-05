@@ -19,6 +19,7 @@ from modal_training_gym.common.dataset import (
 from modal_training_gym.common.models.qwen3_asr_1_7b import Qwen3_ASR_1_7B
 from modal_training_gym.common.models.validation import VALIDATABLE_MODELS
 from modal_training_gym.common.run import TrainingRun, TrainingRunStatus
+from modal_training_gym.common.step_timing import load_step
 from modal_training_gym.common.wandb import WandbConfig
 from modal_training_gym.model import ModelConfig
 from modal_training_gym.train import TrainConfig
@@ -64,6 +65,39 @@ def _total_step_time_s(result: "TutorialResult") -> float:
     return float(
         sum(step.get("duration_s") or 0 for step in (result.step_times or {}).values())
     )
+
+
+def _measured_times(
+    training_run_id: str, step_count: int
+) -> tuple[
+    dict[str, dict[str, int | None]], dict[str, dict[str, dict[str, float | None]]]
+]:
+    """Per-step and per-substep durations from the run's measured timing records.
+
+    Keyed by rollout id, matching the dashboard's rows. A step's duration spans
+    every lane it touched, so the role lanes are placed on the same wall clock
+    (``lane_start_unix_s`` plus each phase's offsets) before being combined.
+    """
+    step_times: dict[str, dict[str, int | None]] = {}
+    substep_times: dict[str, dict[str, dict[str, float | None]]] = {}
+    for rollout_id in range(step_count):
+        records = load_step(training_run_id, rollout_id)
+        if not records:
+            continue
+        starts, ends = [], []
+        substeps: dict[str, dict[str, float | None]] = {}
+        for record in records:
+            lane_start = record["lane_start_unix_s"]
+            for name, phase in record["phases"].items():
+                starts.append(lane_start + phase["first_start_s"])
+                ends.append(lane_start + phase["last_end_s"])
+                substeps[name] = {
+                    "start": lane_start + phase["first_start_s"],
+                    "duration_s": phase["total_duration_s"],
+                }
+        step_times[str(rollout_id)] = {"duration_s": round(max(ends) - min(starts))}
+        substep_times[str(rollout_id)] = substeps
+    return step_times, substep_times
 
 
 def _step_keys(result: "TutorialResult") -> list[str]:
@@ -320,6 +354,9 @@ def run_base_training_on_slime(
 
     train_result = train_config.train()
     training_run = TrainingRun.from_id(train_result.training_run_id)
+    step_times, substep_times = _measured_times(
+        train_result.training_run_id, step_count
+    )
 
     return TutorialResult(
         base_model_name=model_name,
@@ -327,8 +364,8 @@ def run_base_training_on_slime(
         training_run_id=train_result.training_run_id,
         training_run_status=training_run.status,
         total_duration_s=float(training_run.duration_seconds or 0.0),
-        step_times=training_run.step_times,
-        substep_times=training_run.substep_times,
+        step_times=step_times,
+        substep_times=substep_times,
     )
 
 
