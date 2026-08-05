@@ -277,19 +277,27 @@ def vol_list_prefix(
     """
     from modal.exception import NotFoundError
 
+    import time as _time
+
     vol = _metadata_volume()
     _safe_reload(vol)
     paths: list[str] = []
-    try:
-        for entry in vol.iterdir(_store_path(store)):
-            if not entry.path.endswith(".json"):
+    for attempt in range(3):
+        try:
+            paths = [
+                entry.path
+                for entry in vol.iterdir(_store_path(store))
+                if entry.path.endswith(".json")
+                and entry.path.rsplit("/", 1)[-1].startswith(prefix)
+            ]
+            break
+        except (FileNotFoundError, NotFoundError):
+            return []
+        except Exception as exc:
+            if "rate limit" in str(exc).lower() and attempt < 2:
+                _time.sleep(2**attempt)
                 continue
-            name = entry.path.rsplit("/", 1)[-1][: -len(".json")]
-            if not name.startswith(prefix):
-                continue
-            paths.append(entry.path)
-    except (FileNotFoundError, NotFoundError):
-        return []
+            raise
 
     def read(path: str) -> dict[str, Any]:
         return json.loads(b"".join(vol.read_file(path)))
