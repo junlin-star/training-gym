@@ -11,31 +11,28 @@
   const ZOOM_BTN_FACTOR = 1.5;
   const WHEEL_SENSITIVITY = 0.0015;
 
-  const ROW_HEIGHT_PX = 16;
-  const ROW_GAP_PX = 2;
-  // A contained row is drawn short and low inside the row containing it, so a
-  // phase measured off the driver reads as part of the phase it ran within.
-  const CONTAINED_HEIGHT_PX = 6;
-  const CONTAINED_TOP_PX = 9;
-  const CONTAINED_STEP_PX = 3;
+  const ROW_HEIGHT_PX = 20;
+  const ROW_GAP_PX = 3;
+  // A contained row sits just within the row containing it, which is drawn as an
+  // outline, so the two read as one bar inside another.
+  const CONTAINED_INSET_PX = 3;
 
   function placeRows(rows) {
-    const topByDepth = [];
+    const rowByDepth = [];
     let nextTop = 0;
     const placed = rows.map((row) => {
-      const containerTop = topByDepth[row.depth - 1];
-      const within = row.depth > 0 && !row.concurrent && containerTop != null;
-      const top = within
-        ? containerTop + CONTAINED_TOP_PX + (row.depth - 1) * CONTAINED_STEP_PX
-        : nextTop;
-      if (!within) nextTop = top + ROW_HEIGHT_PX + ROW_GAP_PX;
-      topByDepth[row.depth] = top;
-      return {
+      const container = row.concurrent ? null : rowByDepth[row.depth - 1];
+      const placedRow = {
         ...row,
-        top,
-        within,
-        height: within ? CONTAINED_HEIGHT_PX : ROW_HEIGHT_PX,
+        within: container != null,
+        top: container ? container.top + CONTAINED_INSET_PX : nextTop,
+        height: container
+          ? container.height - 2 * CONTAINED_INSET_PX
+          : ROW_HEIGHT_PX,
       };
+      if (!container) nextTop = placedRow.top + ROW_HEIGHT_PX + ROW_GAP_PX;
+      rowByDepth[row.depth] = placedRow;
+      return placedRow;
     });
     return { rows: placed, rowsHeight: Math.max(nextTop - ROW_GAP_PX, ROW_HEIGHT_PX) };
   }
@@ -237,7 +234,9 @@
                         class="bar"
                         aria-label={`${labelFor(bar.name)} ${fmtSecs(bar.duration)}`}
                         class:active={pinned && isActive(rollout.id, bar)}
-                        style:background={colorFor(bar.name)}
+                        class:outlined={bar.contains}
+                        style:background={bar.contains ? "none" : colorFor(bar.name)}
+                        style:border-color={colorFor(bar.name)}
                         style:left={`${(bar.start / rollout.span) * 100}%`}
                         style:width={`${Math.max(((bar.end - bar.start) / rollout.span) * 100, 0.4)}%`}
                         onmouseenter={(e) => showTip(e, rollout.id, bar)}
@@ -472,6 +471,10 @@
     overflow: hidden;
     cursor: pointer;
     transition: filter 0.1s ease;
+  }
+
+  .bar.outlined {
+    border: 1px solid;
   }
 
   .bar:hover {

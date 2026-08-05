@@ -49,6 +49,10 @@ export const PHASES_BESIDE_THE_STEP = [
 // dismiss next to the work that matters.
 const NEGLIGIBLE_WORK_S = 0.0005;
 
+// The recorder stops keeping a phase's runs past this many of them, and a record
+// written before it did is read the same way: as work spent, not as a bar each.
+const MAX_DRAWN_RUNS = 12;
+
 export function labelFor(name) {
   return TIMING_LABELS[name] || name.replace(/_/g, " ");
 }
@@ -92,7 +96,7 @@ export function rolloutTimeline(lanes) {
       const first = (Number(phase?.first_start_s) || 0) + shift;
       const last = (Number(phase?.last_end_s) || 0) + shift;
       if (!count || total < NEGLIGIBLE_WORK_S) continue;
-      if (!runs.length && count > 1) {
+      if (count > MAX_DRAWN_RUNS || (!runs.length && count > 1)) {
         perSample.push({
           role,
           name,
@@ -115,6 +119,7 @@ export function rolloutTimeline(lanes) {
           start: Number(start) + shift,
           end: Number(end) + shift,
           duration: Number(end) - Number(start),
+          contains: false,
           spent: [],
         });
       });
@@ -131,6 +136,9 @@ export function rolloutTimeline(lanes) {
     const container = enclosing[enclosing.length - 1];
     bar.depth = enclosing.length;
     bar.inside = container ? container.name : null;
+    // A bar with work inside it is drawn as an outline around that work rather
+    // than as a block over the top of it.
+    if (container) container.contains = true;
     enclosing.push(bar);
   }
 
@@ -149,6 +157,7 @@ export function rolloutTimeline(lanes) {
         duration: work.total,
         depth: 0,
         inside: null,
+        contains: false,
         spent: [work],
       });
   }
