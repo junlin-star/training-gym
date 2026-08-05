@@ -12,6 +12,9 @@ from typing import Any
 
 METADATA_VOLUME_NAME = "training-gym-metadata"
 
+# Cap on concurrent volume reads when listing a store on the event loop.
+_ASYNC_READ_CONCURRENCY = 32
+
 
 class MetadataStore(Enum):
     TRAINING_RUNS = "training-runs"
@@ -120,10 +123,23 @@ def _canonical_items_for(
     return [] if item_store is None else _keep(vol_list(item_store))
 
 
-def _metadata_volume():
-    import modal
+_volume_handle: Any = None
 
-    return modal.Volume.from_name(METADATA_VOLUME_NAME, create_if_missing=True)
+
+def _metadata_volume():
+    """The shared volume handle.
+
+    Kept because building one looks the volume up, and a request that reads a
+    store pays that round trip before it reads anything.
+    """
+    global _volume_handle
+    if _volume_handle is None:
+        import modal
+
+        _volume_handle = modal.Volume.from_name(
+            METADATA_VOLUME_NAME, create_if_missing=True
+        )
+    return _volume_handle
 
 
 def _safe_reload(vol, *, is_async: bool = False):
@@ -231,8 +247,13 @@ def vol_list(
         async def _run() -> list[dict[str, Any]]:
             await _safe_reload(vol, is_async=True)
 
+            # Bounded so a store with thousands of records (a long run's lanes)
+            # doesn't open a read per file at once.
+            limit = asyncio.Semaphore(_ASYNC_READ_CONCURRENCY)
+
             async def _read(path: str) -> dict[str, Any]:
-                chunks = [c async for c in vol.read_file.aio(path)]
+                async with limit:
+                    chunks = [c async for c in vol.read_file.aio(path)]
                 return json.loads(b"".join(chunks))
 
             try:

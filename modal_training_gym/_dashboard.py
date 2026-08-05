@@ -472,14 +472,16 @@ def fastapi_app():
         def __init__(self) -> None:
             self.lanes: JsonDict = {}
             self.read_at: float | None = None
+            # A run that has ended writes no further records, so its lanes are
+            # read once and then answered from here for as long as it is held.
+            self.final = False
             self.lock = asyncio.Lock()
 
         @property
         def fresh(self) -> bool:
-            return (
-                self.read_at is not None
-                and time.monotonic() - self.read_at < TIMING_CACHE_TTL_S
-            )
+            if self.read_at is None:
+                return False
+            return self.final or time.monotonic() - self.read_at < TIMING_CACHE_TTL_S
 
     timing_cache: dict[str, TimingEntry] = {}
     cache_locks = {key: asyncio.Lock() for key in cache_keys}
@@ -912,7 +914,31 @@ def fastapi_app():
                 lanes["roles"].update(
                     rollout_lanes([record.model_dump(mode="json")])["roles"]
                 )
+                # A lane still posting means the run is going, whatever a
+                # summary read before it started said.
+                entry.final = False
         return JSONResponse({"status": "ok"})
+
+    # A run in one of these writes no further timing, so its lanes are read once.
+    ENDED_RUN_STATUSES = frozenset({"completed", "failed", "stopped", "cancelled"})
+
+    def _run_has_ended(training_run_id: str) -> bool:
+        """Whether the run is over, from run summaries already cached here.
+
+        Deliberately does not load them: this answers a timing read, and going
+        to the volume for the status would cost the round trip the caching of
+        the lanes is there to avoid. An unknown run is treated as still live,
+        so the worst case is the entry expiring as it used to.
+        """
+        _expires_at, runs_cached, loaded_at = cache_entries["runs"]
+        if loaded_at == 0.0:
+            return False
+        return any(
+            run.get("training_run_id") == training_run_id
+            and run.get("status") in ENDED_RUN_STATUSES
+            for run in runs_cached
+            if isinstance(run, dict)
+        )
 
     async def _read_run_timings(training_run_id: str) -> JsonDict:
         found = await load_run_async(training_run_id)
@@ -932,12 +958,15 @@ def fastapi_app():
         entry = timing_cache.get(training_run_id)
         if entry is None:
             if len(timing_cache) >= TIMING_CACHE_MAX_RUNS:
-                for run_id in [
-                    run_id
+                # Drop the least recently read entry rather than the whole map,
+                # so browsing a 65th run doesn't cost every other run its lanes.
+                evictable = [
+                    (other.read_at or 0.0, run_id)
                     for run_id, other in timing_cache.items()
                     if not other.lock.locked()
-                ]:
-                    del timing_cache[run_id]
+                ]
+                if evictable:
+                    del timing_cache[min(evictable)[1]]
             entry = timing_cache.setdefault(training_run_id, TimingEntry())
         if entry.fresh:
             return entry.lanes
@@ -947,6 +976,7 @@ def fastapi_app():
             if not entry.fresh:
                 entry.lanes = await _read_run_timings(training_run_id)
                 entry.read_at = time.monotonic()
+                entry.final = _run_has_ended(training_run_id)
             return entry.lanes
 
     @web.get("/api/runs/{training_run_id}/timings")
