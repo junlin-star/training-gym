@@ -922,23 +922,26 @@ def fastapi_app():
     # A run in one of these writes no further timing, so its lanes are read once.
     ENDED_RUN_STATUSES = frozenset({"completed", "failed", "stopped", "cancelled"})
 
-    def _run_has_ended(training_run_id: str) -> bool:
-        """Whether the run is over, from run summaries already cached here.
+    async def _run_has_ended(training_run_id: str) -> bool:
+        """Whether the run is over, so its lanes need reading only once.
 
-        Deliberately does not load them: this answers a timing read, and going
-        to the volume for the status would cost the round trip the caching of
-        the lanes is there to avoid. An unknown run is treated as still live,
-        so the worst case is the entry expiring as it used to.
+        Answered from the run summaries when this container happens to hold
+        them, and otherwise by reading the run. That read is worth its round
+        trip: it settles the entry for good, where treating an unknown run as
+        live costs a listing of the whole run every few seconds forever.
         """
         _expires_at, runs_cached, loaded_at = cache_entries["runs"]
-        if loaded_at == 0.0:
+        if loaded_at != 0.0:
+            for run in runs_cached:
+                if isinstance(run, dict) and run.get("training_run_id") == (
+                    training_run_id
+                ):
+                    return run.get("status") in ENDED_RUN_STATUSES
+        try:
+            run_record = await TrainingRun.from_id(training_run_id, is_async=True)
+        except KeyError:
             return False
-        return any(
-            run.get("training_run_id") == training_run_id
-            and run.get("status") in ENDED_RUN_STATUSES
-            for run in runs_cached
-            if isinstance(run, dict)
-        )
+        return run_record.status.value in ENDED_RUN_STATUSES
 
     async def _read_run_timings(training_run_id: str) -> JsonDict:
         found = await load_run_async(training_run_id)
@@ -976,7 +979,7 @@ def fastapi_app():
             if not entry.fresh:
                 entry.lanes = await _read_run_timings(training_run_id)
                 entry.read_at = time.monotonic()
-                entry.final = _run_has_ended(training_run_id)
+                entry.final = await _run_has_ended(training_run_id)
             return entry.lanes
 
     @web.get("/api/runs/{training_run_id}/timings")
