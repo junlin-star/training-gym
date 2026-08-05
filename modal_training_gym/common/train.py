@@ -618,7 +618,7 @@ class TrainConfig:
         app = self._build_app(training_run_id)
         output_context = modal.enable_output() if show_output else nullcontext()
         with output_context:
-            with app.run(detach=True):
+            with app.run(detach=self.detach):
                 modal_app_id = app.app_id or ""
                 modal_app_url = modal_app_dashboard_url(modal_app_id)
                 if show_output:
