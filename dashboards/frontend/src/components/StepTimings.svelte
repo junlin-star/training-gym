@@ -68,21 +68,53 @@
 
   let hasData = $derived(steps.length > 0);
 
+  // Lanes are recorded in different processes, so each one's offsets are
+  // relative to its own start; lane_start_unix_s shifts them onto one timeline.
   let laneList = $derived.by(() => {
-    const roles = lanes?.roles || {};
-    return Object.entries(roles).map(([role, lane]) => {
-      const folded = [];
-      for (const [name, intervals] of Object.entries(lane?.phases || {})) {
-        const counted = Number(lane?.totals?.[name]?.count);
-        if (Number.isFinite(counted) && counted > (intervals || []).length) {
-          folded.push(`${labelFor(name)} ${(intervals || []).length} of ${counted}`);
-        }
-      }
-      return { ...lane, role, folded: folded.join(", ") };
+    const roles = Object.entries(lanes?.roles || {});
+    const laneStarts = roles
+      .map(([, lane]) => Number(lane?.lane_start_unix_s))
+      .filter((s) => Number.isFinite(s));
+    const firstLaneStart = laneStarts.length ? Math.min(...laneStarts) : null;
+
+    return roles.map(([role, lane]) => {
+      const laneStart = Number(lane?.lane_start_unix_s);
+      const shift =
+        firstLaneStart != null && Number.isFinite(laneStart) ? laneStart - firstLaneStart : 0;
+      const phases = Object.entries(lane?.phases || {})
+        .map(([name, phase]) => {
+          const count = Number(phase?.count) || 0;
+          const total = Number(phase?.total_duration_s) || 0;
+          return {
+            name,
+            count,
+            total,
+            longest: Number(phase?.longest_duration_s) || 0,
+            average: count ? total / count : 0,
+            start: (Number(phase?.first_start_s) || 0) + shift,
+            end: (Number(phase?.last_end_s) || 0) + shift,
+          };
+        })
+        .sort((a, b) => a.start - b.start);
+      return { role, phases };
     });
   });
 
-  let hasLaneData = $derived(laneList.length > 0);
+  // `lanes` present but empty is a real answer -- this rollout recorded no
+  // timing -- so it is shown, not passed over to the legacy timeline below.
+  let hasMeasuredTiming = $derived(lanes != null);
+
+  // One shared width for every lane, so a bar's position and length mean the
+  // same thing across roles.
+  let laneWindow = $derived(
+    Math.max(0.001, ...laneList.flatMap((lane) => lane.phases.map((p) => p.end))),
+  );
+
+  function phaseTitle(phase) {
+    const runs =
+      phase.count === 1 ? "ran once" : `ran ${phase.count}\u00d7, longest ${fmtSecs(phase.longest)}, average ${fmtSecs(phase.average)}`;
+    return `${labelFor(phase.name)}: ${fmtSecs(phase.total)} total, ${runs} \u2014 ${fmtSecs(phase.start)} to ${fmtSecs(phase.end)}`;
+  }
 
   let legend = $derived.by(() => {
     const seen = new Set();
@@ -199,30 +231,39 @@
   ></div>
 {/snippet}
 
-{#if hasLaneData}
+{#if hasMeasuredTiming}
   <div class="step-timings lanes">
+    {#if laneList.length === 0}
+      <div class="no-timing">no timing recorded for this rollout</div>
+    {/if}
     {#each laneList as lane (lane.role)}
       <div class="lane">
         <div class="lane-header">
           <span class="lane-role">{lane.role}</span>
-          {#if lane.folded}
-            <span
-              class="lane-folded"
-              title="Measured in full — every total and count includes them, only the individual bars are not drawn."
-            >
-              bars: {lane.folded}
-            </span>
-          {/if}
         </div>
-        {#if Object.keys(lane.phases || {}).length === 0}
+        {#if lane.phases.length === 0}
           <div class="no-timing">no timing recorded for this rollout</div>
         {:else}
           <div class="lane-phases">
-            {#each Object.entries(lane.phases || {}) as [name, intervals] (name)}
-              <div class="phase-row">
-                <span class="phase-name" style:color={colorFor(name)}>{labelFor(name)}</span>
-                <span class="phase-total">{fmtSecs(lane.totals?.[name]?.total_duration_s)}</span>
-                <span class="phase-count">({lane.totals?.[name]?.count ?? intervals.length})</span>
+            {#each lane.phases as phase (phase.name)}
+              <div class="phase-row" title={phaseTitle(phase)}>
+                <span class="phase-name" style:color={colorFor(phase.name)}>
+                  {labelFor(phase.name)}
+                </span>
+                <span class="phase-track">
+                  <span
+                    class="phase-bar"
+                    style:background={colorFor(phase.name)}
+                    style:left={`${(phase.start / laneWindow) * 100}%`}
+                    style:width={`${Math.max(((phase.end - phase.start) / laneWindow) * 100, 0.6)}%`}
+                  ></span>
+                </span>
+                <span class="phase-total">{fmtSecs(phase.total)}</span>
+                <span class="phase-count">
+                  {#if phase.count > 1}
+                    {phase.count}× · longest {fmtSecs(phase.longest)}
+                  {/if}
+                </span>
               </div>
             {/each}
           </div>
@@ -363,11 +404,6 @@
     text-transform: capitalize;
   }
 
-  .lane-folded {
-    font-size: 0.75rem;
-    color: var(--color-c-gray-45, #6e6e6e);
-  }
-
   .no-timing {
     color: var(--color-c-gray-45, #6e6e6e);
     font-size: 0.85rem;
@@ -389,14 +425,35 @@
 
   .phase-name {
     min-width: 10rem;
+    flex: 0 0 auto;
+  }
+
+  .phase-track {
+    position: relative;
+    flex: 1 1 auto;
+    min-width: 4rem;
+    height: 10px;
+    border-radius: 3px;
+    background: var(--color-c-gray-08, #1c1c1c);
+  }
+
+  .phase-bar {
+    position: absolute;
+    top: 0;
+    height: 100%;
+    border-radius: 3px;
+    min-width: 2px;
   }
 
   .phase-total {
     font-variant-numeric: tabular-nums;
+    flex: 0 0 auto;
   }
 
   .phase-count {
     color: var(--color-c-gray-45, #6e6e6e);
+    font-variant-numeric: tabular-nums;
+    flex: 0 0 9rem;
   }
 
   .legend-row {

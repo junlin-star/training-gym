@@ -659,13 +659,13 @@ class TrainConfig:
         print(f"TrainingRun recorded: {training_run_id}")
 
         recipe = self.recipe
-        if isinstance(self.recipe, SlimeRecipe):
+        if isinstance(self.recipe, (SlimeRecipe, MilesConfig)):
             from modal_training_gym.common.step_timing import probe_substep_timing
 
-            enable = probe_substep_timing(
+            if not probe_substep_timing(
                 framework_status_url, self.recipe.substep_timing
-            )
-            recipe = _dc.replace(self.recipe, substep_timing="on" if enable else "off")
+            ):
+                recipe = _dc.replace(self.recipe, substep_timing="off")
 
         app = self._build_app(training_run_id, recipe=recipe)
         output_context = modal.enable_output() if show_output else nullcontext()

@@ -71,7 +71,10 @@ MILES_ROOT = "/root/miles"
 HARBOR_PKG_VERSION = "0.8.0"
 
 _MILES_PATCHES = Path(__file__).parent / "modal_helpers" / "patches"
+_COMMON_PATCHES = Path(__file__).parents[2] / "common" / "patches"
 _PATCH_SGLANG_ABORT_B64 = encode_patch("patch_sglang_abort", _MILES_PATCHES)
+# Shared with slime: one script owns both frameworks' timing anchors.
+_PATCH_SUBSTEP_TIMING_B64 = encode_patch("patch_substep_timing", _COMMON_PATCHES)
 
 
 def _build_miles_base_image(miles: MilesRecipe) -> Image:
@@ -81,6 +84,7 @@ def _build_miles_base_image(miles: MilesRecipe) -> Image:
         .run_commands(
             f"rm -rf {HF_CACHE_PATH} 2>/dev/null || true",
             f"echo {_PATCH_SGLANG_ABORT_B64} | base64 -d | python3",
+            f"echo {_PATCH_SUBSTEP_TIMING_B64} | base64 -d | python3",
         )
     )
     if miles.image_env:
@@ -686,8 +690,16 @@ def build_miles_app(
                 "env_vars": {
                     "no_proxy": f"127.0.0.1,{cluster.head_addr}",
                     "MASTER_ADDR": cluster.head_addr,
+                    # Read by the substep-timing recorder in every ray worker:
+                    # which run to file records under, where to post them, and
+                    # whether to record at all.
+                    "TRAINING_GYM_TRAINING_RUN_ID": training_run_id,
+                    "TRAINING_GYM_FRAMEWORK_STATUS_URL": framework_status_url
+                    or os.environ.get("TRAINING_GYM_FRAMEWORK_STATUS_URL", ""),
+                    "TRAINING_GYM_SUBSTEP_TIMING": miles.substep_timing,
                     **wandb_env,
                     **miles.environment,
+                    "TRAINING_GYM_FRAMEWORK_STATUS_TOKEN": framework_status_token,
                 }
             }
 

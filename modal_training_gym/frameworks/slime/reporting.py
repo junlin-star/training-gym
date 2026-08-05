@@ -11,7 +11,6 @@ from __future__ import annotations
 import json
 import os
 import threading
-import time
 from queue import Queue
 from typing import Any
 from urllib.error import URLError
@@ -33,18 +32,6 @@ _ADVANTAGE_PATH = "/api/advantage-distributions"
 _PHASE_TIMEOUT_SECONDS = 1.0
 _STATUS_BOUNDARY_TIMEOUT_SECONDS = 5.0
 _ROLLOUT_TIMEOUT_SECONDS = 10.0
-
-
-# Separate substep timing queue to not block or evict status reports
-_TIMING_QUEUE: "Queue[Any | None]" = Queue(maxsize=256)
-_TIMING_WORKER_STARTED = False
-_TIMING_LOCK = threading.Lock()
-_TIMING_PENDING: "dict[Any, dict[str, Any]]" = {}
-_TIMING_PENDING_LOCK = threading.Lock()
-_TIMING_PATH = "/api/timing-events"
-_TIMING_TIMEOUT_SECONDS = 5.0
-_TIMING_FLUSH_SECONDS = 10.0
-TIMING_MODE_ENV = "TRAINING_GYM_SUBSTEP_TIMING"
 
 
 def _arg_value(args: Any, key: str) -> Any:
@@ -130,16 +117,6 @@ def _advantage_url() -> str:
     return _derive_url(_ADVANTAGE_PATH)
 
 
-def _timing_url() -> str:
-    return _derive_url(_TIMING_PATH)
-
-
-def _env_training_run_id() -> str:
-    return _run_context(None).get("training_run_id") or os.environ.get(
-        "TRAINING_GYM_TRAINING_RUN_ID", ""
-    )
-
-
 def _report_token() -> str:
     return (
         os.environ.get("TRAINING_GYM_FRAMEWORK_STATUS_TOKEN", "")
@@ -161,46 +138,6 @@ def _ensure_worker() -> None:
         )
         thread.start()
         _REPORTER_STARTED = True
-
-
-def _ensure_timing_worker() -> None:
-    global _TIMING_WORKER_STARTED
-    if _TIMING_WORKER_STARTED:
-        return
-    with _TIMING_LOCK:
-        if _TIMING_WORKER_STARTED:
-            return
-        thread = threading.Thread(
-            target=_timing_worker,
-            name="slime-timing-poster",
-            daemon=True,
-        )
-        thread.start()
-        _TIMING_WORKER_STARTED = True
-
-
-def _timing_worker() -> None:
-    while True:
-        try:
-            key = _TIMING_QUEUE.get()
-        except Exception:
-            continue
-        try:
-            with _TIMING_PENDING_LOCK:
-                payload = _TIMING_PENDING.pop(key, None)
-            if payload is not None:
-                _post(dict(payload))
-        finally:
-            _TIMING_QUEUE.task_done()
-
-
-def flush_timing(timeout: float = _TIMING_FLUSH_SECONDS) -> None:
-    """Wait up to ``timeout`` seconds for the timing queue to drain."""
-    if not _TIMING_WORKER_STARTED:
-        return
-    deadline = time.monotonic() + timeout
-    while _TIMING_QUEUE.unfinished_tasks > 0 and time.monotonic() < deadline:
-        time.sleep(0.05)
 
 
 def _enqueue(payload: dict[str, Any]) -> None:
@@ -227,33 +164,6 @@ def _enqueue_rollout(payload: dict[str, Any]) -> None:
         _REPORT_QUEUE.put_nowait(item)
     except Exception:
         pass
-
-
-def _enqueue_timing(payload: dict[str, Any]) -> None:
-    if os.environ.get(TIMING_MODE_ENV, "auto") == "off":
-        return
-    url = _timing_url()
-    training_run_id = _env_training_run_id()
-    if not url or not training_run_id:
-        return
-    _ensure_timing_worker()
-    item = {
-        "_url": url,
-        "_timeout": _TIMING_TIMEOUT_SECONDS,
-        "training_run_id": training_run_id,
-        **payload,
-    }
-    key = (payload.get("rollout_id"), payload.get("role"))
-    with _TIMING_PENDING_LOCK:
-        superseded = key in _TIMING_PENDING
-        _TIMING_PENDING[key] = item
-    if superseded:
-        return  # its key is already queued, and will now carry this snapshot
-    try:
-        _TIMING_QUEUE.put_nowait(key)
-    except Exception:
-        with _TIMING_PENDING_LOCK:
-            _TIMING_PENDING.pop(key, None)
 
 
 def _enqueue_advantage(payload: dict[str, Any]) -> None:

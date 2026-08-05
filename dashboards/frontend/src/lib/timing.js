@@ -9,9 +9,11 @@ export const TIMING_LABELS = {
   weight_sync: "Weight sync",
   evaluate_rollouts_end: "Eval (after)",
   wait_for_rollout: "Wait for rollout",
-  custom_reward: "Custom reward",
+  generate_samples: "Generate samples",
+  reward: "Reward",
   reward_post_process: "Reward post process",
   forward_backward: "Forward/backward",
+  optimizer_step: "Optimizer step",
 };
 
 export const TIMING_COLORS = {
@@ -25,9 +27,11 @@ export const TIMING_COLORS = {
   weight_sync: "#22d3ee",
   evaluate_rollouts_end: "#818cf8",
   wait_for_rollout: "#fb923c",
-  custom_reward: "#a3e635",
+  generate_samples: "#4ade80",
+  reward: "#a3e635",
   reward_post_process: "#f0abfc",
   forward_backward: "#2dd4bf",
+  optimizer_step: "#facc15",
 };
 
 export function labelFor(name) {
@@ -38,45 +42,53 @@ export function colorFor(name) {
   return TIMING_COLORS[name] || "var(--color-c-gray-40, #5e5e5e)";
 }
 
-export function phaseSummaries(lanes = {}) {
-  const roles = lanes.roles || lanes || {};
-  const rolloutIds = new Set();
-  const totalsByName = {};
+/** Per-phase totals across the rollouts currently listed, longest first.
+ *
+ * `timings` is the `{rollout_id: {roles: {role: lane}}}` map the timings API
+ * returns, so `rolloutsMeasured` counts the rollouts that recorded a phase and
+ * `rolloutCount` how many were asked for: fewer means some rollout's lane is
+ * missing, which the summary says out loud rather than averaging over.
+ */
+export function phaseSummaries(timings = {}) {
+  const rollouts = Object.values(timings);
+  const byName = {};
 
-  for (const [role, lane] of Object.entries(roles)) {
-    const phaseTotals = lane?.totals || {};
-    const laneRolloutId = lane?.role === role ? lane?.rollout_id : undefined;
-    if (laneRolloutId !== undefined) rolloutIds.add(laneRolloutId);
-    for (const [name, t] of Object.entries(phaseTotals)) {
-      if (!totalsByName[name]) {
-        totalsByName[name] = {
+  for (const lanes of rollouts) {
+    const seenHere = new Set();
+    for (const lane of Object.values(lanes?.roles || {})) {
+      for (const [name, phase] of Object.entries(lane?.phases || {})) {
+        const row = (byName[name] ??= {
           name,
           count: 0,
-          total_duration_s: 0,
-          max_duration_s: 0,
-          rollouts: new Set(),
-        };
+          totalDuration: 0,
+          longestDuration: 0,
+          rolloutsMeasured: 0,
+        });
+        row.count += Number(phase?.count) || 0;
+        row.totalDuration += Number(phase?.total_duration_s) || 0;
+        row.longestDuration = Math.max(
+          row.longestDuration,
+          Number(phase?.longest_duration_s) || 0,
+        );
+        if (!seenHere.has(name)) {
+          seenHere.add(name);
+          row.rolloutsMeasured += 1;
+        }
       }
-      const entry = totalsByName[name];
-      const c = Number(t?.count) || 0;
-      const total = Number(t?.total_duration_s) || 0;
-      const max = Number(t?.max_duration_s) || 0;
-      entry.count += c;
-      entry.total_duration_s += total;
-      entry.max_duration_s = Math.max(entry.max_duration_s, max);
-      entry.rollouts.add(role);
     }
   }
 
-  const rolloutCount = rolloutIds.size || Object.keys(roles).length || 1;
-  return Object.values(totalsByName).map((row) => ({
-    name: row.name,
-    count: row.rollouts.size,
-    totalDuration: row.total_duration_s,
-    avgDuration: row.count ? row.total_duration_s / row.count : 0,
-    maxDuration: row.max_duration_s,
-    rolloutCount,
-  }));
+  const rolloutCount = rollouts.length;
+  return Object.values(byName)
+    .map((row) => ({
+      ...row,
+      avgDuration: row.count ? row.totalDuration / row.count : 0,
+      avgPerRollout: row.rolloutsMeasured
+        ? row.totalDuration / row.rolloutsMeasured
+        : 0,
+      rolloutCount,
+    }))
+    .sort((a, b) => b.totalDuration - a.totalDuration);
 }
 
 export function fmtSecs(s) {

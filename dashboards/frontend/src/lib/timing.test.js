@@ -36,34 +36,67 @@ describe("fmtSecs", () => {
   });
 });
 
+const phase = (count, total, longest) => ({
+  count,
+  total_duration_s: total,
+  longest_duration_s: longest,
+  first_start_s: 0,
+  last_end_s: total,
+});
+
 describe("phaseSummaries", () => {
-  it("aggregates totals across lanes and tracks rollout count", () => {
-    const lanes = {
-      roles: {
-        driver: {
-          role: "driver",
-          rollout_id: 0,
-          totals: {
-            generate_rollouts: { total_duration_s: 1.2, max_duration_s: 0.6, count: 2 },
-          },
-        },
-        rollout: {
-          role: "rollout",
-          rollout_id: 0,
-          totals: {
-            generate_rollouts: { total_duration_s: 0.8, max_duration_s: 0.4, count: 2 },
-            custom_reward: { total_duration_s: 4.0, max_duration_s: 2.0, count: 8 },
+  it("aggregates a phase across lanes and rollouts", () => {
+    const rows = phaseSummaries({
+      0: {
+        roles: {
+          driver: { role: "driver", phases: { generate_rollouts: phase(1, 1.2, 1.2) } },
+          rollout: {
+            role: "rollout",
+            phases: { reward: phase(8, 4.0, 2.0) },
           },
         },
       },
-    };
-    const rows = phaseSummaries(lanes);
+      1: {
+        roles: {
+          driver: { role: "driver", phases: { generate_rollouts: phase(1, 0.8, 0.8) } },
+        },
+      },
+    });
+
     const gen = rows.find((r) => r.name === "generate_rollouts");
-    expect(gen).toBeDefined();
     expect(gen.count).toBe(2);
-    expect(gen.totalDuration).toBe(2.0);
-    expect(gen.maxDuration).toBe(0.6);
-    expect(gen.avgDuration).toBe(2.0 / 4);
-    expect(gen.rolloutCount).toBe(1);
+    expect(gen.totalDuration).toBeCloseTo(2.0);
+    expect(gen.longestDuration).toBe(1.2);
+    expect(gen.avgDuration).toBeCloseTo(1.0);
+    expect(gen.avgPerRollout).toBeCloseTo(1.0);
+    expect(gen.rolloutsMeasured).toBe(2);
+    expect(gen.rolloutCount).toBe(2);
+  });
+
+  it("says how many rollouts a phase is missing from", () => {
+    const rows = phaseSummaries({
+      0: { roles: { rollout: { role: "rollout", phases: { reward: phase(4, 2.0, 0.7) } } } },
+      1: { roles: {} },
+    });
+
+    const reward = rows.find((r) => r.name === "reward");
+    expect(reward.rolloutsMeasured).toBe(1);
+    expect(reward.rolloutCount).toBe(2);
+    // Averaged over the rollouts that recorded it, not the ones asked for.
+    expect(reward.avgPerRollout).toBeCloseTo(2.0);
+  });
+
+  it("orders by time spent, longest first", () => {
+    const rows = phaseSummaries({
+      0: {
+        roles: {
+          driver: {
+            role: "driver",
+            phases: { weight_sync: phase(1, 0.5, 0.5), train_models: phase(1, 9.0, 9.0) },
+          },
+        },
+      },
+    });
+    expect(rows.map((r) => r.name)).toEqual(["train_models", "weight_sync"]);
   });
 });

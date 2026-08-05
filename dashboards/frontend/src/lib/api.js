@@ -220,6 +220,16 @@ export async function fetchRunTimings(trainingRunId, rolloutId) {
   return await res.json();
 }
 
+// Measured substep timing for several rollouts at once, keyed by rollout id.
+export async function fetchRunTimingsBatch(trainingRunId, rolloutIds) {
+  if (!rolloutIds?.length) return {};
+  const res = await fetch(
+    `${SERVER}/runs/${encodeURIComponent(trainingRunId)}/timings?rollout_ids=${rolloutIds.join(",")}`,
+  );
+  if (!res.ok) return {};
+  return await res.json();
+}
+
 // One step's full per-group advantage distribution (for drill-in).
 export async function fetchRunAdvantageStep(trainingRunId, rolloutId) {
   const res = await fetch(

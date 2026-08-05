@@ -20,6 +20,32 @@ class Role(str, Enum):
     CRITIC = "critic"
 
 
+class PhaseTiming(BaseModel):
+    """How long one phase took, for the times it ran in one rollout.
+
+    A phase can run many times per rollout -- a reward phase runs once per
+    sample, ``compute_log_probs`` up to four times per train step -- so the
+    writer accumulates these five numbers as it measures instead of keeping one
+    entry per measurement, which would grow the record without bound.
+
+    Offsets are seconds since the lane opened, so ``first_start_s`` and
+    ``last_end_s`` place the phase on the rollout's timeline. ``total_duration_s``
+    is time spent in the phase, which is less than ``last_end_s -
+    first_start_s`` when the phase ran repeatedly and more than it when the runs
+    overlapped (rewards are scored concurrently).
+    """
+
+    count: int
+    total_duration_s: float
+    longest_duration_s: float
+    first_start_s: float
+    last_end_s: float
+
+    @property
+    def average_duration_s(self) -> float:
+        return self.total_duration_s / self.count if self.count else 0.0
+
+
 class RoleTimingRecord(BaseModel):
     """One role's measured timing for one rollout.
 
@@ -31,13 +57,7 @@ class RoleTimingRecord(BaseModel):
     role: Role
     created_at: int = 0
     lane_start_unix_s: float | None = None
-    phases: dict[str, list[tuple[float, float]]] = Field(default_factory=dict)
-    # {phase: (count, summed duration, latest end)} for intervals past the
-    # writer's per-phase cap: measured, but not stored one by one. A phase
-    # measured per sample is thousands of intervals in one step, and a record
-    # is re-posted whole on every publish. Folding them keeps every number
-    # phase_totals prints exact at a fixed size; only the individual bars go.
-    overflow: dict[str, tuple[int, float, float]] = Field(default_factory=dict)
+    phases: dict[str, PhaseTiming] = Field(default_factory=dict)
 
     @property
     def storage_key(self) -> str:
@@ -80,35 +100,10 @@ class Substep(str, Enum):
 
     WAIT_FOR_ROLLOUT = "wait_for_rollout"  # driver
     TRAIN_MODELS = "train_models"  # driver
-    CUSTOM_REWARD = "custom_reward"  # rollout worker
+    GENERATE_SAMPLES = "generate_samples"  # rollout worker
+    REWARD = "reward"  # rollout worker
     REWARD_POST_PROCESS = "reward_post_process"  # rollout worker
     FORWARD_BACKWARD = "forward_backward"  # actor / critic
-
-
-def phase_totals(
-    intervals: list[list[float]],
-    overflow: tuple[int, float, float] | None = None,
-) -> dict[str, float | int]:
-    extra_count, extra_duration, extra_end = overflow or (0, 0.0, 0.0)
-    if not intervals:
-        return {
-            "total_duration_s": 0.0,
-            "wall_span_s": 0.0,
-            "count": 0,
-            "start_offset_s": 0.0,
-        }
-    # Total and span differ whenever a phase's intervals overlap, which the
-    # concurrent lanes do (rewards are scored in parallel): the total is
-    # occupancy, the span is how long the phase was in progress.
-    last_end = max(max(end for _, end in intervals), extra_end)
-    return {
-        "total_duration_s": round(
-            sum(end - start for start, end in intervals) + extra_duration, 6
-        ),
-        "wall_span_s": round(last_end - intervals[0][0], 6),
-        "count": len(intervals) + extra_count,
-        "start_offset_s": round(intervals[0][0], 6),
-    }
 
 
 def rollout_lanes(records: list[dict[str, Any]]) -> dict[str, Any]:
@@ -116,19 +111,14 @@ def rollout_lanes(records: list[dict[str, Any]]) -> dict[str, Any]:
 
     Keyed by role so the frontend indexes lanes by name rather than by position.
     """
-    lanes: dict[str, Any] = {}
-    for record in records:
-        phases = record["phases"]
-        overflow = record.get("overflow") or {}
-        lanes[record["role"]] = {
+    lanes = {
+        record["role"]: {
             "role": record["role"],
             "lane_start_unix_s": record["lane_start_unix_s"],
-            "phases": phases,
-            "totals": {
-                name: phase_totals(intervals, overflow.get(name))
-                for name, intervals in phases.items()
-            },
+            "phases": record["phases"],
         }
+        for record in records
+    }
     return {"roles": lanes}
 
 
@@ -136,9 +126,9 @@ def load_step(training_run_id: str, rollout_id: int) -> list[dict[str, Any]]:
     """The <=4 role records for one rollout, as stored. ``[]`` when none.
 
     Called by ``_dashboard._timings_for`` in a threadpool, once per uncached
-    rollout. An empty result is a normal outcome, not an error: every
-    pre-cutover run is in that state, and the caller falls through to the
-    legacy adapter.
+    rollout. An empty result is a normal outcome, not an error: a rollout can
+    be mid-flight, or the run can predate measured timing, in which case the
+    caller reads the run's legacy blob instead.
     """
     return vol_list_prefix(
         RoleTimingRecord.store(training_run_id),
@@ -147,10 +137,6 @@ def load_step(training_run_id: str, rollout_id: int) -> list[dict[str, Any]]:
 
 
 # ---------- Legacy handling --------------
-
-
-class DashboardTooOldError(RuntimeError):
-    """The dashboard cannot accept measured timing and the recipe requires it."""
 
 
 def probe_substep_timing(framework_status_url: str, mode: str = "auto") -> bool:
@@ -172,7 +158,7 @@ def probe_substep_timing(framework_status_url: str, mode: str = "auto") -> bool:
         return False
     if not framework_status_url:
         if mode == "require":
-            raise DashboardTooOldError(
+            raise RuntimeError(
                 "substep_timing='require' but this run has no dashboard URL to "
                 "report timing to. Deploy the dashboard "
                 "(`modal deploy dashboards/app.py`) or set substep_timing='auto'."
@@ -205,7 +191,7 @@ def probe_substep_timing(framework_status_url: str, mode: str = "auto") -> bool:
     if not problem:
         return True
     if mode == "require":
-        raise DashboardTooOldError(
+        raise RuntimeError(
             f"substep_timing='require' but {problem}. Redeploy the dashboard "
             "(`modal deploy dashboards/app.py`) or set substep_timing='auto'."
         )
@@ -229,15 +215,21 @@ def legacy_run_to_records(
         if not starts:
             continue
         lane_start = min(starts)
-        phases: dict[str, list[list[float]]] = {}
+        phases: dict[str, dict[str, float]] = {}
         for name, sub in subs.items():
             start, duration = sub.get("start"), sub.get("duration_s")
             if start is None or duration is None:
                 continue
             rel = start - lane_start
-            phases[_LEGACY_RENAMES.get(name, name)] = [
-                [round(rel, 6), round(rel + duration, 6)]
-            ]
+            # A legacy substep was recorded once per step, so its one duration
+            # is also its total and its longest.
+            phases[_LEGACY_RENAMES.get(name, name)] = {
+                "count": 1,
+                "total_duration_s": round(duration, 6),
+                "longest_duration_s": round(duration, 6),
+                "first_start_s": round(rel, 6),
+                "last_end_s": round(rel + duration, 6),
+            }
         records.append(
             {
                 "rollout_id": int(step_key) - 1,

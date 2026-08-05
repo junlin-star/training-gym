@@ -873,8 +873,8 @@ def fastapi_app():
         authorization: str | None = Header(default=None),
     ):
         """Writes RoleTimingRecords to metadata volume and timing cache."""
-        await _get_run_or_404(record.training_run_id)
         await _require_framework_status_token(record.training_run_id, authorization)
+        await _get_run_or_404(record.training_run_id)
 
         await record.save(is_async=True)
         timing_cache.pop((record.training_run_id, record.rollout_id), None)

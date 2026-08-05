@@ -6,6 +6,8 @@ paths import from this module *inside the training container*, so everything
 they reference must stay importable here. The implementation is split across:
 
 - :mod:`.reporting` — HTTP queue/URL/token plumbing + run-context helpers
+- :mod:`modal_training_gym.common.timing_recorder` — substep timing recorder,
+  shared with miles
 - :mod:`.sample_extraction` — trace/image/trajectory extraction from Samples
 - :mod:`.advantage_reporting` — torch/megatron advantage-distribution math
 
@@ -42,7 +44,6 @@ from .reporting import (
     _report_token as _report_token,
     _rollout_url as _rollout_url,
     _total_steps as _total_steps,
-    flush_timing as flush_timing,
 )
 from .sample_extraction import (
     _image_sample_limit,
@@ -83,7 +84,7 @@ from .sample_extraction import (
     _trace_attrs as _trace_attrs,
     _trace_scalar as _trace_scalar,
 )
-from .timing import (
+from modal_training_gym.common.timing_recorder import (
     RoleRecorder as RoleRecorder,
     recording_lane as recording_lane,
     recording_lane_on_reporting_rank as recording_lane_on_reporting_rank,
@@ -311,7 +312,6 @@ def report_rollout_phase(
 __all__ = [
     "before_log_prob_hook",
     "before_train_step_hook",
-    "flush_timing",
     "log_eval_rollout_data",
     "log_rollout_data",
     "recording_lane",

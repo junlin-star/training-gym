@@ -1,9 +1,9 @@
 <script>
   import { fmtSecs, labelFor, phaseSummaries } from "../lib/timing.js";
 
-  let { lanes = null } = $props();
+  let { timings = null } = $props();
 
-  let rows = $derived(phaseSummaries(lanes || {}));
+  let rows = $derived(phaseSummaries(timings || {}));
 </script>
 
 <div class="phase-summary">
@@ -16,8 +16,9 @@
           <th>Phase</th>
           <th>Rollouts</th>
           <th>Total</th>
-          <th>Average</th>
-          <th>Max</th>
+          <th>Per rollout</th>
+          <th>Average run</th>
+          <th>Longest run</th>
         </tr>
       </thead>
       <tbody>
@@ -25,19 +26,25 @@
           <tr>
             <td>{labelFor(row.name)}</td>
             <td>
-              {row.count}/{row.rolloutCount}
-              {#if row.count < row.rolloutCount}
+              {row.rolloutsMeasured}/{row.rolloutCount}
+              {#if row.rolloutsMeasured < row.rolloutCount}
                 <span
                   class="missing"
                   title="Not measured on every rollout shown: the phase did not run, or its record never arrived."
                 >
-                  · missing in {row.rolloutCount - row.count}
+                  · missing in {row.rolloutCount - row.rolloutsMeasured}
                 </span>
               {/if}
             </td>
             <td>{fmtSecs(row.totalDuration)}</td>
-            <td>{fmtSecs(row.avgDuration)}</td>
-            <td>{fmtSecs(row.maxDuration)}</td>
+            <td>{fmtSecs(row.avgPerRollout)}</td>
+            <td>
+              {fmtSecs(row.avgDuration)}
+              {#if row.count > row.rolloutsMeasured}
+                <span class="runs">over {row.count} runs</span>
+              {/if}
+            </td>
+            <td>{fmtSecs(row.longestDuration)}</td>
           </tr>
         {/each}
       </tbody>
@@ -62,9 +69,13 @@
     color: var(--color-c-gray-45, #6e6e6e);
     font-weight: 500;
   }
-  .missing {
+  .missing,
+  .runs {
     color: var(--color-c-gray-45, #6e6e6e);
     margin-left: 0.25rem;
+  }
+  td {
+    font-variant-numeric: tabular-nums;
   }
   .empty {
     color: var(--color-c-gray-45, #6e6e6e);

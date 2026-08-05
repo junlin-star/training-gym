@@ -4,6 +4,7 @@
   import Tabs from "../components/Tabs.svelte";
   import RunSummary from "../components/RunSummary.svelte";
   import StepTimings from "../components/StepTimings.svelte";
+  import PhaseSummary from "../components/PhaseSummary.svelte";
   import StatusPill from "../components/StatusPill.svelte";
   import TimeAgo from "../components/TimeAgo.svelte";
   import InferenceStats from "../components/InferenceStats.svelte";
@@ -20,6 +21,7 @@
     fetchRunRollouts,
     fetchRollout,
     fetchRunTimings,
+    fetchRunTimingsBatch,
     fetchRunAdvantages,
     fetchRunAdvantageStep,
     fetchRunLogs,
@@ -419,6 +421,10 @@
       if (signal?.aborted) return;
       rolloutSummaries = rows;
       rolloutsError = "";
+      runTimings = await fetchRunTimingsBatch(
+        runId,
+        rows.map((r) => r.rollout_id),
+      );
 
       // Reveal the first rollout
       if (wasEmpty && rolloutSummaries.length > 0 && expandedRolloutId === null) {
@@ -453,6 +459,7 @@
     runId;
     rolloutSummaries = [];
     rolloutsError = "";
+    runTimings = {};
     expandedRolloutId = null;
     expandedRollout = null;
     advantageSteps = [];
@@ -504,6 +511,8 @@
   });
 
   let expandedTimings = $state(null);
+  // Measured timing for every listed rollout, for the run-level phase summary.
+  let runTimings = $state({});
 
   async function toggleRolloutDetail(rolloutId) {
     if (!runId) return;
@@ -1360,6 +1369,14 @@
             <div class="mb-[20px]">
               <div class="text-(--red,#f87171) text-[12px] font-[600] tracking-[0.02em] mb-[6px] uppercase">Error</div>
               <pre class="[border:1px_solid_color-mix(in_srgb,var(--red,#f87171)_45%,transparent)] rounded-[8px] bg-[color-mix(in_srgb,var(--red,#f87171)_12%,transparent)] text-(--red,#f87171) [font-family:var(--font-mono)] text-[12px] leading-[17px] m-0 max-h-[320px] overflow-auto p-[12px_14px] whitespace-pre-wrap [word-break:break-word]">{run.error_message}</pre>
+            </div>
+          {/if}
+          {#if Object.keys(runTimings).length}
+            <div class="rollout-chart">
+              <div class="rollout-chart-title">
+                Substep timing across {Object.keys(runTimings).length} rollouts
+              </div>
+              <PhaseSummary timings={runTimings} />
             </div>
           {/if}
           {#if run.step_times || run.substep_times}
