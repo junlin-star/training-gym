@@ -152,8 +152,6 @@
     }
   });
 
-  // Inverted vs. evals' expanded set so groups default to expanded, including
-  // ones that appear later via auto-refresh.
   let collapsedGroupKeys = $state(new Set());
 
   function toggleGroupSection(key) {

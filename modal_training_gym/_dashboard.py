@@ -121,13 +121,7 @@ app = modal.App("training-gym-dashboard", image=image)
 STATIC_DIR = "/app/frontend/dist"
 
 
-# Underscore-prefixed so it shows up as an auto-managed secret in the Modal
-# Secrets UI and is auto-created on first deploy from ~/.modal.toml.
 MODAL_CREDS_SECRET_NAME = "_training-gym-modal-creds"
-
-# Holds DASHBOARD_PASSWORD. An empty value means the dashboard is open (no
-# auth) — that's the default so existing deployments keep working untouched.
-# Set a real value via ``training-gym set-password``.
 DASHBOARD_PASSWORD_SECRET_NAME = "_training-gym-dashboard-password"
 
 # Routes that must bypass Basic Auth. Write endpoints authenticate with their
@@ -342,14 +336,12 @@ def _run_compact_sync() -> None:
 
 @app.function(schedule=modal.Cron("*/30 * * * *"))
 def compact_summaries() -> None:
-    """Scheduled compaction of summary stores (every 30 min)."""
     _run_compact_sync()
     print("Compaction complete.")
 
 
 @app.function(schedule=modal.Cron("*/30 * * * *"), secrets=_function_secrets())
 def reconcile() -> None:
-    """Reconcile orphaned training runs and deployments every 30 minutes."""
     from modal_training_gym.common.reconcile import reconcile as _reconcile
 
     outcome = _reconcile()
@@ -394,7 +386,6 @@ def fastapi_app():
     from modal_training_gym.common.modal_urls import modal_app_dashboard_url
     from modal_training_gym.utils.metadata import (
         MetadataStore,
-        summary_items_from_payload,
         vol_get,
         vol_get_summary_items_healed,
         vol_put_summary_items,
@@ -433,7 +424,7 @@ def fastapi_app():
         return os.environ.get(DASHBOARD_REQUIRES_PROXY_AUTH_ENV_KEY, "false") == "true"
 
     cache_ttl_seconds = 30.0
-    cache_keys = ("runs", "train_results", "evals", "deployments")
+    cache_keys = ("runs", "train_results")
     # Each entry holds (expires_at, values, loaded_at). ``loaded_at == 0.0``
     # means "never successfully loaded", which lets the very first request block
     # for real data instead of flashing an empty list.
@@ -539,75 +530,6 @@ def fastapi_app():
             updated.append(new_item)
         return updated, changed
 
-    def merge_missing_fields(
-        merged: JsonDict, source: JsonDict, fields: tuple[str, ...]
-    ) -> None:
-        for field in fields:
-            value = source.get(field)
-            if field not in merged and value is not None:
-                merged[field] = value
-
-    async def fetch_by_id(
-        store: MetadataStore, key: str
-    ) -> tuple[str, JsonDict | None]:
-        try:
-            return key, await run_in_threadpool(vol_get, store, key)
-        except KeyError:
-            return key, None
-
-    async def fetch_all_by_id(
-        store: MetadataStore, keys: list[str]
-    ) -> dict[str, JsonDict]:
-        fetched = await asyncio.gather(*(fetch_by_id(store, key) for key in keys))
-        return {key: value for key, value in fetched if value is not None}
-
-    async def load_eval_summaries() -> list[JsonDict]:
-        try:
-            payload = await run_in_threadpool(vol_get, MetadataStore.EVALS, "summary")
-        except KeyError:
-            return []
-
-        summaries = summary_items_from_payload(payload, payload_key="summaries")
-        if not summaries:
-            return []
-
-        results_by_id = await fetch_all_by_id(
-            MetadataStore.EVAL_RESULTS,
-            [str(s.get("eval_id") or "") for s in summaries if s.get("eval_id")],
-        )
-        configs_by_id = await fetch_all_by_id(
-            MetadataStore.EVAL_CONFIGS,
-            [
-                str(s.get("eval_config_id") or "")
-                for s in summaries
-                if s.get("eval_config_id")
-            ],
-        )
-
-        enriched: list[JsonDict] = []
-        for summary in summaries:
-            merged = dict(summary)
-            result = results_by_id.get(str(summary.get("eval_id") or ""))
-            if result:
-                merge_missing_fields(
-                    merged, result, ("deployment_id", "config", "status")
-                )
-            eval_config = configs_by_id.get(str(summary.get("eval_config_id") or ""))
-            if eval_config:
-                merged["eval_config"] = eval_config
-                merge_missing_fields(
-                    merged,
-                    eval_config,
-                    (
-                        "dataset_name",
-                        "eval_fn_name",
-                        "prompt_column",
-                        "generate_kwargs",
-                    ),
-                )
-            enriched.append(merged)
-        return enriched
-
     async def load_list_summary(
         summary_store: MetadataStore,
     ) -> list[JsonDict]:
@@ -632,12 +554,6 @@ def fastapi_app():
             summary.model_dump(mode="json")
             for summary in build_run_summaries(run_records, result_records)
         ]
-
-    async def load_train_results() -> list[JsonDict]:
-        return await load_list_summary(MetadataStore.TRAIN_RESULTS_SUMMARY)
-
-    async def load_deployments() -> list[JsonDict]:
-        return await load_list_summary(MetadataStore.DEPLOYMENTS_SUMMARY)
 
     def _bearer_token(authorization: str | None) -> str:
         scheme, _, token = (authorization or "").partition(" ")
@@ -1099,7 +1015,10 @@ def fastapi_app():
     @web.get("/api/train-results")
     async def train_results():
         try:
-            data = await get_cached_list("train_results", load_train_results)
+            data = await get_cached_list(
+                "train_results",
+                lambda: load_list_summary(MetadataStore.TRAIN_RESULTS_SUMMARY),
+            )
         except Exception:
             data = []
         return JSONResponse(data)
@@ -1117,39 +1036,6 @@ def fastapi_app():
                 detail=f"TrainResult {training_run_id!r} not found",
             )
 
-    # ── Eval results ─────────────────────────────────────────────────────
-
-    @web.get("/api/evals")
-    async def evals():
-        try:
-            data = await get_cached_list("evals", load_eval_summaries)
-        except Exception:
-            data = []
-        return JSONResponse(data)
-
-    @web.get("/api/evals/{eval_id}")
-    async def eval_detail(eval_id: str):
-        try:
-            data = await run_in_threadpool(vol_get, MetadataStore.EVAL_RESULTS, eval_id)
-        except KeyError:
-            raise HTTPException(
-                status_code=404,
-                detail=f"EvalResult {eval_id!r} not found",
-            )
-        if isinstance(data, dict):
-            _apply_parsed(data.get("rows"))
-        return JSONResponse(data)
-
-    # ── Deployments ──────────────────────────────────────────────────────
-
-    @web.get("/api/deployments")
-    async def deployments():
-        try:
-            data = await get_cached_list("deployments", load_deployments)
-        except Exception:
-            data = []
-        return JSONResponse(data)
-
     @web.get("/favicon.svg", include_in_schema=False)
     async def favicon():
         return FileResponse(f"{STATIC_DIR}/favicon.svg", media_type="image/svg+xml")
@@ -1164,6 +1050,8 @@ def fastapi_app():
 
     @web.get("/{full_path:path}")
     async def serve_spa(full_path: str):
+        if full_path == "api" or full_path.startswith("api/"):
+            raise HTTPException(status_code=404, detail=f"No such route: /{full_path}")
         return FileResponse(f"{STATIC_DIR}/index.html")
 
     return web

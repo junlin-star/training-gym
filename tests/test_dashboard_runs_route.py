@@ -295,3 +295,19 @@ def test_run_logs_rejects_invalid_time_bound(bound, fake_volume, monkeypatch, tm
     assert response.json()["detail"].startswith(
         f"{bound} must be epoch seconds, ISO 8601, or a relative time"
     )
+
+
+def test_spa_fallback_serves_client_routes(fake_volume, monkeypatch, tmp_path):
+    with _client(monkeypatch, tmp_path) as client:
+        for path in ("/", "/training", "/training/run-route-1"):
+            response = client.get(path)
+            assert response.status_code == 200, path
+            assert response.text == "ok", path
+
+
+def test_spa_fallback_404s_unknown_api_routes(fake_volume, monkeypatch, tmp_path):
+    with _client(monkeypatch, tmp_path) as client:
+        for path in ("/api", "/api/nope"):
+            response = client.get(path)
+            assert response.status_code == 404, path
+            assert response.json()["detail"] == f"No such route: {path}"

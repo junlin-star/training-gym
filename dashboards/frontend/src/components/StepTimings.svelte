@@ -9,7 +9,7 @@
   } = $props();
 
   const SUBSTEP_LABELS = {
-    evaluate_rollouts: "Eval (before)",
+    evaluate_rollouts: "Validation (before)",
     generate_rollouts: "Generate rollouts",
     offload_rollout: "Offload rollout",
     compute_log_probs: "Compute log probs",
@@ -17,7 +17,7 @@
     checkpoint_save: "Checkpoint save",
     offload_train: "Offload train",
     weight_sync: "Weight sync",
-    evaluate_rollouts_end: "Eval (after)",
+    evaluate_rollouts_end: "Validation (after)",
   };
 
   const SUBSTEP_COLORS = {
