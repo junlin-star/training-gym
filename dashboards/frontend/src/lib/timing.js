@@ -1,252 +1,320 @@
+const slot = (name) => `var(--color-c-dataviz-${name})`;
+
+// Colour carries the *kind* of cost, not the phase's name: a reader who has
+// never seen slime should be able to tell "the GPUs are training" from "we are
+// moving weights around" from "nothing is happening" without a glossary.
+export const CATEGORIES = {
+  train: { label: "Training compute", color: slot("primary-6") },
+  generate: { label: "Rollout generation", color: slot("primary-7") },
+  reward: { label: "Reward code", color: slot("paired-7") },
+  transfer: { label: "Moving weights", color: slot("primary-2") },
+  checkpoint: { label: "Checkpointing", color: slot("primary-3") },
+  eval: { label: "Eval", color: slot("paired-4") },
+  idle: { label: "Waiting / untracked", color: "var(--color-c-gray-30, #6a6a6a)" },
+};
+
+// Where two phases of one category sit next to each other often enough that
+// telling them apart matters, the second takes a neighbouring tone of the same
+// family -- still "this is training", but with a visible seam.
+const TONES = {
+  optimizer_step: slot("primary-5"),
+  compute_log_probs: slot("paired-1"),
+  offload_train: slot("primary-4"),
+  offload_rollout: slot("primary-4"),
+};
+
+const PHASE_CATEGORY = {
+  train_models: "train",
+  compute_log_probs: "train",
+  forward_backward: "train",
+  optimizer_step: "train",
+  generate_rollouts: "generate",
+  generate_samples: "generate",
+  reward: "reward",
+  reward_batch: "reward",
+  reward_post_process: "reward",
+  weight_sync: "transfer",
+  offload_train: "transfer",
+  offload_rollout: "transfer",
+  checkpoint_save: "checkpoint",
+  evaluate_rollouts: "eval",
+  evaluate_rollouts_end: "eval",
+  wait_for_rollout: "idle",
+  wait_for_next_rollout: "idle",
+};
+
 export const TIMING_LABELS = {
-  evaluate_rollouts: "Eval (before)",
-  generate_rollouts: "Generate rollouts",
-  offload_rollout: "Offload rollout",
-  compute_log_probs: "Compute log probs",
-  train_models: "Train models",
-  checkpoint_save: "Checkpoint save",
-  offload_train: "Offload train",
-  weight_sync: "Weight sync",
-  evaluate_rollouts_end: "Eval (after)",
-  wait_for_rollout: "Wait for rollout",
-  wait_for_next_rollout: "Wait for next rollout",
+  evaluate_rollouts: "Eval (before training)",
+  evaluate_rollouts_end: "Eval (after training)",
+  generate_rollouts: "Waiting for rollouts",
+  offload_rollout: "Offload generation engines",
+  compute_log_probs: "Log probs",
+  train_models: "Train",
+  checkpoint_save: "Save checkpoint",
+  offload_train: "Offload trainer",
+  weight_sync: "Push weights to engines",
+  wait_for_rollout: "Waiting for this rollout",
+  wait_for_next_rollout: "Waiting for the next rollout",
   generate_samples: "Generate samples",
   reward: "Reward",
-  reward_batch: "Reward (batch)",
+  reward_batch: "Reward (whole batch)",
   reward_post_process: "Reward post process",
   forward_backward: "Forward/backward",
   optimizer_step: "Optimizer step",
+  untracked: "Untracked",
 };
 
-const slot = (name) => `var(--color-c-dataviz-${name})`;
-
-export const TIMING_COLORS = {
-  generate_rollouts: slot("paired-4"),
-  wait_for_rollout: slot("primary-7"),
-  wait_for_next_rollout: `color-mix(in srgb, ${slot("primary-7")} 60%, white)`,
-  generate_samples: slot("primary-7"),
-  reward: `color-mix(in srgb, ${slot("paired-4")} 55%, white)`,
-  reward_batch: `color-mix(in srgb, ${slot("paired-4")} 40%, white)`,
-  reward_post_process: `color-mix(in srgb, ${slot("primary-7")} 45%, white)`,
-  train_models: slot("primary-6"),
-  compute_log_probs: slot("paired-1"),
-  forward_backward: slot("primary-1"),
-  optimizer_step: slot("primary-5"),
-  weight_sync: slot("primary-2"),
-  offload_rollout: slot("primary-4"),
-  offload_train: slot("primary-4"),
-  checkpoint_save: slot("primary-3"),
-  evaluate_rollouts: slot("paired-7"),
-  evaluate_rollouts_end: slot("paired-3"),
-};
-
-export const PHASES_BESIDE_THE_STEP = [
-  "checkpoint_save",
+// Phases where the worker whose lane they are on is blocked on somebody else:
+// they are drawn as stalls, and the work itself shows up on the row of the
+// worker actually doing it.
+const STALLS = new Set([
+  "generate_rollouts",
+  "wait_for_rollout",
+  "wait_for_next_rollout",
   "evaluate_rollouts",
   "evaluate_rollouts_end",
-];
+]);
 
-const NEGLIGIBLE_WORK_S = 0.0005;
+// A phase measured once per sample, kept as an aggregate rather than thousands
+// of intervals: it is drawn as its span with the count and average on it.
+const SAMPLED = new Set(["reward", "reward_batch"]);
 
-const BLOCKED_ON = {
+const NESTS_IN = {
   compute_log_probs: ["train_models"],
   forward_backward: ["train_models"],
   optimizer_step: ["train_models"],
-  generate_samples: ["generate_rollouts"],
-  reward: ["generate_samples", "generate_rollouts"],
-  reward_batch: ["generate_samples", "generate_rollouts"],
-  reward_post_process: ["generate_samples", "generate_rollouts"],
+  reward: ["generate_samples"],
+  reward_batch: ["generate_samples"],
+  reward_post_process: ["generate_samples"],
 };
 
-function nestsWithin(bar, container) {
-  return (
-    bar.role === container.role ||
-    (BLOCKED_ON[bar.name] || []).includes(container.name)
-  );
-}
+// Two rows, in the order somebody debugging reads them: what the training loop
+// itself did, then what the machines generating rollouts did underneath it.
+export const GROUPS = [
+  {
+    key: "step",
+    label: "Training loop",
+    hint: "the driver and the GPUs it trains on",
+    roles: ["driver", "actor", "critic"],
+  },
+  {
+    key: "generation",
+    label: "Rollout generation",
+    hint: "the inference engines producing samples",
+    roles: ["rollout"],
+  },
+];
+
+const GROUP_OF_ROLE = new Map(
+  GROUPS.flatMap((group) => group.roles.map((role) => [role, group.key])),
+);
+
+const ROLE_LABELS = {
+  driver: "training loop",
+  actor: "trainer",
+  critic: "critic trainer",
+  rollout: "generation engines",
+};
+
+const NEGLIGIBLE_WORK_S = 0.0005;
+// Below this a hole is loop overhead rather than something to go and look at.
+const UNTRACKED_FLOOR_S = 0.25;
 
 export function labelFor(name) {
   return TIMING_LABELS[name] || name.replace(/_/g, " ");
 }
 
-export function colorFor(name) {
-  return TIMING_COLORS[name] || "var(--color-c-gray-40, #5e5e5e)";
+export function categoryOf(name) {
+  return PHASE_CATEGORY[name] || "idle";
 }
 
-export function rolloutTimeline(lanes) {
-  const roles = Object.entries(lanes?.roles || {});
-  const laneStarts = roles
-    .map(([, lane]) => Number(lane?.lane_start_unix_s))
-    .filter((s) => Number.isFinite(s));
-  const earliestLaneStart = laneStarts.length ? Math.min(...laneStarts) : null;
+export function colorFor(name) {
+  return TONES[name] || CATEGORIES[categoryOf(name)].color;
+}
 
-  const bars = [];
-  const perSample = [];
-  for (const [role, lane] of roles) {
-    const laneStart = Number(lane?.lane_start_unix_s);
-    const shift =
-      earliestLaneStart != null && Number.isFinite(laneStart)
-        ? laneStart - earliestLaneStart
-        : 0;
-    for (const [name, phase] of Object.entries(lane?.phases || {})) {
-      const count = Number(phase?.count) || 0;
-      const total = Number(phase?.total_duration_s) || 0;
-      const runs = Array.isArray(phase?.invocations) ? phase.invocations : [];
-      const first = (Number(phase?.first_start_s) || 0) + shift;
-      const last = (Number(phase?.last_end_s) || 0) + shift;
-      if (!count || total < NEGLIGIBLE_WORK_S) continue;
-      if (total / count < NEGLIGIBLE_WORK_S || (!runs.length && count > 1)) {
-        perSample.push({
+export function roleLabel(role) {
+  return ROLE_LABELS[role] || role;
+}
+
+function merge(spans) {
+  const merged = [];
+  for (const [start, end] of [...spans].sort((a, b) => a[0] - b[0])) {
+    const last = merged[merged.length - 1];
+    if (last && start <= last[1]) last[1] = Math.max(last[1], end);
+    else merged.push([start, end]);
+  }
+  return merged;
+}
+
+function collect(timings) {
+  const spans = [];
+  for (const [id, lanes] of Object.entries(timings || {})) {
+    const rolloutId = Number(id);
+    for (const [role, lane] of Object.entries(lanes?.roles || {})) {
+      const laneStart = Number(lane?.lane_start_unix_s);
+      if (!Number.isFinite(laneStart)) continue;
+      for (const [name, phase] of Object.entries(lane?.phases || {})) {
+        const count = Number(phase?.count) || 0;
+        const total = Number(phase?.total_duration_s) || 0;
+        if (!count || total < NEGLIGIBLE_WORK_S) continue;
+        const start = laneStart + (Number(phase?.first_start_s) || 0);
+        const end = laneStart + (Number(phase?.last_end_s) || 0);
+        spans.push({
+          rolloutId,
           role,
+          group: GROUP_OF_ROLE.get(role) ?? "step",
           name,
+          category: categoryOf(name),
+          kind: SAMPLED.has(name)
+            ? "sampled"
+            : STALLS.has(name)
+              ? "stall"
+              : "work",
+          start,
+          end,
           count,
           total,
           longest: Number(phase?.longest_duration_s) || 0,
-          start: first,
-          end: last,
         });
-        continue;
       }
-      const drawn = runs.length ? runs : [[first - shift, last - shift]];
-      const blocks = [];
-      for (const [start, end] of [...drawn].sort((a, b) => a[0] - b[0])) {
-        const block = blocks[blocks.length - 1];
-        if (block && Number(start) <= block.end) {
-          block.end = Math.max(block.end, Number(end));
-          block.runs += 1;
-          block.work += Number(end) - Number(start);
-        } else {
-          blocks.push({
-            start: Number(start),
-            end: Number(end),
-            runs: 1,
-            work: Number(end) - Number(start),
-          });
-        }
-      }
-      blocks.forEach((block, index) => {
-        bars.push({
-          key: `${role}:${name}:${index}`,
-          role,
-          name,
-          start: block.start + shift,
-          end: block.end + shift,
-          duration: block.end - block.start,
-          runs: block.runs,
-          work: block.work,
-          contains: false,
-          band: null,
-          spent: [],
-        });
-      });
     }
   }
-  bars.sort((a, b) => a.start - b.start || b.end - a.end);
+  return spans;
+}
 
-  bars.forEach((bar, index) => {
-    const container = bars
-      .slice(0, index)
+// Where each rollout's step sits on the run's clock, taken from the lane the
+// loop itself runs on so a step spans exactly what the driver did for it.
+function stepsOf(spans) {
+  const byRollout = new Map();
+  for (const span of spans) {
+    if (span.role !== "driver") continue;
+    const step = byRollout.get(span.rolloutId) ?? {
+      id: span.rolloutId,
+      start: span.start,
+      end: span.end,
+      work: 0,
+      stalled: 0,
+    };
+    step.start = Math.min(step.start, span.start);
+    step.end = Math.max(step.end, span.end);
+    if (span.kind === "stall") step.stalled += span.total;
+    else step.work += span.total;
+    byRollout.set(span.rolloutId, step);
+  }
+  return [...byRollout.values()].sort((a, b) => a.start - b.start);
+}
+
+// Wall-clock the loop spent somewhere no phase measured. Drawn rather than left
+// blank: a hole in the driver's timeline is a finding, not decoration.
+function untrackedOf(spans, runStart, runEnd) {
+  const driver = spans.filter((span) => span.role === "driver");
+  if (!driver.length) return [];
+  const covered = merge(driver.map((span) => [span.start, span.end]));
+  const holes = [];
+  let cursor = runStart;
+  for (const [start, end] of covered) {
+    if (start - cursor >= UNTRACKED_FLOOR_S) holes.push([cursor, start]);
+    cursor = Math.max(cursor, end);
+  }
+  if (runEnd - cursor >= UNTRACKED_FLOOR_S) holes.push([cursor, runEnd]);
+  return holes.map(([start, end]) => ({
+    rolloutId: null,
+    role: "driver",
+    group: "step",
+    name: "untracked",
+    category: "idle",
+    kind: "untracked",
+    start,
+    end,
+    count: 1,
+    total: end - start,
+    longest: end - start,
+  }));
+}
+
+function nest(spans) {
+  const ordered = [...spans].sort((a, b) => a.start - b.start || b.end - a.end);
+  for (const span of ordered) {
+    const parent = ordered
       .filter(
         (other) =>
-          other.start <= bar.start &&
-          bar.end <= other.end &&
-          nestsWithin(bar, other),
+          other !== span &&
+          other.rolloutId === span.rolloutId &&
+          other.group === span.group &&
+          other.start <= span.start &&
+          span.end <= other.end &&
+          (NESTS_IN[span.name] || []).includes(other.name),
       )
       .sort((a, b) => b.depth - a.depth)[0];
-    bar.depth = container ? container.depth + 1 : 0;
-    bar.container = container ?? null;
-    bar.inside = container ? container.name : null;
-    if (container) container.contains = true;
-  });
-
-  for (const work of perSample) {
-    const container = bars
-      .filter(
-        (bar) =>
-          bar.start <= work.start &&
-          work.end <= bar.end &&
-          nestsWithin(work, bar),
-      )
-      .sort((a, b) => b.depth - a.depth)[0];
-    if (container) {
-      container.spent.push(work);
-      container.contains = true;
-    }
-    // Drawn even when nested: the span of thousands of sub-millisecond calls is
-    // where a step's time goes, and folding it into a parent hides it entirely.
-    bars.push({
-      key: `${work.role}:${work.name}`,
-      ...work,
-      duration: work.end - work.start,
-      runs: 1,
-      work: work.total,
-      depth: container ? container.depth + 1 : 0,
-      container: container ?? null,
-      inside: container ? container.name : null,
-      contains: false,
-      band: work,
-      spent: [],
-    });
+    span.depth = parent ? parent.depth + 1 : 0;
+    span.parent = parent ?? null;
+    if (parent) parent.contains = true;
   }
+  return ordered;
+}
 
-  for (const bar of bars) {
-    bar.overlaps = [
-      ...new Set(
-        bars
-          .filter(
-            (other) =>
-              other !== bar &&
-              other.start < bar.end &&
-              bar.start < other.end &&
-              !(other.start <= bar.start && bar.end <= other.end) &&
-              !(bar.start <= other.start && other.end <= bar.end),
-          )
-          .map((other) => other.name),
-      ),
-    ];
-  }
-
-  bars.sort((a, b) => a.depth - b.depth || a.start - b.start || b.end - a.end);
+// One row per depth, split further only when same-depth spans genuinely run at
+// the same time -- which in async is the next rollout generating during this
+// one's training, and in sync never happens.
+function rowsOf(spans) {
   const rows = [];
-  const rowOf = new Map();
-  const rowsPerParent = new Map();
-  for (const bar of bars) {
-    const parent = rowOf.get(bar.container) ?? null;
-    const siblings = rowsPerParent.get(parent) || [];
-    let row = siblings.find((r) => r.bars[r.bars.length - 1].end <= bar.start);
+  for (const span of [...spans].sort(
+    (a, b) => a.depth - b.depth || a.start - b.start,
+  )) {
+    let row = rows.find(
+      (candidate) =>
+        candidate.depth === span.depth &&
+        candidate.spans[candidate.spans.length - 1].end <= span.start,
+    );
     if (!row) {
-      row = {
-        depth: bar.depth,
-        parentIndex: parent ? parent.index : null,
-        concurrent: siblings.length > 0,
-        bars: [],
-      };
-      row.index = rows.push(row) - 1;
-      rowsPerParent.set(parent, [...siblings, row]);
+      row = { depth: span.depth, spans: [] };
+      rows.push(row);
     }
-    row.bars.push(bar);
-    rowOf.set(bar, row);
+    row.spans.push(span);
+    span.row = rows.indexOf(row);
+  }
+  return rows;
+}
+
+export function runTimeline(timings) {
+  const measured = collect(timings);
+  if (!measured.length) {
+    return { span: 0, runStart: null, groups: [], steps: [], categories: [] };
+  }
+  const runStart = Math.min(...measured.map((span) => span.start));
+  const runEnd = Math.max(...measured.map((span) => span.end));
+  const steps = stepsOf(measured);
+  const spans = nest([...measured, ...untrackedOf(measured, runStart, runEnd)]);
+
+  for (const span of spans) {
+    span.key = `${span.rolloutId}:${span.role}:${span.name}:${span.start.toFixed(3)}`;
+    span.offset = span.start - runStart;
+    span.duration = span.end - span.start;
+    span.average = span.total / span.count;
+    span.inside = span.parent ? span.parent.name : null;
+    delete span.parent;
   }
 
-  const span = bars.length ? Math.max(...bars.map((bar) => bar.end)) : 0;
-  const beside = bars.filter((bar) =>
-    PHASES_BESIDE_THE_STEP.includes(bar.name),
-  );
-  const stepDuration = bars
-    .filter(
-      (bar) =>
-        bar.role === "driver" && !PHASES_BESIDE_THE_STEP.includes(bar.name),
-    )
-    .reduce((total, bar) => total + bar.work, 0);
+  const groups = GROUPS.map((group) => {
+    const mine = spans.filter((span) => span.group === group.key);
+    return { ...group, rows: rowsOf(mine), roleNames: [...new Set(mine.map((s) => s.role))] };
+  }).filter((group) => group.rows.length);
+
   return {
-    rows,
-    span,
-    // Where this rollout sits on the run's wall clock. Async overlaps across
-    // rollouts rather than inside one, so a rollout drawn only against itself
-    // cannot show that its generation ran during the previous one's training.
-    originUnix: earliestLaneStart,
-    stepDuration,
-    beside: beside.map((bar) => ({ name: bar.name, duration: bar.duration })),
+    runStart,
+    span: Math.max(runEnd - runStart, 1e-6),
+    groups,
+    steps: steps.map((step) => ({
+      ...step,
+      offset: step.start - runStart,
+      duration: step.end - step.start,
+    })),
+    untracked: spans
+      .filter((span) => span.kind === "untracked")
+      .reduce((total, span) => total + span.duration, 0),
+    categories: [...new Set(spans.map((span) => span.category))].sort(
+      (a, b) => Object.keys(CATEGORIES).indexOf(a) - Object.keys(CATEGORIES).indexOf(b),
+    ),
   };
 }
 

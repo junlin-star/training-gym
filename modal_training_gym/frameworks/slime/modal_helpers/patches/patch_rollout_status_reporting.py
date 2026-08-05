@@ -9,8 +9,6 @@ from pathlib import Path
 PREAMBLE_MARKER = "PATCHED_TRAINING_GYM_PREAMBLE"
 ROLLOUT_MARKER = "PATCHED_TRAINING_GYM_ROLLOUT_STATUS"
 WEIGHT_SYNC_MARKER = "PATCHED_TRAINING_GYM_WEIGHT_SYNC_STATUS"
-STEP_START_MARKER = "PATCHED_TRAINING_GYM_STEP_START"
-STEP_FINISH_MARKER = "PATCHED_TRAINING_GYM_STEP_FINISH"
 GENERATE_ROLLOUT_MARKER = "PATCHED_TRAINING_GYM_GENERATE_ROLLOUT_STATUS"
 COMPUTE_LOG_PROBS_MARKER = "PATCHED_TRAINING_GYM_COMPUTE_LOG_PROBS_STATUS"
 OFFLOAD_ROLLOUT_MARKER = "PATCHED_TRAINING_GYM_OFFLOAD_ROLLOUT_STATUS"
@@ -29,7 +27,7 @@ PREAMBLE = (
     "        report_rollout_phase as _tg_report,\n"
     "    )\n"
     "except ImportError:\n"
-    "    def _tg_report(status, args=None, rollout_id=None, sync=False): pass\n"
+    "    def _tg_report(status, args=None, rollout_id=None): pass\n"
     "\n"
 )
 
@@ -43,8 +41,6 @@ def _patch_file(path: Path) -> None:
     needs_preamble = PREAMBLE_MARKER not in src
     needs_rollout = ROLLOUT_MARKER not in src
     needs_weight_sync = WEIGHT_SYNC_MARKER not in src
-    needs_step_start = STEP_START_MARKER not in src
-    needs_step_finish = STEP_FINISH_MARKER not in src
     needs_generate_rollout = GENERATE_ROLLOUT_MARKER not in src
     needs_compute_log_probs = COMPUTE_LOG_PROBS_MARKER not in src
     needs_offload_rollout = OFFLOAD_ROLLOUT_MARKER not in src
@@ -57,8 +53,6 @@ def _patch_file(path: Path) -> None:
         needs_preamble
         or needs_rollout
         or needs_weight_sync
-        or needs_step_start
-        or needs_step_finish
         or needs_generate_rollout
         or needs_compute_log_probs
         or needs_offload_rollout
@@ -82,7 +76,7 @@ def _patch_file(path: Path) -> None:
         src = src.replace(
             "except ImportError:\n",
             "except ImportError:\n"
-            "    def _tg_report(status, args=None, rollout_id=None, sync=False): pass\n",
+            "    def _tg_report(status, args=None, rollout_id=None): pass\n",
             1,
         )
 
@@ -102,29 +96,6 @@ def _patch_file(path: Path) -> None:
             )
 
         src, rollout_count = rollout_pattern.subn(_rollout_replacement, src, count=1)
-
-    step_start_count = 0
-    if needs_step_start:
-        step_start_pattern = re.compile(
-            r"^(?P<indent>[ \t]*)(?P<line>rollout_data_ref = "
-            r"ray\.get\(rollout_manager\.generate\.remote\("
-            r"(?P<rollout_id>rollout_id)\)\))[ \t]*$",
-            re.M,
-        )
-
-        def _step_start_replacement(match: re.Match[str]) -> str:
-            indent = match.group("indent")
-            line = match.group("line")
-            rollout_id = match.group("rollout_id").strip()
-            return "\n".join(
-                [
-                    f"{indent}# {STEP_START_MARKER}: training step start",
-                    f"{indent}_tg_report('generate_rollouts', args, {rollout_id}, sync=True)",
-                    f"{indent}{line}",
-                ]
-            )
-
-        src, step_start_count = step_start_pattern.subn(_step_start_replacement, src)
 
     compute_log_probs_count = 0
     if needs_compute_log_probs:
@@ -323,29 +294,6 @@ def _patch_file(path: Path) -> None:
             patched_lines.append(line)
         src = "".join(patched_lines)
 
-    step_finish_count = 0
-    if needs_step_finish:
-        step_finish_pattern = re.compile(
-            r"^(?P<indent>[ \t]*)(?P<guard>if "
-            r"(?:release_train or )?should_run_periodic_action\("
-            r"[ \t\r\n]*rollout_id,[ \t\r\n]*args\.save_interval,"
-            r"[ \t\r\n]*num_rollout_per_epoch,[ \t\r\n]*args\.num_rollout"
-            r"[ \t\r\n]*\):)",
-            re.M,
-        )
-
-        def _step_finish_replacement(match: re.Match[str]) -> str:
-            indent = match.group("indent")
-            return (
-                f"{indent}# {STEP_FINISH_MARKER}: training step finish\n"
-                f"{indent}_tg_report('weight_sync', args, rollout_id, sync=True)\n"
-                f"{indent}{match.group('guard')}"
-            )
-
-        src, step_finish_count = step_finish_pattern.subn(
-            _step_finish_replacement, src, count=1
-        )
-
     failed = []
     if needs_rollout and rollout_count != 1:
         failed.append("rollout init")
@@ -355,10 +303,6 @@ def _patch_file(path: Path) -> None:
         failed.append("generate rollout")
     if needs_compute_log_probs and compute_log_probs_count < 1:
         failed.append("compute log probs")
-    if needs_step_finish and step_finish_count != 1:
-        failed.append("step finish")
-    if needs_step_start and step_start_count == 0:
-        failed.append("step start")
     if needs_offload_rollout and offload_rollout_count != 1:
         failed.append("offload rollout")
     if needs_offload_train and offload_train_count != 1:

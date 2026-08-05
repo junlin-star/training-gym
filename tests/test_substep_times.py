@@ -30,9 +30,7 @@ def test_missing_patch_target_is_skipped(tmp_path, capsys):
 # The async loop has no generation/offload/eval step of its own to report
 # around, so those anchors are absent there and the patcher says so.
 UNREPORTED = {
-    "train_async.py": (
-        "generate rollout, step start, offload rollout, offload train, eval begin"
-    )
+    "train_async.py": "generate rollout, offload rollout, offload train, eval begin"
 }
 
 

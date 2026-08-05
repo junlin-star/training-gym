@@ -33,10 +33,8 @@ from .advantage_reporting import (
     report_advantage_distribution as report_advantage_distribution,
 )
 from .reporting import (
-    _STEP_EVENT_TIMEOUT_SECONDS,
     _enqueue,
     _enqueue_rollout,
-    _post_framework_status,
     _run_context,
     _step_progress,
 )
@@ -286,15 +284,15 @@ def report_rollout_phase(
     status: SlimeStatus | str,
     args: Any = None,
     rollout_id: int | None = None,
-    sync: bool = False,
 ) -> None:
     """Report one rollout phase to the dashboard's Stage column.
 
     ``status`` may be a plain string — the patched slime train.py passes phase
     names as literals so the injected code stays stdlib-only.
 
-    ``sync=True`` posts inline and is used for step-boundary transitions that the
-    dashboard shows as the current step; everything else is queued.
+    Always queued: nothing this reports is worth a millisecond of the training
+    loop, and the step boundaries it used to post inline for cost a full 5s
+    timeout per step on a dashboard that was slow to answer.
     """
     payload = {
         **_run_context(args),
@@ -303,10 +301,7 @@ def report_rollout_phase(
         "rollout_id": rollout_id,
         "event_ts": time.time(),
     }
-    if sync:
-        _post_framework_status(payload, _STEP_EVENT_TIMEOUT_SECONDS)
-    else:
-        _enqueue(payload)
+    _enqueue(payload)
 
 
 __all__ = [

@@ -1,6 +1,14 @@
 <script>
   import { Download, ZoomIn, ZoomOut } from "lucide-svelte";
-  import { colorFor, fmtSecs, labelFor, rolloutTimeline } from "../lib/timing.js";
+  import {
+    CATEGORIES,
+    categoryOf,
+    colorFor,
+    fmtSecs,
+    labelFor,
+    roleLabel,
+    runTimeline,
+  } from "../lib/timing.js";
 
   let { timings = null, downloadName = "substep_timing.json" } = $props();
 
@@ -10,117 +18,54 @@
   const WHEEL_SENSITIVITY = 0.0015;
 
   const ROW_HEIGHT_PX = 16;
-  const ROW_GAP_PX = 4;
-  const CONTAINED_INSET_PX = 2;
-  const BAR_GAP_PX = 2;
+  const ROW_GAP_PX = 3;
+  const GROUP_GAP_PX = 14;
+  const LABEL_PX = 46;
 
-  // An async driver waits twice a step, on two different rollouts' generation.
+  // What each wait is actually waiting for, in rollouts rather than futures.
   const WAITS_ON = {
+    generate_rollouts: () => "the engines generating this rollout's samples",
     wait_for_rollout: (id) =>
       id > 0
-        ? `waited on rollout ${id}'s generation, run during rollout ${id - 1}`
-        : `waited on rollout ${id}'s generation, started before the loop`,
-    wait_for_next_rollout: (id) => `waited on rollout ${id + 1}'s generation, before the weight update`,
+        ? `this rollout's samples, generated during rollout ${id - 1}`
+        : "this rollout's samples, generation started before the loop",
+    wait_for_next_rollout: (id) =>
+      `rollout ${id + 1}'s samples, drained before the weights change`,
+    evaluate_rollouts: () => "the engines running eval",
+    evaluate_rollouts_end: () => "the engines running eval",
   };
 
-  function placeRows(rows) {
-    const placed = [];
-    let nextTop = 0;
-    for (const row of rows) {
-      const container =
-        row.parentIndex == null || row.concurrent ? null : placed[row.parentIndex];
-      const placedRow = {
-        ...row,
-        top: container ? container.top + CONTAINED_INSET_PX : nextTop,
-        height: container
-          ? container.height - 2 * CONTAINED_INSET_PX
-          : ROW_HEIGHT_PX,
-      };
-      if (!container) nextTop = placedRow.top + ROW_HEIGHT_PX + ROW_GAP_PX;
-      placed[row.index] = placedRow;
-    }
-    return { rows: placed, rowsHeight: Math.max(nextTop - ROW_GAP_PX, ROW_HEIGHT_PX) };
-  }
-
-  const ROLLOUT_GAP_PX = 20;
-  const ROLLOUT_HEAD_PX = 19;
-
-  let rollouts = $derived.by(() =>
-    Object.entries(timings || {})
-      .map(([id, lanes]) => {
-        const timeline = rolloutTimeline(lanes);
-        return { id: Number(id), ...timeline, ...placeRows(timeline.rows) };
-      })
-      .sort((a, b) => a.id - b.id),
-  );
-
-  // Rollouts are laid out on the run's own clock rather than packed end to
-  // end, so a rollout that began before the previous one finished is drawn
-  // over that stretch instead of after it. Async is overlap between rollouts:
-  // the next generation runs during this step's training, which a rollout
-  // measured only against itself has no way to show. Ones that overlap take
-  // separate bands; a run without overlap keeps a single band, as it did.
-  let placedRollouts = $derived.by(() => {
-    // Without a wall clock on every rollout there is nothing to align them
-    // by, so they fall back to running one after another as they used to.
-    const clocked = rollouts.every((r) => Number.isFinite(r.originUnix));
-    let packed = 0;
-    const spans = rollouts.map((rollout) => {
-      const start = clocked ? rollout.originUnix : packed;
-      packed += rollout.span;
-      return { rollout, start, end: start + rollout.span };
-    });
-    const runStart = Math.min(...spans.map((s) => s.start));
-    const runSpan = Math.max(Math.max(...spans.map((s) => s.end)) - runStart, 1e-6);
-    const bandEnds = [];
-    return spans.map(({ rollout, start, end }) => {
-      let band = bandEnds.findIndex((bandEnd) => bandEnd <= start);
-      if (band === -1) band = bandEnds.push(0) - 1;
-      bandEnds[band] = end;
-      return {
-        rollout,
-        band,
-        offset: (start - runStart) / runSpan,
-        extent: Math.max(rollout.span / runSpan, 0.001),
-      };
-    });
-  });
-
-  let bandStride = $derived(
-    ROLLOUT_HEAD_PX +
-      placedRollouts.reduce(
-        (tallest, p) => Math.max(tallest, p.rollout.rowsHeight),
+  let timeline = $derived(runTimeline(timings));
+  let groups = $derived(
+    timeline.groups.map((group) => ({
+      ...group,
+      height: Math.max(
+        group.rows.length * (ROW_HEIGHT_PX + ROW_GAP_PX) - ROW_GAP_PX,
         ROW_HEIGHT_PX,
-      ) +
-      ROLLOUT_GAP_PX,
+      ),
+    })),
   );
   let trackHeight = $derived(
-    placedRollouts.reduce((most, p) => Math.max(most, p.band + 1), 1) * bandStride -
-      ROLLOUT_GAP_PX,
+    groups.reduce((total, group) => total + group.height + GROUP_GAP_PX, 0) -
+      GROUP_GAP_PX,
   );
 
-  let measured = $derived(rollouts.filter((r) => r.rows.length > 0));
-  let legend = $derived.by(() => {
-    const names = new Set();
-    for (const rollout of measured)
-      for (const row of rollout.rows) for (const bar of row.bars) names.add(bar.name);
-    return [...names];
-  });
+  const pct = (seconds) => (seconds / timeline.span) * 100;
 
-  function downloadJson() {
-    const blob = new Blob([JSON.stringify(timings || {}, null, 2)], {
-      type: "application/json",
-    });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = downloadName;
-    a.click();
-    URL.revokeObjectURL(url);
+  // Deeper frames are lighter, so a nested phase reads as part of its parent
+  // rather than as a different kind of work.
+  function fill(bar) {
+    const base = colorFor(bar.name);
+    if (bar.depth === 0) return base;
+    return `color-mix(in srgb, ${base} ${Math.max(100 - bar.depth * 28, 40)}%, var(--color-c-gray-02, #111))`;
   }
 
   let zoom = $state(1);
   let viewport = $state(null);
+  let viewportWidth = $state(900);
+
+  let contentWidth = $derived(viewportWidth * zoom);
+  const widthPx = (bar) => (bar.duration / timeline.span) * contentWidth;
 
   function setZoom(next, anchorX = null) {
     const clamped = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, next));
@@ -154,20 +99,26 @@
     };
   }
 
+  function downloadJson() {
+    const blob = new Blob([JSON.stringify(timings || {}, null, 2)], {
+      type: "application/json",
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = downloadName;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
   let tip = $state(null);
   let pinned = $state(false);
 
-  function isActive(rolloutId, bar) {
-    return tip && tip.rolloutId === rolloutId && tip.bar.key === bar.key;
-  }
+  const isActive = (bar) => tip && tip.bar.key === bar.key;
 
-  function tipFor(e, rolloutId, bar) {
-    return { x: e.clientX, y: e.clientY, rolloutId, bar };
-  }
-
-  function showTip(e, rolloutId, bar) {
+  function showTip(e, bar) {
     if (pinned) return;
-    tip = tipFor(e, rolloutId, bar);
+    tip = { x: e.clientX, y: e.clientY, bar };
   }
 
   function moveTip(e) {
@@ -180,15 +131,15 @@
     tip = null;
   }
 
-  function pinTip(e, rolloutId, bar) {
+  function pinTip(e, bar) {
     e.stopPropagation();
-    if (pinned && isActive(rolloutId, bar)) {
+    if (pinned && isActive(bar)) {
       pinned = false;
       tip = null;
       return;
     }
     pinned = true;
-    tip = tipFor(e, rolloutId, bar);
+    tip = { x: e.clientX, y: e.clientY, bar };
   }
 
   function clearPin() {
@@ -201,17 +152,21 @@
 <svelte:window onclick={clearPin} />
 
 <div class="run-timeline">
-  {#if measured.length === 0}
+  {#if !groups.length}
     <div class="empty">No substep timing recorded for these rollouts yet.</div>
   {:else}
     <div class="toolbar">
       <div class="legend">
-        {#each legend as name (name)}
+        {#each timeline.categories as key (key)}
           <span class="legend-item">
-            <span class="swatch" style:background={colorFor(name)}></span>
-            {labelFor(name)}
+            <span class="swatch" style:background={CATEGORIES[key].color}></span>
+            {CATEGORIES[key].label}
           </span>
         {/each}
+        <span class="legend-item">
+          <span class="swatch swatch-stall"></span>
+          stalled, waiting on somebody else
+        </span>
       </div>
       <div class="controls">
         <div class="zoom-controls">
@@ -247,98 +202,108 @@
       </div>
     </div>
 
-    <div class="viewport" bind:this={viewport} use:wheelZoom>
-      <div
-        class="track"
-        style:width={`${zoom * 100}%`}
-        style:height={`${trackHeight}px`}
-      >
-        {#each placedRollouts as { rollout, band, offset, extent } (rollout.id)}
+    <div class="chart">
+      <div class="gutter" style:padding-top={`${ROW_HEIGHT_PX + 6}px`}>
+        {#each groups as group (group.key)}
           <div
-            class="rollout"
-            style:left={`${offset * 100}%`}
-            style:width={`calc(${extent * 100}% - ${ROLLOUT_GAP_PX}px)`}
-            style:top={`${band * bandStride}px`}
+            class="gutter-label"
+            style:height={`${group.height}px`}
+            style:margin-bottom={`${GROUP_GAP_PX}px`}
+            title={`${group.label} — ${group.hint}`}
           >
-            <div class="rollout-head">
-              <span class="rollout-name">Rollout {rollout.id}</span>
-              <span
-                class="rollout-span"
-                title={rollout.beside.length
-                  ? `step ${fmtSecs(rollout.stepDuration)}, then ${rollout.beside
-                      .map((b) => `${labelFor(b.name)} ${fmtSecs(b.duration)}`)
-                      .join(", ")}`
-                  : undefined}
+            <span class="gutter-name">{group.label}</span>
+            <span class="gutter-hint">{group.hint}</span>
+          </div>
+        {/each}
+      </div>
+
+      <div
+        class="viewport"
+        bind:this={viewport}
+        bind:clientWidth={viewportWidth}
+        use:wheelZoom
+      >
+        <div class="track" style:width={`${zoom * 100}%`}>
+          <div class="steps" style:height={`${ROW_HEIGHT_PX}px`}>
+            {#each timeline.steps as step (step.id)}
+              <div
+                class="step"
+                style:left={`${pct(step.offset)}%`}
+                style:width={`${Math.max(pct(step.duration), 0.05)}%`}
+                title={`Step ${step.id}: ${fmtSecs(step.duration)} wall clock — ${fmtSecs(step.work)} working, ${fmtSecs(step.stalled)} waiting on the engines`}
               >
-                {fmtSecs(rollout.stepDuration)}{#if rollout.beside.length}
-                  + {fmtSecs(
-                    rollout.beside.reduce((t, b) => t + b.duration, 0),
-                  )}{/if}
-              </span>
-            </div>
-            {#if rollout.rows.length === 0}
-              <div class="rows" style:height={`${ROW_HEIGHT_PX}px`}>
-                <div class="row row-empty" style:height={`${ROW_HEIGHT_PX}px`}></div>
+                <span class="step-text"
+                  >Step {step.id} · {fmtSecs(step.duration)}</span
+                >
               </div>
-            {:else}
-              <div class="rows" style:height={`${rollout.rowsHeight}px`}>
-                {#each rollout.rows as row, index (index)}
+            {/each}
+          </div>
+
+          <div class="groups" style:height={`${trackHeight}px`}>
+            {#each groups as group (group.key)}
+              <div
+                class="group"
+                style:height={`${group.height}px`}
+                style:margin-bottom={`${GROUP_GAP_PX}px`}
+              >
+                {#each group.rows as row, index (index)}
                   <div
                     class="row"
-                    style:top={`${row.top}px`}
-                    style:height={`${row.height}px`}
+                    style:top={`${index * (ROW_HEIGHT_PX + ROW_GAP_PX)}px`}
+                    style:height={`${ROW_HEIGHT_PX}px`}
                   >
-                    {#each row.bars as bar (bar.key)}
+                    {#each row.spans as bar (bar.key)}
                       <button
                         class="bar"
+                        class:stall={bar.kind === "stall"}
+                        class:untracked={bar.kind === "untracked"}
+                        class:sampled={bar.kind === "sampled"}
+                        class:active={pinned && isActive(bar)}
                         aria-label={`${labelFor(bar.name)} ${fmtSecs(bar.duration)}`}
-                        class:active={pinned && isActive(rollout.id, bar)}
-                        class:outlined={bar.contains || bar.band}
-                        class:banded={bar.band}
-                        style:background={bar.contains || bar.band
-                          ? `color-mix(in srgb, ${colorFor(bar.name)} 22%, transparent)`
-                          : colorFor(bar.name)}
-                        style:border-color={colorFor(bar.name)}
-                        style:left={`${(bar.start / rollout.span) * 100}%`}
-                        style:width={`max(2px, calc(${Math.max(((bar.end - bar.start) / rollout.span) * 100, 0.4)}% - ${BAR_GAP_PX}px))`}
-                        onmouseenter={(e) => showTip(e, rollout.id, bar)}
+                        style:left={`${pct(bar.offset)}%`}
+                        style:width={`max(2px, ${Math.max(pct(bar.duration), 0.02)}%)`}
+                        style:--bar-color={colorFor(bar.name)}
+                        style:background={bar.kind === "work" ? fill(bar) : undefined}
+                        onmouseenter={(e) => showTip(e, bar)}
                         onmousemove={moveTip}
                         onmouseleave={hideTip}
-                        onclick={(e) => pinTip(e, rollout.id, bar)}
+                        onclick={(e) => pinTip(e, bar)}
                       >
-                        {#if bar.band}
+                        {#if bar.kind === "sampled"}
                           <span
-                            class="band-longest"
-                            style:background={colorFor(bar.name)}
-                            style:width={`max(2px, ${Math.min((bar.band.longest / Math.max(bar.duration, 1e-9)) * 100, 100)}%)`}
+                            class="tick"
+                            style:left={`${Math.min((bar.average / bar.duration) * 100, 100)}%`}
                           ></span>
-                          <span
-                            class="band-average"
-                            style:background={colorFor(bar.name)}
-                            style:left={`max(2px, ${Math.min((bar.band.total / bar.band.count / Math.max(bar.duration, 1e-9)) * 100, 100)}%)`}
-                          ></span>
-                          <span class="bar-text"
-                            >{bar.band.count}× {fmtSecs(
-                              bar.band.total / bar.band.count,
-                            )}</span
-                          >
+                        {/if}
+                        {#if widthPx(bar) > LABEL_PX}
+                          <span class="bar-text" class:on-dark={bar.kind === "work"}>
+                            {#if bar.kind === "sampled"}
+                              {bar.count}× {fmtSecs(bar.average)}
+                            {:else if bar.kind === "untracked"}
+                              untracked {fmtSecs(bar.duration)}
+                            {:else}
+                              {labelFor(bar.name)} · {fmtSecs(bar.duration)}
+                            {/if}
+                          </span>
                         {/if}
                       </button>
                     {/each}
                   </div>
                 {/each}
               </div>
-            {/if}
+            {/each}
           </div>
-        {/each}
+        </div>
       </div>
     </div>
+
     <div class="hint">
-      Hover a bar for its phase and exact times · click to pin · scroll to zoom · drag to
-      pan. Everything shares the run's clock, so a rollout drawn under another one began
-      before that one finished. A bar inside an outline ran within the phase outlined, and
-      a bar on a row of its own overlapped work it is not part of. A gap is time no phase
-      was measured in, not time nothing ran.
+      One clock for the whole run. The training loop is on top and the machines it
+      waits on are underneath, indented where one phase ran inside another. A thin
+      grey line is the loop stalled on somebody else — the work itself is on the row
+      below. Hatched is wall clock no phase measured{#if timeline.untracked > 0.25},
+        {fmtSecs(timeline.untracked)} of it in this run{/if}. Hover for exact times,
+      click to pin, scroll to zoom.
     </div>
   {/if}
 </div>
@@ -346,43 +311,44 @@
 {#if tip}
   <div class="tg-tip" class:pinned style:left={`${tip.x}px`} style:top={`${tip.y}px`}>
     <span class="tg-tip-head">
-      Rollout {tip.rolloutId}
-      · {tip.bar.role}
+      {#if tip.bar.rolloutId != null}Rollout {tip.bar.rolloutId} ·{/if}
+      {roleLabel(tip.bar.role)}
+      {#if tip.bar.kind !== "untracked"}
+        · {CATEGORIES[categoryOf(tip.bar.name)].label.toLowerCase()}{/if}
     </span>
-    <span class="tg-tip-name">{labelFor(tip.bar.name)}</span>
+    <span class="tg-tip-name">
+      {tip.bar.kind === "untracked" ? "Untracked wall clock" : labelFor(tip.bar.name)}
+    </span>
     <span class="tg-tip-dur">{fmtSecs(tip.bar.duration)}</span>
     <span class="tg-tip-when">
-      {fmtSecs(tip.bar.start)} → {fmtSecs(tip.bar.end)} into the rollout
+      {fmtSecs(tip.bar.offset)} → {fmtSecs(tip.bar.offset + tip.bar.duration)} into the
+      run
     </span>
-    {#if tip.bar.band}
+    {#if tip.bar.kind === "sampled"}
       <span class="tg-tip-when">
-        {tip.bar.band.count} calls · average {fmtSecs(
-          tip.bar.band.total / tip.bar.band.count,
-        )} · longest {fmtSecs(tip.bar.band.longest)}, spread over the span, not
-        one run
+        {tip.bar.count} calls · average {fmtSecs(tip.bar.average)} · longest {fmtSecs(
+          tip.bar.longest,
+        )}, spread over the span rather than one run
+      </span>
+    {:else if tip.bar.count > 1}
+      <span class="tg-tip-when">
+        {tip.bar.count} runs · {fmtSecs(tip.bar.total)} of work · longest {fmtSecs(
+          tip.bar.longest,
+        )}
       </span>
     {/if}
-    {#if tip.bar.runs > 1}
+    {#if tip.bar.kind === "stall"}
       <span class="tg-tip-when">
-        {tip.bar.runs} runs at once, {fmtSecs(tip.bar.work)} of work between them
+        stalled on {WAITS_ON[tip.bar.name]?.(tip.bar.rolloutId) ?? "another worker"}
       </span>
     {/if}
-    {#each tip.bar.spent as work (work.name)}
+    {#if tip.bar.kind === "untracked"}
       <span class="tg-tip-when">
-        {fmtSecs(work.total)} of it in {labelFor(work.name).toLowerCase()}, over {work.count}
-        calls · longest {fmtSecs(work.longest)}
+        the loop was between measured phases here — nothing claims this time
       </span>
-    {/each}
-    {#if WAITS_ON[tip.bar.name]}
-      <span class="tg-tip-when">{WAITS_ON[tip.bar.name](tip.rolloutId)}</span>
     {/if}
     {#if tip.bar.inside}
-      <span class="tg-tip-when">ran inside {labelFor(tip.bar.inside)}</span>
-    {/if}
-    {#if tip.bar.overlaps.length}
-      <span class="tg-tip-when">
-        ran at the same time as {tip.bar.overlaps.map(labelFor).join(", ")}
-      </span>
+      <span class="tg-tip-when">ran inside {labelFor(tip.bar.inside).toLowerCase()}</span>
     {/if}
   </div>
 {/if}
@@ -426,6 +392,12 @@
     height: 9px;
     border-radius: 2px;
     flex-shrink: 0;
+  }
+
+  .swatch-stall {
+    height: 2px;
+    background: var(--color-c-gray-30, #6a6a6a);
+    border-radius: 1px;
   }
 
   .controls {
@@ -493,15 +465,51 @@
     border-color: var(--border-strong, #4a4a4a);
   }
 
+  .chart {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+  }
+
+  .gutter {
+    flex-shrink: 0;
+    width: 108px;
+  }
+
+  .gutter-label {
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-start;
+    gap: 1px;
+    overflow: hidden;
+    border-left: 2px solid var(--border, #2f2f2f);
+    padding-left: 6px;
+  }
+
+  .gutter-name {
+    font-size: 10px;
+    line-height: 13px;
+    color: var(--text-bright, #fff);
+    font-weight: 500;
+  }
+
+  .gutter-hint {
+    font-size: 9px;
+    line-height: 11px;
+    color: var(--muted);
+    opacity: 0.75;
+  }
+
   .viewport {
+    flex: 1;
+    min-width: 0;
     overflow-x: auto;
     overflow-y: hidden;
-    padding: 4px 0 12px;
+    padding-bottom: 10px;
     scrollbar-width: thin;
     scrollbar-color: var(--color-c-gray-20, #464646) transparent;
     overscroll-behavior-x: contain;
     touch-action: pan-x;
-    -webkit-overflow-scrolling: touch;
   }
 
   .track {
@@ -509,35 +517,35 @@
     min-width: 100%;
   }
 
-  .rollout {
-    position: absolute;
-    display: flex;
-    flex-direction: column;
-    gap: 5px;
-    min-width: 2px;
+  .steps {
+    position: relative;
+    margin-bottom: 6px;
   }
 
-  .rollout-head {
-    display: flex;
-    align-items: baseline;
-    gap: 6px;
-    font-size: 10px;
-    line-height: 14px;
-    white-space: nowrap;
+  .step {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    border-left: 1px solid var(--border-strong, #4a4a4a);
+    background: var(--color-c-gray-05, #171717);
     overflow: hidden;
   }
 
-  .rollout-name {
-    color: var(--text-bright);
-    font-weight: 500;
-  }
-
-  .rollout-span {
+  .step-text {
+    display: block;
+    padding: 0 4px;
+    font-size: 10px;
+    line-height: 16px;
     color: var(--muted);
+    white-space: nowrap;
     font-variant-numeric: tabular-nums;
   }
 
-  .rows {
+  .groups {
+    position: relative;
+  }
+
+  .group {
     position: relative;
   }
 
@@ -548,60 +556,68 @@
     pointer-events: none;
   }
 
-  .row-empty {
-    border-radius: 1.5px;
-    background: var(--color-c-gray-5, #242424);
-  }
-
   .bar {
     position: absolute;
     top: 0;
     height: 100%;
     min-width: 2px;
-    padding: 0 3px;
+    padding: 0;
     border: none;
-    border-radius: min(1.5px, 10%);
+    border-radius: min(2px, 12%);
     overflow: hidden;
     cursor: pointer;
     pointer-events: auto;
+    background: transparent;
     transition: filter 0.1s ease;
   }
 
-  .bar.outlined {
-    border: 1px solid;
+  /* A stall is the loop doing nothing, so it is a line rather than a block: the
+     work being waited on is drawn on the row underneath. */
+  .bar.stall {
+    background: linear-gradient(
+      var(--color-c-gray-30, #6a6a6a),
+      var(--color-c-gray-30, #6a6a6a)
+    );
+    background-size: 100% 2px;
+    background-position: center;
+    background-repeat: no-repeat;
   }
 
-  .bar.banded {
-    padding: 0;
+  .bar.untracked {
+    background: repeating-linear-gradient(
+      -45deg,
+      var(--color-c-gray-12, #262626) 0 4px,
+      transparent 4px 8px
+    );
+    border: 1px dashed var(--color-c-gray-25, #555);
   }
 
-
-  .band-longest {
-    position: absolute;
-    left: 0;
-    top: 0;
-    bottom: 0;
-    opacity: 0.28;
-    pointer-events: none;
+  .bar.sampled {
+    background: color-mix(in srgb, var(--bar-color) 20%, transparent);
+    border: 1px solid var(--bar-color);
   }
 
-  .band-average {
+  .tick {
     position: absolute;
     top: 0;
     bottom: 0;
     width: 1px;
-    pointer-events: none;
+    background: var(--bar-color);
   }
 
   .bar-text {
     position: relative;
     display: block;
-    padding: 0 3px;
+    padding: 0 4px;
     font-size: 9px;
-    line-height: 1;
-    color: var(--color-c-gray-9, #0b0b0b);
+    line-height: 16px;
+    color: var(--muted);
     white-space: nowrap;
     pointer-events: none;
+  }
+
+  .bar-text.on-dark {
+    color: var(--color-c-gray-9, #0b0b0b);
   }
 
   .bar:hover {
