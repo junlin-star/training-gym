@@ -23,9 +23,8 @@ import tempfile
 import time
 from pathlib import Path, PurePosixPath
 from typing import Any
-from collections.abc import Callable, Mapping
-from enum import Enum
-from modal import App, Dict as ModalDict, Image, Secret, Volume, Retries
+from collections.abc import Callable
+from modal import App, Image, Secret, Volume, Retries
 
 from modal_training_gym.common import hf_secrets, proxy_auth_secrets
 

@@ -1,6 +1,5 @@
 from collections.abc import Callable
 from dataclasses import field
-from pathlib import Path
 from typing import Any, ClassVar, Literal
 
 from modal_training_gym.train_recipes.base import (
