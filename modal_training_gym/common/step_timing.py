@@ -124,9 +124,10 @@ def measured_run_times(
 ]:
     """How long each step of a run took, and each of its substeps.
 
-    Both are keyed by rollout id, matching the dashboard's rows, and a substep
-    measured off the driver keeps its role in its key: the actor and the critic
-    record the same phase names, and their times are not one substep.
+    Both are keyed by step number from one, the way a stored baseline of a
+    model's timings is, and a substep measured off the driver keeps its role in
+    its key: the actor and the critic record the same phase names, and their
+    times are not one substep.
 
     A step is the driver's substeps of a rollout added up: the driver runs them
     one after another, and the checkpoint or eval that landed on the rollout is
@@ -158,8 +159,9 @@ def measured_run_times(
                 }
         if not substeps:
             continue
-        step_times[str(rollout_id)] = {"duration_s": round(step_duration)}
-        substep_times[str(rollout_id)] = substeps
+        step = str(rollout_id + 1)
+        step_times[step] = {"duration_s": round(step_duration)}
+        substep_times[step] = substeps
     return step_times, substep_times
 
 

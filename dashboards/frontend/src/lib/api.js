@@ -218,7 +218,9 @@ export async function fetchRunTimings(trainingRunId, { signal } = {}) {
     `${SERVER}/runs/${encodeURIComponent(trainingRunId)}/timings`,
     { signal },
   );
-  if (!res.ok) return {};
+  // Raised rather than empty: the caller keeps the timing it has, and an
+  // emptied one would take the timeline off the page until the next poll.
+  if (!res.ok) throw new Error(await getErrorFromResponse(res));
   return await res.json();
 }
 

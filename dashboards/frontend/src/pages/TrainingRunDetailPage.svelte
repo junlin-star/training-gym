@@ -404,6 +404,7 @@
       if (signal?.aborted) return;
       rolloutSummaries = rows;
       rolloutsError = "";
+
       // Reveal the first rollout
       if (wasEmpty && rolloutSummaries.length > 0 && expandedRolloutId === null) {
         toggleRolloutDetail(rolloutSummaries[0].rollout_id);

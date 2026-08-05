@@ -694,9 +694,9 @@ def build_miles_app(
                     "TRAINING_GYM_FRAMEWORK_STATUS_URL": framework_status_url
                     or os.environ.get("TRAINING_GYM_FRAMEWORK_STATUS_URL", ""),
                     "TRAINING_GYM_SUBSTEP_TIMING": miles.substep_timing,
+                    "TRAINING_GYM_FRAMEWORK_STATUS_TOKEN": framework_status_token,
                     **wandb_env,
                     **miles.environment,
-                    "TRAINING_GYM_FRAMEWORK_STATUS_TOKEN": framework_status_token,
                 }
             }
 

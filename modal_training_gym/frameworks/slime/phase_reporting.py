@@ -21,6 +21,12 @@ import time
 from typing import Any
 
 from modal_training_gym.common.status import SlimeStatus
+from modal_training_gym.common.timing_recorder import (
+    RoleRecorder as RoleRecorder,
+    recording_lane as recording_lane,
+    recording_lane_on_reporting_rank as recording_lane_on_reporting_rank,
+    time_phase as time_phase,
+)
 
 from .advantage_reporting import (
     _advantage_samples_payload as _advantage_samples_payload,
@@ -83,12 +89,6 @@ from .sample_extraction import (
     _parsed_response_dict as _parsed_response_dict,
     _trace_attrs as _trace_attrs,
     _trace_scalar as _trace_scalar,
-)
-from modal_training_gym.common.timing_recorder import (
-    RoleRecorder as RoleRecorder,
-    recording_lane as recording_lane,
-    recording_lane_on_reporting_rank as recording_lane_on_reporting_rank,
-    time_phase as time_phase,
 )
 
 CUSTOM_ROLLOUT_LOG_FUNCTION_PATH_KEY = "training_gym_custom_rollout_log_function_path"

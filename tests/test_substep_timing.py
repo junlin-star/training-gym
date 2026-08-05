@@ -271,10 +271,11 @@ def test_a_step_adds_its_substeps_and_leaves_out_the_checkpoint_and_eval(
         },
     )
 
+    # Rollout 0 is step 1, the way a stored baseline numbers it.
     step_times, substep_times = step_timing.measured_run_times("run-1")
-    assert step_times == {"0": {"duration_s": 15}}
-    assert substep_times["0"]["generate_samples (rollout)"]["duration_s"] == 8.0
-    assert substep_times["0"]["evaluate_rollouts"] == {
+    assert step_times == {"1": {"duration_s": 15}}
+    assert substep_times["1"]["generate_samples (rollout)"]["duration_s"] == 8.0
+    assert substep_times["1"]["evaluate_rollouts"] == {
         "start": 1000.0,
         "duration_s": 60.0,
     }

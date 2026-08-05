@@ -63,6 +63,7 @@ def cleanup(*, older_than_days: int = 7, dry_run: bool = False) -> None:
     deleted_runs = 0
     deleted_rollouts = 0
     deleted_tokens = 0
+
     for r in targets:
         rid = r.training_run_id
         if vol_remove(MetadataStore.TRAINING_RUNS, rid):
@@ -91,6 +92,7 @@ def cleanup(*, older_than_days: int = 7, dry_run: bool = False) -> None:
         vol_put_summary_items(
             MetadataStore.TRAINING_ROLLOUTS_SUMMARY, kept_rollout_items
         )
+
     run_summary = vol_get_summary_items(MetadataStore.TRAINING_RUNS_SUMMARY) or []
     kept_run_items = [
         item for item in run_summary if item.get("training_run_id") not in target_ids

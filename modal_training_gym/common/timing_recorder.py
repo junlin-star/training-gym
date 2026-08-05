@@ -15,6 +15,7 @@ import os
 import threading
 import time
 from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Callable, Iterator
 
 from modal_training_gym.common import status_reporter
@@ -190,27 +191,32 @@ class RoleRecorder:
             return
         with self._lock:
             self._snapshot = snapshot
-        if self._poster is None:
-            self._poster = threading.Thread(
-                target=self._post_snapshots,
-                name=f"training-gym-timing-{self.role}-{self.rollout_id}",
-                daemon=True,
-            )
-            self._poster.start()
+            # Started holding the lock: two phases ending at once would
+            # otherwise each start a poster, and the lane joins only one.
+            if self._poster is None:
+                self._poster = threading.Thread(
+                    target=self._post_snapshots,
+                    name=f"training-gym-timing-{self.role}-{self.rollout_id}",
+                    daemon=True,
+                )
+                self._poster.start()
         self._snapshot_ready.set()
 
 
-# The lane the phases of this process are recorded on: a driver, a rollout
-# worker or an actor records one rollout at a time, and phases timed deep in the
-# framework's call stack (a reward on its event loop thread) find it here rather
-# than being passed it.
-_active_lane: RoleRecorder | None = None
+# The lane the phases of the running code are recorded on, so that a phase timed
+# deep in the framework's call stack (a reward on its event loop thread) finds it
+# rather than being passed it. A context variable because a rollout actor can
+# have two lanes open at once -- an eval and a generate are separate async calls
+# on one actor -- and each of their phases belongs to its own.
+_ACTIVE_LANE: ContextVar[RoleRecorder | None] = ContextVar(
+    "training_gym_active_lane", default=None
+)
 
 
 @contextmanager
 def time_phase(name: str) -> Iterator[None]:
     """Record a phase on the active lane; a no-op when there is none."""
-    rec = _active_lane
+    rec = _ACTIVE_LANE.get()
     if rec is None:
         yield
         return
@@ -225,15 +231,13 @@ def recording_lane(
     publish_gate: Callable[[], bool | None] | None = None,
 ) -> Iterator[RoleRecorder]:
     """Install a :class:`RoleRecorder` as the active lane for a block."""
-    global _active_lane
-    previous = _active_lane
     rec = RoleRecorder(role, rollout_id, publish_gate)
-    _active_lane = rec
+    token = _ACTIVE_LANE.set(rec)
     try:
         with rec:
             yield rec
     finally:
-        _active_lane = previous
+        _ACTIVE_LANE.reset(token)
 
 
 def _rank_zero_publishes() -> bool | None:
