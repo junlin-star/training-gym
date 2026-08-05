@@ -17,23 +17,26 @@ export const TIMING_LABELS = {
   optimizer_step: "Optimizer step",
 };
 
+// A phase is coloured by the work it belongs to -- generation green, training
+// blue, moving weights or samples around pink, and the rest of a step grey --
+// so a rollout reads as a few pieces of work rather than a row of unrelated bars.
 export const TIMING_COLORS = {
-  evaluate_rollouts: "#60a5fa",
-  generate_rollouts: "#34d399",
-  offload_rollout: "#a78bfa",
-  compute_log_probs: "#fbbf24",
-  train_models: "#f87171",
-  checkpoint_save: "#f472b6",
-  offload_train: "#c084fc",
-  weight_sync: "#22d3ee",
-  evaluate_rollouts_end: "#818cf8",
-  wait_for_rollout: "#fb923c",
-  generate_samples: "#4ade80",
-  reward: "#a3e635",
-  reward_batch: "#65a30d",
-  reward_post_process: "#f0abfc",
-  forward_backward: "#2dd4bf",
-  optimizer_step: "#facc15",
+  generate_rollouts: "var(--color-c-green-70)",
+  generate_samples: "var(--color-c-pale-green-90)",
+  reward: "var(--color-c-pale-green-60)",
+  reward_batch: "var(--color-c-pale-green-50)",
+  reward_post_process: "var(--color-c-pale-green-40)",
+  train_models: "var(--color-c-blue-60)",
+  compute_log_probs: "var(--color-c-blue-90)",
+  forward_backward: "var(--color-c-blue-100)",
+  optimizer_step: "var(--color-c-blue-40)",
+  offload_rollout: "var(--color-c-pink-50)",
+  offload_train: "var(--color-c-pink-40)",
+  weight_sync: "var(--color-c-pink-80)",
+  checkpoint_save: "var(--color-c-yellow-70)",
+  evaluate_rollouts: "var(--color-c-gray-60)",
+  evaluate_rollouts_end: "var(--color-c-gray-50)",
+  wait_for_rollout: "var(--color-c-gray-30)",
 };
 
 // Work a step waits on but isn't: a checkpoint or an eval lands on one rollout

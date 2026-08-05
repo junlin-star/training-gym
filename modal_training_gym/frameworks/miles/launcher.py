@@ -690,9 +690,6 @@ def build_miles_app(
                 "env_vars": {
                     "no_proxy": f"127.0.0.1,{cluster.head_addr}",
                     "MASTER_ADDR": cluster.head_addr,
-                    # Read by the substep-timing recorder in every ray worker:
-                    # which run to file records under, where to post them, and
-                    # whether to record at all.
                     "TRAINING_GYM_TRAINING_RUN_ID": training_run_id,
                     "TRAINING_GYM_FRAMEWORK_STATUS_URL": framework_status_url
                     or os.environ.get("TRAINING_GYM_FRAMEWORK_STATUS_URL", ""),

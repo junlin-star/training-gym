@@ -15,7 +15,6 @@ import os
 import threading
 import time
 from contextlib import contextmanager
-from contextvars import ContextVar
 from typing import Callable, Iterator
 
 from modal_training_gym.common import status_reporter
@@ -25,11 +24,9 @@ TIMING_PATH = "/api/timing-events"
 STATUS_PATH = "/api/framework-status"
 TIMING_TIMEOUT_SECONDS = 10.0
 
-# Rate limiting, mostly for per-sample reward phases
 MIN_PUBLISH_INTERVAL_S = 1.0
 
-# Past this, a phase keeps its aggregate only: the whole record is re-posted on
-# every publish.
+# Past this a phase keeps its aggregate only: every publish re-posts the record.
 MAX_DRAWN_INVOCATIONS = 1024
 
 
@@ -52,8 +49,8 @@ class RoleRecorder:
     Two timings exist: monotonic offsets relative to ``_t0`` to guarantee
     positive duration, and ``lane_start_unix_s`` to align multiple processes.
 
-    Publishing is gated so that, for actor/critic lanes, only the reporting
-    megatron rank writes the timing file for a rollout.
+    A lane measured on every rank of a distributed model is published by one of
+    them, so the ranks do not overwrite each other's record.
     """
 
     def __init__(
@@ -199,15 +196,17 @@ class RoleRecorder:
         self._snapshot_ready.set()
 
 
-_ACTIVE_LANE: ContextVar[RoleRecorder | None] = ContextVar(
-    "training_gym_active_lane", default=None
-)
+# The lane the phases of this process are recorded on: a driver, a rollout
+# worker or an actor records one rollout at a time, and phases timed deep in the
+# framework's call stack (a reward on its event loop thread) find it here rather
+# than being passed it.
+_active_lane: RoleRecorder | None = None
 
 
 @contextmanager
 def time_phase(name: str) -> Iterator[None]:
     """Record a phase on the active lane; a no-op when there is none."""
-    rec = _ACTIVE_LANE.get()
+    rec = _active_lane
     if rec is None:
         yield
         return
@@ -222,39 +221,26 @@ def recording_lane(
     publish_gate: Callable[[], bool | None] | None = None,
 ) -> Iterator[RoleRecorder]:
     """Install a :class:`RoleRecorder` as the active lane for a block."""
+    global _active_lane
+    previous = _active_lane
     rec = RoleRecorder(role, rollout_id, publish_gate)
-    token = _ACTIVE_LANE.set(rec)
+    _active_lane = rec
     try:
         with rec:
             yield rec
     finally:
-        _ACTIVE_LANE.reset(token)
+        _active_lane = previous
 
 
-def _megatron_publish_gate() -> bool | None:
-    """Whether this megatron rank is the single writer for its lane."""
-    try:
-        from megatron.core import parallel_state as ps
-
-        if not ps.model_parallel_is_initialized():
-            return None
-        return (
-            ps.get_tensor_model_parallel_rank() == 0
-            and ps.get_pipeline_model_parallel_rank()
-            == ps.get_pipeline_model_parallel_world_size() - 1
-            and ps.get_context_parallel_rank() == 0
-            and ps.get_data_parallel_rank() == 0
-        )
-    except ImportError:
-        pass
+def _rank_zero_publishes() -> bool | None:
+    """Whether this rank writes its lane; ``None`` until ranks are known."""
     try:
         import torch.distributed as dist
-
-        if not dist.is_initialized():
-            return None
-        return dist.get_rank() == 0
     except ImportError:
         return True
+    if not dist.is_initialized():
+        return None
+    return dist.get_rank() == 0
 
 
 @contextmanager
@@ -262,7 +248,7 @@ def recording_lane_on_reporting_rank(
     rollout_id: int, role: str = "actor"
 ) -> Iterator[RoleRecorder]:
     """An actor/critic lane measured on every rank, written by one of them."""
-    with recording_lane(role, rollout_id, _megatron_publish_gate) as rec:
+    with recording_lane(role, rollout_id, _rank_zero_publishes) as rec:
         yield rec
 
 

@@ -635,15 +635,13 @@ class TrainConfig:
             if context_plan_line := self.context_plan_line():
                 print(f"Training context: {context_plan_line}")
 
-        # Before the run is recorded: "require" fails with nothing to clean up.
-        recipe = self.recipe
         if isinstance(self.recipe, (SlimeRecipe, MilesRecipe)):
             from modal_training_gym.common.step_timing import probe_substep_timing
 
             if not probe_substep_timing(
                 framework_status_url, self.recipe.substep_timing
             ):
-                recipe = _dc.replace(self.recipe, substep_timing="off")
+                self.recipe.substep_timing = "off"
 
         created_at = int(time.time())
         run_record = TrainingRun(
@@ -668,7 +666,7 @@ class TrainConfig:
             framework_status_token = ""
         print(f"TrainingRun recorded: {training_run_id}")
 
-        app = self._build_app(training_run_id, recipe=recipe)
+        app = self._build_app(training_run_id)
         output_context = modal.enable_output() if show_output else nullcontext()
         with output_context:
             with app.run(detach=True):

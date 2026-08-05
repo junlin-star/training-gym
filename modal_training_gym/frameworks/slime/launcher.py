@@ -133,8 +133,6 @@ _PATCH_QWEN3_VL_TORCH_DIST_B64 = encode_patch(
 _PATCH_ROLLOUT_STATUS_B64 = encode_patch(
     "patch_rollout_status_reporting", _SLIME_PATCHES
 )
-# Shared with miles: one script owns both frameworks' timing anchors, so the
-# lanes, phase names and record format cannot drift apart.
 _PATCH_SUBSTEP_TIMING_B64 = encode_patch("patch_substep_timing", _COMMON_PATCHES)
 _PATCH_ADVANTAGE_DIST_B64 = encode_patch("patch_advantage_distribution", _SLIME_PATCHES)
 _PATCH_LOG_ELIDE_B64 = encode_patch("patch_log_elide", _SLIME_PATCHES)

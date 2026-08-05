@@ -7,7 +7,7 @@ Puts each phase of the training loop inside ``with _tg_rec.phase(...)``. The
 driver's phases all sit in one loop body, with a local (``_tg_rec``) recorder.
 The rollout worker and the actor measure work further down the call stack, so
 they open a lane at their entry point and the phases below use the module-level
-``_tg_time_phase``, which finds that lane in a ``ContextVar``.
+``_tg_time_phase``, which records on whichever lane that process has open.
 """
 
 from __future__ import annotations

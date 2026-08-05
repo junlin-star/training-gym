@@ -51,7 +51,6 @@ class RoleTimingRecord(BaseModel):
     Single writer per key, whole-file overwrite, last write wins.
     """
 
-    # A minted run id is name-hash; constrained because it is a path component.
     training_run_id: str = Field(pattern=r"^[A-Za-z0-9._-]+$")
     rollout_id: int = Field(ge=0)
     role: Role
@@ -102,13 +101,6 @@ class Substep(str, Enum):
     FORWARD_BACKWARD = "forward_backward"  # actor / critic
 
 
-# Timed, but not part of how long a step took: a checkpoint or an eval lands on
-# one step and would make it read as many times slower than its neighbours.
-PHASES_BESIDE_THE_STEP = frozenset(
-    {Substep.CHECKPOINT_SAVE, Substep.EVAL_BEFORE, Substep.EVAL_AFTER}
-)
-
-
 def rollout_lanes(records: list[dict[str, Any]]) -> dict[str, Any]:
     """Returns which roles need to be drawn for UI for a run.
 
@@ -130,28 +122,35 @@ def measured_run_times(
 ) -> tuple[
     dict[str, dict[str, int | None]], dict[str, dict[str, dict[str, float | None]]]
 ]:
-    """Per-step and per-substep durations from a run's measured timing records.
+    """How long each step of a run took, and each of its substeps.
 
-    Keyed by rollout id, matching the dashboard's rows. A step's duration spans
-    every lane it touched, so the role lanes are placed on the same wall clock
-    (``lane_start_unix_s`` plus each phase's offsets) before being combined.
-    A phase measured off the driver keeps its role in the key: the actor and the
-    critic record the same names, and their times are not one phase.
+    Both are keyed by rollout id, matching the dashboard's rows, and a substep
+    measured off the driver keeps its role in its key: the actor and the critic
+    record the same phase names, and their times are not one substep.
+
+    A step is the training work of a rollout -- from the first phase it started
+    to the last one it finished -- less the checkpoint or eval that landed on it,
+    which would otherwise read as a step many times slower than its neighbours.
+    Its lanes are placed on the same wall clock (``lane_start_unix_s`` plus each
+    phase's offsets) first, since they are measured in separate processes.
     """
+    beside_the_step = (
+        Substep.CHECKPOINT_SAVE.value,
+        Substep.EVAL_BEFORE.value,
+        Substep.EVAL_AFTER.value,
+    )
     step_times: dict[str, dict[str, int | None]] = {}
     substep_times: dict[str, dict[str, dict[str, float | None]]] = {}
     for rollout_id, records in sorted(load_run(training_run_id).items()):
         substeps: dict[str, dict[str, float | None]] = {}
-        step_start, step_end, beside_the_step = None, None, 0.0
+        step_start, step_end, waited_on = None, None, 0.0
         for record in records:
             lane_start = record["lane_start_unix_s"]
             role = record["role"]
             for name, phase in record["phases"].items():
                 start = lane_start + phase["first_start_s"]
-                if name in PHASES_BESIDE_THE_STEP:
-                    # A checkpoint or an eval runs within the step that reached
-                    # it, so its time comes back out of the step's span.
-                    beside_the_step += phase["total_duration_s"]
+                if name in beside_the_step:
+                    waited_on += phase["total_duration_s"]
                 else:
                     end = lane_start + phase["last_end_s"]
                     step_start = start if step_start is None else min(step_start, start)
@@ -164,7 +163,7 @@ def measured_run_times(
         if step_start is None or step_end is None:
             continue
         step_times[str(rollout_id)] = {
-            "duration_s": round(max(step_end - step_start - beside_the_step, 0.0))
+            "duration_s": round(max(step_end - step_start - waited_on, 0.0))
         }
         substep_times[str(rollout_id)] = substeps
     return step_times, substep_times
