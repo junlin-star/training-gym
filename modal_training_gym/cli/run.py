@@ -7,7 +7,7 @@ import shutil
 import tempfile
 import time
 from collections.abc import Callable
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, TypedDict
 from urllib.parse import quote
@@ -456,40 +456,33 @@ def _format_step(current: int | None, total: int | None, unit: str) -> str:
     return f"{value} {unit}".strip()
 
 
-def _print_kill_report(runs: list[_KillRunReport]) -> None:
-    print_table(
-        [
-            "Training Run",
-            "Modal app",
-            "Status",
-            "Current step",
-            "Duration",
-            "Action",
-        ],
-        [
-            [
-                row["run_id"],
-                row["modal_app_id"] or "—",
-                row["status"],
-                _format_step(
-                    row["current_step"],
-                    row["total_steps"],
-                    row["step_unit"],
-                ),
-                (
-                    str(timedelta(seconds=row["duration_seconds"]))
-                    if row["duration_seconds"] is not None
-                    else "—"
-                ),
-                (
-                    f"{row['action']}: {row['skip_reason']}"
-                    if row["skip_reason"]
-                    else row["action"]
-                ).replace("_", " "),
-            ]
-            for row in runs
-        ],
-    )
+def _print_kill_skips(runs: list[_KillRunReport]) -> None:
+    for run in runs:
+        if run["action"] == "skipped":
+            reason = (run["skip_reason"] or "not terminated").replace("_", " ")
+            click.echo(f"Skipped {run['run_id']}: {reason}")
+
+
+def _print_kill_preview(runs: list[_KillRunReport]) -> None:
+    runs_to_kill = [run for run in runs if run["action"] == "would_kill"]
+    if runs_to_kill:
+        run_word = "run" if len(runs_to_kill) == 1 else "runs"
+        click.echo(f"Would terminate {len(runs_to_kill)} {run_word}:")
+        for run in runs_to_kill:
+            click.echo(f"  {run['run_id']}")
+    else:
+        click.echo("No active runs to terminate.")
+    _print_kill_skips(runs)
+
+
+def _print_kill_result(runs: list[_KillRunReport]) -> None:
+    killed_count = sum(run["action"] == "killed" for run in runs)
+    if killed_count:
+        run_word = "run" if killed_count == 1 else "runs"
+        click.echo(f"Terminated {killed_count} {run_word}.")
+    else:
+        click.echo("No active runs to terminate.")
+    _print_kill_skips(runs)
 
 
 def _build_kill_run_report(
@@ -585,7 +578,7 @@ def kill_runs(
         if json_output:
             print_json(result)
         else:
-            _print_kill_report(run_reports)
+            _print_kill_preview(run_reports)
         if error_count:
             raise click.exceptions.Exit(int(ExitCode.BACKEND))
         return
@@ -629,14 +622,7 @@ def kill_runs(
     if json_output:
         print_json(result)
     else:
-        _print_kill_report(run_reports)
-        if killed_run_ids:
-            click.echo(
-                f"Terminated {len(killed_run_ids)} "
-                f"{'run' if len(killed_run_ids) == 1 else 'runs'}."
-            )
-        else:
-            click.echo("No active runs to terminate.")
+        _print_kill_result(run_reports)
     if error_count:
         raise click.exceptions.Exit(int(ExitCode.BACKEND))
 
