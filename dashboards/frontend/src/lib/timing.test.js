@@ -43,7 +43,6 @@ describe("fmtSecs", () => {
   });
 });
 
-/** A phase from its runs, as the recorder accumulates them. */
 const phase = (runs) => ({
   count: runs.length,
   total_duration_s: runs.reduce((acc, [start, end]) => acc + (end - start), 0),
@@ -53,7 +52,6 @@ const phase = (runs) => ({
   invocations: runs,
 });
 
-/** A per-sample phase, which recorded its aggregate but not its runs. */
 const perSamplePhase = (count, total, longest, start, end) => ({
   count,
   total_duration_s: total,
@@ -84,7 +82,6 @@ describe("rolloutTimeline", () => {
       },
     });
 
-    // Nothing overlapped, so all four bars fit on one row in the order they ran.
     expect(rows).toHaveLength(1);
     expect(rows[0].bars.map((bar) => bar.name)).toEqual([
       "forward_backward",
@@ -144,7 +141,6 @@ describe("rolloutTimeline", () => {
       },
     });
 
-    // The step, then the four runs it contains on one row drawn within it.
     expect(rows).toHaveLength(2);
     expect(rows[0].bars.map((bar) => [bar.name, bar.depth])).toEqual([
       ["train_models", 0],
@@ -174,8 +170,6 @@ describe("rolloutTimeline", () => {
       },
     });
 
-    // The actor's lane opened 2s after the driver's, so its bar sits there and
-    // does not collide with the driver's first second.
     expect(rows).toHaveLength(1);
     expect(rows[0].bars.map((bar) => [bar.name, bar.start])).toEqual([
       ["train_models", 0],
@@ -202,8 +196,6 @@ describe("rolloutTimeline", () => {
       },
     });
 
-    // Its calls covered most of the generation, but the generation is the bar:
-    // a block over that span would read as reward working the whole time.
     const bars = rows.flatMap((row) => row.bars);
     expect(bars.map((bar) => bar.name)).toEqual(["generate_samples"]);
     expect(bars[0].spent).toEqual([
@@ -273,8 +265,6 @@ describe("rolloutTimeline", () => {
       },
     });
 
-    // The runs are kept in the record, but 64 slivers of 0.1ms across the
-    // generation are the generation's reward cost, not 64 bars.
     const bars = rows.flatMap((row) => row.bars);
     expect(bars.map((bar) => bar.name)).toEqual(["generate_samples"]);
     expect(bars[0].spent[0].count).toBe(64);
@@ -331,14 +321,12 @@ describe("rolloutTimeline", () => {
       roles: {
         driver: {
           role: "driver",
-          // 3s of driver work, and 7s of slime the gym does not measure.
           phases: {
             generate_rollouts: phase([[0, 2]]),
             weight_sync: phase([[9, 10]]),
           },
           lane_start_unix_s: 1000,
         },
-        // A worker's generation is the driver's wait, not more of the step.
         rollout: {
           role: "rollout",
           lane_start_unix_s: 1000,

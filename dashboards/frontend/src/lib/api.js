@@ -211,15 +211,11 @@ export async function fetchRunAdvantages(trainingRunId, { signal } = {}) {
     .sort((a, b) => a.rollout_id - b.rollout_id);
 }
 
-// A whole run's measured substep timing, keyed by rollout id — one request for
-// the run, the way its rollouts are fetched.
 export async function fetchRunTimings(trainingRunId, { signal } = {}) {
   const res = await fetch(
     `${SERVER}/runs/${encodeURIComponent(trainingRunId)}/timings`,
     { signal },
   );
-  // Raised rather than empty: the caller keeps the timing it has, and an
-  // emptied one would take the timeline off the page until the next poll.
   if (!res.ok) throw new Error(await getErrorFromResponse(res));
   return await res.json();
 }

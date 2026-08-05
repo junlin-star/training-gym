@@ -4,8 +4,6 @@
 
   let { timings = null, downloadName = "substep_timing.json" } = $props();
 
-  // 1 fits every rollout in the width; columns keep their relative widths at
-  // every zoom, so a wider column is always a longer rollout.
   const MIN_ZOOM = 1;
   const MAX_ZOOM = 64;
   const ZOOM_BTN_FACTOR = 1.5;
@@ -13,19 +11,13 @@
 
   const ROW_HEIGHT_PX = 16;
   const ROW_GAP_PX = 4;
-  // A contained row sits just within the row containing it, which is drawn as an
-  // outline, so the two read as one bar inside another.
   const CONTAINED_INSET_PX = 2;
-  // Taken off each bar's width so phases that ran back to back read as two bars
-  // rather than one block.
   const BAR_GAP_PX = 2;
 
   function placeRows(rows) {
     const placed = [];
     let nextTop = 0;
     for (const row of rows) {
-      // Only the first row of a container is drawn within it; a second one is
-      // work that overlapped it, which needs a band of its own.
       const container =
         row.parentIndex == null || row.concurrent ? null : placed[row.parentIndex];
       const placedRow = {
@@ -91,13 +83,11 @@
   }
 
   function handleWheel(e) {
-    // Let horizontal trackpad gestures pan natively; vertical wheel zooms.
     if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
     e.preventDefault();
     setZoom(zoom * Math.exp(-e.deltaY * WHEEL_SENSITIVITY), e.clientX);
   }
 
-  // Wheel listeners are passive by default; zooming needs preventDefault.
   function wheelZoom(node) {
     node.addEventListener("wheel", handleWheel, { passive: false });
     return {
@@ -455,8 +445,6 @@
     position: relative;
   }
 
-  /* Only the bars take the pointer, so the empty space within an outline still
-     hovers the phase outlined rather than the row drawn over it. */
   .row {
     position: absolute;
     left: 0;
@@ -476,7 +464,6 @@
     min-width: 2px;
     padding: 0 3px;
     border: none;
-    /* Scaled to the bar, so a sliver isn't a pill */
     border-radius: min(1.5px, 10%);
     overflow: hidden;
     cursor: pointer;

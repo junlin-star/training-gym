@@ -237,17 +237,12 @@
     const rollouts = groupByRollout(samples);
     if (!rollouts.length) return null;
     const scores = rolloutScores(samples, rollouts);
-    // Loop instead of Math.min(...arr): a single step's rollout-score array can
-    // exceed the engine's max argument count and make the spread throw a
-    // RangeError (same failure class buildDist avoids).
     let lo = Infinity;
     let hi = -Infinity;
     for (const v of scores) {
       if (v < lo) lo = v;
       if (v > hi) hi = v;
     }
-    // When every rollout scored the same, a single bucket reads clearer than a
-    // lone bar pinned to one edge.
     const count = lo === hi ? 1 : BUCKET_COUNT;
     const span = hi - lo || 1;
     const buckets = Array.from({ length: count }, () => []);
@@ -307,7 +302,6 @@
     activeSamplePos = Math.max(0, Math.min(list.length - 1, activeSamplePos + delta));
   }
 
-  // The rollout currently shown in the viewer (or null when no bucket is open).
   let activeSample = $derived.by(() => {
     const d = sampleDist;
     if (!d || activeBucket == null) return null;
@@ -396,9 +390,6 @@
   async function loadRollouts(signal) {
     if (!runId) return;
     try {
-      // Untracked: the fetch effect calls this synchronously, so a tracked read
-      // here makes the effect depend on the state it is about to write, and
-      // every fetch (which always yields a fresh array) retriggers it forever.
       const wasEmpty = untrack(() => rolloutSummaries.length === 0);
       const rows = await fetchRunRollouts(runId, { signal });
       if (signal?.aborted) return;
@@ -420,9 +411,6 @@
     }
   }
 
-  // The read in flight, so a read slower than the poll interval doesn't queue
-  // another one for the same run. Switching runs or tabs aborts it, and an
-  // aborted read holds nothing back.
   let timingInFlight = null;
 
   async function loadTimings(signal) {
@@ -437,8 +425,6 @@
       if (signal?.aborted) return;
       runTimings = timings;
     } catch {
-      // Keep the timing we have: a lane only grows, so a failed poll is stale
-      // rather than wrong.
     } finally {
       if (timingInFlight?.signal === signal) timingInFlight = null;
     }
@@ -515,7 +501,6 @@
     };
   });
 
-  // Measured timing for every rollout of the run, keyed by rollout id.
   let runTimings = $state({});
 
   async function toggleRolloutDetail(rolloutId) {
@@ -534,7 +519,6 @@
       const detail = await fetchRollout(runId, rolloutId);
       if (expandedRolloutId === rolloutId) {
         expandedRollout = detail;
-        // Preselect the first populated bucket so a rollout is shown right away.
         const d = sampleDist;
         const first = d ? d.buckets.findIndex((b) => b.length > 0) : -1;
         if (first >= 0) openBucket(first);

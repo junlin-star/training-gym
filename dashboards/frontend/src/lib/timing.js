@@ -17,45 +17,35 @@ export const TIMING_LABELS = {
   optimizer_step: "Optimizer step",
 };
 
-// One dataviz slot per section — generation mint, training blue, moving weights
-// teal, checkpoint desert orange, eval gold, reward pink — and a phase inside
-// one of them is a lighter step of its section's slot, so a nested bar reads as
-// part of the section it sits in.
+const slot = (name) => `var(--color-c-dataviz-${name})`;
+
 export const TIMING_COLORS = {
-  generate_rollouts: "#ADEAAB",
-  wait_for_rollout: "#ADEAAB",
-  generate_samples: "#CDF2CB",
-  reward: "#FFC1F7",
-  reward_batch: "#FFD3F9",
-  reward_post_process: "#FFE2FB",
-  train_models: "#648FE0",
-  compute_log_probs: "#8FADEA",
-  forward_backward: "#A8C0EF",
-  optimizer_step: "#C6D5F5",
-  weight_sync: "#4AA19D",
-  offload_rollout: "#7ABDBA",
-  offload_train: "#9CD0CD",
-  checkpoint_save: "#D9866B",
-  evaluate_rollouts: "#DECB6C",
-  evaluate_rollouts_end: "#EBDD9B",
+  generate_rollouts: slot("primary-1"),
+  generate_samples: slot("primary-6"),
+  wait_for_rollout: slot("paired-1"),
+  reward: slot("primary-3"),
+  reward_batch: slot("paired-3"),
+  reward_post_process: slot("paired-7"),
+  train_models: slot("primary-7"),
+  compute_log_probs: slot("paired-4"),
+  forward_backward: slot("primary-4"),
+  optimizer_step: `color-mix(in srgb, ${slot("primary-7")} 55%, white)`,
+  weight_sync: slot("paired-8"),
+  offload_rollout: slot("paired-5"),
+  offload_train: slot("primary-2"),
+  checkpoint_save: slot("paired-2"),
+  evaluate_rollouts: slot("primary-5"),
+  evaluate_rollouts_end: slot("paired-6"),
 };
 
-// Work a step waits on but isn't: a checkpoint or an eval lands on one rollout
-// and would make that step read as many times slower than its peers.
 export const PHASES_BESIDE_THE_STEP = [
   "checkpoint_save",
   "evaluate_rollouts",
   "evaluate_rollouts_end",
 ];
 
-// Below this a phase did no measurable work, so it is recorded but not drawn.
 const NEGLIGIBLE_WORK_S = 0.0005;
 
-// What a phase is drawn inside when the two ran on different lanes: the phase
-// that blocked on it, so the driver's train_models really is the actor's
-// forward/backward. Anything else measured on another lane merely ran while the
-// phase its times fall in was running — a rollout worker generating during
-// training — and takes a row of its own.
 const BLOCKED_ON = {
   compute_log_probs: ["train_models"],
   forward_backward: ["train_models"],
@@ -81,19 +71,6 @@ export function colorFor(name) {
   return TIMING_COLORS[name] || "var(--color-c-gray-40, #5e5e5e)";
 }
 
-/** Every measured phase run of one rollout, on the time axis its lanes share.
- *
- * `lanes` is one rollout's `{roles: {role: lane}}` from the timings API. Each
- * lane's offsets are relative to its own start, so `lane_start_unix_s` shifts
- * them onto one axis.
- *
- * A phase contributes one bar per recorded run. A phase measured once per sample
- * keeps no runs to draw, so it reads as work spent inside the bar that contains
- * it (`spent`) rather than as a block of its own, which would be mostly the gaps
- * between its calls. A run entirely inside another is nested within it; a bar
- * takes a row of its own only where it overlaps work it is not inside, which is
- * real concurrency.
- */
 export function rolloutTimeline(lanes) {
   const roles = Object.entries(lanes?.roles || {});
   const laneStarts = roles
@@ -116,9 +93,6 @@ export function rolloutTimeline(lanes) {
       const first = (Number(phase?.first_start_s) || 0) + shift;
       const last = (Number(phase?.last_end_s) || 0) + shift;
       if (!count || total < NEGLIGIBLE_WORK_S) continue;
-      // A phase scored per sample reads as work spent inside the phase it ran
-      // in: its runs are too brief to draw, and past the recorder's cap it
-      // keeps none of them.
       if (total / count < NEGLIGIBLE_WORK_S || (!runs.length && count > 1)) {
         perSample.push({
           role,
@@ -131,10 +105,7 @@ export function rolloutTimeline(lanes) {
         });
         continue;
       }
-      // A phase that ran once spans exactly its one run, so a pre-cutover
-      // record still draws as the run it measured.
       const drawn = runs.length ? runs : [[first - shift, last - shift]];
-      // Runs of one phase that overlap are one block of work.
       const blocks = [];
       for (const [start, end] of [...drawn].sort((a, b) => a[0] - b[0])) {
         const block = blocks[blocks.length - 1];
@@ -167,11 +138,9 @@ export function rolloutTimeline(lanes) {
       });
     }
   }
-  // Enclosing bars first, so a bar meets its container before itself.
   bars.sort((a, b) => a.start - b.start || b.end - a.end);
 
   bars.forEach((bar, index) => {
-    // The innermost phase this one both ran within and belongs to.
     const container = bars
       .slice(0, index)
       .filter(
@@ -184,13 +153,9 @@ export function rolloutTimeline(lanes) {
     bar.depth = container ? container.depth + 1 : 0;
     bar.container = container ?? null;
     bar.inside = container ? container.name : null;
-    // A bar with work inside it is drawn as an outline around that work.
     if (container) container.contains = true;
   });
 
-  // A per-sample phase's work reads on the innermost bar it ran within
-  // ("generation spent 32ms scoring 227 samples"); one nothing contains keeps a
-  // bar of its own rather than going unshown.
   for (const work of perSample) {
     const container = bars
       .filter(
@@ -216,7 +181,6 @@ export function rolloutTimeline(lanes) {
       });
   }
 
-  // Work that ran at the same time without either side containing the other.
   for (const bar of bars) {
     bar.overlaps = [
       ...new Set(
@@ -234,9 +198,6 @@ export function rolloutTimeline(lanes) {
     ];
   }
 
-  // A row holds bars that ran one after another, and belongs to the row holding
-  // the bars that contain them, so it is drawn within that row and never within
-  // a bar it is not inside. Work that overlaps its own row takes another one.
   bars.sort((a, b) => a.depth - b.depth || a.start - b.start || b.end - a.end);
   const rows = [];
   const rowOf = new Map();
@@ -246,8 +207,6 @@ export function rolloutTimeline(lanes) {
     const siblings = rowsPerParent.get(parent) || [];
     let row = siblings.find((r) => r.bars[r.bars.length - 1].end <= bar.start);
     if (!row) {
-      // The first row of a container is drawn within it; another one is work
-      // that overlapped it, which needs a row of its own.
       row = {
         depth: bar.depth,
         parentIndex: parent ? parent.index : null,
@@ -265,8 +224,6 @@ export function rolloutTimeline(lanes) {
   const beside = bars.filter((bar) =>
     PHASES_BESIDE_THE_STEP.includes(bar.name),
   );
-  // The driver runs its substeps one after another, so a step is their work
-  // added up; a checkpoint or an eval is not one of them.
   const stepDuration = bars
     .filter(
       (bar) =>
@@ -286,7 +243,6 @@ export function fmtSecs(s) {
   const n = Number(s);
   if (!Number.isFinite(n)) return "—";
   const trim = (x) => x.toFixed(3).replace(/\.?0+$/, "");
-  // A per-sample phase averages well under a millisecond; seconds would read 0s.
   if (n > 0 && n < 0.01) return `${trim(n * 1000)}ms`;
   if (n >= 60) {
     const m = Math.floor(n / 60);
