@@ -659,7 +659,7 @@ class TrainConfig:
         print(f"TrainingRun recorded: {training_run_id}")
 
         recipe = self.recipe
-        if isinstance(self.recipe, (SlimeRecipe, MilesConfig)):
+        if isinstance(self.recipe, (SlimeRecipe, MilesRecipe)):
             from modal_training_gym.common.step_timing import probe_substep_timing
 
             if not probe_substep_timing(
