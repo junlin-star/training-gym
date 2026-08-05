@@ -211,32 +211,15 @@ export async function fetchRunAdvantages(trainingRunId, { signal } = {}) {
     .sort((a, b) => a.rollout_id - b.rollout_id);
 }
 
-// Per-rollout measured substep timing lanes.
-export async function fetchRunTimings(trainingRunId, rolloutId) {
+// A whole run's measured substep timing, keyed by rollout id — one request for
+// the run, the way its rollouts are fetched.
+export async function fetchRunTimings(trainingRunId, { signal } = {}) {
   const res = await fetch(
-    `${SERVER}/runs/${encodeURIComponent(trainingRunId)}/timings/${encodeURIComponent(rolloutId)}`,
+    `${SERVER}/runs/${encodeURIComponent(trainingRunId)}/timings`,
+    { signal },
   );
-  if (!res.ok) return null;
+  if (!res.ok) return {};
   return await res.json();
-}
-
-// The route rejects a larger batch, so a run past this many rollouts is asked
-// for in several requests rather than losing its timing entirely.
-const TIMINGS_PER_REQUEST = 200;
-
-// Measured substep timing for several rollouts at once, keyed by rollout id.
-export async function fetchRunTimingsBatch(trainingRunId, rolloutIds, { signal } = {}) {
-  const timings = {};
-  for (let i = 0; i < (rolloutIds?.length || 0); i += TIMINGS_PER_REQUEST) {
-    const batch = rolloutIds.slice(i, i + TIMINGS_PER_REQUEST);
-    const res = await fetch(
-      `${SERVER}/runs/${encodeURIComponent(trainingRunId)}/timings?rollout_ids=${batch.join(",")}`,
-      { signal },
-    );
-    if (!res.ok) continue;
-    Object.assign(timings, await res.json());
-  }
-  return timings;
 }
 
 // One step's full per-group advantage distribution (for drill-in).

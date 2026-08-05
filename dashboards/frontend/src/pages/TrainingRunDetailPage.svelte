@@ -3,7 +3,6 @@
   import { ArrowLeft, ChevronLeft, ChevronRight, Download, ExternalLink, Minimize2, X } from "lucide-svelte";
   import Tabs from "../components/Tabs.svelte";
   import RunSummary from "../components/RunSummary.svelte";
-  import StepTimings from "../components/StepTimings.svelte";
   import RunTimeline from "../components/RunTimeline.svelte";
   import StatusPill from "../components/StatusPill.svelte";
   import TimeAgo from "../components/TimeAgo.svelte";
@@ -21,7 +20,6 @@
     fetchRunRollouts,
     fetchRollout,
     fetchRunTimings,
-    fetchRunTimingsBatch,
     fetchRunAdvantages,
     fetchRunAdvantageStep,
     fetchRunLogs,
@@ -194,21 +192,6 @@
   function formatMean(value) {
     if (typeof value !== "number" || !Number.isFinite(value)) return "—";
     return value.toFixed(3);
-  }
-
-  // Map a rollout to its step timing. Step keys are 1-indexed; rollout ids are
-  // 0-indexed, so step N corresponds to rollout N-1 (fall back to a direct match).
-  function stepTimingForRollout(rolloutId) {
-    const st = run?.step_times || null;
-    const sub = run?.substep_times || null;
-    if (!st && !sub) return null;
-    const candidates = [String(Number(rolloutId) + 1), String(rolloutId)];
-    const key = candidates.find((k) => (st && st[k]) || (sub && sub[k]));
-    if (!key) return null;
-    return {
-      stepTimes: st && st[key] ? { [key]: st[key] } : null,
-      substepTimes: sub && sub[key] ? { [key]: sub[key] } : null,
-    };
   }
 
   function resumeBadge(run) {
@@ -426,11 +409,7 @@
         toggleRolloutDetail(rolloutSummaries[0].rollout_id);
       }
 
-      const timings = await fetchRunTimingsBatch(
-        runId,
-        rows.map((r) => r.rollout_id),
-        { signal },
-      );
+      const timings = await fetchRunTimings(runId, { signal });
       if (signal?.aborted) return;
       runTimings = timings;
     } catch (err) {
@@ -513,8 +492,7 @@
     };
   });
 
-  let expandedTimings = $state(null);
-  // Measured timing for every listed rollout, for the run-level phase summary.
+  // Measured timing for every rollout of the run, keyed by rollout id.
   let runTimings = $state({});
 
   async function toggleRolloutDetail(rolloutId) {
@@ -522,23 +500,17 @@
     if (expandedRolloutId === rolloutId) {
       expandedRolloutId = null;
       expandedRollout = null;
-      expandedTimings = null;
       closeBucket();
       return;
     }
     expandedRolloutId = rolloutId;
     expandedRollout = null;
-    expandedTimings = null;
     closeBucket();
     expandedRolloutLoading = true;
     try {
-      const [detail, timings] = await Promise.all([
-        fetchRollout(runId, rolloutId),
-        fetchRunTimings(runId, rolloutId),
-      ]);
+      const detail = await fetchRollout(runId, rolloutId);
       if (expandedRolloutId === rolloutId) {
         expandedRollout = detail;
-        expandedTimings = timings;
         // Preselect the first populated bucket so a rollout is shown right away.
         const d = sampleDist;
         const first = d ? d.buckets.findIndex((b) => b.length > 0) : -1;
@@ -1385,19 +1357,6 @@
               />
             </div>
           {/if}
-          {#if run.step_times || run.substep_times}
-            <div class="rollout-chart">
-              <div class="rollout-chart-title">Step &amp; substep timeline</div>
-              <div class="chart-scroll">
-                <StepTimings
-                  stepTimes={run.step_times}
-                  substepTimes={run.substep_times}
-                  layout="timeline"
-                  downloadName={`step_substep_times_${runId}.json`}
-                />
-              </div>
-            </div>
-          {/if}
           {#if rolloutsLoading && !rolloutSummaries.length}
             <div class="rollout-chart">
               <ChartSkeleton variant="line" height={140} showTitle />
@@ -1571,18 +1530,13 @@
                     {:else if !expandedRollout || !sampleDist}
                       <div class="detail-empty">No rollouts recorded.</div>
                     {:else}
-                      {@const stepTiming = stepTimingForRollout(r.rollout_id)}
-                      {#if stepTiming || expandedTimings}
+                      {#if runTimings[r.rollout_id]}
                         <div class="rollout-chart">
-                          <div class="rollout-chart-title">Step timing</div>
-                          <div class="chart-scroll">
-                            <StepTimings
-                              stepTimes={stepTiming?.stepTimes}
-                              substepTimes={stepTiming?.substepTimes}
-                              lanes={expandedTimings}
-                              layout="rows"
-                            />
-                          </div>
+                          <div class="rollout-chart-title">Substep timing</div>
+                          <RunTimeline
+                            timings={{ [r.rollout_id]: runTimings[r.rollout_id] }}
+                            downloadName={`substep_timing_${runId}_rollout_${r.rollout_id}.json`}
+                          />
                         </div>
                       {/if}
                       {#if expandedRollout.metrics && Object.keys(expandedRollout.metrics).length}

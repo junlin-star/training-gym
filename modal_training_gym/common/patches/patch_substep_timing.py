@@ -1,15 +1,13 @@
 """Wrap the driver loop, rollout worker and actor with measured substep timing.
 
 One script for both frameworks: slime and miles have the same lanes and phase
-names, only different source anchors, and running the same script at both image
-builds is what keeps the record format from drifting apart.
+names, only different source anchors.
 
-Puts each phase of the training loop inside ``with _tg_rec.phase(...)``
-The driver's phases all sit in one loop body, with a local (``_tg_rec``) recorder.
-The rollout worker and the actor measure work inside a reward function/inside megatron's train
-step, so they open a lane at the entry point and the phases below use the
-module-level ``_tg_time_phase``, which finds the active lane in a ``ContextVar`` and does nothing
-if there is none.
+Puts each phase of the training loop inside ``with _tg_rec.phase(...)``. The
+driver's phases all sit in one loop body, with a local (``_tg_rec``) recorder.
+The rollout worker and the actor measure work further down the call stack, so
+they open a lane at their entry point and the phases below use the module-level
+``_tg_time_phase``, which finds that lane in a ``ContextVar``.
 """
 
 from __future__ import annotations
@@ -73,11 +71,9 @@ MILES_ROOT = Path("/root/miles")
 
 
 def replace_once(source: str, old: str, new: str, path: Path) -> str:
-    """Replace exactly one occurrence, or raise.
-
-    Short anchors are not unique in these files (``actor_model.update_weights()``
-    appears twice, ``rollout_manager.eval.remote`` three times), and silently
-    patching the wrong one is worse than failing the build.
+    """Replace exactly one occurrence, or raise: anchors like
+    ``actor_model.update_weights()`` appear more than once, and patching the
+    wrong one is worse than failing the build.
     """
     count = source.count(old)
     if count != 1:
@@ -92,15 +88,9 @@ def indent_block(block: str) -> str:
 def wrap_block(block: str, phase: str, opener: str = "_tg_rec.phase") -> str:
     """Wrap a block in ``with <opener>('<phase>'):``.
 
-    ``opener`` is ``_tg_rec.phase`` where the patch can see the active lane (the
-    driver loop) and the module-level ``_tg_time_phase`` where it cannot.
-
-    For a bare ``if`` with no ``else``, only the body is wrapped: wrapping the
-    ``if`` itself records a ~0s interval on every step the branch is skipped,
-    and a zero-width bar for work that never ran is indistinguishable from work
-    that finished instantly. An ``if/else`` is wrapped whole, since wrapping one
-    arm alone would not parse. The header can span several lines, and its
-    closing ``):`` sits back at the ``if``'s own indent.
+    For a bare ``if``, only the body is wrapped, so a skipped branch records
+    nothing instead of a ~0s bar for work that never ran. An ``if/else`` is
+    wrapped whole, since wrapping one arm alone would not parse.
     """
     lines = block.splitlines(keepends=True)
     outer = len(lines[0]) - len(lines[0].lstrip(" "))
@@ -227,9 +217,8 @@ _SYNC_PHASE_WRAPS = [
 ]
 
 
-# train_async.py is a separate file with a different loop: no eval before train,
-# no rollout offload, no offload_train, and the wait is on a future prefetched
-# during the previous step. Same phase names, different anchors.
+# train_async.py has a different loop: no eval before train, no rollout offload,
+# and the wait is on a future prefetched during the previous step.
 _ASYNC_PHASE_WRAPS = [
     (
         "        if rollout_data_next_future is not None:\n"
@@ -267,9 +256,8 @@ _ASYNC_PHASE_WRAPS = [
         "checkpoint_save",
     ),
     # Where an async run actually waits for generation from the second step on:
-    # this consumes the prefetched future because weights cannot be updated mid
-    # generation. Measured apart from the weight update, which is the number
-    # async mode is judged on.
+    # weights cannot be updated mid generation, so the prefetched future is
+    # consumed here. Measured apart from the weight update that follows it.
     (
         "            # sync generate before update weights to prevent update weight in the middle of generation\n"
         "            rollout_data_curr_ref = ray.get(x) if (x := rollout_data_next_future) is not None else None\n"
@@ -299,13 +287,13 @@ SLIME_ENTRYPOINTS = {
 
 @dataclass(frozen=True)
 class PackageTarget:
-    """One file in the slime *package* that measures a non-driver lane.
+    """One file in the framework package that measures a non-driver lane.
 
     ``scope`` opens the recorder: the first line of the function that knows the
     rollout id, the line ending its body, and the ``with`` header to insert.
-    ``blocks`` are the phases, wrapped with the module-level ``_tg_time_phase``
-    because they may sit in a different module from the scope entirely --
-    ``forward_backward`` is in ``model.py``, its recorder in ``actor.py``.
+    ``blocks`` are the phases; they may sit in a different module from the scope
+    (``forward_backward`` is in ``model.py``, its recorder in ``actor.py``), so
+    they are wrapped with the module-level ``_tg_time_phase``.
     """
 
     path: str
@@ -313,9 +301,7 @@ class PackageTarget:
     blocks: tuple[tuple[str, str], ...]
 
 
-# The rollout worker: one lane per generate call. ``generate`` runs an asyncio
-# loop, so its phases overlap -- which is why a phase records its own summed
-# duration alongside first start and last end.
+# The rollout worker: one lane per generate call.
 ROLLOUT_TARGET = PackageTarget(
     path="slime/ray/rollout.py",
     scope=(
@@ -324,9 +310,8 @@ ROLLOUT_TARGET = PackageTarget(
         "with _tg_role('rollout', rollout_id):",
     ),
     blocks=(
-        # Named apart from the driver's ``generate_rollouts``, which is the same
-        # work seen from the caller: one name per lane keeps the run-level phase
-        # summary from counting generation twice.
+        # Named apart from the driver's ``generate_rollouts``, which is the
+        # same work seen from the caller.
         (
             "generate_samples",
             "        data, metrics = self._get_rollout_data(rollout_id=rollout_id)\n",
@@ -338,23 +323,20 @@ ROLLOUT_TARGET = PackageTarget(
     ),
 )
 
-# Rewards run on slime's background event-loop thread (`utils/async_utils.py`
-# submits with `asyncio.run_coroutine_threadsafe`), not on the thread that
-# opened the rollout lane -- and they still see it: that call schedules task
-# creation with `call_soon_threadsafe`, which copies the *submitting* thread's
-# context, and every task spawned below inherits it.
+# Rewards run on the framework's background event-loop thread, and still see the
+# rollout lane: `run_coroutine_threadsafe` schedules task creation with
+# `call_soon_threadsafe`, which copies the submitting thread's context.
 #
-# `batched_async_rm` is only reached by the group and fan-out paths (under
-# `--group-rm`, or a custom generate function returning several samples). The
-# default path scores one sample at a time through `async_rm`, so measuring
-# only here left the lane empty on every ordinary run, including one with a
-# custom reward function; REWARD_SAMPLE_TARGET covers that path.
-REWARD_TARGET = PackageTarget(
+# `batched_async_rm` is only reached by the group and fan-out paths; the default
+# path scores one sample at a time, which REWARD_SAMPLE_TARGET covers. Named
+# apart because a batch call awaits those per-sample calls -- under one name a
+# generate function hitting both paths would count the inner time twice.
+REWARD_BATCH_TARGET = PackageTarget(
     path="slime/rollout/rm_hub/__init__.py",
     scope=None,
     blocks=(
         (
-            "reward",
+            "reward_batch",
             "    if args.custom_rm_path is not None:\n"
             "        # Ensure the custom reward function is implemented in batch mode\n"
             "        rm_function = load_function(args.custom_rm_path)\n"
@@ -366,10 +348,7 @@ REWARD_TARGET = PackageTarget(
     ),
 )
 
-# The default reward path: one sample, scored where it was generated. Same lane
-# and phase name as the batched site -- a run uses one path or the other, and
-# what the phase answers ("how much of this rollout went to scoring") does not
-# depend on which.
+# The default reward path: one sample, scored where it was generated.
 REWARD_SAMPLE_TARGET = PackageTarget(
     path="slime/rollout/sglang_rollout.py",
     scope=None,
@@ -383,9 +362,8 @@ REWARD_SAMPLE_TARGET = PackageTarget(
     ),
 )
 
-# The actor and the critic are one class and one lane each, told apart by
-# ``self.role`` -- so the header is an expression, not a literal, and one patch
-# instruments both.
+# The actor and the critic are one class, told apart by ``self.role``, so the
+# header is an expression and one patch instruments both lanes.
 ACTOR_TARGET = PackageTarget(
     path="slime/backends/megatron_utils/actor.py",
     scope=(
@@ -412,8 +390,7 @@ ACTOR_TARGET = PackageTarget(
 )
 
 # No scope: ``train_one_step`` runs inside the actor's ``train`` on the same
-# thread, so it inherits that lane. Both phases are per *step*, not per
-# microbatch -- ``forward_backward_func`` loops over microbatches internally.
+# thread, so it inherits that lane.
 TRAIN_STEP_TARGET = PackageTarget(
     path="slime/backends/megatron_utils/model.py",
     scope=None,
@@ -431,8 +408,7 @@ TRAIN_STEP_TARGET = PackageTarget(
             "        forward_only=False,\n"
             "    )\n",
         ),
-        # Body of ``if valid_step:``, so a skipped step (NaN grads) records
-        # nothing instead of a 0s bar claiming an instant optimizer step.
+        # Body of ``if valid_step:``, so a skipped step records nothing
         (
             "optimizer_step",
             "    if valid_step:\n"
@@ -449,7 +425,7 @@ TRAIN_STEP_TARGET = PackageTarget(
 
 SLIME_PACKAGE_TARGETS: tuple[PackageTarget, ...] = (
     ROLLOUT_TARGET,
-    REWARD_TARGET,
+    REWARD_BATCH_TARGET,
     REWARD_SAMPLE_TARGET,
     ACTOR_TARGET,
     TRAIN_STEP_TARGET,
@@ -458,10 +434,9 @@ SLIME_PACKAGE_TARGETS: tuple[PackageTarget, ...] = (
 
 # ---------- miles ----------
 #
-# Same lanes and phase names as slime, different source. Two differences drive
-# every anchor below: miles' driver loop is ``async``, so the phases wrap
-# ``await`` expressions rather than ``ray.get`` calls, and no status patcher
-# runs before this one, so the anchors are the pristine upstream lines.
+# Same lanes and phase names, different source: miles' driver loop is ``async``,
+# so the phases wrap ``await`` expressions rather than ``ray.get`` calls, and no
+# status patcher runs first, so the anchors are the upstream lines.
 
 _MILES_SYNC_PHASE_WRAPS = [
     (
@@ -547,9 +522,8 @@ _MILES_ASYNC_PHASE_WRAPS = [
         "                await rollout_manager.save.remote(rollout_id)\n",
         "checkpoint_save",
     ),
-    # Where an async run actually waits for generation: the prefetched future is
-    # consumed here because weights cannot be updated mid generation. Measured
-    # apart from the weight update, which is the number async mode is judged on.
+    # As in slime's async loop: the prefetched future is consumed before the
+    # weight update, and measured apart from it.
     (
         "            # sync generate before update weights to prevent update weight in the middle of generation\n"
         "            rollout_data_curr_ref = (await x) if (x := rollout_data_next_future) is not None else None\n"
@@ -600,7 +574,7 @@ MILES_PACKAGE_TARGETS: tuple[PackageTarget, ...] = (
         scope=None,
         blocks=(
             (
-                "reward",
+                "reward_batch",
                 "    if args.custom_rm_path is not None:\n"
                 "        # Ensure the custom reward function is implemented in batch mode\n"
                 "        rm_function = load_function(args.custom_rm_path)\n"
@@ -677,10 +651,8 @@ MILES_PACKAGE_TARGETS: tuple[PackageTarget, ...] = (
 
 
 def wrap_scope(src: str, scope: tuple[str, str, str], path: Path) -> str:
-    """Put a function body inside the recorder's ``with``.
-
-    Anchored on its first and last lines rather than its whole text, because
-    the phases inside it have already been rewritten by the time this runs.
+    """Put a function body inside the recorder's ``with``, anchored on its first
+    and last lines: the phases inside it are already rewritten by now.
     """
     signature, last_line, header = scope
     if src.count(signature) != 1:
@@ -693,9 +665,7 @@ def wrap_scope(src: str, scope: tuple[str, str, str], path: Path) -> str:
     if not sep:
         raise RuntimeError(f"{path}: scope end not found: {last_line.strip()!r}")
     indent = " " * (len(signature) - len(signature.lstrip(" ")) + 4)
-    # The match has to be the function's own last line: an earlier line with
-    # the same text would close the lane early, and the rest of the function
-    # would keep running, measured by nothing.
+    # An earlier line with the same text would close the lane early
     after = next((ln for ln in tail.splitlines() if ln.strip()), "")
     if after.startswith(indent):
         raise RuntimeError(
@@ -714,11 +684,9 @@ def wrap_scope(src: str, scope: tuple[str, str, str], path: Path) -> str:
 
 
 def patch_package_file(root: Path, target: PackageTarget) -> None:
-    """Instrument one file in the framework package.
-
-    A missing file is fatal here, unlike the entrypoints: these paths are
-    inside the pinned framework checkout, so a missing one means the layout
-    moved and the lane would silently never appear.
+    """Instrument one file in the framework package. A missing file is fatal
+    here, unlike the entrypoints: it means the layout moved and the lane would
+    silently never appear.
     """
     path = root / target.path
     if not path.exists():
@@ -771,11 +739,7 @@ def _patch_file(path: Path, wraps: list[tuple[str, str]]) -> None:
 
 
 def main() -> None:
-    """Patch whichever framework checkout this image has.
-
-    Both launchers run this same script at image build, so the lanes, phase
-    names and record format cannot drift between slime and miles.
-    """
+    """Patch whichever framework checkout this image has."""
     for root, entrypoints, package_targets in (
         (SLIME_ROOT, SLIME_ENTRYPOINTS, SLIME_PACKAGE_TARGETS),
         (MILES_ROOT, MILES_ENTRYPOINTS, MILES_PACKAGE_TARGETS),

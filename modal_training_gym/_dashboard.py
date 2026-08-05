@@ -59,7 +59,7 @@ from modal_training_gym.common.step_timing import (
     PROTOCOL as TIMING_PROTOCOL,
     RoleTimingRecord,
     legacy_run_to_records,
-    load_steps,
+    load_run,
     rollout_lanes,
 )
 
@@ -455,9 +455,11 @@ def fastapi_app():
         key: (0.0, [], 0.0) for key in cache_keys
     }
 
-    TIMING_CACHE_MAX_ENTRIES = 2048
-    TIMING_MAX_BATCH = 200
-    timing_cache: dict[tuple[str, int], tuple[float, JsonDict]] = {}
+    # Timing is read a run at a time, like rollouts, so it cannot use the
+    # fixed-key cache above; the bound keeps browsing many runs from growing
+    # this without limit.
+    TIMING_CACHE_MAX_RUNS = 64
+    timing_cache: dict[str, tuple[float, JsonDict]] = {}
     cache_locks = {key: asyncio.Lock() for key in cache_keys}
     # Hold strong refs to background refresh tasks so they aren't GC'd mid-flight.
     refresh_tasks: set[asyncio.Task[list[JsonDict]]] = set()
@@ -877,65 +879,36 @@ def fastapi_app():
         await _get_run_or_404(record.training_run_id)
 
         await record.save(is_async=True)
-        timing_cache.pop((record.training_run_id, record.rollout_id), None)
+        timing_cache.pop(record.training_run_id, None)
         return JSONResponse({"status": "ok"})
 
-    async def _timings_for(training_run_id: str, rollout_ids: list[int]) -> JsonDict:
-        """Reads stored RoleTimingRecords or cache and normalizes into separate rollout lanes for viewing."""
+    async def _run_timings(training_run_id: str) -> JsonDict:
+        """One run's stored RoleTimingRecords as lanes to draw, by rollout id."""
         now = time.monotonic()
-        out: JsonDict = {}
-        misses: list[int] = []
-        for rollout_id in rollout_ids:
-            cached = timing_cache.get((training_run_id, rollout_id))
-            if cached is not None and now < cached[0]:
-                out[str(rollout_id)] = cached[1]
-            else:
-                misses.append(rollout_id)
+        cached = timing_cache.get(training_run_id)
+        if cached is not None and now < cached[0]:
+            return cached[1]
 
-        found: dict[int, list[JsonDict]] = (
-            await run_in_threadpool(load_steps, training_run_id, misses)
-            if misses
-            else {}
-        )
-
-        if misses and not found:
+        found = await run_in_threadpool(load_run, training_run_id)
+        if not found:
+            # Only a run that measured nothing anywhere is pre-cutover; one with
+            # partial timing keeps its gaps rather than inferring them.
             run = await _get_run_or_404(training_run_id)
             for record in legacy_run_to_records(run.substep_times):
-                rollout_id = int(record["rollout_id"])
-                if rollout_id in misses:
-                    found.setdefault(rollout_id, []).append(record)
+                found.setdefault(int(record["rollout_id"]), []).append(record)
 
-        for rollout_id in misses:
-            payload = rollout_lanes(found.get(rollout_id, []))
-            if len(timing_cache) >= TIMING_CACHE_MAX_ENTRIES:
-                timing_cache.clear()
-            timing_cache[(training_run_id, rollout_id)] = (
-                now + cache_ttl_seconds,
-                payload,
-            )
-            out[str(rollout_id)] = payload
-        return out
-
-    @web.get("/api/runs/{training_run_id}/timings/{rollout_id}")
-    async def get_run_timing(training_run_id: str, rollout_id: int):
-        timings = await _timings_for(training_run_id, [int(rollout_id)])
-        return JSONResponse(timings[str(int(rollout_id))])
+        timings: JsonDict = {
+            str(rollout_id): rollout_lanes(records)
+            for rollout_id, records in sorted(found.items())
+        }
+        if len(timing_cache) >= TIMING_CACHE_MAX_RUNS:
+            timing_cache.clear()
+        timing_cache[training_run_id] = (now + cache_ttl_seconds, timings)
+        return timings
 
     @web.get("/api/runs/{training_run_id}/timings")
-    async def get_run_timings(training_run_id: str, rollout_ids: str = ""):
-        wanted: list[int] = []
-        for section in rollout_ids.split(","):
-            section = section.strip()
-            if section.lstrip("-").isdigit() and int(section) not in wanted:
-                wanted.append(int(section))
-        if not wanted:
-            return JSONResponse({})
-        if len(wanted) > TIMING_MAX_BATCH:
-            raise HTTPException(
-                status_code=400,
-                detail=f"at most {TIMING_MAX_BATCH} rollout_ids per request",
-            )
-        return JSONResponse(await _timings_for(training_run_id, wanted))
+    async def get_run_timings(training_run_id: str):
+        return JSONResponse(await _run_timings(training_run_id))
 
     # ── Live Modal log stream (SSE, pure pass-through) ───────────────────
 

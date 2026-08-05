@@ -1,16 +1,11 @@
 """Container-side substep timing recorder, shared by slime and miles.
 
-Runs inside the training image, so it is dependency-light: stdlib plus
-:mod:`.status_reporter`, which owns the background HTTP queue. It must stay
-importable in a container without torch, pydantic or a framework present, since
-build-time patches inject calls into framework source that also runs on ranks
-that record nothing.
+Runs inside the training image, so is dependency-light and importable without a
+framework, torch or pydantic present.
 
-A record measures one ``(rollout_id, role)`` lane. Per phase it keeps how many
-times the phase ran, the summed and longest duration, when it first started and
-last ended, and each run's start and end while there are few enough of them to
-draw -- a reward phase runs once per sample, thousands of times per step, and
-every publish re-sends the whole record.
+A record measures one ``(rollout_id, role)`` lane: per phase, how many times it
+ran, its summed and longest duration, when it first started and last ended, and
+each run's start and end while there are few enough of them to draw.
 """
 
 from __future__ import annotations
@@ -29,14 +24,11 @@ TIMING_PATH = "/api/timing-events"
 STATUS_PATH = "/api/framework-status"
 TIMING_TIMEOUT_SECONDS = 10.0
 
-# Publishing every measurement would be one POST per reward sample; the record
-# is cumulative, so a snapshot at most this often loses nothing but detail in
-# how a step's timing filled in while it ran.
+# Rate limiting, mostly for per-sample reward phases
 MIN_PUBLISH_INTERVAL_S = 1.0
 
-# Past this many runs of one phase, the record carries the phase's aggregate
-# only: individual bars stop being legible (and stop fitting in a record that is
-# re-posted every second) well before a per-sample phase's thousands.
+# Past this, a phase keeps its aggregate only: a per-sample phase runs thousands
+# of times per step, and the whole record is re-posted on every publish.
 MAX_DRAWN_INVOCATIONS = 64
 
 
@@ -56,9 +48,9 @@ class RoleRecorder:
     :func:`recording_lane` for the other lanes; publishes to
     ``/api/timing-events``, which overwrites the lane's stored record.
 
-    Two clocks, for two jobs: durations are monotonic offsets from ``_t0`` so
-    they cannot go backwards, and ``lane_start_unix_s`` is wall clock, used only
-    to line up lanes recorded in different processes.
+    Two timings exist for visibility: monotonic offsets relative to ``_t0`` to
+    guarantee positive duration, and ``lane_start_unix_s`` for wall-clock time
+    to align multiple processes in visualization.
 
     Publishing is gated so that, for actor/critic lanes, only the reporting
     megatron rank writes the timing file for a rollout.
@@ -78,21 +70,15 @@ class RoleRecorder:
         self._t0 = time.monotonic()
         self.lane_start_unix_s = time.time()
         self.phases: dict[str, dict[str, float]] = {}
-        # Each phase's runs as [start, end] offsets, kept separately from the
-        # aggregate above so both stay numeric and easy to accumulate.
         self.invocations: dict[str, list[list[float]]] = {}
         self._last_publish_t = float("-inf")
-        # A lane can be measured from several threads at once: rewards are
-        # scored concurrently, and the framework runs generation in a worker
-        # thread that inherits the lane. Accumulating without this loses runs.
+        # Rewards are scored concurrently on the same lane
         self._lock = threading.Lock()
 
     def __enter__(self) -> "RoleRecorder":
         return self
 
     def __exit__(self, *exc: object) -> None:
-        # Forced, because the rate limit would otherwise hold back the tail of
-        # the step -- the part that matters when a step fails or is preempted.
         self._publish(force=True)
 
     @contextmanager
@@ -121,15 +107,14 @@ class RoleRecorder:
                     timing["longest_duration_s"] = max(
                         timing["longest_duration_s"], duration
                     )
-                    # Concurrent runs neither start nor finish in order, so the
-                    # span is the earliest start to the latest end.
+                    # Concurrent runs neither start nor finish in order
                     timing["first_start_s"] = min(
                         timing["first_start_s"], start - self._t0
                     )
                     timing["last_end_s"] = max(timing["last_end_s"], end - self._t0)
                     if timing["count"] > MAX_DRAWN_INVOCATIONS:
-                        # Emptied rather than truncated: the first 64 of a
-                        # phase's runs would draw as if it had stopped early.
+                        # Emptied, not truncated: a prefix of the runs would
+                        # draw as if the phase had stopped early.
                         self.invocations[name] = []
                     else:
                         self.invocations[name].append(
@@ -172,8 +157,7 @@ class RoleRecorder:
             {
                 "_url": url,
                 "_timeout": TIMING_TIMEOUT_SECONDS,
-                # Each post replaces the lane's stored record, so a queued
-                # older snapshot of this lane is dead weight.
+                # A queued older snapshot of this lane would only be overwritten
                 "_supersede_key": (training_run_id, self.rollout_id, self.role),
                 "_token": os.environ.get("TRAINING_GYM_FRAMEWORK_STATUS_TOKEN", ""),
                 "training_run_id": training_run_id,
@@ -192,11 +176,7 @@ _ACTIVE_LANE: ContextVar[RoleRecorder | None] = ContextVar(
 
 @contextmanager
 def time_phase(name: str) -> Iterator[None]:
-    """Record a phase on the active :class:`RoleRecorder`, if there is one.
-
-    This is a no-op when no lane is active, so injected calls deep in
-    framework/megatron/reward code do not crash processes that have no recorder.
-    """
+    """Record a phase on the active lane; a no-op when there is none."""
     rec = _ACTIVE_LANE.get()
     if rec is None:
         yield
@@ -222,7 +202,7 @@ def recording_lane(
 
 
 def _megatron_publish_gate() -> bool | None:
-    """Return whether this megatron rank is the unique writer for its lane."""
+    """Whether this megatron rank is the single writer for its lane."""
     try:
         from megatron.core import parallel_state as ps
 

@@ -11,6 +11,7 @@ export const TIMING_LABELS = {
   wait_for_rollout: "Wait for rollout",
   generate_samples: "Generate samples",
   reward: "Reward",
+  reward_batch: "Reward (batch)",
   reward_post_process: "Reward post process",
   forward_backward: "Forward/backward",
   optimizer_step: "Optimizer step",
@@ -29,6 +30,7 @@ export const TIMING_COLORS = {
   wait_for_rollout: "#fb923c",
   generate_samples: "#4ade80",
   reward: "#a3e635",
+  reward_batch: "#65a30d",
   reward_post_process: "#f0abfc",
   forward_backward: "#2dd4bf",
   optimizer_step: "#facc15",
@@ -44,27 +46,15 @@ export function colorFor(name) {
 
 /** Every measured phase run of one rollout, on the time axis its lanes share.
  *
- * `lanes` is one rollout's `{roles: {role: lane}}` from the timings API. Lanes
- * are recorded in different processes, each phase offset relative to its own
- * lane's start, so `lane_start_unix_s` shifts them onto one axis.
+ * `lanes` is one rollout's `{roles: {role: lane}}` from the timings API. Each
+ * lane's offsets are relative to its own start, so `lane_start_unix_s` shifts
+ * them onto one axis.
  *
- * A phase that recorded its runs contributes one bar per run -- that is what
- * makes `forward_backward` and `optimizer_step` read as alternating rather than
- * one containing the other. A phase that ran too many times to keep them
- * (rewards, one run per sample) contributes a single band over the span it
- * covered, carrying `count`, `average` and `longest` instead.
- *
- * Rows follow what the times mean. A bar that ran entirely inside another --
- * `forward_backward` inside `train_models` -- is nested one level under it, so
- * the sync path reads as one timeline of thin bars inside their step. A bar
- * gets a row of its own only when it overlaps something it is not inside, which
- * is real concurrency: an async rollout generating while the actor trains. Each
- * bar carries the relationship it was drawn with -- `inside` and `overlaps` --
- * so hovering says why it sits where it does rather than leaving the reader to
- * guess whether an overlap is intended.
- *
- * A band is not a container: it covers the span its runs were scattered over
- * rather than one continuous run, so work drawn beneath it is not part of it.
+ * A phase contributes one bar per recorded run, or a single band over the span
+ * it covered when it ran too many times to keep them. A run entirely inside
+ * another is nested under it; a bar takes a row of its own only where it
+ * overlaps work it is not inside, which is real concurrency. Bars carry the
+ * `inside`/`overlaps` they were drawn with so hover can say which it is.
  */
 export function rolloutTimeline(lanes) {
   const roles = Object.entries(lanes?.roles || {});

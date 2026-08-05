@@ -23,19 +23,13 @@ class Role(str, Enum):
 class PhaseTiming(BaseModel):
     """How long one phase took, for the times it ran in one rollout.
 
-    ``invocations`` holds each run as ``[start_s, end_s]`` so the timeline draws
-    what actually happened: ``forward_backward`` and ``optimizer_step`` alternate
-    within a step, and only bars that really overlap in time are drawn
-    overlapping. It is empty for a phase that ran more times than
-    ``MAX_DRAWN_INVOCATIONS`` -- a reward phase runs once per sample, thousands
-    of times a step, which is neither drawable nor worth re-posting on every
-    publish -- and such a phase is drawn as one band from ``first_start_s`` to
-    ``last_end_s`` with its count, average and longest.
-
     Offsets are seconds since the lane opened. ``total_duration_s`` is time spent
-    in the phase, which is less than ``last_end_s - first_start_s`` when the
-    phase ran repeatedly and more than it when the runs overlapped (rewards are
-    scored concurrently).
+    in the phase: less than ``last_end_s - first_start_s`` when the phase ran
+    repeatedly, more when its runs overlapped.
+
+    ``invocations`` holds each run as ``[start_s, end_s]``, so the timeline can
+    draw them rather than one bar per phase. Empty past
+    ``MAX_DRAWN_INVOCATIONS`` runs, where the UI draws a band instead.
     """
 
     count: int
@@ -71,11 +65,6 @@ class RoleTimingRecord(BaseModel):
     def store(training_run_id: str) -> str:
         return f"{MetadataStore.SUBSTEP_TIMING.value}/{training_run_id}"
 
-    @staticmethod
-    def step_prefix(rollout_id: int) -> str:
-        """Listing prefix that matches every role's file for one rollout."""
-        return f"{rollout_id:08d}__"
-
     def _touch_created_at(self) -> None:
         if not self.created_at:
             self.created_at = int(time.time())
@@ -105,7 +94,8 @@ class Substep(str, Enum):
     WAIT_FOR_ROLLOUT = "wait_for_rollout"  # driver
     TRAIN_MODELS = "train_models"  # driver
     GENERATE_SAMPLES = "generate_samples"  # rollout worker
-    REWARD = "reward"  # rollout worker
+    REWARD = "reward"  # rollout worker, one run per sample
+    REWARD_BATCH = "reward_batch"  # rollout worker, one run per scored batch
     REWARD_POST_PROCESS = "reward_post_process"  # rollout worker
     FORWARD_BACKWARD = "forward_backward"  # actor / critic
 
@@ -126,23 +116,16 @@ def rollout_lanes(records: list[dict[str, Any]]) -> dict[str, Any]:
     return {"roles": lanes}
 
 
-def load_steps(
-    training_run_id: str, rollout_ids: list[int]
-) -> dict[int, list[dict[str, Any]]]:
-    """The <=4 role records of each requested rollout, keyed by rollout id.
+def load_run(training_run_id: str) -> dict[int, list[dict[str, Any]]]:
+    """Every role record of a run, keyed by rollout id.
 
-    Called by ``_dashboard._timings_for`` in a threadpool. One volume listing
-    covers the whole batch — a listing per rollout runs into the volume's list
-    rate limit as soon as a page asks for a handful of rows. A rollout with no
-    records is left out, which is a normal outcome rather than an error: it can
-    be mid-flight, or the run can predate measured timing, in which case the
-    caller reads the run's legacy blob instead.
+    Read whole, the way a run's rollouts are: the volume rate limits listings,
+    so one listing per rollout fails as soon as a page wants a few rows. A
+    rollout with no records is left out; the run may predate measured timing, in
+    which case the caller reads its legacy blob.
     """
     steps: dict[int, list[dict[str, Any]]] = {}
-    for record in vol_list_prefix(
-        RoleTimingRecord.store(training_run_id),
-        tuple(RoleTimingRecord.step_prefix(i) for i in rollout_ids),
-    ):
+    for record in vol_list_prefix(RoleTimingRecord.store(training_run_id), ""):
         steps.setdefault(record["rollout_id"], []).append(record)
     return steps
 
@@ -154,12 +137,8 @@ def probe_substep_timing(framework_status_url: str, mode: str = "auto") -> bool:
     """Check the dashboard can accept timing records; return whether to enable.
 
     Called on the host before the training app is spawned, so ``"require"``
-    fails while nothing is allocated rather than 40 GPUs in.
-
-    ``"auto"`` warns and disables rather than raising: refusing to start a
-    multi-node job over missing telemetry costs more than the telemetry.
-    Disabling means the run produces no timing records -- it never falls back
-    to the legacy path, which no longer has a writer.
+    fails while nothing is allocated rather than 40 GPUs in. ``"auto"`` warns
+    and disables instead: a run is worth more than its telemetry.
     """
     import json
     import urllib.error
@@ -232,8 +211,8 @@ def legacy_run_to_records(
             if start is None or duration is None:
                 continue
             rel = start - lane_start
-            # A legacy substep was recorded once per step, so its one duration
-            # is also its total and its longest.
+            # A legacy substep ran once a step, so its duration is also its
+            # total and its longest.
             phases[_LEGACY_RENAMES.get(name, name)] = {
                 "count": 1,
                 "total_duration_s": round(duration, 6),

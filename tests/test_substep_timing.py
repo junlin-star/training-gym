@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import threading
 import time
 from queue import Queue
@@ -99,6 +100,34 @@ def test_concurrent_phase_spans_less_than_it_sums(timing_env):
 def _sleep_in_phase(lane, seconds: float) -> None:
     with lane.phase("reward"):
         time.sleep(seconds)
+
+
+def test_a_reward_scored_on_the_frameworks_loop_thread_lands_on_the_lane(timing_env):
+    """The reward lane is non-empty only because the loop inherits the context.
+
+    slime and miles score samples with ``asyncio.run_coroutine_threadsafe`` on a
+    background loop thread that was started before the lane existed; the phase
+    finds the lane because that call copies the *submitting* thread's context.
+    """
+    loop = asyncio.new_event_loop()
+    loop_thread = threading.Thread(target=loop.run_forever, daemon=True)
+    loop_thread.start()
+
+    async def score() -> None:
+        with time_phase("reward"):
+            await asyncio.sleep(0.001)
+
+    try:
+        with recording_lane("rollout", 0) as lane:
+            scored = [asyncio.run_coroutine_threadsafe(score(), loop) for _ in range(4)]
+            for future in scored:
+                future.result(timeout=5)
+    finally:
+        loop.call_soon_threadsafe(loop.stop)
+        loop_thread.join(timeout=5)
+        loop.close()
+
+    assert lane.phases["reward"]["count"] == 4
 
 
 def test_time_phase_records_on_the_active_lane_and_is_a_noop_without_one(timing_env):

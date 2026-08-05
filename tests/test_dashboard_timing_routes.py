@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
 from fastapi.testclient import TestClient
 
 from modal_training_gym import _dashboard
@@ -66,7 +65,7 @@ def test_capability_route_identifies_the_protocol(fake_volume, monkeypatch, tmp_
     assert response.json() == {"protocol": PROTOCOL}
 
 
-def test_batch_returns_a_lane_per_role_and_leaves_unmeasured_rollouts_empty(
+def test_a_run_returns_a_lane_per_role_and_omits_unmeasured_rollouts(
     fake_volume, monkeypatch, tmp_path
 ):
     """A rollout still in flight must read as absent, not as another's timing."""
@@ -76,10 +75,10 @@ def test_batch_returns_a_lane_per_role_and_leaves_unmeasured_rollouts_empty(
     _save_record(1, "driver", 3.0)
 
     with _client(monkeypatch, tmp_path) as client:
-        response = client.get(f"/api/runs/{RUN_ID}/timings?rollout_ids=0,1,2")
+        response = client.get(f"/api/runs/{RUN_ID}/timings")
 
     timings = response.json()
-    assert set(timings) == {"0", "1", "2"}
+    assert set(timings) == {"0", "1"}
     assert set(timings["0"]["roles"]) == {"driver", "actor"}
     assert timings["0"]["roles"]["driver"]["phases"]["train_models"] == {
         "count": 2,
@@ -89,7 +88,6 @@ def test_batch_returns_a_lane_per_role_and_leaves_unmeasured_rollouts_empty(
         "last_end_s": 4.5,
         "invocations": [[0.5, 2.5], [2.5, 4.5]],
     }
-    assert timings["2"] == {"roles": {}}
 
 
 def test_a_measured_run_is_never_backfilled_from_legacy_timing(
@@ -101,9 +99,9 @@ def test_a_measured_run_is_never_backfilled_from_legacy_timing(
     _save_record(0, "driver", 4.0)
 
     with _client(monkeypatch, tmp_path) as client:
-        timings = client.get(f"/api/runs/{RUN_ID}/timings?rollout_ids=0,1").json()
+        timings = client.get(f"/api/runs/{RUN_ID}/timings").json()
 
-    assert timings["1"] == {"roles": {}}
+    assert set(timings) == {"0"}
 
 
 def test_a_pre_cutover_run_renders_from_its_legacy_blob(
@@ -115,20 +113,20 @@ def test_a_pre_cutover_run_renders_from_its_legacy_blob(
     )
 
     with _client(monkeypatch, tmp_path) as client:
-        timings = client.get(f"/api/runs/{RUN_ID}/timings?rollout_ids=0").json()
+        timings = client.get(f"/api/runs/{RUN_ID}/timings").json()
 
     phases = timings["0"]["roles"]["driver"]["phases"]
     assert phases["generate_rollouts"]["total_duration_s"] == 1.5
     assert phases["generate_rollouts"]["count"] == 1
 
 
-def test_posting_a_record_invalidates_the_cached_rollout(
+def test_posting_a_record_invalidates_the_cached_run(
     fake_volume, monkeypatch, tmp_path
 ):
     """The lane grows while a rollout runs, so a cached empty must not stick."""
     _save_run()
     with _client(monkeypatch, tmp_path) as client:
-        assert client.get(f"/api/runs/{RUN_ID}/timings/0").json() == {"roles": {}}
+        assert client.get(f"/api/runs/{RUN_ID}/timings").json() == {}
 
         record = RoleTimingRecord(
             training_run_id=RUN_ID,
@@ -152,25 +150,22 @@ def test_posting_a_record_invalidates_the_cached_rollout(
         )
         assert posted.status_code == 200
 
-        timings = client.get(f"/api/runs/{RUN_ID}/timings/0").json()
+        timings = client.get(f"/api/runs/{RUN_ID}/timings").json()
 
-    assert timings["roles"]["driver"]["phases"]["train_models"]["count"] == 1
+    lanes = timings["0"]["roles"]["driver"]
+    assert lanes["phases"]["train_models"]["count"] == 1
 
 
-@pytest.mark.parametrize(
-    "query, expected",
-    [("", {}), ("rollout_ids=", {}), ("rollout_ids=abc", {})],
-)
-def test_a_request_for_no_rollouts_reads_nothing(
-    fake_volume, monkeypatch, tmp_path, query, expected
-):
+def test_a_run_with_no_timing_reads_as_empty(fake_volume, monkeypatch, tmp_path):
     _save_run()
     with _client(monkeypatch, tmp_path) as client:
-        assert client.get(f"/api/runs/{RUN_ID}/timings?{query}").json() == expected
+        assert client.get(f"/api/runs/{RUN_ID}/timings").json() == {}
 
 
-def test_a_batch_lists_the_volume_once(fake_volume, monkeypatch, tmp_path):
-    """Volume listing is rate limited, so a page of rollouts is one listing."""
+def test_a_run_lists_the_volume_once_however_many_rollouts(
+    fake_volume, monkeypatch, tmp_path
+):
+    """Volume listing is rate limited, so a run's timing is one listing."""
     _save_run()
     for rollout_id in range(5):
         _save_record(rollout_id, "driver", 1.0)
@@ -184,15 +179,7 @@ def test_a_batch_lists_the_volume_once(fake_volume, monkeypatch, tmp_path):
     )
 
     with _client(monkeypatch, tmp_path) as client:
-        timings = client.get(f"/api/runs/{RUN_ID}/timings?rollout_ids=0,1,2,3,4").json()
+        timings = client.get(f"/api/runs/{RUN_ID}/timings").json()
 
     assert len(listings) == 1
     assert all(timings[str(i)]["roles"]["driver"] for i in range(5))
-
-
-def test_an_oversized_batch_is_refused(fake_volume, monkeypatch, tmp_path):
-    _save_run()
-    ids = ",".join(str(i) for i in range(201))  # one past TIMING_MAX_BATCH
-    with _client(monkeypatch, tmp_path) as client:
-        response = client.get(f"/api/runs/{RUN_ID}/timings?rollout_ids={ids}")
-    assert response.status_code == 400

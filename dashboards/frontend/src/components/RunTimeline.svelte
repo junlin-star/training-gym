@@ -4,9 +4,8 @@
 
   let { timings = null, downloadName = "substep_timing.json" } = $props();
 
-  // Zoom bounds: 1 = every rollout fits the width, MAX_ZOOM = deepest look at
-  // one phase. Rollout columns keep their relative widths at every zoom, so a
-  // wider column is a longer rollout however far in you are.
+  // 1 fits every rollout in the width; columns keep their relative widths at
+  // every zoom, so a wider column is always a longer rollout.
   const MIN_ZOOM = 1;
   const MAX_ZOOM = 64;
   const ZOOM_BTN_FACTOR = 1.5;
@@ -204,10 +203,9 @@
       </div>
     </div>
     <div class="hint">
-      Hover a bar for its phase and exact times · scroll to zoom · shift-scroll or drag to
-      pan · click a bar to pin its details. Bars share one clock per rollout: a thin bar
-      ran inside the bar above it, and a bar on a row of its own overlapped work it is not
-      part of.
+      Hover a bar for its phase and exact times · click to pin · scroll to zoom · drag to
+      pan. Bars share one clock per rollout: a thin bar ran inside the bar above it, and a
+      bar on its own row overlapped work it is not part of.
     </div>
   {/if}
 </div>
@@ -216,7 +214,6 @@
   <div class="tg-tip" class:pinned style:left={`${tip.x}px`} style:top={`${tip.y}px`}>
     <span class="tg-tip-head">
       Rollout {tip.rolloutId}
-      <!-- The driver is where a phase lives unless it says otherwise. -->
       {#if tip.bar.role !== "driver"}· measured on the {tip.bar.role}{/if}
     </span>
     <span class="tg-tip-name">{labelFor(tip.bar.name)}</span>
@@ -400,8 +397,7 @@
     background: var(--color-c-gray-08, #1c1c1c);
   }
 
-  /* Bars that ran inside the bar above them, drawn thin so the containing
-     phase stays the one you read first. */
+  /* Ran inside the bar above, drawn thin so the containing phase reads first */
   .row.nested {
     height: 7px;
     background: none;
@@ -434,8 +430,8 @@
     filter: brightness(1.3);
   }
 
-  /* A phase that ran too many times to keep each run: one band over the span
-     it covered, hatched so it doesn't read as a single continuous run. */
+  /* A band over the span a phase's runs covered, hatched so it doesn't read as
+     one continuous run */
   .bar.banded {
     background-image: repeating-linear-gradient(
       45deg,
