@@ -49,10 +49,6 @@ export const PHASES_BESIDE_THE_STEP = [
 // dismiss next to the work that matters.
 const NEGLIGIBLE_WORK_S = 0.0005;
 
-// The recorder stops keeping a phase's runs past this many of them, and a record
-// written before it did is read the same way: as work spent, not as a bar each.
-const MAX_DRAWN_RUNS = 12;
-
 export function labelFor(name) {
   return TIMING_LABELS[name] || name.replace(/_/g, " ");
 }
@@ -96,7 +92,10 @@ export function rolloutTimeline(lanes) {
       const first = (Number(phase?.first_start_s) || 0) + shift;
       const last = (Number(phase?.last_end_s) || 0) + shift;
       if (!count || total < NEGLIGIBLE_WORK_S) continue;
-      if (count > MAX_DRAWN_RUNS || (!runs.length && count > 1)) {
+      // A phase scored per sample runs too briefly each time to draw as a bar of
+      // its own, and past the recorder's cap it keeps no runs at all: either way
+      // it reads as work spent inside the phase it ran in.
+      if (total / count < NEGLIGIBLE_WORK_S || (!runs.length && count > 1)) {
         perSample.push({
           role,
           name,
@@ -111,14 +110,35 @@ export function rolloutTimeline(lanes) {
       // A phase that ran once spans exactly its one run, so a record without
       // runs to draw (a pre-cutover one) still draws as the run it measured.
       const drawn = runs.length ? runs : [[first - shift, last - shift]];
-      drawn.forEach(([start, end], index) => {
+      // Runs of one phase that overlap are one block of work: the samples of a
+      // batch are scored concurrently, and 64 slivers read as noise where the
+      // block they add up to reads as the time scoring took.
+      const blocks = [];
+      for (const [start, end] of [...drawn].sort((a, b) => a[0] - b[0])) {
+        const block = blocks[blocks.length - 1];
+        if (block && Number(start) <= block.end) {
+          block.end = Math.max(block.end, Number(end));
+          block.runs += 1;
+          block.work += Number(end) - Number(start);
+        } else {
+          blocks.push({
+            start: Number(start),
+            end: Number(end),
+            runs: 1,
+            work: Number(end) - Number(start),
+          });
+        }
+      }
+      blocks.forEach((block, index) => {
         bars.push({
           key: `${role}:${name}:${index}`,
           role,
           name,
-          start: Number(start) + shift,
-          end: Number(end) + shift,
-          duration: Number(end) - Number(start),
+          start: block.start + shift,
+          end: block.end + shift,
+          duration: block.end - block.start,
+          runs: block.runs,
+          work: block.work,
           contains: false,
           spent: [],
         });
@@ -155,6 +175,8 @@ export function rolloutTimeline(lanes) {
         key: `${work.role}:${work.name}`,
         ...work,
         duration: work.total,
+        runs: work.count,
+        work: work.total,
         depth: 0,
         inside: null,
         contains: false,

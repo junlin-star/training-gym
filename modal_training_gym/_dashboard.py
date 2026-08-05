@@ -880,7 +880,15 @@ def fastapi_app():
         await _get_run_or_404(record.training_run_id)
 
         await record.save(is_async=True)
-        timing_cache.pop(record.training_run_id, None)
+        cached = timing_cache.get(record.training_run_id)
+        if cached is not None:
+            # A lane re-posts its whole record about once a second, so the run's
+            # other lanes have nothing new to read: put this one straight into
+            # the cache rather than making the next poll list the run again.
+            lanes = cached[1].setdefault(str(record.rollout_id), {"roles": {}})
+            lanes["roles"].update(
+                rollout_lanes([record.model_dump(mode="json")])["roles"]
+            )
         return JSONResponse({"status": "ok"})
 
     async def _run_timings(training_run_id: str) -> JsonDict:
@@ -912,6 +920,9 @@ def fastapi_app():
             }
             if len(timing_cache) >= TIMING_CACHE_MAX_RUNS:
                 timing_cache.clear()
+                for run_id, run_lock in list(timing_locks.items()):
+                    if not run_lock.locked():
+                        del timing_locks[run_id]
             timing_cache[training_run_id] = (
                 time.monotonic() + cache_ttl_seconds,
                 timings,

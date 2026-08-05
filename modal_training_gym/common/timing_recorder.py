@@ -28,10 +28,11 @@ TIMING_TIMEOUT_SECONDS = 10.0
 # Rate limiting, mostly for per-sample reward phases
 MIN_PUBLISH_INTERVAL_S = 1.0
 
-# Past this, a phase keeps its aggregate only: a per-sample phase runs thousands
-# of times per step, and the whole record is re-posted on every publish. The
-# timeline reads such a phase as work spent inside the phase that contains it.
-MAX_DRAWN_INVOCATIONS = 12
+# Past this, a phase keeps its aggregate only: a per-sample phase runs tens of
+# thousands of times a step, and the whole record is re-posted on every publish.
+# The timeline reads such a phase as work spent inside the phase containing it.
+# High enough that a phase running once per micro batch is still drawn.
+MAX_DRAWN_INVOCATIONS = 1024
 
 
 def timing_url() -> str:

@@ -249,6 +249,53 @@ describe("rolloutTimeline", () => {
     ]);
   });
 
+  it("reads a phase whose every run is too short to see as work spent", () => {
+    const scored = Array.from({ length: 64 }, (_, index) => [
+      1 + index * 0.01,
+      1 + index * 0.01 + 0.0001,
+    ]);
+    const { rows } = rolloutTimeline({
+      roles: {
+        rollout: {
+          role: "rollout",
+          lane_start_unix_s: 1000,
+          phases: { generate_samples: phase([[0, 4]]), reward: phase(scored) },
+        },
+      },
+    });
+
+    // The runs are kept in the record, but 64 slivers of 0.1ms across the
+    // generation are the generation's reward cost, not 64 bars.
+    const bars = rows.flatMap((row) => row.bars);
+    expect(bars.map((bar) => bar.name)).toEqual(["generate_samples"]);
+    expect(bars[0].spent[0].count).toBe(64);
+  });
+
+  it("draws runs of one phase that overlapped as the block of work they formed", () => {
+    const { rows } = rolloutTimeline({
+      roles: {
+        rollout: {
+          role: "rollout",
+          lane_start_unix_s: 1000,
+          phases: {
+            reward: phase([
+              [0, 2],
+              [1, 3],
+              [5, 6],
+            ]),
+          },
+        },
+      },
+    });
+
+    const bars = rows.flatMap((row) => row.bars);
+    expect(bars.map((bar) => [bar.start, bar.end, bar.runs])).toEqual([
+      [0, 3, 2],
+      [5, 6, 1],
+    ]);
+    expect(bars[0].work).toBe(4);
+  });
+
   it("keeps a checkpoint out of the step's duration but still draws it", () => {
     const { stepDuration, beside, rows } = rolloutTimeline({
       roles: {

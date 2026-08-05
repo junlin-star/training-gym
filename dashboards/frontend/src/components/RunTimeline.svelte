@@ -255,9 +255,9 @@
     </div>
     <div class="hint">
       Hover a bar for its phase and exact times · click to pin · scroll to zoom · drag to
-      pan. Bars share one clock per rollout: a thin bar ran inside the bar above it, and a
-      bar on its own row overlapped work it is not part of. A gap is time no phase was
-      measured in, not time nothing ran.
+      pan. Bars share one clock per rollout: a bar drawn inside an outline ran within the
+      phase outlined, and a bar on a row of its own overlapped work it is not part of. A
+      gap is time no phase was measured in, not time nothing ran.
     </div>
   {/if}
 </div>
@@ -273,6 +273,11 @@
     <span class="tg-tip-when">
       {fmtSecs(tip.bar.start)} → {fmtSecs(tip.bar.end)} into the rollout
     </span>
+    {#if tip.bar.runs > 1}
+      <span class="tg-tip-when">
+        {tip.bar.runs} runs at once, {fmtSecs(tip.bar.work)} of work between them
+      </span>
+    {/if}
     {#each tip.bar.spent as work (work.name)}
       <span class="tg-tip-when">
         {fmtSecs(work.total)} of it in {labelFor(work.name).toLowerCase()}, over {work.count}
