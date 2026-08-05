@@ -123,15 +123,15 @@ export default defineConfig({
             { label: 'All Tutorials', link: '/tutorials/' },
             {
               label: 'Reinforcement Learning',
-              autogenerate: { directory: 'tutorials/rl' },
+              items: [{ autogenerate: { directory: 'tutorials/rl' } }],
             },
             {
               label: 'Agents',
-              autogenerate: { directory: 'tutorials/agent' },
+              items: [{ autogenerate: { directory: 'tutorials/agent' } }],
             },
             {
               label: 'Tools',
-              autogenerate: { directory: 'tutorials/tools' },
+              items: [{ autogenerate: { directory: 'tutorials/tools' } }],
             },
           ],
         },
