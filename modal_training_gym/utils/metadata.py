@@ -4,9 +4,7 @@ from __future__ import annotations
 
 import io
 import json
-import time
 from collections.abc import Awaitable, Callable
-from concurrent.futures import ThreadPoolExecutor
 from enum import Enum
 from functools import partial
 from typing import Any
@@ -265,51 +263,29 @@ def vol_list(
     return results
 
 
-def vol_list_prefix(
-    store: MetadataStore | str, prefix: str | tuple[str, ...]
-) -> list[dict[str, Any]]:
+def vol_list_prefix(store: MetadataStore | str, prefix: str) -> list[dict[str, Any]]:
     """Read only the items whose key (file basename) starts with ``prefix``.
 
     Lists directory entries (cheap, no payload reads) and fetches only the
     matching files. Used to gather the per-DP-rank shards of one
-    ``(run, rollout)`` without reading the whole store. Several prefixes can be
-    passed together: listing is rate limited per volume, so a caller that wants
-    a handful of rollouts should ask for them in one call rather than one each.
+    ``(run, rollout)`` without reading the whole store.
     """
     from modal.exception import NotFoundError
 
     vol = _metadata_volume()
     _safe_reload(vol)
-    paths: list[str] = []
-    for attempt in range(3):
-        try:
-            paths = [
-                entry.path
-                for entry in vol.iterdir(_store_path(store))
-                if entry.path.endswith(".json")
-                and entry.path.rsplit("/", 1)[-1][: -len(".json")].startswith(prefix)
-            ]
-            break
-        except (FileNotFoundError, NotFoundError):
-            return []
-        except Exception as exc:
-            if "rate limit" in str(exc).lower() and attempt < 2:
-                time.sleep(2**attempt)
+    results: list[dict[str, Any]] = []
+    try:
+        for entry in vol.iterdir(_store_path(store)):
+            if not entry.path.endswith(".json"):
                 continue
-            raise
-
-    def read(path: str) -> dict[str, Any] | None:
-        # A file rewritten while it was being read is missing one item, which
-        # beats failing the whole request.
-        try:
-            return json.loads(b"".join(vol.read_file(path)))
-        except (FileNotFoundError, NotFoundError, ValueError):
-            return None
-
-    # A read is a round trip of its own (~0.5s), so a dashboard page waits on
-    # the slowest file rather than on their sum.
-    with ThreadPoolExecutor(max_workers=16) as pool:
-        return [item for item in pool.map(read, paths) if item is not None]
+            name = entry.path.rsplit("/", 1)[-1][: -len(".json")]
+            if not name.startswith(prefix):
+                continue
+            results.append(json.loads(b"".join(vol.read_file(entry.path))))
+    except (FileNotFoundError, NotFoundError):
+        return results
+    return results
 
 
 def vol_remove_keys_with_prefix(store: MetadataStore | str, prefix: str) -> int:
