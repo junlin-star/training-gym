@@ -9,13 +9,10 @@ TUTORIAL_METADATA = {
     "order": 25,
     "api_classes": [
         "HuggingFaceDataset",
-        "DeploymentConfig",
-        "EvalConfig",
-        "EvalRowResult",
-        "ModelDeployment",
         "Qwen3_6_35B",
         "Qwen3_6_35b_Recipe",
         "TrainConfig",
+        "TrainResult",
     ],
 }
 
@@ -38,7 +35,7 @@ def _intro():
        model, which extracts the final numerical answer and compares
        it to the ground truth.
     3. Feed that score back as a GRPO reward through SLIME.
-    4. Compare base vs. trained accuracy.
+    4. Serve the trained checkpoint from a Modal Endpoint.
 
     Qwen3.6-35B-A3B uses slime's mbridge conversion path:
     the HuggingFace checkpoint is pre-converted to torch_dist format
@@ -73,16 +70,11 @@ def _install():
 @code
 def _imports():
     from modal_training_gym import (
-        DeploymentConfig,
-        EvalConfig,
-        EvalRowResult,
         HuggingFaceDataset,
-        ModelDeployment,
         Qwen3_6_35B,
         TrainConfig,
-        list_checkpoints,
+        ensure_endpoint,
     )
-    from modal_training_gym.deploy_recipes.sglang_recipe import Qwen3_6_35b_SglangRecipe
     from modal_training_gym.train_recipes.slime_recipe import Qwen3_6_35b_Recipe
 
 
@@ -93,7 +85,7 @@ def _dataset_intro():
 
     [DAPO-math-17k](https://huggingface.co/datasets/zhuzilin/dapo-math-17k)
     contains ~17k math problems with ground-truth answers. We use a
-    small subset for this tutorial — 100 training samples and 20 for eval.
+    small subset of 120 training samples for this tutorial.
     """
 
 
@@ -166,23 +158,26 @@ def _train():
 
 
 @markdown
-def _serve_eval_intro():
+def _serve_intro():
     """
-    ## Serve and evaluate
+    ## Serve the trained checkpoint
 
-    Serve the trained checkpoint and run a quick math eval.
+    Convert the newest checkpoint with `train_result.hf_model()` and serve it
+    from an authenticated Modal Endpoint. Run `training-gym set-proxy-auth` or
+    export `MODAL_KEY`/`MODAL_SECRET`.
     """
 
 
 @code
 def _serve_trained():
-    checkpoint = list_checkpoints(train_result.training_run_id)[-1]
-    trained_deployment = DeploymentConfig(
-        model=Qwen3_6_35B(),
-        recipe=Qwen3_6_35b_SglangRecipe(),
-        checkpoint=checkpoint,
-        app_name="qwen3-6-35b-math-serve",
-        served_model_name="qwen3-6-35b-math",
-        unauthenticated=True,
-    ).serve()
-    print(f"Trained model URL: {trained_deployment.url}")
+    trained_model = train_result.hf_model()
+    print(f"Checkpoint: {trained_model.model_path}")
+
+    trained_url = ensure_endpoint(
+        name=f"gym-qwen3-6-35b-math-trained-{train_result.training_run_id}",
+        model=trained_model.model_name,
+        custom_volume_name=train_result.checkpoints_volume,
+        custom_volume_path=trained_model.model_path,
+        unauthenticated=False,
+    )
+    print(f"Trained model endpoint: {trained_url}")

@@ -9,11 +9,9 @@ TUTORIAL_METADATA = {
     "order": 60,
     "api_classes": [
         "Qwen3_6_35B",
-        "DeploymentConfig",
-        "EvalConfig",
-        "EvalRowResult",
         "Qwen3_6_35b_Recipe",
         "TrainConfig",
+        "TrainResult",
     ],
 }
 
@@ -38,7 +36,7 @@ def _intro():
     K is decremented until the student is given the starter prompt or rollouts have completed.
 
     ### Steps
-    1. Deploy DeepSeek V4 Flash as the teacher.
+    1. Serve DeepSeek V4 Flash as a custom Modal SGLang teacher (`/generate` for prompt logprobs).
     2. Load BFCL multi_turn_base, carve a train/eval split, and define reverse-K curriculum + shaped reward.
     3. Evaluate the base student and teacher models on the held-out eval.
     4. Define SimCT alignment, reward function, and OPD-adjustment.
@@ -72,17 +70,24 @@ def _imports():
     import asyncio
     import json
     import re
+    import subprocess
+    import time
+    import urllib.error as urllib_error
+    import urllib.request as urllib_request
+    from concurrent.futures import ThreadPoolExecutor
+
+    import modal
 
     from modal_training_gym import (
-        DeploymentConfig,
-        EvalConfig,
-        EvalRowResult,
-        ModelDeployment,
         Qwen3_6_35B,
+        Sample,
         TrainConfig,
-        list_checkpoints,
+        endpoint_chat_message,
+        ensure_endpoint,
+        wait_for_server_url,
     )
-    from modal_training_gym.common.models.base import HFModelConfiguration, ToolCall
+    from modal_training_gym.common.config import modal_proxy_auth_headers
+    from modal_training_gym.common.models.base import ToolCall
 
     from modal_training_gym.common.environments import (
         BfclMultiTurnConfig,
@@ -94,45 +99,147 @@ def _imports():
         run_bfcl_episode,
         to_json_schema,
     )
-    from modal_training_gym.deploy_recipes.sglang_recipe import (
-        DeepSeek_V4_Flash_SglangRecipe,
-        Qwen3_6_35b_SglangRecipe,
-    )
     from modal_training_gym.train_recipes.slime_recipe import Qwen3_6_35b_Recipe
 
 
 @markdown
 def _deploy_intro():
     """
-    ## Deploy DeepSeek-V4 Flash Teacher Model
-    Modal training gym provides a production SGLang recipe for the 284B-A13B FP4 checkpoint on
-    4×B200. The teacher model assigns its own logprobs to student token outputs, which is a prefill-bound process.
-    Training-gym ships MegaMoE DeepGEMM kernels and DP attention (`dp=4`) for DSV4 to increase prefill speed on lengthy trajectories.
+    ## Serve the DeepSeek-V4 Flash teacher on SGLang `/generate`
+
+    The teacher assigns its own logprobs to student token outputs, which is a
+    prefill-bound process. MegaMoE DeepGEMM kernels and DP attention (`dp=4`)
+    increase prefill speed on lengthy trajectories on 4×B200.
+
+    OPD needs SGLang's native `/generate`, so the teacher runs as an authenticated
+    `@app.server`. Run `training-gym set-proxy-auth` or export
+    `MODAL_KEY`/`MODAL_SECRET`; the training launcher forwards them to reward workers.
     """
 
 
 @code
 def _deploy_teacher():
-    TEACHER_READY_TIMEOUT = 30 * 60
+    TEACHER_MODEL_ID = "deepseek-ai/DeepSeek-V4-Flash"
+    TEACHER_APP_NAME = "gym-deepseek-v4-flash-teacher"
+    TEACHER_PORT = 8000
+    TEACHER_STARTUP_TIMEOUT = 30 * 60
     # OPD fires one /generate prefill per trajectory. With 16×8=128 traj/step, the
     # default max_running_requests=16 saturates and returns 503s for minutes — raise
     # the teacher queue and throttle client-side (see TEACHER_RM_CONCURRENCY below).
-    teacher_deployment = DeploymentConfig(
-        model=HFModelConfiguration(model_name="deepseek-ai/DeepSeek-V4-Flash"),
-        recipe=DeepSeek_V4_Flash_SglangRecipe(
-            context_length=16384,
-            startup_timeout=TEACHER_READY_TIMEOUT,
-            max_running_requests=64,
-        ),
-        app_name="dsv4-teacher-model",
-        served_model_name="deepseek-v4-flash",
-    ).serve()
-    print(f"Teacher URL: {teacher_deployment.url}")
-
-    teacher_deployment.wait_until_ready(timeout=TEACHER_READY_TIMEOUT)
-
-    TEACHER_GENERATE_URL = f"{teacher_deployment.url}/generate"
     TEACHER_RM_CONCURRENCY = 24
+
+    teacher_image = (
+        modal.Image.from_registry("lmsysorg/sglang:v0.5.12.post1-cu130")
+        .entrypoint([])
+        .run_commands("rm -rf /root/.cache/huggingface")
+        .env(
+            {
+                "HF_HUB_CACHE": "/root/.cache/huggingface",
+                "HF_XET_HIGH_PERFORMANCE": "1",
+                "NCCL_CUMEM_ENABLE": "1",
+                "SGLANG_OPT_DEEPGEMM_MEGA_MOE_NUM_MAX_TOKENS_PER_RANK": "8320",
+                "SGLANG_OPT_DEEPGEMM_MEGA_MOE_USE_FP4_ACTS": "1",
+                "SGLANG_OPT_DEEPGEMM_MEGA_MOE_USE_MXF4_KIND": "1",
+            }
+        )
+    )
+    teacher_app = modal.App(TEACHER_APP_NAME)
+
+    _teacher_model_id = TEACHER_MODEL_ID
+    _teacher_port = TEACHER_PORT
+    _teacher_startup = TEACHER_STARTUP_TIMEOUT
+
+    @teacher_app.server(
+        image=teacher_image,
+        gpu="B200:4",
+        volumes={
+            "/root/.cache/huggingface": modal.Volume.from_name(
+                "huggingface-cache", create_if_missing=True
+            ),
+        },
+        port=_teacher_port,
+        startup_timeout=_teacher_startup,
+        scaledown_window=10 * 60,
+        exit_grace_period=25,
+        target_concurrency=8,
+        unauthenticated=False,
+        serialized=True,
+    )
+    class TeacherServer:
+        @modal.enter()
+        def start(self):
+            cmd = [
+                "python",
+                "-m",
+                "sglang.launch_server",
+                "--model-path",
+                _teacher_model_id,
+                "--served-model-name",
+                _teacher_model_id,
+                "--host",
+                "0.0.0.0",
+                "--port",
+                str(_teacher_port),
+                "--tp",
+                "4",
+                "--dp-size",
+                "4",
+                "--enable-dp-attention",
+                "--context-length",
+                "16384",
+                "--mem-fraction-static",
+                "0.85",
+                "--chunked-prefill-size",
+                "4096",
+                "--max-running-requests",
+                "64",
+                "--trust-remote-code",
+                "--moe-a2a-backend",
+                "megamoe",
+                "--enable-breakable-cuda-graph",
+                "--enable-mixed-chunk",
+                "--piecewise-cuda-graph-max-tokens",
+                "4096",
+                "--tool-call-parser",
+                "deepseekv4",
+                "--reasoning-parser",
+                "deepseek-v4",
+            ]
+            self.proc = subprocess.Popen(cmd)
+            deadline = time.monotonic() + _teacher_startup
+            health = f"http://127.0.0.1:{_teacher_port}/health"
+            while True:
+                if self.proc.poll() is not None:
+                    raise RuntimeError(
+                        f"SGLang exited with code {self.proc.returncode} before healthy"
+                    )
+                try:
+                    with urllib_request.urlopen(health, timeout=5) as resp:
+                        if resp.status == 200:
+                            return
+                except (urllib_error.URLError, TimeoutError, OSError):
+                    pass
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(f"Teacher SGLang not healthy at {health}")
+                time.sleep(2)
+
+        @modal.exit()
+        def stop(self):
+            proc = getattr(self, "proc", None)
+            if proc is not None and proc.poll() is None:
+                proc.terminate()
+                proc.wait(timeout=30)
+
+    with modal.enable_output():
+        teacher_app.deploy()
+    teacher_url = wait_for_server_url(
+        TeacherServer,
+        label="DSV4 teacher",
+        proxy_auth=True,
+    )
+    print(f"Teacher URL: {teacher_url}")
+
+    TEACHER_GENERATE_URL = f"{teacher_url}/generate"
 
 
 @code
@@ -370,7 +477,7 @@ def _eval_base():
 
     EVAL_MAX_TURNS = EVAL_TAIL_STEPS * 2
     MAX_CONSECUTIVE_TOOL_ERRORS = 3
-    DEPLOYMENT_READY_TIMEOUT = 1200
+    EVAL_MAX_CONCURRENCY = 4
 
     def _prompt_token_count(messages, tools=None) -> int:
         try:
@@ -382,7 +489,40 @@ def _eval_base():
         except Exception:
             return sum(len(str(m.get("content", ""))) for m in messages) // 3
 
-    def _chat(deployment, messages, tools=None, max_tokens=None, max_attempts=12, *, qwen_thinking=False):
+    def _messages_for_endpoint(messages: list[dict]) -> list[dict]:
+        wire_messages = []
+        for message in messages:
+            wire_message = dict(message)
+            tool_calls = message.get("tool_calls")
+            if isinstance(tool_calls, list):
+                wire_tool_calls = []
+                for tool_call in tool_calls:
+                    if not isinstance(tool_call, dict):
+                        wire_tool_calls.append(tool_call)
+                        continue
+                    wire_tool_call = dict(tool_call)
+                    function = tool_call.get("function")
+                    if isinstance(function, dict):
+                        wire_function = dict(function)
+                        arguments = function.get("arguments")
+                        if isinstance(arguments, dict):
+                            wire_function["arguments"] = json.dumps(arguments)
+                        wire_tool_call["function"] = wire_function
+                    wire_tool_calls.append(wire_tool_call)
+                wire_message["tool_calls"] = wire_tool_calls
+            wire_messages.append(wire_message)
+        return wire_messages
+
+    def _chat(
+        url: str,
+        model_id: str,
+        messages,
+        tools=None,
+        max_tokens=None,
+        max_attempts=12,
+        *,
+        qwen_thinking=False,
+    ):
         if max_tokens is None:
             max_tokens = RESPONSE_TOKEN_CAP
         remaining = SERVED_CONTEXT_LEN - _prompt_token_count(messages, tools) - CONTEXT_SAFETY_MARGIN
@@ -396,12 +536,19 @@ def _eval_base():
         }
         if tools is not None:
             kwargs["tools"] = tools
-        if qwen_thinking is not None:
-            kwargs["chat_template_kwargs"] = {"enable_thinking": qwen_thinking}
-        return deployment.chat(
-            messages,
-            ensure_ready=False,
+        extra_body = (
+            {"chat_template_kwargs": {"enable_thinking": qwen_thinking}}
+            if qwen_thinking is not None
+            else None
+        )
+        return endpoint_chat_message(
+            url,
+            model=model_id,
+            messages=_messages_for_endpoint(messages),
+            timeout=180,
             max_attempts=max_attempts,
+            extra_body=extra_body,
+            proxy_auth=True,
             **kwargs,
         )
 
@@ -431,7 +578,12 @@ def _eval_base():
 
 @code
 def _eval_function():
-    def bfcl_eval_fn(deployment: ModelDeployment, example: dict) -> EvalRowResult:
+    def bfcl_eval_fn(
+        url: str,
+        model_id: str,
+        is_student: bool,
+        example: dict,
+    ) -> Sample:
         label = json.loads(example.get("label", "{}"))
         task_id = label.get("task_id", "")
         N = label.get("total_steps", 1)
@@ -439,16 +591,12 @@ def _eval_function():
         K = max(0, N - EVAL_TAIL_STEPS)
         expert_call = flattened_calls[K] if K < len(flattened_calls) else {}
 
-        served = deployment.deployment_config.served_model_name
-        is_student = served != "deepseek-v4-flash"
-
-        deployment.wait_until_ready(timeout=DEPLOYMENT_READY_TIMEOUT)
-
         episode = run_bfcl_episode(
             label,
             start_step=K,
             generate=lambda messages, tools: _chat(
-                deployment,
+                url,
+                model_id,
                 messages,
                 tools=tools,
                 qwen_thinking=STUDENT_ENABLE_THINKING if is_student else None,
@@ -471,8 +619,9 @@ def _eval_function():
             EVAL_TAIL_STEPS,
         )
 
-        return EvalRowResult(
+        return Sample(
             score=shaped_score,
+            prompt=example["messages"][-1]["content"],
             response=episode.final_response,
             metadata={
                 "task": task_id,
@@ -491,33 +640,66 @@ def _eval_function():
 
 @code
 def _run_baseline_eval():
-    def _print_eval_summary(name: str, result) -> None:
+    def run_bfcl_eval(
+        url: str,
+        model_id: str,
+        *,
+        is_student: bool,
+    ) -> list[Sample]:
+        examples = list(eval_dataset.load(split="eval"))
+        with ThreadPoolExecutor(max_workers=EVAL_MAX_CONCURRENCY) as executor:
+            rows = list(
+                executor.map(
+                    lambda example: bfcl_eval_fn(
+                        url, model_id, is_student, example
+                    ),
+                    examples,
+                )
+            )
+        for row in rows:
+            print(
+                f"task={row.metadata['task']} score={row.score:.3f} "
+                f"passed={row.metadata['task_passed']}",
+                flush=True,
+            )
+        return rows
+
+    def _mean_score(rows: list[Sample]) -> float:
+        return sum(row.score for row in rows) / len(rows) if rows else float("nan")
+
+    def _print_eval_summary(name: str, rows: list[Sample]) -> None:
         def _frac(rows, key):
             if not rows:
                 return 0.0
-            return sum(1 for r in rows if r.metadata.get(key)) / len(rows)
+            return sum(1 for row in rows if row.metadata.get(key)) / len(rows)
 
-        n = len(result.rows)
+        n = len(rows)
         print(f"{'Metric':<25} {name:>10}")
         print("-" * 37)
         print(f"{'Eval rows':<25} {n:>10d}")
-        print(f"{'Shaped reward':<25} {result.mean:>10.3f}")
-        print(f"{'Terminal pass rate':<25} {_frac(result.rows, 'task_passed'):>10.1%}")
+        print(f"{'Shaped reward':<25} {_mean_score(rows):>10.3f}")
+        print(f"{'Terminal pass rate':<25} {_frac(rows, 'task_passed'):>10.1%}")
         if n:
-            print(f"{'Parsed tool call':<25} {_frac(result.rows, 'parsed_call'):>10.1%}")
-            print(f"{'First-call tool match':<25} {_frac(result.rows, 'tool_match'):>10.1%}")
+            print(f"{'Parsed tool call':<25} {_frac(rows, 'parsed_call'):>10.1%}")
+            print(f"{'First-call tool match':<25} {_frac(rows, 'tool_match'):>10.1%}")
 
-    student_recipe = Qwen3_6_35b_SglangRecipe(context_length=SERVED_CONTEXT_LEN)
-    base_deployment = DeploymentConfig(model=base_model, recipe=student_recipe).serve()
-    print(f"Student URL: {base_deployment.url}")
-
-    eval_config = EvalConfig(dataset=eval_dataset, eval_fn=bfcl_eval_fn)
+    STUDENT_MODEL_ID = base_model.model_name
+    base_url = ensure_endpoint(
+        name="gym-qwen3-6-35b-bfcl-base",
+        model=STUDENT_MODEL_ID,
+        unauthenticated=False,
+    )
+    print(f"Student URL: {base_url}")
 
     teacher_eval = None
     print("--- Evaluating teacher (DeepSeek V4 Flash)... ---")
     try:
-        teacher_eval = eval_config.evaluate(teacher_deployment, max_concurrency=4)
-        print(f"Teacher shaped reward: {teacher_eval.mean:.3f}")
+        teacher_eval = run_bfcl_eval(
+            teacher_url,
+            TEACHER_MODEL_ID,
+            is_student=False,
+        )
+        print(f"Teacher shaped reward: {_mean_score(teacher_eval):.3f}")
         _print_eval_summary("Teacher", teacher_eval)
     except Exception as e:
         print(
@@ -527,8 +709,13 @@ def _run_baseline_eval():
 
     print("--- Evaluating base student (shaped live reward + terminal verdict metadata)... ---")
     try:
-        base_eval = eval_config.evaluate(base_deployment, max_concurrency=4)
-        print(f"Base shaped reward: {base_eval.mean:.3f}")
+        base_eval = run_bfcl_eval(
+            base_url,
+            STUDENT_MODEL_ID,
+            is_student=True,
+        )
+        base_mean = _mean_score(base_eval)
+        print(f"Base shaped reward: {base_mean:.3f}")
         _print_eval_summary("Base", base_eval)
     except Exception as e:
         print(
@@ -536,15 +723,16 @@ def _run_baseline_eval():
             flush=True,
         )
         base_eval = None
+        base_mean = float("nan")
 
     if teacher_eval is not None and base_eval is not None:
         def _frac(rows, key):
             if not rows:
                 return 0.0
-            return sum(1 for r in rows if r.metadata.get(key)) / len(rows)
+            return sum(1 for row in rows if row.metadata.get(key)) / len(rows)
 
-        t_pass = _frac(teacher_eval.rows, "task_passed")
-        b_pass = _frac(base_eval.rows, "task_passed")
+        t_pass = _frac(teacher_eval, "task_passed")
+        b_pass = _frac(base_eval, "task_passed")
         print(
             f"[baseline] teacher pass={t_pass:.1%} student pass={b_pass:.1%} "
             f"(gap={t_pass - b_pass:+.1%})",
@@ -689,8 +877,6 @@ def _teacher_reward():
         import aiohttp
         import random
 
-        from modal_training_gym.common.deployment import _modal_proxy_auth_headers
-
         tokenizer = _get_student_tokenizer()
 
         resp_len = max(1, sample.response_length)
@@ -723,8 +909,10 @@ def _teacher_reward():
                 try:
                     async with aiohttp.ClientSession() as session:
                         async with session.post(
-                            args.rm_url, json=payload,
-                            headers=_modal_proxy_auth_headers(),
+                            args.rm_url,
+                            json=payload,
+                            headers=modal_proxy_auth_headers(),
+                            allow_redirects=False,
                             timeout=aiohttp.ClientTimeout(total=request_timeout),
                         ) as resp:
                             resp.raise_for_status()
@@ -1173,27 +1361,33 @@ def _eval_trained_intro():
     """
     ## Evaluate the trained student
 
-    Deploy the last checkpoint and re-run the held-out BFCL ids with the same evaluator from our earlier baseline.
+    Point a Modal Endpoint at the last checkpoint and re-run the held-out BFCL
+    ids with the same evaluator from our earlier baseline.
     """
 
 
 @code
 def _eval_trained():
-    checkpoint = list_checkpoints(train_result.training_run_id)[-1]
-    print(f"Checkpoint: {checkpoint.path}")
+    trained_model = train_result.hf_model()
+    print(f"Checkpoint: {trained_model.model_path}")
 
-    trained_deployment = DeploymentConfig(
-        model=Qwen3_6_35B(),
-        recipe=student_recipe,
-        checkpoint=checkpoint,
-        app_name="qwen3-6-35b-bfcl-trained",
-        served_model_name="qwen3-6-35b-bfcl-trained",
-    ).serve()
-    print(f"Trained student URL: {trained_deployment.url}")
+    trained_url = ensure_endpoint(
+        name=f"gym-qwen3-6-35b-bfcl-trained-{train_result.training_run_id}",
+        model=trained_model.model_name,
+        custom_volume_name=train_result.checkpoints_volume,
+        custom_volume_path=trained_model.model_path,
+        unauthenticated=False,
+    )
+    print(f"Trained student URL: {trained_url}")
 
     print("--- Evaluating trained student (shaped live reward + terminal verdict metadata)... ---")
-    trained_eval = eval_config.evaluate(trained_deployment, max_concurrency=4)
-    print(f"Trained shaped reward: {trained_eval.mean:.3f}")
+    trained_eval = run_bfcl_eval(
+        trained_url,
+        trained_model.model_name,
+        is_student=True,
+    )
+    trained_mean = _mean_score(trained_eval)
+    print(f"Trained shaped reward: {trained_mean:.3f}")
 
 
 
@@ -1203,40 +1397,40 @@ def _compare():
     def _frac(rows, key):
         if not rows:
             return 0.0
-        return sum(1 for r in rows if r.metadata.get(key)) / len(rows)
+        return sum(1 for row in rows if row.metadata.get(key)) / len(rows)
 
     if base_eval is None:
-        n_trained = len(trained_eval.rows)
+        n_trained = len(trained_eval)
         print(f"{'Metric':<25} {'Trained':>10}")
         print("-" * 37)
         print(f"{'Eval rows':<25} {n_trained:>10d}")
-        print(f"{'Shaped reward':<25} {trained_eval.mean:>10.3f}")
-        print(f"{'Terminal pass rate':<25} {_frac(trained_eval.rows, 'task_passed'):>10.1%}")
+        print(f"{'Shaped reward':<25} {trained_mean:>10.3f}")
+        print(f"{'Terminal pass rate':<25} {_frac(trained_eval, 'task_passed'):>10.1%}")
         print("(baseline eval was skipped — trained metrics only)")
         return
 
-    n_base = len(base_eval.rows)
-    n_trained = len(trained_eval.rows)
+    n_base = len(base_eval)
+    n_trained = len(trained_eval)
 
     print(f"{'Metric':<25} {'Base':>10} {'Trained':>10} {'Delta':>10}")
     print("-" * 57)
     print(f"{'Eval rows':<25} {n_base:>10d} {n_trained:>10d} {'':>10}")
-    print(f"{'Shaped reward':<25} {base_eval.mean:>10.3f} {trained_eval.mean:>10.3f} {trained_eval.mean - base_eval.mean:>+10.3f}")
+    print(f"{'Shaped reward':<25} {base_mean:>10.3f} {trained_mean:>10.3f} {trained_mean - base_mean:>+10.3f}")
 
-    base_pass_rate = _frac(base_eval.rows, "task_passed")
-    trained_pass_rate = _frac(trained_eval.rows, "task_passed")
+    base_pass_rate = _frac(base_eval, "task_passed")
+    trained_pass_rate = _frac(trained_eval, "task_passed")
     print(f"{'Terminal pass rate':<25} {base_pass_rate:>10.1%} {trained_pass_rate:>10.1%} {trained_pass_rate - base_pass_rate:>+10.1%}")
 
     if n_base and n_trained:
-        base_parse = _frac(base_eval.rows, "parsed_call")
-        trained_parse = _frac(trained_eval.rows, "parsed_call")
+        base_parse = _frac(base_eval, "parsed_call")
+        trained_parse = _frac(trained_eval, "parsed_call")
         print(f"{'Parsed tool call':<25} {base_parse:>10.1%} {trained_parse:>10.1%} {trained_parse - base_parse:>+10.1%}")
 
-        base_match = _frac(base_eval.rows, "tool_match")
-        trained_match = _frac(trained_eval.rows, "tool_match")
+        base_match = _frac(base_eval, "tool_match")
+        trained_match = _frac(trained_eval, "tool_match")
         print(f"{'First-call tool match':<25} {base_match:>10.1%} {trained_match:>10.1%} {trained_match - base_match:>+10.1%}")
     else:
-        print("(no eval rows — check the eval dataset / deployment)")
+        print("(no eval rows — check the eval dataset / Endpoint)")
 
 
 @markdown
