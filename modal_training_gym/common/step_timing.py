@@ -124,18 +124,25 @@ def rollout_lanes(records: list[dict[str, Any]]) -> dict[str, Any]:
     return {"roles": lanes}
 
 
-def load_step(training_run_id: str, rollout_id: int) -> list[dict[str, Any]]:
-    """The <=4 role records for one rollout, as stored. ``[]`` when none.
+def load_steps(
+    training_run_id: str, rollout_ids: list[int]
+) -> dict[int, list[dict[str, Any]]]:
+    """The <=4 role records of each requested rollout, keyed by rollout id.
 
-    Called by ``_dashboard._timings_for`` in a threadpool, once per uncached
-    rollout. An empty result is a normal outcome, not an error: every
-    pre-cutover run is in that state, and the caller falls through to the
-    legacy adapter.
+    Called by ``_dashboard._timings_for`` in a threadpool. One volume listing
+    covers the whole batch — a listing per rollout runs into the volume's list
+    rate limit as soon as a page asks for a handful of rows. A rollout with no
+    records is left out, which is a normal outcome rather than an error: it can
+    be mid-flight, or the run can predate measured timing, in which case the
+    caller reads the run's legacy blob instead.
     """
-    return vol_list_prefix(
+    steps: dict[int, list[dict[str, Any]]] = {}
+    for record in vol_list_prefix(
         RoleTimingRecord.store(training_run_id),
-        RoleTimingRecord.step_prefix(rollout_id),
-    )
+        tuple(RoleTimingRecord.step_prefix(i) for i in rollout_ids),
+    ):
+        steps.setdefault(record["rollout_id"], []).append(record)
+    return steps
 
 
 # ---------- Legacy handling --------------

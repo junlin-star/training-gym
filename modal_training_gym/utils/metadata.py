@@ -263,12 +263,16 @@ def vol_list(
     return results
 
 
-def vol_list_prefix(store: MetadataStore | str, prefix: str) -> list[dict[str, Any]]:
+def vol_list_prefix(
+    store: MetadataStore | str, prefix: str | tuple[str, ...]
+) -> list[dict[str, Any]]:
     """Read only the items whose key (file basename) starts with ``prefix``.
 
     Lists directory entries (cheap, no payload reads) and fetches only the
     matching files. Used to gather the per-DP-rank shards of one
-    ``(run, rollout)`` without reading the whole store.
+    ``(run, rollout)`` without reading the whole store. Several prefixes can be
+    passed together: listing is rate limited per volume, so a caller that wants
+    a handful of rollouts should ask for them in one call rather than one each.
     """
     from modal.exception import NotFoundError
 

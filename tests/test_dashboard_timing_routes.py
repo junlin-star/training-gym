@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 from modal_training_gym import _dashboard
 from modal_training_gym.common.framework import Framework
 from modal_training_gym.common.run import TrainingRun
+from modal_training_gym.common import step_timing
 from modal_training_gym.common.step_timing import PROTOCOL, RoleTimingRecord
 from modal_training_gym.utils import metadata
 from modal_training_gym.utils.metadata import MetadataStore
@@ -164,6 +165,27 @@ def test_a_request_for_no_rollouts_reads_nothing(
     _save_run()
     with _client(monkeypatch, tmp_path) as client:
         assert client.get(f"/api/runs/{RUN_ID}/timings?{query}").json() == expected
+
+
+def test_a_batch_lists_the_volume_once(fake_volume, monkeypatch, tmp_path):
+    """Volume listing is rate limited, so a page of rollouts is one listing."""
+    _save_run()
+    for rollout_id in range(5):
+        _save_record(rollout_id, "driver", 1.0)
+
+    listings = []
+    original = step_timing.vol_list_prefix
+    monkeypatch.setattr(
+        step_timing,
+        "vol_list_prefix",
+        lambda store, prefix: listings.append(prefix) or original(store, prefix),
+    )
+
+    with _client(monkeypatch, tmp_path) as client:
+        timings = client.get(f"/api/runs/{RUN_ID}/timings?rollout_ids=0,1,2,3,4").json()
+
+    assert len(listings) == 1
+    assert all(timings[str(i)]["roles"]["driver"] for i in range(5))
 
 
 def test_an_oversized_batch_is_refused(fake_volume, monkeypatch, tmp_path):

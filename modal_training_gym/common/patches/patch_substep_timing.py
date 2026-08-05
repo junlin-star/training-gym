@@ -99,17 +99,20 @@ def wrap_block(block: str, phase: str, opener: str = "_tg_rec.phase") -> str:
     ``if`` itself records a ~0s interval on every step the branch is skipped,
     and a zero-width bar for work that never ran is indistinguishable from work
     that finished instantly. An ``if/else`` is wrapped whole, since wrapping one
-    arm alone would not parse.
+    arm alone would not parse. The header can span several lines, and its
+    closing ``):`` sits back at the ``if``'s own indent.
     """
     lines = block.splitlines(keepends=True)
     outer = len(lines[0]) - len(lines[0].lstrip(" "))
-    has_dedent_to_outer = any(
-        ln.strip() and len(ln) - len(ln.lstrip(" ")) == outer for ln in lines[1:]
-    )
-    if lines[0].lstrip().startswith("if ") and not has_dedent_to_outer:
-        head, body = lines[0], "".join(lines[1:])
-    else:
-        head, body = "", block
+    head, body = "", block
+    if lines[0].lstrip().startswith("if "):
+        header = next(i for i, ln in enumerate(lines) if ln.rstrip().endswith(":")) + 1
+        has_dedent_to_outer = any(
+            ln.strip() and len(ln) - len(ln.lstrip(" ")) == outer
+            for ln in lines[header:]
+        )
+        if not has_dedent_to_outer:
+            head, body = "".join(lines[:header]), "".join(lines[header:])
     indent = body[: len(body) - len(body.lstrip(" "))]
     return (
         head

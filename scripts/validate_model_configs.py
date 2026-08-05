@@ -19,7 +19,7 @@ from modal_training_gym.common.dataset import (
 from modal_training_gym.common.models.qwen3_asr_1_7b import Qwen3_ASR_1_7B
 from modal_training_gym.common.models.validation import VALIDATABLE_MODELS
 from modal_training_gym.common.run import TrainingRun, TrainingRunStatus
-from modal_training_gym.common.step_timing import load_step
+from modal_training_gym.common.step_timing import load_steps
 from modal_training_gym.common.wandb import WandbConfig
 from modal_training_gym.model import ModelConfig
 from modal_training_gym.train import TrainConfig
@@ -80,10 +80,8 @@ def _measured_times(
     """
     step_times: dict[str, dict[str, int | None]] = {}
     substep_times: dict[str, dict[str, dict[str, float | None]]] = {}
-    for rollout_id in range(step_count):
-        records = load_step(training_run_id, rollout_id)
-        if not records:
-            continue
+    steps = load_steps(training_run_id, list(range(step_count)))
+    for rollout_id, records in sorted(steps.items()):
         starts, ends = [], []
         substeps: dict[str, dict[str, float | None]] = {}
         for record in records:

@@ -104,6 +104,24 @@ def test_driver_loop_is_instrumented(
     compile(patched, entrypoint, "exec")
 
 
+def test_a_conditional_phase_is_timed_inside_its_branch(patcher, tmp_path):
+    """A skipped save must record nothing, not a 0s bar on every rollout.
+
+    Its condition spans three lines, so the closing ``):`` sits at the ``if``'s
+    own indent and must not be read as the start of another clause.
+    """
+    patched = _patched(
+        patcher,
+        tmp_path,
+        "train.py.output",
+        "train.py",
+        patcher.SLIME_ENTRYPOINTS["train.py"],
+    )
+    save = patched.split("if release_train or should_run_periodic_action(")[1]
+    before_wrap = save.split("with _tg_rec.phase('checkpoint_save'):")[0]
+    assert before_wrap.split("#")[0].rstrip().endswith("):")
+
+
 def test_patching_twice_is_a_no_op(patcher, tmp_path, capsys):
     work = tmp_path / "train.py"
     work.write_text((TESTDATA / "miles/train.py.input").read_text())

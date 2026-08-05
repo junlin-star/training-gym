@@ -59,7 +59,7 @@ from modal_training_gym.common.step_timing import (
     PROTOCOL as TIMING_PROTOCOL,
     RoleTimingRecord,
     legacy_run_to_records,
-    load_step,
+    load_steps,
     rollout_lanes,
 )
 
@@ -892,11 +892,11 @@ def fastapi_app():
             else:
                 misses.append(rollout_id)
 
-        found: dict[int, list[JsonDict]] = {}
-        for rollout_id in misses:
-            records = await run_in_threadpool(load_step, training_run_id, rollout_id)
-            if records:
-                found[rollout_id] = records
+        found: dict[int, list[JsonDict]] = (
+            await run_in_threadpool(load_steps, training_run_id, misses)
+            if misses
+            else {}
+        )
 
         if misses and not found:
             run = await _get_run_or_404(training_run_id)
