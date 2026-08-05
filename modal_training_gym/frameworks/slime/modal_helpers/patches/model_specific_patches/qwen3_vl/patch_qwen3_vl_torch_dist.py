@@ -14,7 +14,7 @@ so its weights equal the base weights. The fill only adds tensors whose HF names
 not already produced by the (trained) language-stack conversion, so trained weights
 always win.
 
-Baked into the slime base image (only the deploy/eval conversion runs this tool).
+Baked into the slime base image for standalone checkpoint conversion.
 Additive + idempotent, so non-VL runs are untouched. Report upstream; drop once
 fixed there.
 

@@ -1,49 +1,3 @@
-"""Post-training handle: look up checkpoints, serve them, write evals.
-
-A :class:`TrainResult` is produced by ``train`` itself — one per call —
-and is also persisted to a shared :class:`modal.Dict` keyed by
-``training_run_id`` so that a *separate* evaluation script can look it up after
-the fact without re-running training.
-
-Typical flow:
-
-.. code-block:: python
-
-    # training.py
-    app = TrainConfig(...).build_app()
-
-    # Kick off training:
-    #   modal run --detach training.py::app.train
-    # The train function constructs a TrainResult, writes it to the
-    # shared modal.Dict, and returns it.
-
-    # eval.py (anywhere, any time after `train` finishes):
-    from modal_training_gym.common.train_result import TrainResult
-
-    result = TrainResult.load("my-app")                 # latest run
-    # or
-    result = TrainResult.load("my-app", training_run_id="...")   # pinned
-
-    print(result.checkpoint_dir)            # /checkpoints/my-app_train_...
-    print(result.latest_checkpoint_path())  # .../iter_0000050
-
-    from modal_training_gym.common.deployment import DeploymentConfig
-    deployment = DeploymentConfig(model=result.model).serve()
-    print(deployment.url)
-
-Two design invariants:
-
-1. ``TrainResult`` is **not** attached to the ``modal.App`` returned by
-   ``build_app()`` — a training run has no "result" before ``train`` has
-   executed. The ``modal.App`` object is a deployment handle, not a run
-   handle.
-2. Every call to ``train`` can produce a *different* result (different
-   ``training_run_id``, different ``checkpoint_dir``). We use a :class:`modal.Dict`
-   named ``{app_name}-train-results`` as the shared store so that eval
-   scripts — which don't import the training closure and don't call
-   ``train()`` — can still retrieve results by ``training_run_id``.
-"""
-
 from __future__ import annotations
 
 from collections.abc import Awaitable
@@ -51,6 +5,7 @@ from dataclasses import asdict, dataclass, field, fields
 import copy
 from typing import TYPE_CHECKING, Any
 
+from modal_training_gym.common.errors import TrainingGymConfigError
 from modal_training_gym.common.framework import Framework
 from modal_training_gym.utils.metadata import (
     MetadataStore,
@@ -61,6 +16,7 @@ from modal_training_gym.utils.metadata import (
 if TYPE_CHECKING:
     from modal import Volume
 
+    from modal_training_gym.common.checkpoint import Checkpoint
     from modal_training_gym.common.models import ModelConfig
 
 
@@ -69,41 +25,7 @@ TRAIN_RESULTS_STORE_NAME = MetadataStore.TRAIN_RESULTS.value
 
 @dataclass
 class TrainResult:
-    """One completed training run's checkpoint handle.
-
-    Constructed and persisted by each framework's ``train`` function at
-    the end of a run, and loaded by eval scripts via :meth:`load`. All
-    fields are pure data — no method connects to Modal until explicitly
-    invoked.
-
-    Fields
-    ------
-    app_name:
-        Modal app name — also the prefix for the per-app checkpoints
-        volume (``{app_name}-checkpoints``) and the shared results
-        :class:`modal.Dict` (``{app_name}-train-results``).
-    framework:
-        Training framework identifier.
-    training_run_id:
-        Unique identifier for *this* specific training call. Keys the
-        record in the shared :class:`modal.Dict`; embedded in
-        ``checkpoint_dir`` for frameworks that scope checkpoints by run.
-    checkpoint_dir:
-        Absolute in-container path to this run's checkpoint directory.
-        For slime (which
-        writes a single flat ``iter_*`` tree at ``slime.save``) this is
-        that save root.
-    model_config:
-        The ``ModelConfig`` used for training. The :attr:`model` property
-        returns a copy with ``model_path`` pointing at the latest
-        checkpoint, ready to serve.
-    group_id:
-        Identifier shared by every run in a :class:`TrainingGroup` sweep, or
-        empty for a standalone run. Lets eval/dashboard code group variants.
-    extra:
-        Free-form metadata a launcher may attach (e.g. wandb run name,
-        rollout tunnel URL). Not used by the base class.
-    """
+    """Checkpoint handle for one completed training run."""
 
     app_name: str
     framework: Framework
@@ -115,12 +37,8 @@ class TrainResult:
     wandb_project: str = ""
     wandb_entity: str = ""
     wandb_training_run_id: str = ""
-    # Set when this run was launched as part of a TrainingGroup sweep; shared
-    # across every variant in the group so results can be compared together.
     group_id: str = ""
     extra: dict[str, Any] = field(default_factory=dict)
-
-    # ── Persistence ────────────────────────────────────────────────────────
 
     def _to_dict(self) -> dict[str, Any]:
         d = asdict(self)
@@ -166,13 +84,6 @@ class TrainResult:
 
     @classmethod
     def from_training_run_id(cls, training_run_id: str) -> "TrainResult":
-        """Load a completed run's result.
-
-        Raises
-        ------
-        KeyError
-            The given ``training_run_id`` isn't in the store.
-        """
         return cls(
             **cls._parse_model_config(
                 vol_get(MetadataStore.TRAIN_RESULTS, training_run_id)
@@ -183,31 +94,71 @@ class TrainResult:
     def load(cls, training_run_id: str) -> "TrainResult":
         return cls.from_training_run_id(training_run_id)
 
-    # ── Volume lookup ────────────────────────────────────────────────────
+    @property
+    def checkpoints_volume(self) -> str:
+        return self.checkpoints_volume_name or f"{self.app_name}-checkpoints"
 
     def volume(self) -> "Volume":
-        volume_name = self.checkpoints_volume_name or f"{self.app_name}-checkpoints"
-        return Volume.from_name(volume_name, create_if_missing=True)
+        from modal import Volume
 
-    @property
-    def model(self) -> "ModelConfig":
+        return Volume.from_name(self.checkpoints_volume, create_if_missing=True)
+
+    def _require_model_config(self) -> "ModelConfig":
         if self.model_config is None:
             raise ValueError(
                 "No model_config on this TrainResult. "
                 "Was it saved by an older launcher?"
             )
+        return self.model_config
 
-        from modal_training_gym.common.checkpoint import list_checkpoints
-
-        model = copy.copy(self.model_config)
-        checkpoints = list_checkpoints(self.training_run_id)
-        if checkpoints:
-            model.model_path = checkpoints[-1].path
-        elif self.checkpoint_dir:
-            model.model_path = self.checkpoint_dir
-
+    def _model_at(self, model_path: str) -> "ModelConfig":
+        model = copy.copy(self._require_model_config())
+        if model_path:
+            model.model_path = model_path
         if self.checkpoints_volume_name:
             setattr(model, "checkpoints_volume_name", self.checkpoints_volume_name)
         if self.checkpoints_mount_path:
             setattr(model, "checkpoints_mount_path", self.checkpoints_mount_path)
         return model
+
+    def checkpoints(self) -> "list[Checkpoint]":
+        from modal_training_gym.common.checkpoint import list_checkpoints
+
+        return list_checkpoints(self.training_run_id)
+
+    @property
+    def model(self) -> "ModelConfig":
+        checkpoints = self.checkpoints()
+        model_path = checkpoints[-1].path if checkpoints else self.checkpoint_dir
+        return self._model_at(model_path)
+
+    def hf_model(self, *, gpu: str | None = None) -> "ModelConfig":
+        """Return a model pointed at the newest checkpoint in HuggingFace format.
+
+        slime writes torch_dist checkpoints unless HF export is enabled, and
+        neither ``modal endpoint create --custom-volume-path`` nor any serving
+        runtime can load those. This converts the newest checkpoint to
+        ``<name>_hf`` on the same Volume (a GPU job, minutes) and returns a
+        :class:`~modal_training_gym.common.models.ModelConfig` pointing at it.
+
+        ``gpu`` overrides the conversion worker's GPU spec, which otherwise
+        comes from the training run's actor GPUs.
+        """
+        from modal_training_gym.common.checkpoint import (
+            _checkpoint_sort_key,
+            convert_checkpoint_to_hf,
+        )
+
+        model_config = self._require_model_config()
+        checkpoints = self.checkpoints()
+        if not checkpoints:
+            raise TrainingGymConfigError(
+                f"No checkpoints found for training run {self.training_run_id!r}."
+            )
+        latest = max(
+            checkpoints, key=lambda checkpoint: _checkpoint_sort_key(checkpoint.name)
+        )
+        if latest.checkpoint_type.value == "hf":
+            return self._model_at(latest.path)
+        converted = convert_checkpoint_to_hf(latest, model_config, gpu=gpu)
+        return self._model_at(converted.path)

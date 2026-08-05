@@ -48,11 +48,7 @@ def open_command() -> None:
 
 @click.command("set-proxy-auth", cls=_TrainingGymCommand)
 def set_proxy_auth_command() -> None:
-    """Set/replace the Modal proxy-auth credentials for authenticated served endpoints.
-
-    You only need this after deploying a model with `unauthenticated=False`.
-    Re-run this command to change the saved credentials.
-    """
+    """Set or replace Modal Endpoint proxy-auth credentials."""
     from .setup import set_proxy_auth
 
     set_proxy_auth()

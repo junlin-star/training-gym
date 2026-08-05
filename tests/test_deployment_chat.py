@@ -1,7 +1,12 @@
 from types import SimpleNamespace
 
+import pytest
+
+from modal_training_gym.common.checkpoint import CheckpointType
 from modal_training_gym.common import deployment as deployment_module
-from modal_training_gym.common.deployment import ModelDeployment
+from modal_training_gym.common.deployment import DeploymentConfig, ModelDeployment
+from modal_training_gym.common.errors import TrainingGymConfigError
+from modal_training_gym.deploy_recipes.vllm_recipe import VllmRecipe
 
 
 def test_chat_serializes_tool_arguments_without_mutating_messages(monkeypatch) -> None:
@@ -96,3 +101,18 @@ def test_generate_accepts_caller_supplied_messages(monkeypatch) -> None:
         "ensure_ready": False,
         "kwargs": {"temperature": 0},
     }
+
+
+def test_serve_requires_gpu_when_conversion_inference_fails(monkeypatch) -> None:
+    def _missing_gpu(_checkpoint) -> str:
+        raise TrainingGymConfigError("missing training metadata")
+
+    monkeypatch.setattr(deployment_module, "_conversion_gpu_spec", _missing_gpu)
+    config = DeploymentConfig(
+        model=SimpleNamespace(),
+        checkpoint=SimpleNamespace(checkpoint_type=CheckpointType.megatron),
+        recipe=VllmRecipe(),
+    )
+
+    with pytest.raises(TrainingGymConfigError, match="recipe.gpu"):
+        config.serve()

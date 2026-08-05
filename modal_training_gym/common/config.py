@@ -14,7 +14,6 @@ from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-
 CONFIG_PATH = Path.home() / ".training-gym.toml"
 MODAL_CONFIG_PATH = Path(
     os.environ.get("MODAL_CONFIG_PATH") or os.path.expanduser("~/.modal.toml")
@@ -46,6 +45,13 @@ def load_config() -> dict[str, Any]:
         return {}
 
 
+def _save_config(config: dict[str, Any]) -> None:
+    fd = os.open(CONFIG_PATH, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        os.fchmod(f.fileno(), 0o600)
+        f.write(_render(config))
+
+
 def save_dashboard_url(url: str, *, proxy_auth: bool | None = None) -> None:
     """Persist the deployed dashboard URL and optional proxy-auth mode."""
     config = load_config()
@@ -56,7 +62,7 @@ def save_dashboard_url(url: str, *, proxy_auth: bool | None = None) -> None:
     if proxy_auth is not None:
         dashboard["proxy_auth"] = proxy_auth
     config["dashboard"] = dashboard
-    CONFIG_PATH.write_text(_render(config))
+    _save_config(config)
 
 
 def get_dashboard_url() -> str | None:
@@ -74,7 +80,7 @@ def get_dashboard_proxy_auth() -> bool | None:
 
     The live endpoint is authoritative. Modal itself returns 403 before a
     proxy-authenticated dashboard request reaches FastAPI, so that status also
-    identifies an authenticated deployment. The persisted mode remains a
+    identifies an authenticated dashboard. The persisted mode remains a
     fallback for older or temporarily unreachable dashboards.
     """
     # Imported here: ``cli`` imports this module, so a module-level import cycles.
@@ -143,10 +149,9 @@ def get_proxy_auth() -> tuple[str, str]:
 
 
 def save_proxy_auth(key: str, secret: str) -> None:
-    """Persist the proxy-auth token pair under ``[proxy_auth]``."""
     config = load_config()
     config[PROXY_AUTH_SECTION] = {"key": key.strip(), "secret": secret.strip()}
-    CONFIG_PATH.write_text(_render(config))
+    _save_config(config)
 
 
 def load_proxy_auth() -> bool:

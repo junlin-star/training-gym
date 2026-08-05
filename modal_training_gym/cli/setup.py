@@ -86,15 +86,6 @@ def setup(require_proxy_auth: bool, interactive: bool = True) -> str:
 
 
 def ensure_proxy_auth(interactive: bool = True, force: bool = False) -> bool:
-    """Prompt for and persist Modal proxy-auth tokens in ``~/.training-gym.toml``.
-
-    Authenticated served endpoints (``unauthenticated=False``) need Modal proxy auth
-    and need a ``MODAL_KEY`` / ``MODAL_SECRET`` token pair. When ``interactive``
-    we ask whether the user has created a pair and, if so, read and save it.
-    With ``force`` we offer to replace an already-saved pair (e.g. when the old
-    one was minted in the wrong workspace). Returns ``True`` when both tokens are
-    available afterwards.
-    """
     from getpass import getpass
 
     from modal_training_gym.common.config import (
@@ -126,7 +117,7 @@ def ensure_proxy_auth(interactive: bool = True, force: bool = False) -> bool:
             return True
     else:
         print(
-            "\nAuthenticated served endpoints (DeploymentConfig(unauthenticated=False)) need "
+            "\nAuthenticated Modal Endpoints need "
             "a Modal proxy-auth token pair (MODAL_KEY / MODAL_SECRET)."
         )
         answer = (
@@ -258,18 +249,6 @@ def deployed_dashboard_url() -> str | None:
 
 
 def ensure_dashboard_deployed() -> str | None:
-    """Deploy the dashboard if it isn't already; return its web URL (or ``None``).
-
-    Idempotent: if the app is already deployed we only reconcile the cached URL
-    in ``~/.training-gym.toml`` and return; we never redeploy.
-
-    Best-effort and guaranteed not to raise: this is called from the hot path
-    of ``train()`` and ``evaluate()``, where dashboard provisioning is a
-    convenience, not a precondition. Any failure — Modal deploy errors
-    (network, auth, image build, outage), a read-only/full disk on the toml
-    write, or an import error — is swallowed with a warning so the run itself
-    is never aborted. Callers therefore don't need their own try/except.
-    """
     try:
         from modal_training_gym.common.config import (
             get_dashboard_proxy_auth,
@@ -279,7 +258,6 @@ def ensure_dashboard_deployed() -> str | None:
 
         web_url = deployed_dashboard_url()
         if web_url:
-            # Already deployed — keep the local toml in sync with the live URL.
             if get_dashboard_url() != web_url:
                 save_dashboard_url(web_url)
             return web_url

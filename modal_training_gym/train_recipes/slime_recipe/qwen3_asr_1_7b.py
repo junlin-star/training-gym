@@ -16,7 +16,7 @@ from modal_training_gym.train_recipes.slime_recipe.recipe import SlimeRecipe
 # pg_collection). These are slime-specific, so they live on the recipe (not the
 # model) and are applied via ``image_run_commands``. The Megatron->HF audio-tower
 # converter (``patch_qwen3_asr_export``) instead lives in the slime base image, since
-# conversion also runs in the recipe-less deploy/eval path. Each should be reported
+# conversion also runs through the standalone conversion path. Each should be reported
 # upstream; once fixed, drop the corresponding patch.
 _ASR_PATCH_DIR = (
     Path(__file__).resolve().parents[2]

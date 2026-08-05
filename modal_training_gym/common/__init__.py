@@ -61,14 +61,14 @@ def hf_secrets() -> list:
 
 
 def proxy_auth_secrets() -> list:
-    """Return a Modal Secret with ``MODAL_KEY`` / ``MODAL_SECRET`` for train workers.
+    """Return a Modal Secret for authenticated dashboard status reporting.
 
-    Served endpoints (``DeploymentConfig.serve()``) sit behind Modal proxy auth.
-    Driver-shell env does not reach Ray rollout actors, so frameworks attach this
-    secret to the train function the same way they attach wandb / HF secrets.
+    Driver-shell env does not reach remote phase workers, so launchers attach
+    this secret to functions that report status to a proxy-authenticated dashboard.
+    User train functions must receive proxy credentials through explicit secret
+    configuration.
     Loads from env or ``~/.training-gym.toml`` via :func:`load_proxy_auth`.
-    Returns ``[]`` when the pair is unset (callers that hit proxy-auth endpoints
-    will then get 401).
+    Returns ``[]`` when the pair is unset.
     """
     from modal import Secret
 
