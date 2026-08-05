@@ -175,8 +175,19 @@ def load_run(training_run_id: str) -> dict[int, list[dict[str, Any]]]:
     rollout with no records is left out; the run may predate measured timing, in
     which case the caller reads its legacy blob.
     """
+    return _by_rollout(vol_list(RoleTimingRecord.store(training_run_id)))
+
+
+async def load_run_async(training_run_id: str) -> dict[int, list[dict[str, Any]]]:
+    """:func:`load_run` on the event loop, which reads the records together."""
+    return _by_rollout(
+        await vol_list(RoleTimingRecord.store(training_run_id), is_async=True)
+    )
+
+
+def _by_rollout(records: list[dict[str, Any]]) -> dict[int, list[dict[str, Any]]]:
     steps: dict[int, list[dict[str, Any]]] = {}
-    for record in vol_list(RoleTimingRecord.store(training_run_id)):
+    for record in records:
         steps.setdefault(record["rollout_id"], []).append(record)
     return steps
 

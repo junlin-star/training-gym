@@ -25,17 +25,17 @@ export const TIMING_COLORS = {
   wait_for_rollout: slot("paired-1"),
   reward: slot("primary-3"),
   reward_batch: slot("paired-3"),
-  reward_post_process: slot("paired-7"),
+  reward_post_process: slot("primary-5"),
   train_models: slot("primary-7"),
-  compute_log_probs: slot("paired-4"),
+  compute_log_probs: `color-mix(in srgb, ${slot("primary-7")} 55%, white)`,
   forward_backward: slot("primary-4"),
-  optimizer_step: `color-mix(in srgb, ${slot("primary-7")} 55%, white)`,
+  optimizer_step: slot("paired-4"),
   weight_sync: slot("paired-8"),
   offload_rollout: slot("paired-5"),
-  offload_train: slot("primary-2"),
+  offload_train: slot("paired-5"),
   checkpoint_save: slot("paired-2"),
-  evaluate_rollouts: slot("primary-5"),
-  evaluate_rollouts_end: slot("paired-6"),
+  evaluate_rollouts: slot("primary-2"),
+  evaluate_rollouts_end: slot("paired-7"),
 };
 
 export const PHASES_BESIDE_THE_STEP = [

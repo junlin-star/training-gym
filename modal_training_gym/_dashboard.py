@@ -53,7 +53,7 @@ from modal_training_gym.common.step_timing import (
     PROTOCOL as TIMING_PROTOCOL,
     RoleTimingRecord,
     legacy_run_to_records,
-    load_run,
+    load_run_async,
     rollout_lanes,
 )
 from modal_training_gym.common.time import parse_time as _parse_log_time
@@ -915,7 +915,7 @@ def fastapi_app():
         return JSONResponse({"status": "ok"})
 
     async def _read_run_timings(training_run_id: str) -> JsonDict:
-        found = await run_in_threadpool(load_run, training_run_id)
+        found = await load_run_async(training_run_id)
         if not found:
             # Only a run that measured nothing anywhere is pre-cutover; one with
             # partial timing keeps its gaps rather than inferring them.

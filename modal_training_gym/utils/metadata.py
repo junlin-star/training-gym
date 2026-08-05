@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import io
 import json
 from collections.abc import Awaitable, Callable
@@ -229,15 +230,22 @@ def vol_list(
 
         async def _run() -> list[dict[str, Any]]:
             await _safe_reload(vol, is_async=True)
-            results: list[dict[str, Any]] = []
+
+            async def _read(path: str) -> dict[str, Any]:
+                chunks = [c async for c in vol.read_file.aio(path)]
+                return json.loads(b"".join(chunks))
+
             try:
-                async for entry in vol.iterdir.aio(_store_path(store)):
-                    if entry.path.endswith(".json"):
-                        chunks = [c async for c in vol.read_file.aio(entry.path)]
-                        results.append(json.loads(b"".join(chunks)))
+                paths = [
+                    entry.path
+                    async for entry in vol.iterdir.aio(_store_path(store))
+                    if entry.path.endswith(".json")
+                ]
+                # Read together: a store holds a file per record, and one round
+                # trip each is the whole latency of listing a run.
+                return list(await asyncio.gather(*(_read(path) for path in paths)))
             except (FileNotFoundError, NotFoundError):
-                pass
-            return results
+                return []
 
         return _run()
 
