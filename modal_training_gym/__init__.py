@@ -51,7 +51,7 @@ _EXPORTS = {
         "modal_training_gym.train_recipes.miles_recipe",
         "Kimi_K2_6_LoRA_Recipe",
     ),
-    "MilesConfig": ("modal_training_gym.train_recipes.miles_recipe", "MilesConfig"),
+    "MilesRecipe": ("modal_training_gym.train_recipes.miles_recipe", "MilesRecipe"),
     "parse_qwen3_response": (
         "modal_training_gym.common.models",
         "parse_qwen3_response",
@@ -93,7 +93,6 @@ _EXPORTS = {
     "TrainingGymError": ("modal_training_gym.common.errors", "TrainingGymError"),
     "TrainingGroup": ("modal_training_gym.common.training_group", "TrainingGroup"),
     "TrainResult": ("modal_training_gym.common.train_result", "TrainResult"),
-    "setup": ("modal_training_gym.cli.setup", "setup"),
     "WandbConfig": ("modal_training_gym.common.wandb", "WandbConfig"),
 }
 
@@ -128,7 +127,7 @@ __all__ = [
     "ModelArchitecture",
     "ModelConfig",
     "ModelDeployment",
-    "MilesConfig",
+    "MilesRecipe",
     "parse_qwen3_response",
     "ParsedResponse",
     "Qwen3_0_6B",
@@ -144,7 +143,6 @@ __all__ = [
     "Qwen3_VL_8b_Recipe",
     "score_in_sandbox",
     "SlimeRecipe",
-    "setup",
     "ToolCall",
     "TrainConfig",
     "TrainingGymConfigError",

@@ -1,5 +1,5 @@
 <script>
-  import { onMount, tick } from "svelte";
+  import { onMount, tick, untrack } from "svelte";
   import { ArrowLeft, ChevronLeft, ChevronRight, Download, ExternalLink, Minimize2, X } from "lucide-svelte";
   import Tabs from "../components/Tabs.svelte";
   import RunSummary from "../components/RunSummary.svelte";
@@ -23,6 +23,7 @@
     fetchRunAdvantageStep,
     fetchRunLogs,
   } from "../lib/api.js";
+  import { groupByRollout, rolloutIndex, rolloutScores } from "../lib/rolloutGrouping.js";
 
   // Number of historical log lines requested per page.
   const HIST_PAGE = 500;
@@ -232,7 +233,7 @@
   const rolloutColumns = [
     { key: "step", label: "Step", width: 72, minWidth: 56 },
     { key: "mean", label: "Mean reward", width: 118, minWidth: 96 },
-    { key: "samples", label: "Samples", width: 80, minWidth: 64 },
+    { key: "rollouts", label: "Rollouts", width: 80, minWidth: 64 },
     { key: "when", label: "When", width: 88, minWidth: 64 },
   ];
 
@@ -241,18 +242,16 @@
   let advantageSteps = $state([]);
   let hasAdvantages = $derived(advantageSteps.length > 0);
 
-  // Per-step sample view: a histogram of sample scores. Clicking a bar opens
-  // a single-sample viewer scoped to that bucket; ←/→ step through it.
   const BUCKET_COUNT = 12;
   let activeBucket = $state(null); // histogram bucket index, or null
   let activeSamplePos = $state(0); // position within the active bucket's list
 
-  // Bucket the expanded rollout's samples by score.
   let sampleDist = $derived.by(() => {
     const samples = expandedRollout?.samples || [];
-    if (!samples.length) return null;
-    const scores = samples.map((s) => Number(s.score) || 0);
-    // Loop instead of Math.min(...arr): a single rollout's per-sample array can
+    const rollouts = groupByRollout(samples);
+    if (!rollouts.length) return null;
+    const scores = rolloutScores(samples, rollouts);
+    // Loop instead of Math.min(...arr): a single step's rollout-score array can
     // exceed the engine's max argument count and make the spread throw a
     // RangeError (same failure class buildDist avoids).
     let lo = Infinity;
@@ -261,20 +260,38 @@
       if (v < lo) lo = v;
       if (v > hi) hi = v;
     }
-    // When every sample scored the same, a single bucket reads clearer than a
+    // When every rollout scored the same, a single bucket reads clearer than a
     // lone bar pinned to one edge.
     const count = lo === hi ? 1 : BUCKET_COUNT;
     const span = hi - lo || 1;
     const buckets = Array.from({ length: count }, () => []);
-    samples.forEach((s, i) => {
-      const score = Number(s.score) || 0;
-      let b = count === 1 ? 0 : Math.floor(((score - lo) / span) * count);
+    rollouts.forEach((positions, r) => {
+      let b = count === 1 ? 0 : Math.floor(((scores[r] - lo) / span) * count);
       b = Math.max(0, Math.min(count - 1, b));
-      buckets[b].push(i);
+      buckets[b].push({ positions, score: scores[r] });
     });
     const maxCount = Math.max(...buckets.map((b) => b.length), 1);
-    return { lo, hi, count, span, buckets, maxCount, total: samples.length };
+    return {
+      lo,
+      hi,
+      count,
+      span,
+      buckets,
+      maxCount,
+      total: rollouts.length,
+      sampleCount: samples.length,
+    };
   });
+
+  let distSummary = $derived(!sampleDist ? "" : plural(sampleDist.total, "rollout"));
+
+  function plural(n, unit) {
+    return `${n} ${unit}${n === 1 ? "" : "s"}`;
+  }
+
+  function bucketLabel(bucket, b) {
+    return `${plural(bucket.length, "rollout")} · reward ${bucketRange(b)}`;
+  }
 
   function bucketRange(b) {
     const d = sampleDist;
@@ -321,16 +338,18 @@
     return meta.image ?? (meta.image_ref ? rolloutImages[meta.image_ref] : null) ?? null;
   }
 
-  // The sample currently shown in the viewer (or null when no bucket is open).
+  // The rollout currently shown in the viewer (or null when no bucket is open).
   let activeSample = $derived.by(() => {
     const d = sampleDist;
     if (!d || activeBucket == null) return null;
     const list = d.buckets[activeBucket] || [];
-    const idx = list[activeSamplePos];
-    if (idx == null) return null;
-    const sample = expandedRollout.samples[idx];
+    const entry = list[activeSamplePos];
+    if (!entry) return null;
+    const sample = expandedRollout.samples[entry.positions[0]];
     return {
       sample,
+      samples: entry.positions.map((p) => expandedRollout.samples[p]),
+      score: entry.score,
       image: sampleImage(sample),
       pos: activeSamplePos,
       count: list.length,
@@ -362,6 +381,9 @@
     }
     return {
       score: s.score,
+      rollout_index: rolloutIndex(s),
+      sample_index: s.sample_index ?? null,
+      group_index: s.group_index ?? null,
       prompt: s.prompt || null,
       response: s.response || null,
       thinking: s.thinking || null,
@@ -374,13 +396,21 @@
 
   function downloadSampleTrajectory() {
     if (!activeSample) return;
-    const payload = sampleToPayload(activeSample.sample, { inlineImage: true });
+    const turns = activeSample.samples;
+    const payload =
+      turns.length === 1
+        ? sampleToPayload(turns[0], { inlineImage: true })
+        : {
+            mean: activeSample.score,
+            turns: turns.length,
+            samples: turns.map((s) => sampleToPayload(s, { inlineImage: true })),
+          };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
     const rollout = expandedRolloutId ?? 0;
-    a.download = `trajectory_r${rollout}_s${activeSample.pos}.json`;
+    a.download = `trajectory_r${rollout}_rollout${rolloutIndex(activeSample.sample) ?? activeSample.pos}.json`;
     a.click();
     URL.revokeObjectURL(url);
   }
@@ -388,14 +418,19 @@
   function downloadAllTrajectories() {
     if (!expandedRollout?.samples?.length) return;
     const rollout = expandedRolloutId ?? 0;
+    const samples = expandedRollout.samples;
+    const groups = groupByRollout(samples);
+    const scores = rolloutScores(samples, groups);
     const payload = {
       training_run_id: runId,
       rollout_id: rollout,
-      total: expandedRollout.samples.length,
-      mean: expandedRollout.samples.reduce((a, s) => a + (s.score || 0), 0) / expandedRollout.samples.length,
+      total: samples.length,
+      rollouts: groups.length,
+      n_samples_per_prompt: expandedRollout.n_samples_per_prompt ?? null,
+      mean: scores.reduce((a, v) => a + v, 0) / scores.length,
       // Shared screenshots, keyed by the `metadata.image_ref` each sample carries.
       images: rolloutImages,
-      samples: expandedRollout.samples.map((s) => sampleToPayload(s, { refOnly: true })),
+      samples: samples.map((s) => sampleToPayload(s, { refOnly: true })),
     };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
@@ -409,7 +444,10 @@
   async function loadRollouts(signal) {
     if (!runId) return;
     try {
-      const wasEmpty = rolloutSummaries.length === 0;
+      // Untracked: the fetch effect calls this synchronously, so a tracked read
+      // here makes the effect depend on the state it is about to write, and
+      // every fetch (which always yields a fresh array) retriggers it forever.
+      const wasEmpty = untrack(() => rolloutSummaries.length === 0);
       const rows = await fetchRunRollouts(runId, { signal });
       if (signal?.aborted) return;
       rolloutSummaries = rows;
@@ -514,7 +552,7 @@
       const detail = await fetchRollout(runId, rolloutId);
       if (expandedRolloutId === rolloutId) {
         expandedRollout = detail;
-        // Preselect the first populated bucket so a sample is shown right away.
+        // Preselect the first populated bucket so a rollout is shown right away.
         const d = sampleDist;
         const first = d ? d.buckets.findIndex((b) => b.length > 0) : -1;
         if (first >= 0) openBucket(first);
@@ -1173,12 +1211,7 @@
   }
 
   function buildScoreDist(firstSamples, lastSamples, firstId, lastId) {
-    return buildDist(
-      firstSamples.map((s) => Number(s.score) || 0),
-      lastSamples.map((s) => Number(s.score) || 0),
-      firstId,
-      lastId,
-    );
+    return buildDist(rolloutScores(firstSamples), rolloutScores(lastSamples), firstId, lastId);
   }
 
   // Adapt a buildDist result into ComparativeBarChart inputs: one category per
@@ -1527,7 +1560,7 @@
                     <span class="inline-block text-[10px] font-medium p-[1px_6px] rounded-[3px] ml-[6px] align-middle bg-[rgba(251,191,36,0.15)] text-[#fbbf24] [border:1px_solid_rgba(251,191,36,0.25)]" title="Some samples failed due to infrastructure error">partial failure</span>
                   {/if}
                 </td>
-                <td>{r.total}</td>
+                <td>{r.episode_count ?? "—"}</td>
                 <td>
                   <TimeAgo timestamp={r.created_at} showJustNow falsyRepresentation="—" />
                 </td>
@@ -1536,9 +1569,9 @@
                 <tr>
                   <td class="p-[12px_10px] bg-(--color-c-gray-08,#1c1c1c) cursor-default" colspan={rolloutColumns.length}>
                     {#if expandedRolloutLoading}
-                      <div class="detail-empty">Loading samples…</div>
+                      <div class="detail-empty">Loading rollouts…</div>
                     {:else if !expandedRollout || !sampleDist}
-                      <div class="detail-empty">No samples recorded.</div>
+                      <div class="detail-empty">No rollouts recorded.</div>
                     {:else}
                       {@const stepTiming = stepTimingForRollout(r.rollout_id)}
                       {#if stepTiming}
@@ -1559,7 +1592,7 @@
                         {@const responseMissing = Number(m["agent/response_missing_sample_count"]) || 0}
                         {@const infraInvalid = Number(m["agent/invalid_infra_sample_count"]) || 0}
                         {@const limitsExceeded = Number(m["agent/limits_exceeded_sample_count"]) || 0}
-                        {@const totalSamples = Number(m["agent/valid_sample_count"]) || sampleDist.total || 0}
+                        {@const totalSamples = Number(m["agent/valid_sample_count"]) || sampleDist.sampleCount || 0}
                         {@const hasErrors = remoteErr > 0 || responseMissing > 0 || infraInvalid > 0}
                         {#if hasErrors}
                           <div class="rollout-diagnostics" class:diag-critical={remoteErr >= totalSamples}>
@@ -1601,14 +1634,14 @@
                             title="Download all samples as JSON"
                           >
                             <Download size={13} />
-                            Download all ({sampleDist.total} samples)
+                            Download all ({sampleDist.sampleCount} samples)
                           </button>
                         </div>
                         <div class="chart-scroll">
                           <div
                             class="flex items-end gap-[2px] h-[120px] pt-[14px] min-w-[280px] [border-bottom:1px_solid_var(--border,#2f2f2f)]"
                             role="group"
-                            aria-label="Sample score distribution"
+                            aria-label="Reward distribution"
                           >
                             {#each sampleDist.buckets as bucket, b (b)}
                               <button
@@ -1618,7 +1651,7 @@
                                 class:is-empty={!bucket.length}
                                 style:height={`${(bucket.length / sampleDist.maxCount) * 100}%`}
                                 disabled={!bucket.length}
-                                title={`${bucket.length} sample${bucket.length === 1 ? "" : "s"} · reward ${bucketRange(b)}`}
+                                title={bucketLabel(bucket, b)}
                                 onclick={() => openBucket(b)}
                               >
                                 <span class="absolute top-[-14px] left-0 right-0 text-center text-[10px] text-(--muted) [font-variant-numeric:tabular-nums]">{bucket.length || ""}</span>
@@ -1627,7 +1660,7 @@
                           </div>
                           <div class="dist-axis">
                             <span>{formatMean(sampleDist.lo)}</span>
-                            <span class="dist-axis-label">reward · {sampleDist.total} samples</span>
+                            <span class="dist-axis-label">reward · {distSummary}</span>
                             <span>{formatMean(sampleDist.hi)}</span>
                           </div>
                         </div>
@@ -1641,18 +1674,18 @@
                                 class="sample-nav-btn"
                                 onclick={() => stepSample(-1)}
                                 disabled={activeSample.pos === 0}
-                                aria-label="Previous sample"
+                                aria-label="Previous rollout"
                               >
                                 <ChevronLeft size={14} />
                               </button>
                               <span class="text-[12px] text-(--text-bright) [font-variant-numeric:tabular-nums]">
-                                Sample {activeSample.pos + 1} / {activeSample.count}
+                                Rollout {activeSample.pos + 1} / {activeSample.count}
                               </span>
                               <button
                                 class="sample-nav-btn"
                                 onclick={() => stepSample(1)}
                                 disabled={activeSample.pos === activeSample.count - 1}
-                                aria-label="Next sample"
+                                aria-label="Next rollout"
                               >
                                 <ChevronRight size={14} />
                               </button>
@@ -1660,7 +1693,9 @@
                             </div>
                             <div class="sample-viewer-actions">
                               <span class="text-(--text-bright) [font-variant-numeric:tabular-nums]">
-                                reward {formatMean(activeSample.sample.score)}
+                                reward {formatMean(activeSample.score)}{activeSample.samples.length > 1
+                                  ? ` · first of ${activeSample.samples.length} turns`
+                                  : ""}
                               </span>
                               <button
                                 class="sample-nav-btn"
@@ -1673,7 +1708,7 @@
                               <button
                                 class="sample-nav-btn"
                                 onclick={closeBucket}
-                                aria-label="Close sample viewer"
+                                aria-label="Close rollout viewer"
                               >
                                 <X size={14} />
                               </button>
@@ -1770,7 +1805,7 @@
                           {/if}
                         </div>
                       {:else}
-                        <div class="text-[12px] text-(--muted) p-[4px_0]">Click a bar to inspect its samples.</div>
+                        <div class="text-[12px] text-(--muted) p-[4px_0]">Click a bar to inspect its rollouts.</div>
                       {/if}
                     {/if}
                   </td>

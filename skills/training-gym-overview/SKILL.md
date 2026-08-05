@@ -101,7 +101,7 @@ framework's config converter.
 ### `TrainConfig` + recipe
 
 `TrainConfig` composes `dataset`, `model`, and a recipe (`SlimeRecipe` /
-`MilesConfig`). Recipes carry Modal infra + framework CLI flags
+`MilesRecipe`). Recipes carry Modal infra + framework CLI flags
 (`extra="forbid"`). Call `.train()` / `.launch()` — no public `build_app()`.
 
 ```python

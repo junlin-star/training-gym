@@ -17,14 +17,6 @@ Deploy the observability dashboard to your Modal account.
 training-gym setup
 ```
 
-This is equivalent to calling `setup()` from Python:
-
-```python
-import modal_training_gym
-
-modal_training_gym.setup()
-```
-
 The command builds a Modal image (Node.js + Svelte frontend + FastAPI backend),
 deploys it as a persistent web app, and prints the dashboard URL.
 

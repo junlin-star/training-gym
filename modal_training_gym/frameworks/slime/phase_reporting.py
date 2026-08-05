@@ -138,6 +138,7 @@ def report_rollout_samples(
     trace_limit = _trace_sample_limit() if _trace_enabled() else 0
     trajectory_limit = _trajectory_sample_limit()
     image_store = RolloutImageStore(_image_limit())
+    n_per = _positive_int(_arg_value(args, "n_samples_per_prompt")) or 1
     try:
         sample_dicts = [
             _sample_to_dict(
@@ -146,6 +147,7 @@ def report_rollout_samples(
                 include_trace=(i < trace_limit),
                 image_store=image_store,
                 include_trajectory=(i < trajectory_limit),
+                n_samples_per_prompt=n_per,
             )
             for i, s in enumerate(samples)
         ]
@@ -155,6 +157,7 @@ def report_rollout_samples(
         **_run_context(args),
         "rollout_id": int(rollout_id),
         "created_at": int(time.time()),
+        "n_samples_per_prompt": n_per,
         "samples": sample_dicts,
         "metrics": _metrics_to_dict(rollout_extra_metrics),
     }

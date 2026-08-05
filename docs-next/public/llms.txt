@@ -84,6 +84,7 @@ Repo: https://github.com/modal-projects/training-gym
 - [TrainConfig](https://gym.modal.dev/reference/training/trainconfig/): `TrainConfig`
 - [TrainingGroup](https://gym.modal.dev/reference/training/traininggroup/): `TrainingGroup`
 - [SlimeRecipe](https://gym.modal.dev/reference/training/slimerecipe/): `SlimeRecipe`
+- [MilesRecipe](https://gym.modal.dev/reference/training/milesrecipe/): `MilesRecipe`
 - [Qwen3_6_35b_Recipe](https://gym.modal.dev/reference/training/qwen3_6_35b_recipe/): `Qwen3_6_35b_Recipe`
 - [Qwen3_6_27b_Recipe](https://gym.modal.dev/reference/training/qwen3_6_27b_recipe/): `Qwen3_6_27b_Recipe`
 

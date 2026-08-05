@@ -33,6 +33,10 @@ cd docs-next && npm ci && npm run dev                 # local dev server
 uv run scripts/generate_all.py                 # full regen + build
 
 # Deploy
+# IMPORTANT: These commands are only for development of the gym itself.
+# Consumers of the gym should use `training-gym setup` instead.
+# Features such as requiring proxy authentication only work with the CLI
+# and will stop working if the dashboard is deployed with `modal deploy`.
 uv run modal deploy docs-next/docs_next_app.py        # docs site → gym.modal.dev
 uv run modal deploy dashboards/app.py                  # observability dashboard
 

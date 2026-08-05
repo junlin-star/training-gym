@@ -23,6 +23,7 @@ from modal_training_gym.common.framework import (
     Framework,
     mount_tools_dir,
 )
+from modal_training_gym.common.launcher_utils import serialize_recipe_params
 from modal_training_gym.common.modal_urls import modal_app_dashboard_url
 from modal_training_gym.common.models import ModelConfig
 from modal_training_gym.common.ray_cluster import ModalRayCluster
@@ -53,7 +54,7 @@ from modal_training_gym.train_recipes.miles_recipe.recipe import (
     CHECKPOINTS_PATH,
     DATA_PATH,
     HF_CACHE_PATH,
-    MilesConfig,
+    MilesRecipe,
 )
 from modal_training_gym.common.patches import encode_patch
 from modal_training_gym.frameworks.miles.modal_helpers.utils import (
@@ -73,7 +74,7 @@ _MILES_PATCHES = Path(__file__).parent / "modal_helpers" / "patches"
 _PATCH_SGLANG_ABORT_B64 = encode_patch("patch_sglang_abort", _MILES_PATCHES)
 
 
-def _build_miles_base_image(miles: MilesConfig) -> Image:
+def _build_miles_base_image(miles: MilesRecipe) -> Image:
     image = (
         Image.from_registry(miles.docker_image)
         .entrypoint([])
@@ -92,7 +93,7 @@ def _build_miles_base_image(miles: MilesConfig) -> Image:
 def build_miles_app(
     *,
     training_run_id: str,
-    miles: MilesConfig,
+    miles: MilesRecipe,
     model: ModelConfig,
     dataset: DatasetConfig,
     checkpoint: Checkpoint | None = None,
@@ -142,12 +143,12 @@ def build_miles_app(
 
     def _set_custom_config_value(key: str, value: str) -> None:
         cfg = (
-            dict(miles.custom_config_path or {})
-            if isinstance(miles.custom_config_path, dict)
+            dict(miles.extra_config or {})
+            if isinstance(miles.extra_config, dict)
             else {}
         )
         cfg[key] = value
-        miles.custom_config_path = cfg
+        miles.extra_config = cfg
 
     def _ship_callable(
         fn: Any,
@@ -164,6 +165,9 @@ def build_miles_app(
             set_path=set_path,
         )
 
+    # rm/generate paths live in the YAML custom-config; Miles reads the rest off
+    # dedicated --<name>-path flags, so those resolve back onto the field itself
+    # and MilesRecipe._fields emits them.
     _ship_callable(
         miles.custom_rm_function,
         fallback_name="custom_rm",
@@ -178,6 +182,24 @@ def build_miles_app(
     )
     miles.custom_rm_function = None
     miles.custom_generate_function = None
+
+    for attr, fallback_name in (
+        ("custom_reward_post_process_function", "custom_reward_post_process"),
+        ("rollout_function", "rollout_function"),
+        ("custom_rollout_log_function", "custom_rollout_log"),
+        ("custom_eval_rollout_log_function", "custom_eval_rollout_log"),
+        ("custom_megatron_before_log_prob_hook", "before_log_prob_hook"),
+        ("custom_megatron_before_train_step_hook", "before_train_step_hook"),
+    ):
+        value = getattr(miles, attr)
+        # A str is already an import path the user vouches for — nothing to ship.
+        if not callable(value):
+            continue
+        _ship_callable(
+            value,
+            fallback_name=fallback_name,
+            set_path=lambda path, attr=attr: object.__setattr__(miles, attr, path),
+        )
 
     hf_cache_volume = Volume.from_name("huggingface-cache", create_if_missing=True)
     data_volume = Volume.from_name(f"{volume_prefix}-data", create_if_missing=True)
@@ -214,7 +236,7 @@ def build_miles_app(
             checkpoints_mount_path: checkpoints_volume,
         },
         timeout=4 * 60 * 60,
-        secrets=hf_secrets(),
+        secrets=[*hf_secrets(), *proxy_auth_secrets()],
         serialized=True,
         name="download",
     )
@@ -246,7 +268,7 @@ def build_miles_app(
         name="prepare_dataset",
     )
     def prepare_dataset():
-        run_prepare_dataset(dataset, data_volume, MilesConfig._resolve_data_paths)
+        run_prepare_dataset(dataset, data_volume, MilesRecipe._resolve_data_paths)
 
     convert_nnodes = get_checkpoint_conversion_policy(miles, model=model)[0]
     convert_multi_node = convert_nnodes > 1
@@ -258,7 +280,7 @@ def build_miles_app(
             checkpoints_mount_path: checkpoints_volume,
         },
         timeout=60 * 60,
-        secrets=hf_secrets(),
+        secrets=[*hf_secrets(), *proxy_auth_secrets()],
         serialized=True,
         name="resolve_checkpoint",
     )
@@ -313,6 +335,7 @@ def build_miles_app(
         gpu=gpu_spec,
         volumes=all_volumes,
         timeout=4 * 60 * 60,
+        secrets=proxy_auth_secrets() or None,
         experimental_options={"efa_enabled": True} if convert_multi_node else {},
         serialized=True,
         name="convert_checkpoint",
@@ -471,8 +494,7 @@ def build_miles_app(
                 "model": {"model_name": model.model_name} if model else {},
                 "recipe": {
                     "gpu_type": miles.gpu_type,
-                    "actor_num_nodes": miles.actor_num_nodes,
-                    "actor_num_gpus_per_node": miles.actor_num_gpus_per_node,
+                    **serialize_recipe_params(miles, dataset=dataset, model=model),
                 },
                 "wandb": (
                     {
@@ -552,7 +574,7 @@ def build_miles_app(
             await checkpoints_volume.commit.aio()
 
             await _set_framework_status(MilesStatus.PREPARE_DATASET)
-            prompt_data, eval_paths = MilesConfig._resolve_data_paths(dataset)
+            prompt_data, eval_paths = MilesRecipe._resolve_data_paths(dataset)
             needs_prepare = not os.path.exists(prompt_data)
             if dataset.always_prepare and os.path.exists(prompt_data):
                 data_dir = os.path.dirname(prompt_data)

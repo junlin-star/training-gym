@@ -24,7 +24,6 @@ import time
 from pathlib import Path, PurePosixPath
 from typing import Any
 from collections.abc import Callable, Mapping
-from enum import Enum
 from modal import App, Dict as ModalDict, Image, Secret, Volume, Retries
 
 from modal_training_gym.common import hf_secrets, proxy_auth_secrets
@@ -61,6 +60,12 @@ from modal_training_gym.common.launcher_helpers import (
     run_download_phase,
     run_prepare_dataset,
     ship_callable,
+)
+from modal_training_gym.common.launcher_utils import (
+    is_sensitive_recipe_field,
+    serialize_recipe_param_value,
+    serialize_recipe_params,
+    serialize_recipe_value,
 )
 from modal_training_gym.common.wandb import WandbConfig
 from modal_training_gym.common.status import SlimeStatus
@@ -238,59 +243,12 @@ def _checkpoint_conversion_cache_status(
     return "hit", stored_config
 
 
-def _serialize_recipe_value(value: Any) -> Any:
-    if value is None or isinstance(value, str | int | float | bool):
-        return value
-    if isinstance(value, Enum):
-        return value.value
-    if isinstance(value, Path | PurePosixPath):
-        return str(value)
-    if isinstance(value, dict):
-        return {str(k): _serialize_recipe_value(v) for k, v in value.items()}
-    if isinstance(value, list | tuple | set):
-        return [_serialize_recipe_value(v) for v in value]
-    if callable(value):
-        module = getattr(value, "__module__", "")
-        name = getattr(value, "__qualname__", getattr(value, "__name__", ""))
-        return f"{module}.{name}" if module and name else repr(value)
-    return repr(value)
-
-
-def _is_sensitive_recipe_field(name: str) -> bool:
-    normalized = name.lower()
-    if normalized.endswith("token_id") or normalized.endswith("token_ids"):
-        return False
-    return (
-        any(
-            marker in normalized
-            for marker in ("api_key", "access_key", "secret", "password", "token")
-        )
-        or normalized == "wandb_key"
-    )
-
-
-def _serialize_slime_param_value(name: str, value: Any) -> Any:
-    if _is_sensitive_recipe_field(name):
-        return "[redacted]" if value not in (None, "", False) else value
-    if isinstance(value, dict):
-        return {
-            str(k): _serialize_slime_param_value(str(k), v) for k, v in value.items()
-        }
-    if isinstance(value, list | tuple | set):
-        return [_serialize_slime_param_value(name, v) for v in value]
-    return _serialize_recipe_value(value)
-
-
-def _serialize_slime_params(
-    recipe: SlimeRecipe,
-    *,
-    dataset: DatasetConfig | None = None,
-    model: ModelConfig | None = None,
-) -> dict[str, Any]:
-    return {
-        key: _serialize_slime_param_value(key, value)
-        for key, value in recipe._fields(dataset=dataset, model=model).items()
-    }
+# Framework-agnostic implementations live in common.launcher_utils; these keep the
+# historical private names used elsewhere in this module.
+_serialize_recipe_value = serialize_recipe_value
+_is_sensitive_recipe_field = is_sensitive_recipe_field
+_serialize_slime_param_value = serialize_recipe_param_value
+_serialize_slime_params = serialize_recipe_params
 
 
 def _preflight_wandb(wandb_cfg: WandbConfig) -> str:
@@ -701,7 +659,7 @@ def build_slime_app(
             checkpoints_mount_path: checkpoints_volume,
         },
         timeout=6 * 60 * 60,
-        secrets=hf_secrets(),
+        secrets=[*hf_secrets(), *proxy_auth_secrets()],
         serialized=True,
         name="download",
     )
@@ -739,7 +697,7 @@ def build_slime_app(
             checkpoints_mount_path: checkpoints_volume,
         },
         timeout=60 * 60,
-        secrets=hf_secrets(),
+        secrets=[*hf_secrets(), *proxy_auth_secrets()],
         serialized=True,
         name="resolve_checkpoint",
     )
@@ -820,6 +778,7 @@ def build_slime_app(
         region=slime.region,
         volumes=all_volumes,
         timeout=4 * 60 * 60,
+        secrets=proxy_auth_secrets() or None,
         experimental_options={"efa_enabled": True},
         serialized=True,
         name="convert_checkpoint",

@@ -7,10 +7,8 @@ it uses the local ``dashboards/frontend`` directory instead.
 
 from __future__ import annotations
 
-import ast
 import asyncio
 import os
-import re
 import secrets as _secrets
 import time
 from pathlib import Path
@@ -35,6 +33,10 @@ from starlette.requests import Request
 # Used as endpoint parameter annotations, so — like ``Request`` above — these
 # must resolve from this module's globals.
 from modal_training_gym.common.advantage_distribution import AdvantageDistribution
+from modal_training_gym.common.config import (
+    DASHBOARD_PROXY_AUTH_PATH,
+    dashboard_requires_proxy_auth,
+)
 from modal_training_gym.common.run import FrameworkStatusUpdate, TrainingRun
 from modal_training_gym.common.run_list import (
     filter_run_summaries,
@@ -50,6 +52,7 @@ from modal_training_gym.common.time import parse_time as _parse_log_time
 from modal_training_gym.common.training_rollout import (
     TrainingRolloutResult,
     TrainingRolloutSummary,
+    _apply_parsed,
 )
 
 SummaryLoader = Callable[[], Awaitable[list[JsonDict]]]
@@ -66,6 +69,8 @@ class LogEntry(TypedDict):
 
 REPO_URL = "https://github.com/modal-projects/training-gym.git"
 REPO_BRANCH = "main"
+
+DASHBOARD_REQUIRES_PROXY_AUTH_ENV_KEY = "DASHBOARD_REQUIRES_PROXY_AUTH"
 
 _repo_frontend = Path(__file__).resolve().parents[1] / "dashboards" / "frontend"
 _has_local_frontend = _repo_frontend.is_dir()
@@ -96,9 +101,17 @@ def _build_image() -> modal.Image:
             "rm -rf /tmp/training-gym",
         )
 
-    return base.run_commands(
-        "cd /app/frontend && npm install && npm run build",
-    ).add_local_python_source("modal_training_gym", copy=True)
+    return (
+        base.run_commands("cd /app/frontend && npm install && npm run build")
+        .add_local_python_source("modal_training_gym", copy=True)
+        .env(
+            {
+                DASHBOARD_REQUIRES_PROXY_AUTH_ENV_KEY: "true"
+                if dashboard_requires_proxy_auth()
+                else "false"
+            }
+        )
+    )
 
 
 image = _build_image()
@@ -117,11 +130,12 @@ MODAL_CREDS_SECRET_NAME = "_training-gym-modal-creds"
 # Set a real value via ``training-gym set-password``.
 DASHBOARD_PASSWORD_SECRET_NAME = "_training-gym-dashboard-password"
 
-# Write endpoints authenticated by their own per-run bearer token. They're
-# exempt from Basic Auth so launchers (which send ``Authorization: Bearer``)
-# keep working even when a dashboard password is set.
+# Routes that must bypass Basic Auth. Write endpoints authenticate with their
+# own per-run bearer token; the proxy-auth status route must report only the
+# Modal-layer setting, independent of dashboard password protection.
 PASSWORD_EXEMPT_PATHS = frozenset(
     {
+        DASHBOARD_PROXY_AUTH_PATH,
         "/api/framework-status",
         "/api/training-rollouts",
         "/api/advantage-distributions",
@@ -326,14 +340,19 @@ def _run_compact_sync() -> None:
         compact_summary_store(summary_store)
 
 
-@app.function(schedule=modal.Cron("*/30 * * * *"))
+@app.function(schedule=modal.Cron("*/30 * * * *"), retries=3, timeout=1800)
 def compact_summaries() -> None:
     """Scheduled compaction of summary stores (every 30 min)."""
     _run_compact_sync()
     print("Compaction complete.")
 
 
-@app.function(schedule=modal.Cron("*/30 * * * *"), secrets=_function_secrets())
+@app.function(
+    schedule=modal.Cron("*/30 * * * *"),
+    secrets=_function_secrets(),
+    retries=3,
+    timeout=1800,
+)
 def reconcile() -> None:
     """Reconcile orphaned training runs and deployments every 30 minutes."""
     from modal_training_gym.common.reconcile import reconcile as _reconcile
@@ -358,7 +377,7 @@ def reconcile() -> None:
     min_containers=1,
     secrets=_function_secrets(),
 )
-@modal.asgi_app()
+@modal.asgi_app(requires_proxy_auth=dashboard_requires_proxy_auth())
 def fastapi_app():
     import base64
     import binascii
@@ -413,6 +432,10 @@ def fastapi_app():
                     headers={"WWW-Authenticate": 'Basic realm="training-gym"'},
                 )
         return await call_next(request)
+
+    @web.get(DASHBOARD_PROXY_AUTH_PATH)
+    async def proxy_auth_status() -> bool:
+        return os.environ.get(DASHBOARD_REQUIRES_PROXY_AUTH_ENV_KEY, "false") == "true"
 
     cache_ttl_seconds = 30.0
     cache_keys = ("runs", "train_results", "evals", "deployments")
@@ -621,67 +644,6 @@ def fastapi_app():
     async def load_deployments() -> list[JsonDict]:
         return await load_list_summary(MetadataStore.DEPLOYMENTS_SUMMARY)
 
-    # ── Response display ──────────────────────────────────────────────────
-    # Responses are parsed at write time (slime recorder for rollouts, the eval
-    # harness for evals) and stored as ``parsed_response``. Here we just surface
-    # that cleaned content for display, keeping the raw under ``raw_response``.
-    def _clean_prompt(text: str) -> str:
-        """Make a chat-templated prompt readable for display.
-
-        Dataset prompts often arrive as a chat template wrapping a Python repr
-        of the messages list (e.g. ``<|im_start|>user\\n[{'content': '...',
-        'role': 'user'}]<|im_end|>...``) plus a leaked reference/assistant turn.
-        Pull the message content out and drop the template scaffolding; fall
-        back to stripping special tokens when there's no messages repr.
-        """
-        start, end = text.find("[{"), text.rfind("}]")
-        if start != -1 and end > start:
-            try:
-                data = ast.literal_eval(text[start : end + 2])
-                if isinstance(data, list):
-                    parts = [
-                        str(m["content"])
-                        for m in data
-                        if isinstance(m, dict) and m.get("content")
-                    ]
-                    if parts:
-                        return "\n\n".join(parts).strip()
-            except (ValueError, SyntaxError):
-                pass
-        cleaned = re.sub(r"<\|(?:turn|channel)>|<(?:turn|channel)\|>", "", text)
-        cleaned = re.sub(r"<(?:bos|eos)>", "", cleaned)
-        cleaned = re.sub(r"<\|[^|<>]*\|>", "", cleaned)
-        cleaned = re.sub(r"</?think>", "", cleaned)
-        # Drop standalone role-header lines left behind by the template.
-        cleaned = re.sub(
-            r"(?m)^(system|user|assistant|model|thought)\s*$\n?", "", cleaned
-        )
-        return re.sub(r"\n{3,}", "\n\n", cleaned).strip()
-
-    def _apply_parsed(rows: object) -> None:
-        if not isinstance(rows, list):
-            return
-        for row in rows:
-            if not isinstance(row, dict):
-                continue
-            parsed = row.get("parsed_response")
-            if isinstance(parsed, dict) and isinstance(parsed.get("content"), str):
-                raw = row.get("response")
-                if isinstance(raw, str):
-                    row["raw_response"] = raw
-                row["response"] = parsed.get("content") or ""
-                if parsed.get("thinking"):
-                    row["thinking"] = parsed["thinking"]
-                if parsed.get("tool_calls"):
-                    row["tool_calls"] = parsed["tool_calls"]
-            # Clean the (chat-templated) prompt for display, keeping the raw.
-            raw_prompt = row.get("prompt")
-            if isinstance(raw_prompt, str) and raw_prompt:
-                cleaned_prompt = _clean_prompt(raw_prompt)
-                if cleaned_prompt and cleaned_prompt != raw_prompt:
-                    row["raw_prompt"] = raw_prompt
-                    row["prompt"] = cleaned_prompt
-
     def _bearer_token(authorization: str | None) -> str:
         scheme, _, token = (authorization or "").partition(" ")
         if scheme.lower() != "bearer":
@@ -807,7 +769,7 @@ def fastapi_app():
         await _require_framework_status_token(result.training_run_id, authorization)
         run = await _get_run_or_404(result.training_run_id)
 
-        await result.save(is_async=True)
+        await run_in_threadpool(result.save)
         run.record_latest_rollout(result)
         await run.save(is_async=True)
         invalidate_cache("runs")
@@ -837,6 +799,7 @@ def fastapi_app():
                 status_code=404,
                 detail=f"Rollout {rollout_id} for run {training_run_id!r} not found",
             )
+
         if isinstance(data, dict):
             _apply_parsed(data.get("samples"))
         return JSONResponse(data)
