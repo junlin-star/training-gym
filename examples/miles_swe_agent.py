@@ -40,12 +40,16 @@ class SWEAgentDataset(DatasetConfig):
 
     The ``metadata`` dict carries ``instance_id`` (which Harbor maps to a task
     directory) plus the original sample fields and ``agent_name``.
+
+    This example does not define a held-out eval split, so tell the launcher
+    not to materialize a companion ``eval.*`` file.
     """
 
     input_key: str = "prompt"
     label_key: str = ""
     apply_chat_template: bool = False
     output_format: str = "jsonl"
+    writes_eval_paths: bool = False
 
     hf_repo: str = "SWE-Gym/SWE-Gym"
     hf_split: str = "train"
@@ -190,13 +194,9 @@ recipe = MilesRecipe(
         "CUDA_DEVICE_MAX_CONNECTIONS": "1",
         "NCCL_NVLS_ENABLE": "1",
         "MILES_EXPERIMENTAL_ROLLOUT_REFACTOR": "1",
-        "AGENT_SERVER_URL": os.environ.get(
-            "AGENT_SERVER_URL", "http://<agent-server>:30000"
-        ),
+        "AGENT_SERVER_URL": os.environ.get("AGENT_SERVER_URL", ""),
         "AGENT_MODEL_NAME": os.environ.get("AGENT_MODEL_NAME", "model"),
-        "MILES_ROUTER_EXTERNAL_HOST": os.environ.get(
-            "MILES_ROUTER_EXTERNAL_HOST", "<router-host>"
-        ),
+        "MILES_ROUTER_EXTERNAL_HOST": os.environ.get("MILES_ROUTER_EXTERNAL_HOST", ""),
         "HARBOR_TASKS_DIR": os.environ.get("HARBOR_TASKS_DIR", "/root/harbor_tasks"),
     },
     extra_config={
@@ -213,7 +213,22 @@ recipe = MilesRecipe(
 )
 
 
+def _require_env(name: str) -> str:
+    value = os.environ.get(name, "").strip()
+    if not value:
+        raise TrainingGymConfigError(
+            f"{name} must be set before running this example. "
+            "See the Prerequisites section in the file docstring."
+        )
+    return value
+
+
 def main() -> None:
+    recipe.environment["AGENT_SERVER_URL"] = _require_env("AGENT_SERVER_URL")
+    recipe.environment["MILES_ROUTER_EXTERNAL_HOST"] = _require_env(
+        "MILES_ROUTER_EXTERNAL_HOST"
+    )
+
     result = TrainConfig(
         model=model,
         dataset=dataset,

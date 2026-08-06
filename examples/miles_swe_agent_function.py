@@ -10,7 +10,7 @@ import logging
 import os
 import socket
 from typing import Any
-from urllib.parse import urlparse, urlsplit, urlunparse
+from urllib.parse import urlparse, urlunparse
 
 import httpx
 
@@ -36,6 +36,18 @@ def _get_agent_server_client() -> httpx.AsyncClient:
             timeout=None,
         )
     return _agent_server_client
+
+
+def _rewrite_host_port(original: str, external_host: str) -> str:
+    """Replace the host in a ``host:port`` string while preserving the port."""
+    if ":" in original:
+        host, _, port_str = original.rpartition(":")
+        try:
+            port = int(port_str)
+            return f"{external_host}:{port}"
+        except ValueError:
+            return external_host
+    return external_host
 
 
 async def _post_agent_server(url: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -85,10 +97,8 @@ async def run(
         request["max_seq_len"] = int(max_seq_len)
 
     session_server_id = metadata.get("session_server_id")
-    if session_server_id is not None:
-        if external_host:
-            port = urlsplit(f"http://{session_server_id}").port
-            session_server_id = f"{external_host}:{port}"
+    if session_server_id is not None and external_host:
+        session_server_id = _rewrite_host_port(session_server_id, external_host)
         request["session_server_id"] = session_server_id
 
     session_server_instance_id = metadata.get("session_server_instance_id")
@@ -105,7 +115,7 @@ async def run(
         return None
     except asyncio.CancelledError:
         logger.warning("Agent server call cancelled")
-        return None
+        raise
     except Exception as e:
         logger.error(f"Agent server call failed: {e}")
         return None
