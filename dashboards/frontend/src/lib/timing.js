@@ -139,6 +139,7 @@ function collect(timings) {
           ? parsedId
           : null;
     for (const [role, lane] of Object.entries(lanes?.roles || {})) {
+      if (lane?.lane_start_unix_s == null) continue;
       const laneStart = Number(lane?.lane_start_unix_s);
       if (!Number.isFinite(laneStart)) continue;
       for (const [name, phase] of Object.entries(lane?.phases || {})) {
