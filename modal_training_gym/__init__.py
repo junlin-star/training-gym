@@ -18,7 +18,7 @@ _EXPORTS = {
     "HarborEval": ("modal_training_gym.common.eval", "HarborEval"),
     "Gemma4_26B_A4B": ("modal_training_gym.common.models", "Gemma4_26B_A4B"),
     "Gemma4_26B_A4B_Recipe": (
-        "modal_training_gym.train_recipes.slime_recipe",
+        "modal_training_gym.train_recipes.miles_recipe",
         "Gemma4_26B_A4B_Recipe",
     ),
     "GLM_4_7": ("modal_training_gym.common.models", "GLM_4_7"),

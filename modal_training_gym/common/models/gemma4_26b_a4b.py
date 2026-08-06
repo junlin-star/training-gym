@@ -12,18 +12,20 @@ class Gemma4_26B_A4B(HFModelConfiguration):
     Downloads from ``google/gemma-4-26B-A4B-it`` on HuggingFace.
 
     The checkpoint is a ``Gemma4ForConditionalGeneration``: the MoE decoder described
-    below plus a 27-layer vision tower. ``Gemma4_26B_A4B_Recipe`` trains the decoder
-    alone on text data and the whole vision-language model on image data; the
-    architecture here describes the decoder either way.
+    below plus a 27-layer vision tower. ``Gemma4_26B_A4B_Recipe`` trains it through
+    the HF<->Megatron bridge on either text or image data; the architecture here
+    describes the decoder either way.
     """
 
     model_name = "google/gemma-4-26B-A4B-it"
     response_parser = staticmethod(parse_gemma4_response)
 
     architecture = ModelArchitecture(
-        # text_config from config.json. The layer spec comes from slime's model script
-        # (text) or the megatron-bridge provider (vision), so these mainly drive
-        # slime's arg validation and FLOPs accounting.
+        # text_config from config.json. Informational: the recipe sets
+        # ``miles_model_script``, so miles takes the real values from
+        # ``scripts/models/gemma-4-26b-a4b-it.sh`` and none of these are emitted as
+        # flags. They still drive the num_experts/expert-parallel validator and
+        # FLOPs accounting, so keep them in step with that script.
         num_layers=30,
         hidden_size=2816,
         ffn_hidden_size=2112,
@@ -46,6 +48,8 @@ class Gemma4_26B_A4B(HFModelConfiguration):
         moe_router_dtype="fp32",
         moe_aux_loss_coeff=0.0,
         use_rotary_position_embeddings=True,
-        rotary_base=10000,
+        # Gemma-4 nests rope_theta per attention type; the miles model script takes
+        # the global-attention value.
+        rotary_base=1000000,
         rotary_percent=1.0,
     )

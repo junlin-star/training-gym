@@ -55,6 +55,7 @@ _MILES_SKIP = {
     "rollout_function",
     "custom_megatron_before_log_prob_hook",
     "custom_megatron_before_train_step_hook",
+    "train_function_kwargs",
 }
 
 YAML_CONFIG_FIELDS = ("eval_config", "extra_config", "sglang_config")
@@ -427,6 +428,9 @@ class MilesRecipe(BaseTrainRecipe):
     image_env: dict[str, str] = field(default_factory=dict)
     local_miles: str | None = None
     patch_files: list[str] = field(default_factory=list)
+    # Extra kwargs for the train Modal Function. Supports "ephemeral_disk" (MiB),
+    # "secrets", and "experimental_options"; see the miles launcher.
+    train_function_kwargs: dict[str, Any] = field(default_factory=dict)
 
     environment: dict = field(
         default_factory=lambda: {
@@ -462,10 +466,13 @@ class MilesRecipe(BaseTrainRecipe):
     # ── Fault tolerance and health checks ───────────────────────────────────
     # Miles' own argparse default; slime defaults this on instead.
     use_fault_tolerance: bool = False
-    # Miles' own argparse defaults (slime uses 30/30/300).
     rollout_health_check_interval: int = 30
     rollout_health_check_timeout: int = 30
-    rollout_health_check_first_wait: int = 0
+    # Miles' own argparse default is 0, so the monitor probes /health_generate
+    # during rollout-0's cold Triton/deepgemm JIT compile; the busy scheduler
+    # returns 503 and the engine is killed before it ever serves. Mirrors the
+    # slime defaults (see "Default rollout_health_check_first_wait to 300s").
+    rollout_health_check_first_wait: int = 300
 
     # ── Weight sync ─────────────────────────────────────────────────────────
     update_weight_buffer_size: int | None = None
@@ -597,6 +604,26 @@ class MilesRecipe(BaseTrainRecipe):
     def _validate_gpu_allocation(self) -> "MilesRecipe":
         resolve_gpu_allocation(self)
         return self
+
+    @model_validator(mode="wrap")
+    @classmethod
+    def _capture_explicit_fields(cls, data: Any, handler: Any) -> "MilesRecipe":
+        """Record which fields the caller passed, for ``_for_dataset``.
+
+        Mirrors ``SlimeRecipe``: pydantic tracks constructor arguments for models
+        but not for dataclasses, and ``explicit_fields`` (on ``BaseTrainRecipe``)
+        needs them to tell a caller's choice from a coincidentally equal default.
+        """
+        import dataclasses
+
+        names: set[str] = set()
+        if args := getattr(data, "args", None):
+            names.update(f.name for f in dataclasses.fields(cls)[: len(args)])
+        if kwargs := getattr(data, "kwargs", None):
+            names.update(kwargs)
+        recipe = handler(data)
+        object.__setattr__(recipe, "_explicit_fields", frozenset(names))
+        return recipe
 
     # ── Container → miles flag converters ────────────────────────────────────
 

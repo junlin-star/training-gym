@@ -1,5 +1,4 @@
 import dataclasses
-import functools
 from collections.abc import Callable
 from dataclasses import field
 from typing import Any, ClassVar
@@ -86,21 +85,6 @@ _HOOK_WRAPPER_PATHS = {
     "custom_megatron_before_log_prob_hook": "modal_training_gym.frameworks.slime.phase_reporting.before_log_prob_hook",
     "custom_megatron_before_train_step_hook": "modal_training_gym.frameworks.slime.phase_reporting.before_train_step_hook",
 }
-
-
-@functools.cache
-def _declared_below(cls: type) -> frozenset[str]:
-    """Fields declared by subclasses below the recipe that owns ``_for_dataset``.
-
-    Those are the caller's own config, so they count as chosen. The fields that
-    recipe declares itself are the defaults ``_for_dataset`` exists to override.
-    """
-    names: set[str] = set()
-    for klass in cls.__mro__:
-        if "_for_dataset" in vars(klass):
-            break
-        names |= set(vars(klass).get("__annotations__", {}))
-    return frozenset(names)
 
 
 @dataclass(config=ConfigDict(extra="forbid", arbitrary_types_allowed=True))
@@ -673,25 +657,6 @@ class SlimeRecipe(BaseTrainRecipe):
 
     _SKIP_FIELDS: ClassVar[frozenset[str]] = frozenset(_SLIME_SKIP)
 
-    @property
-    def explicit_fields(self) -> frozenset[str]:
-        """Names of the fields the caller chose.
-
-        ``_for_dataset`` needs this to tell a caller's choice from a default, which
-        the value alone cannot: an explicit ``num_rollout=2`` is indistinguishable
-        from an unset field defaulting to 2. Pydantic records constructor arguments
-        for models but not for dataclasses, hence the validator below.
-        """
-        return getattr(self, "_explicit_fields", frozenset()) | _declared_below(
-            type(self)
-        )
-
-    def __setattr__(self, name: str, value: Any) -> None:
-        """Record post-construction assignment, so a swept field counts as chosen."""
-        super().__setattr__(name, value)
-        if not name.startswith("_"):
-            object.__setattr__(self, "_explicit_fields", self.explicit_fields | {name})
-
     @model_validator(mode="wrap")
     @classmethod
     def _capture_explicit_fields(cls, data: Any, handler: Any) -> "SlimeRecipe":
@@ -849,15 +814,6 @@ class SlimeRecipe(BaseTrainRecipe):
 
     # ── Internal ──────────────────────────────────────────────────────────────
 
-    def _for_dataset(self, dataset: "DatasetConfig | None") -> "SlimeRecipe":
-        """This recipe with its dataset-dependent fields filled in.
-
-        A preset for a model whose config depends on the data's modality (Gemma-4 is
-        one checkpoint with a text-only and a vision-language mode) overrides this.
-        Every other recipe is already complete and returns itself.
-        """
-        return self
-
     def _fields(
         self,
         dataset: "DatasetConfig | None" = None,
@@ -897,9 +853,6 @@ class SlimeRecipe(BaseTrainRecipe):
 
     @classmethod
     def get_base_recipe(cls, model_config: ModelConfig) -> "SlimeRecipe":
-        from modal_training_gym.train_recipes.slime_recipe.gemma4_26b_a4b import (
-            Gemma4_26B_A4B_Recipe,
-        )
         from modal_training_gym.train_recipes.slime_recipe.glm_4_7 import (
             GLM_4_7_Recipe,
         )
@@ -929,8 +882,6 @@ class SlimeRecipe(BaseTrainRecipe):
             Qwen3_VL_8b_Recipe,
         )
 
-        if model_config.model_name == "google/gemma-4-26B-A4B-it":
-            return Gemma4_26B_A4B_Recipe()
         if model_config.model_name == "Qwen/Qwen3-VL-8B-Instruct":
             return Qwen3_VL_8b_Recipe()
         if model_config.model_name == "Qwen/Qwen3-ASR-1.7B":

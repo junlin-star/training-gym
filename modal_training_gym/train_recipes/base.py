@@ -1,4 +1,5 @@
 import dataclasses as _dc
+import functools
 import json
 import os
 from abc import ABC
@@ -37,6 +38,31 @@ def carry_explicit_fields(source: Any, rebuilt: Any) -> Any:
     if explicit is not None:
         object.__setattr__(rebuilt, "_explicit_fields", frozenset(explicit))
     return rebuilt
+
+
+@functools.cache
+def _declared_below(cls: type) -> frozenset[str]:
+    """Fields declared by subclasses below the recipe that owns ``_for_dataset``.
+
+    Those are the caller's own config, so they count as chosen. The walk stops at
+    whichever comes first in the MRO:
+
+    * the recipe that defines ``_for_dataset`` (a modality-aware preset such as
+      ``Gemma4_26B_A4B_Recipe``) — the fields it declares are precisely the
+      text-mode defaults that ``_for_dataset`` exists to override, so counting
+      them as caller-set would make vision mode a silent no-op; or
+    * the framework base recipe (``SlimeRecipe`` / ``MilesRecipe``, i.e. the
+      direct subclass of ``BaseTrainRecipe``), for every ordinary recipe — whose
+      fields are framework defaults, not the caller's choice.
+    """
+    names: set[str] = set()
+    for klass in cls.__mro__:
+        if klass is BaseTrainRecipe or BaseTrainRecipe in klass.__bases__:
+            break
+        if "_for_dataset" in vars(klass):
+            break
+        names |= set(vars(klass).get("__annotations__", {}))
+    return frozenset(names)
 
 
 class RecipeType(Enum):
@@ -106,6 +132,41 @@ class BaseTrainRecipe(ABC):
         slime) may instead raise ``TrainingGymConfigError`` for a model it has
         no preset for, rather than returning ``None``.
         """
+        return None
+
+    # ── Caller-set field tracking ─────────────────────────────────────────────
+
+    @property
+    def explicit_fields(self) -> frozenset[str]:
+        """Names of the fields the caller chose.
+
+        ``_for_dataset`` needs this to tell a caller's choice from a default, which
+        the value alone cannot: an explicit ``num_rollout=2`` is indistinguishable
+        from an unset field defaulting to 2. Pydantic records constructor arguments
+        for models but not for dataclasses, so each framework recipe installs a
+        ``_capture_explicit_fields`` wrap-validator that seeds ``_explicit_fields``.
+        """
+        return getattr(self, "_explicit_fields", frozenset()) | _declared_below(
+            type(self)
+        )
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        """Record post-construction assignment, so a swept field counts as chosen."""
+        super().__setattr__(name, value)
+        if not name.startswith("_"):
+            object.__setattr__(self, "_explicit_fields", self.explicit_fields | {name})
+
+    def _for_dataset(self, dataset: "DatasetConfig | None") -> "BaseTrainRecipe":
+        """This recipe with its dataset-dependent fields filled in.
+
+        A preset for a model whose config depends on the data's modality (Gemma-4 is
+        one checkpoint with a text-only and a vision-language mode) overrides this.
+        Every other recipe is already complete and returns itself.
+        """
+        return self
+
+    def validate_model_parallelism(self, model: "ModelConfig") -> None:
+        """Preflight the parallelism plan against the model. Overridden per framework."""
         return None
 
     # ── Container → framework flag converters ────────────────────────────────

@@ -422,25 +422,45 @@ def build_miles_app(
 
     _multi_node = miles.total_nodes > 1
 
+    train_secrets = [
+        *(
+            []
+            if miles.wandb is None
+            else [Secret.from_name(miles.wandb.modal_wandb_secret_name)]
+        ),
+        *proxy_auth_secrets(),
+    ]
+    train_experimental_options: dict[str, Any] = (
+        {"efa_enabled": True} if _multi_node else {}
+    )
+
+    train_function_kwargs = dict(miles.train_function_kwargs or {})
+    user_secrets = train_function_kwargs.pop("secrets", None)
+    if user_secrets is not None:
+        if not isinstance(user_secrets, (list, tuple)):
+            user_secrets = [user_secrets]
+        train_secrets.extend(user_secrets)
+    user_experimental_options = train_function_kwargs.pop("experimental_options", None)
+    if user_experimental_options is not None:
+        train_experimental_options.update(user_experimental_options)
+    train_ephemeral_disk = train_function_kwargs.pop("ephemeral_disk", None)
+    if train_function_kwargs:
+        unsupported = ", ".join(sorted(train_function_kwargs))
+        raise TypeError(f"Unsupported miles.train_function_kwargs keys: {unsupported}")
+
     @app.function(
         image=image,
         gpu=gpu_spec,
         memory=miles.memory,
+        ephemeral_disk=train_ephemeral_disk,
         cloud=miles.cloud,
         region=miles.region,
         volumes=all_volumes,
-        secrets=[
-            *(
-                []
-                if miles.wandb is None
-                else [Secret.from_name(miles.wandb.modal_wandb_secret_name)]
-            ),
-            *proxy_auth_secrets(),
-        ],
+        secrets=train_secrets,
         timeout=24 * 60 * 60,
         retries=Retries(max_retries=10, initial_delay=0.0),
         single_use_containers=True,
-        experimental_options={"efa_enabled": True} if _multi_node else {},
+        experimental_options=train_experimental_options,
         serialized=True,
         name="train",
     )

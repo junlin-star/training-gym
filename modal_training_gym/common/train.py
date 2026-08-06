@@ -422,6 +422,7 @@ class TrainConfig:
                 miles=_resolve_recipe(
                     self.model,
                     cast(MilesRecipe, self.recipe),
+                    self.dataset,
                     merge_model_recipe=self.merge_model_recipe,
                 ),
                 model=self.model,
