@@ -1,0 +1,124 @@
+"""Caller-set field tracking, and the vision-mode resolution that depends on it.
+
+``_for_dataset`` overrides only the fields the caller left alone, so anything that
+loses the record of what the caller chose turns vision mode into a blanket
+overwrite of their settings. The record is seeded by a pydantic wrap validator
+that mutates the instance ``handler(data)`` returns, which holds only because
+pydantic-core hands back the same ``self_instance`` it initialised -- an
+implementation detail worth pinning.
+"""
+
+import dataclasses as dc
+
+import pydantic.dataclasses as pdc
+import pytest
+from pydantic import ConfigDict
+
+from modal_training_gym.common.dataset import MultimodalDataset
+from modal_training_gym.train_recipes.base import carry_explicit_fields
+from modal_training_gym.train_recipes.miles_recipe import (
+    Gemma4_26B_A4B_Recipe,
+    MilesRecipe,
+)
+
+
+@pytest.fixture
+def image_dataset():
+    return MultimodalDataset(
+        modality="image",
+        rows=[{"prompt": "p", "media": ["data:image/png;base64,x"], "label": "1"}],
+    )
+
+
+def test_constructor_kwargs_are_recorded():
+    recipe = Gemma4_26B_A4B_Recipe(num_rollout=5)
+    assert "num_rollout" in recipe.explicit_fields
+    assert "rollout_temperature" not in recipe.explicit_fields
+
+
+def test_caller_value_survives_vision_mode(image_dataset):
+    """An explicit value must win over the vision default, even when they differ."""
+    resolved = Gemma4_26B_A4B_Recipe(num_rollout=5)._for_dataset(image_dataset)
+    assert resolved.num_rollout == 5
+    # ...while a field left alone still picks the vision default up.
+    assert resolved.rollout_batch_size == 8
+
+
+def test_vision_mode_applies_when_nothing_was_set(image_dataset):
+    resolved = Gemma4_26B_A4B_Recipe()._for_dataset(image_dataset)
+    assert resolved.num_rollout == 15
+    assert resolved.rollout_top_k == 64
+
+
+def test_text_dataset_leaves_recipe_alone():
+    recipe = Gemma4_26B_A4B_Recipe()
+    assert recipe._for_dataset(None) is recipe
+
+
+def test_post_construction_assignment_counts_as_chosen(image_dataset):
+    """A sweep sets values with setattr; they must not be treated as defaults."""
+    recipe = Gemma4_26B_A4B_Recipe()
+    recipe.rollout_temperature = 0.3
+    assert "rollout_temperature" in recipe.explicit_fields
+    assert recipe._for_dataset(image_dataset).rollout_temperature == 0.3
+
+
+def test_swept_value_survives_a_revalidating_rebuild(image_dataset):
+    """TrainingGroup mutates then rebuilds; the rebuild must keep the override.
+
+    Rebuilding as ``type(r)(**all_fields)`` passes every field as a kwarg, which
+    would mark them all explicit and make vision mode a no-op -- hence
+    ``carry_explicit_fields`` restoring the real set.
+    """
+    recipe = Gemma4_26B_A4B_Recipe()
+    recipe.rollout_temperature = 0.3
+    values = {f.name: getattr(recipe, f.name) for f in dc.fields(recipe) if f.init}
+    rebuilt = carry_explicit_fields(recipe, type(recipe)(**values))
+
+    assert "rollout_temperature" in rebuilt.explicit_fields
+    assert rebuilt._for_dataset(image_dataset).rollout_temperature == 0.3
+    # A field nobody touched still resolves to the vision default.
+    assert rebuilt._for_dataset(image_dataset).num_rollout == 15
+
+
+def test_subclass_declared_fields_count_as_chosen(image_dataset):
+    """Fields declared in a subclass body are that author's config, not defaults."""
+
+    @pdc.dataclass(config=ConfigDict(extra="forbid", arbitrary_types_allowed=True))
+    class Custom(Gemma4_26B_A4B_Recipe):
+        num_rollout: int = 5
+
+    assert "num_rollout" in Custom().explicit_fields
+    assert Custom()._for_dataset(image_dataset).num_rollout == 5
+
+
+def test_recipe_own_fields_are_not_treated_as_caller_choices():
+    """The preset's own declarations are the defaults vision mode overrides.
+
+    Counting them as chosen is the failure mode that silently disables vision
+    mode, so keep the walk stopping at the class that defines ``_for_dataset``.
+    """
+    recipe = Gemma4_26B_A4B_Recipe()
+    assert recipe.explicit_fields == frozenset()
+
+
+def test_gemma4_is_wired_into_the_preset_lookup():
+    from modal_training_gym.common.models import Gemma4_26B_A4B
+
+    preset = MilesRecipe.get_base_recipe(Gemma4_26B_A4B())
+    assert isinstance(preset, Gemma4_26B_A4B_Recipe)
+
+
+def test_image_patches_survive_caller_supplied_run_commands():
+    """The build-time patches are additive, not a default a caller can replace."""
+    recipe = Gemma4_26B_A4B_Recipe(image_run_commands=["pip install foo"])
+    patch_cmds = [c for c in recipe.image_run_commands if "base64 -d | python3" in c]
+
+    assert len(patch_cmds) == 2
+    assert recipe.image_run_commands[: len(patch_cmds)] == patch_cmds
+    assert "pip install foo" in recipe.image_run_commands
+    # Re-validating must not stack a second copy.
+    again = type(recipe)(
+        **{f.name: getattr(recipe, f.name) for f in dc.fields(recipe) if f.init}
+    )
+    assert len([c for c in again.image_run_commands if "base64 -d | python3" in c]) == 2

@@ -372,8 +372,14 @@
   function sampleToPayload(s, { inlineImage = false, refOnly = false } = {}) {
     let metadata = s.metadata || null;
     if (inlineImage && metadata?.image_ref && !metadata.image) {
-      const { image_ref, ...rest } = metadata;
-      metadata = { ...rest, image: sampleImage(s) };
+      // Only trade the ref for bytes if the lookup resolved; the carrier sample
+      // may not be loaded, and dropping the ref too would leave the download with
+      // no way to identify the screenshot at all.
+      const resolved = sampleImage(s);
+      if (resolved) {
+        const { image_ref, ...rest } = metadata;
+        metadata = { ...rest, image: resolved };
+      }
     } else if (refOnly && metadata?.image && metadata.image_ref) {
       // Bytes travel once in the payload's `images` map; keep only the ref here.
       const { image, ...rest } = metadata;
