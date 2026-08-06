@@ -51,6 +51,7 @@ from modal_training_gym.common.run_summary import (
 )
 from modal_training_gym.common.step_timing import (
     PROTOCOL as TIMING_PROTOCOL,
+    TIMING_CAPABILITY_PATH,
     RoleTimingRecord,
     legacy_run_to_records,
     load_run_async,
@@ -138,7 +139,7 @@ MODAL_CREDS_SECRET_NAME = "_training-gym-modal-creds"
 # Set a real value via ``training-gym set-password``.
 DASHBOARD_PASSWORD_SECRET_NAME = "_training-gym-dashboard-password"
 
-# Routes that must bypass Basic Auth. Write endpoints authenticate with their
+# Routes that must bypass Basic Auth. These endpoints authenticate with their
 # own per-run bearer token; the proxy-auth status route must report only the
 # Modal-layer setting, independent of dashboard password protection.
 PASSWORD_EXEMPT_PATHS = frozenset(
@@ -147,6 +148,7 @@ PASSWORD_EXEMPT_PATHS = frozenset(
         "/api/framework-status",
         "/api/training-rollouts",
         "/api/advantage-distributions",
+        TIMING_CAPABILITY_PATH,
         "/api/timing-events",
     }
 )
@@ -882,10 +884,14 @@ def fastapi_app():
             )
         return JSONResponse(merged)
 
-    @web.get("/api/timing-events")
-    async def timing_events_capability():
-        """Determines if step timing code is available.
-        Unauthenticated, so a launcher can check it before allocating GPUs."""
+    @web.get(TIMING_CAPABILITY_PATH)
+    async def timing_events_capability(
+        training_run_id: str,
+        authorization: str | None = Header(default=None),
+    ):
+        """Determines if step timing code is available for a run."""
+        await _require_framework_status_token(training_run_id, authorization)
+        await _get_run_or_404(training_run_id)
         return JSONResponse({"protocol": TIMING_PROTOCOL})
 
     @web.post("/api/timing-events")
