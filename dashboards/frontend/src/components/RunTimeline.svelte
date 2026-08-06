@@ -26,8 +26,16 @@
   const GROUP_GAP_PX = 12;
   const STEP_GAP_PX = 8;
   const DETAIL_LEGEND = [
-    { label: "Forward/backward", color: "var(--color-c-dataviz-training-light)" },
-    { label: "Optimizer step", color: "var(--color-c-dataviz-primary-7)" },
+    {
+      label: "Forward/backward",
+      color:
+        "color-mix(in srgb, var(--color-c-dataviz-primary-1) 78%, var(--color-c-gray-02))",
+    },
+    {
+      label: "Optimizer step",
+      color:
+        "color-mix(in srgb, var(--color-c-dataviz-primary-1) 48%, var(--color-c-gray-02))",
+    },
   ];
 
   // What each wait is actually waiting for, in steps rather than futures.
@@ -202,7 +210,13 @@
 
   function displaySpans(row) {
     return [...row.spans]
-      .filter((bar) => !HIDDEN_PHASES.has(bar.name) && (showDetails || bar.depth === 0))
+      .filter(
+        (bar) =>
+          bar.kind !== "stall" &&
+          bar.kind !== "untracked" &&
+          !HIDDEN_PHASES.has(bar.name) &&
+          (showDetails || bar.depth === 0),
+      )
       .sort((a, b) => a.depth - b.depth || a.start - b.start || b.end - a.end);
   }
 </script>
@@ -221,10 +235,6 @@
             {CATEGORIES[key].label}
           </span>
         {/each}
-        <span class="legend-item">
-          <span class="swatch swatch-stall"></span>
-          stalled, waiting on somebody else
-        </span>
         {#if showDetails}
           {#each DETAIL_LEGEND as item (item.label)}
             <span class="legend-item legend-detail">
@@ -514,12 +524,6 @@
     height: 9px;
     border-radius: 2px;
     flex-shrink: 0;
-  }
-
-  .swatch-stall {
-    height: 2px;
-    background: var(--color-c-gray-30, #6a6a6a);
-    border-radius: 1px;
   }
 
   .controls {

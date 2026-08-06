@@ -4,11 +4,11 @@ const slot = (name) => `var(--color-c-dataviz-${name})`;
 // never seen slime should be able to tell "the GPUs are training" from "we are
 // moving weights around" from "nothing is happening" without a glossary.
 export const CATEGORIES = {
-  train: { label: "Train", color: slot("primary-7") },
-  generate: { label: "Rollout", color: slot("primary-2") },
-  transfer: { label: "Weight sync", color: slot("primary-4") },
+  train: { label: "Train", color: slot("primary-1") },
+  generate: { label: "Rollout", color: slot("primary-3") },
+  transfer: { label: "Weight sync", color: slot("primary-2") },
   checkpoint: { label: "Checkpoint", color: slot("primary-5") },
-  eval: { label: "Eval", color: slot("primary-3") },
+  eval: { label: "Eval", color: slot("primary-7") },
   idle: { label: "Waiting", color: "var(--color-c-gray-30)" },
 };
 
@@ -36,16 +36,19 @@ export const PHASE_CATEGORY = {
 
 export const PHASE_COLORS = {
   compute_log_probs:
-    "color-mix(in srgb, var(--color-c-dataviz-primary-7) 62%, var(--color-c-gray-02))",
-  forward_backward: "var(--color-c-dataviz-training-light)",
-  optimizer_step: slot("primary-7"),
+    "color-mix(in srgb, var(--color-c-dataviz-primary-1) 62%, var(--color-c-gray-02))",
+  forward_backward:
+    "color-mix(in srgb, var(--color-c-dataviz-primary-1) 78%, var(--color-c-gray-02))",
+  optimizer_step:
+    "color-mix(in srgb, var(--color-c-dataviz-primary-1) 48%, var(--color-c-gray-02))",
   reward:
-    "color-mix(in srgb, var(--color-c-dataviz-primary-2) 62%, var(--color-c-gray-02))",
+    "color-mix(in srgb, var(--color-c-dataviz-primary-3) 62%, var(--color-c-gray-02))",
   reward_batch:
-    "color-mix(in srgb, var(--color-c-dataviz-primary-2) 62%, var(--color-c-gray-02))",
+    "color-mix(in srgb, var(--color-c-dataviz-primary-3) 62%, var(--color-c-gray-02))",
   reward_post_process:
-    "color-mix(in srgb, var(--color-c-dataviz-primary-2) 62%, var(--color-c-gray-02))",
-  sample_generation: slot("primary-2"),
+    "color-mix(in srgb, var(--color-c-dataviz-primary-3) 62%, var(--color-c-gray-02))",
+  sample_generation:
+    "color-mix(in srgb, var(--color-c-dataviz-primary-3) 62%, var(--color-c-gray-02))",
 };
 
 export const TIMING_LABELS = {
@@ -353,6 +356,7 @@ function clipStalls(spans, async) {
 }
 
 function rowsOf(spans, async) {
+  if (!spans.length) return [];
   const driverSpans = spans.filter((span) => !async || span.role !== "rollout");
   if (!async) {
     return [
@@ -442,7 +446,10 @@ export function runTimeline(timings) {
     span.insideKey = span.parent ? span.parent.key : null;
   }
 
-  const rows = rowsOf(spans, async);
+  const visibleSpans = spans.filter(
+    (span) => span.kind !== "stall" && span.kind !== "untracked",
+  );
+  const rows = rowsOf(visibleSpans, async);
   const groups = rows.length ? [{ ...GROUPS[0], rows }] : [];
   for (const span of spans) delete span.parent;
 
