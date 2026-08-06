@@ -187,11 +187,6 @@ class Gemma4_26B_A4B_Recipe(MilesRecipe):
     save_interval: int = 20
 
     rollout_num_gpus_per_engine: int = 4
-    # miles' own router rather than sglang-router. The sglang path never binds its
-    # port here ("Server at 127.0.0.1:4077 not ready after 30s", a hardcoded
-    # timeout in miles' wait_for_server_ready), and this is the path the gym
-    # already exercises -- Kimi sets it too, and patch_sglang_abort special-cases it.
-    use_miles_router: bool = True
     # 0.25, not upstream's 0.55. Both engines stay resident here (see the offload
     # note below) and upstream's share does not leave room: a failed step measured
     # ~64 GiB of training state against SGLang's ~68 GiB on a 139.8 GiB H200, and
