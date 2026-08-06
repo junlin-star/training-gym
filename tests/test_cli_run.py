@@ -53,6 +53,7 @@ def _summary(**overrides):
     value = {
         "training_run_id": "run-1",
         "run_id": "run-1",
+        "modal_app_id": "ap-test123",
         "status": "failed",
         "display_status": "failed",
         "display_stage": "Training",
@@ -820,6 +821,7 @@ def test_run_list_forwards_filters_and_prints_configured_fields_as_json():
     assert json.loads(result.stdout) == [
         {
             "run_id": "run-1",
+            "modal_app_id": "ap-test123",
             "status": "failed",
             "stage": "Training",
             "model": "org/model",
@@ -851,6 +853,7 @@ def test_run_list_renders_schema_columns():
     assert result.exit_code == 0
     for heading in (
         "Run",
+        "Modal app ID",
         "Status",
         "Stage",
         "Model",
@@ -861,3 +864,4 @@ def test_run_list_renders_schema_columns():
         "Last updated",
     ):
         assert heading in result.stdout
+    assert "ap-test123" in result.stdout

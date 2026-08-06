@@ -159,6 +159,7 @@ class GroupTags(BaseModel):
 class RunSummary(BaseModel):
     training_run_id: str
     run_id: str = _run_list_field("Run")
+    modal_app_id: str = _run_list_field("Modal app ID", default="")
     status: str = "running"
     display_status: str = _run_list_field(
         "Status",
@@ -182,7 +183,6 @@ class RunSummary(BaseModel):
         filterable=True,
     )
     group_tags: GroupTags | None = None
-    modal_app_id: str = ""
     modal_app_url: str | None = None
     dataset_id: str = ""
     deployment_id: str = ""
