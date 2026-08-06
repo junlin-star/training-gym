@@ -298,7 +298,7 @@ class TrainingGroup:
         *,
         continue_on_error: bool = True,
     ) -> list[TrainingRun]:
-        """Start every variant as a detached Modal call and return immediately."""
+        """Start every variant as a detached Modal call."""
         variants = self.iter_variants()
         launches: list[TrainingRun] = []
         failures: list[tuple[dict[str, Any], BaseException]] = []
