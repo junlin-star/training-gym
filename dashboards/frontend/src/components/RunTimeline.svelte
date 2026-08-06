@@ -374,20 +374,20 @@
     </span>
     {#if generationStats(tip.bar)}
       <span class="tg-tip-stat">
-        average sample generation time: {fmtSecs(generationStats(tip.bar).average)}
+        Average sample generation time: {fmtSecs(generationStats(tip.bar).average)}
       </span>
       <span class="tg-tip-stat">
-        longest sample generation time: {fmtSecs(
+        Longest sample generation time: {fmtSecs(
           generationStats(tip.bar).longest ?? generationStats(tip.bar).duration,
         )}
       </span>
     {/if}
     {#if rewardStats(tip.bar)}
       <span class="tg-tip-stat">
-        average reward time: {fmtSecs(rewardStats(tip.bar).average)}
+        Average reward time: {fmtSecs(rewardStats(tip.bar).average)}
       </span>
       <span class="tg-tip-stat">
-        longest reward time: {fmtSecs(
+        Longest reward time: {fmtSecs(
           rewardStats(tip.bar).longest ?? rewardStats(tip.bar).duration,
         )}
       </span>
