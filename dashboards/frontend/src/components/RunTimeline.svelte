@@ -29,12 +29,12 @@
     {
       label: "Forward/backward",
       color:
-        "color-mix(in srgb, var(--color-c-dataviz-primary-1) 78%, var(--color-c-gray-02))",
+        "color-mix(in srgb, var(--color-c-dataviz-primary-1) 84%, white)",
     },
     {
       label: "Optimizer step",
       color:
-        "color-mix(in srgb, var(--color-c-dataviz-primary-1) 48%, var(--color-c-gray-02))",
+        "color-mix(in srgb, var(--color-c-dataviz-primary-1) 64%, white)",
     },
   ];
 
@@ -238,7 +238,7 @@
         {#if showDetails}
           {#each DETAIL_LEGEND as item (item.label)}
             <span class="legend-item legend-detail">
-              <span class="swatch" style:background={item.color}></span>
+              <span class="swatch" style={`background: ${item.color}`}></span>
               {item.label}
             </span>
           {/each}
