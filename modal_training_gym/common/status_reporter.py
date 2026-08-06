@@ -110,7 +110,7 @@ def _post(item: dict[str, Any]) -> PostResult:
         with urlopen(request, timeout=timeout) as response:
             response.read()
     except HTTPError as exc:
-        if exc.code == 404:
+        if exc.code in {401, 404, 405}:
             return "not_found"
         if exc.code == 410:
             return "unknown_run"
@@ -142,7 +142,7 @@ def post_item(item: dict[str, Any]) -> bool:
 
 
 def post_item_result(item: dict[str, Any]) -> PostResult:
-    """Synchronously POST and preserve whether the route returned 404."""
+    """Synchronously POST and classify dashboard route availability."""
     return _post(item)
 
 

@@ -2034,12 +2034,7 @@ table.training-runs-table td.row-open-cell {
   font-size: 12px;
   font-weight: 600;
   color: var(--text-bright);
-  text-transform: uppercase;
   margin-bottom: 6px;
-}
-
-.substep-timing-title {
-  text-transform: none;
 }
 
 table.rollout-table {

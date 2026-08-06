@@ -84,6 +84,11 @@ export const HIDDEN_PHASES = new Set([
   "reward_post_process",
   "sample_generation",
 ]);
+export const TOOLTIP_HIDDEN_PHASES = new Set([
+  "reward",
+  "reward_batch",
+  "sample_generation",
+]);
 
 const NESTS_IN = {
   compute_log_probs: ["train_models"],

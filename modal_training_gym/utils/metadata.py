@@ -221,7 +221,10 @@ def vol_get(
 
 
 def vol_list(
-    store: MetadataStore | str, *, is_async: bool = False
+    store: MetadataStore | str,
+    *,
+    is_async: bool = False,
+    allow_partial: bool = False,
 ) -> list[dict[str, Any]] | Awaitable[list[dict[str, Any]]]:
     from modal.exception import NotFoundError
 
@@ -254,6 +257,11 @@ def vol_list(
                 results = await asyncio.gather(
                     *(_read(path) for path in paths), return_exceptions=True
                 )
+                failures = [
+                    result for result in results if not isinstance(result, dict)
+                ]
+                if failures and not allow_partial:
+                    raise RuntimeError("Metadata listing encountered unreadable files")
                 return [result for result in results if isinstance(result, dict)]
             except (FileNotFoundError, NotFoundError):
                 return []

@@ -27,6 +27,7 @@ STATUS_PATH = "/api/framework-status"
 TIMING_TIMEOUT_SECONDS = 10.0
 
 MIN_PUBLISH_INTERVAL_S = 3.0
+MAX_POST_RETRIES = 5
 
 PER_SAMPLE_PHASES = frozenset({"reward", "reward_batch", "sample_generation"})
 
@@ -89,6 +90,7 @@ class RoleRecorder:
         self._snapshot_ready = threading.Event()
         self._poster: threading.Thread | None = None
         self._closed = False
+        self._post_retries = 0
 
     def __enter__(self) -> "RoleRecorder":
         return self
@@ -165,6 +167,7 @@ class RoleRecorder:
                     result = status_reporter.post_item_result(dict(snapshot))
                     if result == "ok":
                         self._posted_phases = snapshot["phases"]
+                        self._post_retries = 0
                     elif result == "not_found":
                         global _UNSUPPORTED
                         with _UNSUPPORTED_LOCK:
@@ -172,15 +175,20 @@ class RoleRecorder:
                         if os.environ.get(TIMING_MODE_ENV, "auto") == "require":
                             print(
                                 "ERROR: substep_timing='require' was rejected with "
-                                "HTTP 404; timing is unavailable on this dashboard.",
+                                "HTTP 404/401/405 from the dashboard timing "
+                                "endpoint; timing is unavailable on this dashboard.",
                                 flush=True,
                             )
                     elif result == "failed":
-                        with self._lock:
-                            if self._snapshot is None:
-                                self._snapshot = snapshot
-                        time.sleep(0.05)
-                        self._snapshot_ready.set()
+                        self._post_retries += 1
+                        if self._post_retries >= MAX_POST_RETRIES:
+                            self._post_retries = 0
+                        else:
+                            with self._lock:
+                                if self._snapshot is None:
+                                    self._snapshot = snapshot
+                            time.sleep(0.1 * 2 ** (self._post_retries - 1))
+                            self._snapshot_ready.set()
                 if self._closed and self._snapshot is None:
                     if self._poster in _CLOSED_POSTERS:
                         _CLOSED_POSTERS.remove(self._poster)

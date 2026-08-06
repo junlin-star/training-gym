@@ -5,6 +5,7 @@
     colorFor,
     fmtSecs,
     HIDDEN_PHASES,
+    TOOLTIP_HIDDEN_PHASES,
     labelFor,
     PHASE_COLORS,
     TRAIN_OUTLINE_COLOR,
@@ -396,7 +397,7 @@
     {/if}
     {#if tip.bar.children?.length}
       <div class="tg-tip-children">
-        {#each tip.bar.children.filter((child) => !HIDDEN_PHASES.has(child.name)) as child (child.name)}
+        {#each tip.bar.children.filter((child) => !TOOLTIP_HIDDEN_PHASES.has(child.name)) as child (child.name)}
           <span class="tg-tip-child">
             <span class="tg-tip-child-line">
               {labelFor(child.name)} · {fmtSecs(child.duration)}

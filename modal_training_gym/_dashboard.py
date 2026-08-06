@@ -472,6 +472,7 @@ def fastapi_app():
             # A run that has ended writes no further records, so its lanes are
             # read once and then answered from here for as long as it is held.
             self.final = False
+            self.dirty = False
             self.lock = asyncio.Lock()
 
         @property
@@ -918,6 +919,8 @@ def fastapi_app():
                 # A lane still posting means the run is going, whatever a
                 # summary read before it started said.
                 entry.final = False
+        elif entry is not None:
+            entry.dirty = True
         return JSONResponse({"status": "ok"})
 
     # A run in one of these writes no further timing, so its lanes are read once.
@@ -982,9 +985,10 @@ def fastapi_app():
         # read waits for that read rather than starting a listing of its own.
         async with entry.lock:
             if not entry.fresh:
+                entry.dirty = False
                 entry.lanes = await _read_run_timings(training_run_id)
                 entry.read_at = time.monotonic()
-                entry.final = await _run_has_ended(training_run_id)
+                entry.final = not entry.dirty and await _run_has_ended(training_run_id)
             return entry.lanes
 
     @web.get("/api/runs/{training_run_id}/timings")

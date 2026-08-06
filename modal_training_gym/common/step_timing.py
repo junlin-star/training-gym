@@ -191,7 +191,11 @@ async def load_run_async(
 ) -> dict[int | None, list[dict[str, Any]]]:
     """:func:`load_run` on the event loop, which reads the records together."""
     return _by_rollout(
-        await vol_list(RoleTimingRecord.store(training_run_id), is_async=True)
+        await vol_list(
+            RoleTimingRecord.store(training_run_id),
+            is_async=True,
+            allow_partial=True,
+        )
     )
 
 
