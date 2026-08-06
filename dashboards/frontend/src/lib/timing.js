@@ -86,7 +86,7 @@ export const TIMING_LABELS = {
   train_model: "Train",
   checkpoint_save: "Save checkpoint",
   offload_train: "Offload trainer",
-  weight_sync: "Push weights to engines",
+  weight_sync: "Weight sync",
   initial_weight_sync: "Initial weight sync",
   wait_for_rollout: "Waiting for this rollout",
   wait_for_next_rollout: "Waiting for the next rollout",
@@ -472,9 +472,7 @@ export function runTimeline(timings) {
     span.insideKey = span.parent ? span.parent.key : null;
   }
 
-  const visibleSpans = spans.filter(
-    (span) => span.kind !== "stall" && span.kind !== "untracked",
-  );
+  const visibleSpans = spans.filter((span) => span.kind !== "untracked");
   const rows = rowsOf(visibleSpans, async);
   const groups = rows.length ? [{ ...GROUPS[0], rows }] : [];
   for (const span of spans) delete span.parent;

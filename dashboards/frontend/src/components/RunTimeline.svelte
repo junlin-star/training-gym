@@ -17,15 +17,17 @@
   } = $props();
 
   const MIN_ZOOM = 1;
-  const MAX_ZOOM = 64;
+  const MAX_ZOOM = 128;
   const ZOOM_BTN_FACTOR = 1.5;
-  const WHEEL_SENSITIVITY = 0.0015;
+  const WHEEL_SENSITIVITY = 0.0025;
 
   const ROW_HEIGHT_PX = 15;
+  const DETAIL_ROW_HEIGHT_PX = 22;
   const ROW_GAP_PX = 4;
   const HEADER_PX = 0;
   const GROUP_GAP_PX = 12;
   const STEP_GAP_PX = 8;
+  const BAR_GAP_PX = 1;
   const DETAIL_LEGEND = [
     {
       label: "Calculate log probs",
@@ -58,14 +60,15 @@
     evaluate_rollouts_end: () => "the engines running eval",
   };
 
+  let showDetails = $state(false);
   let timeline = $derived(runTimeline(timings));
+  let rowHeight = $derived(showDetails ? DETAIL_ROW_HEIGHT_PX : ROW_HEIGHT_PX);
   let groups = $derived(
     timeline.groups.map((group) => ({
       ...group,
-      height: HEADER_PX + group.rows.length * (ROW_HEIGHT_PX + ROW_GAP_PX),
+      height: HEADER_PX + group.rows.length * (rowHeight + ROW_GAP_PX),
     })),
   );
-  let showDetails = $state(false);
   $effect(() => {
     timings;
     pinned = false;
@@ -105,10 +108,10 @@
   }
 
   function wheelZoom(node) {
-    node.addEventListener("wheel", handleWheel, { passive: false });
+    node.addEventListener("wheel", handleWheel, { capture: true, passive: false });
     return {
       destroy() {
-        node.removeEventListener("wheel", handleWheel);
+        node.removeEventListener("wheel", handleWheel, true);
       },
     };
   }
@@ -219,7 +222,6 @@
     return [...row.spans]
       .filter(
         (bar) =>
-          bar.kind !== "stall" &&
           bar.kind !== "untracked" &&
           !HIDDEN_PHASES.has(bar.name) &&
           (showDetails || bar.depth === 0),
@@ -236,9 +238,13 @@
   {:else}
     <div class="toolbar">
       <div class="legend">
-        {#each timeline.categories.filter((key) => key !== "idle") as key (key)}
+        {#each timeline.categories as key (key)}
           <span class="legend-item">
-            <span class="swatch" style:background={CATEGORIES[key].color}></span>
+            <span
+              class="swatch"
+              class:waiting-swatch={key === "idle"}
+              style:background={key === "idle" ? "transparent" : CATEGORIES[key].color}
+            ></span>
             {CATEGORIES[key].label}
           </span>
         {/each}
@@ -296,14 +302,14 @@
     </div>
 
     <div class="chart">
-      <div class="gutter" style:padding-top={`${ROW_HEIGHT_PX + STEP_GAP_PX}px`}>
+      <div class="gutter" style:padding-top={`${rowHeight + STEP_GAP_PX}px`}>
         {#each visibleGroups as group (group.key)}
           <div style:margin-bottom={`${GROUP_GAP_PX}px`}>
             {#each group.rows as row, index (index)}
               <div
                 class="gutter-row"
                 class:lane={true}
-                style:height={`${ROW_HEIGHT_PX}px`}
+                style:height={`${rowHeight}px`}
                 style:margin-bottom={`${ROW_GAP_PX}px`}
                 title={`${row.label} — ${row.hint || group.hint}`}
               >
@@ -320,7 +326,7 @@
         use:wheelZoom
       >
         <div class="track" style:width={`${zoom * 100}%`}>
-          <div class="steps" style:height={`${ROW_HEIGHT_PX}px`}>
+          <div class="steps" style:height={`${rowHeight}px`}>
             {#each timeline.steps as step (step.id)}
               <div
                 class="step"
@@ -345,8 +351,8 @@
                 {#each group.rows as row, index (index)}
                   <div
                     class="row"
-                    style:top={`${HEADER_PX + index * (ROW_HEIGHT_PX + ROW_GAP_PX)}px`}
-                    style:height={`${ROW_HEIGHT_PX}px`}
+                    style:top={`${HEADER_PX + index * (rowHeight + ROW_GAP_PX)}px`}
+                    style:height={`${rowHeight}px`}
                   >
                     {#each displaySpans(row) as bar (bar.key)}
                       <button
@@ -365,8 +371,8 @@
                         class:expanded-parent={showDetails && bar.depth === 0 && hasVisibleChildren(bar)}
                         class:active={pinned && isActive(bar)}
                         aria-label={`${labelFor(bar.name)} ${fmtSecs(bar.duration)}`}
-                        style:left={`${pct(bar.offset)}%`}
-                        style:width={`max(1px, ${Math.max(pct(bar.duration), 0.01)}%)`}
+                        style:left={`calc(${pct(bar.offset)}% + ${BAR_GAP_PX}px)`}
+                        style:width={`max(1px, calc(${Math.max(pct(bar.duration), 0.01)}% - ${BAR_GAP_PX * 2}px))`}
                         style:--bar-color={colorFor(bar.name)}
                         style:background={bar.kind === "work" && !(showDetails && bar.depth === 0 && hasVisibleChildren(bar)) ? colorFor(bar.name) : undefined}
                         style:border-color={
@@ -535,6 +541,12 @@
     height: 9px;
     border-radius: 2px;
     flex-shrink: 0;
+  }
+
+  .waiting-swatch {
+    height: 2px;
+    border-radius: 0;
+    border-top: 2px solid var(--color-c-gray-30, #6a6a6a);
   }
 
   .controls {
@@ -726,6 +738,7 @@
     min-width: 2px;
     z-index: 3;
     outline: none;
+    border-radius: 0;
   }
 
   /* A stall is the loop doing nothing, so it is a line rather than a block: the
