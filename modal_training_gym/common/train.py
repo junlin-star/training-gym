@@ -611,7 +611,7 @@ class TrainConfig:
         *,
         show_output: bool = True,
     ) -> TrainingRun:
-        """Start training in a detached Modal app and return immediately.
+        """Start training in a detached Modal app.
 
         Inputs are prepared on CPU-only functions first, so the GPU cluster is
         provisioned only once the weights are ready.
