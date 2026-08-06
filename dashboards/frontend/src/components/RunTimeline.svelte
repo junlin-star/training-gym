@@ -749,13 +749,7 @@
   }
 
   .bar.untracked {
-    background: linear-gradient(
-      var(--color-c-gray-30, #6a6a6a),
-      var(--color-c-gray-30, #6a6a6a)
-    );
-    background-size: 100% 2px;
-    background-position: center;
-    background-repeat: no-repeat;
+    background: var(--color-c-gray-30, #6a6a6a);
     border: none;
   }
 
