@@ -13,6 +13,7 @@
 
   let {
     timings = null,
+    timelineKey = "",
     downloadName = "substep_timing.json",
     onOpenRollout = null,
     rolloutIds = [],
@@ -40,7 +41,7 @@
     })),
   );
   $effect(() => {
-    timings;
+    timelineKey;
     pinned = false;
     tip = null;
   });

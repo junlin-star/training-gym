@@ -463,6 +463,7 @@ def fastapi_app():
     # Short, because a lane posted to another container of this app reaches
     # this one only by being read again.
     TIMING_CACHE_TTL_S = 5.0
+    TIMING_CACHE_FINAL_TTL_S = 60.0
 
     class TimingEntry:
         def __init__(self) -> None:
@@ -477,7 +478,8 @@ def fastapi_app():
         def fresh(self) -> bool:
             if self.read_at is None:
                 return False
-            return self.final or time.monotonic() - self.read_at < TIMING_CACHE_TTL_S
+            ttl = TIMING_CACHE_FINAL_TTL_S if self.final else TIMING_CACHE_TTL_S
+            return time.monotonic() - self.read_at < ttl
 
     timing_cache: dict[str, TimingEntry] = {}
     cache_locks = {key: asyncio.Lock() for key in cache_keys}
@@ -888,7 +890,15 @@ def fastapi_app():
     ):
         """Writes RoleTimingRecords to metadata volume and timing cache."""
         await _require_framework_status_token(record.training_run_id, authorization)
-        await _get_run_or_404(record.training_run_id)
+        try:
+            await _get_run_or_404(record.training_run_id)
+        except HTTPException as exc:
+            if exc.status_code == 404:
+                raise HTTPException(
+                    status_code=410,
+                    detail=exc.detail,
+                ) from exc
+            raise
 
         await record.save(is_async=True)
         entry = timing_cache.get(record.training_run_id)

@@ -120,23 +120,10 @@ def _canonical_items_for(
     return [] if item_store is None else _keep(vol_list(item_store))
 
 
-_volume_handle: Any = None
-
-
 def _metadata_volume():
-    """The shared volume handle.
+    import modal
 
-    Kept because building one looks the volume up, and a request that reads a
-    store pays that round trip before it reads anything.
-    """
-    global _volume_handle
-    if _volume_handle is None:
-        import modal
-
-        _volume_handle = modal.Volume.from_name(
-            METADATA_VOLUME_NAME, create_if_missing=True
-        )
-    return _volume_handle
+    return modal.Volume.from_name(METADATA_VOLUME_NAME, create_if_missing=True)
 
 
 def _safe_reload(vol, *, is_async: bool = False):
@@ -243,10 +230,20 @@ def vol_list(
 
         async def _run() -> list[dict[str, Any]]:
             await _safe_reload(vol, is_async=True)
+            semaphore = asyncio.Semaphore(16)
 
-            async def _read(path: str) -> dict[str, Any]:
-                chunks = [c async for c in vol.read_file.aio(path)]
-                return json.loads(b"".join(chunks))
+            async def _read(path: str) -> dict[str, Any] | None:
+                async with semaphore:
+                    for attempt in range(3):
+                        try:
+                            chunks = [c async for c in vol.read_file.aio(path)]
+                            return json.loads(b"".join(chunks))
+                        except (FileNotFoundError, NotFoundError):
+                            return None
+                        except Exception as exc:
+                            if "rate limit" not in str(exc).lower() or attempt == 2:
+                                raise
+                            await asyncio.sleep(2**attempt)
 
             try:
                 paths = [
@@ -254,9 +251,10 @@ def vol_list(
                     async for entry in vol.iterdir.aio(_store_path(store))
                     if entry.path.endswith(".json")
                 ]
-                # Read together: a store holds a file per record, and one round
-                # trip each is the whole latency of listing a run.
-                return list(await asyncio.gather(*(_read(path) for path in paths)))
+                results = await asyncio.gather(
+                    *(_read(path) for path in paths), return_exceptions=True
+                )
+                return [result for result in results if isinstance(result, dict)]
             except (FileNotFoundError, NotFoundError):
                 return []
 

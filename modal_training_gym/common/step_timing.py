@@ -155,6 +155,8 @@ def measured_run_times(
         step_duration = 0.0
         for record in records:
             lane_start = record["lane_start_unix_s"]
+            if lane_start is None:
+                continue
             role = record["role"]
             for name, phase in record["phases"].items():
                 if role == Role.DRIVER.value and name not in beside_the_step:

@@ -398,8 +398,8 @@ export function runTimeline(timings) {
   );
   const spans = nest(clipStalls(rawSpans, async));
 
-  for (const span of spans) {
-    span.key = `${span.rolloutId}:${span.role}:${span.name}:${span.start.toFixed(3)}`;
+  for (const [index, span] of spans.entries()) {
+    span.key = `${span.rolloutId}:${span.role}:${span.name}:${span.start.toFixed(3)}:${index}`;
   }
   for (const span of spans) {
     span.offset = span.start - runStart;

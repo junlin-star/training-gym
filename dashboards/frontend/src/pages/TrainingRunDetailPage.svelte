@@ -502,6 +502,9 @@
   });
 
   let runTimings = $state({});
+  let stepTimingIds = $derived(
+    Object.keys(runTimings).filter((id) => id !== "bootstrap"),
+  );
 
   async function toggleRolloutDetail(rolloutId) {
     if (!runId) return;
@@ -1353,14 +1356,15 @@
               <pre class="[border:1px_solid_color-mix(in_srgb,var(--red,#f87171)_45%,transparent)] rounded-[8px] bg-[color-mix(in_srgb,var(--red,#f87171)_12%,transparent)] text-(--red,#f87171) [font-family:var(--font-mono)] text-[12px] leading-[17px] m-0 max-h-[320px] overflow-auto p-[12px_14px] whitespace-pre-wrap [word-break:break-word]">{run.error_message}</pre>
             </div>
           {/if}
-          {#if Object.keys(runTimings).length}
+          {#if stepTimingIds.length}
             <div class="rollout-chart">
               <div class="rollout-chart-title substep-timing-title">
-                Substep Timing ({Object.keys(runTimings).length}
-                {Object.keys(runTimings).length === 1 ? "step" : "steps"})
+                Substep Timing ({stepTimingIds.length}
+                {stepTimingIds.length === 1 ? "step" : "steps"})
               </div>
               <RunTimeline
                 timings={runTimings}
+                timelineKey={runId}
                 downloadName={`substep_timing_${runId}.json`}
                 rolloutIds={rolloutSummaries.map((r) => r.rollout_id)}
                 onOpenRollout={(id) => {
@@ -1548,6 +1552,7 @@
                           <div class="rollout-chart-title">Substep timing</div>
                           <RunTimeline
                             timings={{ [r.rollout_id]: runTimings[r.rollout_id] }}
+                            timelineKey={`${runId}:${r.rollout_id}`}
                             downloadName={`substep_timing_${runId}_rollout_${r.rollout_id}.json`}
                             rolloutIds={[r.rollout_id]}
                             onOpenRollout={(id) => {

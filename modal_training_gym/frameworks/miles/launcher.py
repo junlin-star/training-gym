@@ -123,6 +123,10 @@ def build_miles_app(
             copy=True,
             ignore=["**/__pycache__", "**/*.pyc", "**/.git", "**/.venv"],
         )
+        image = image.run_commands(
+            f"echo {_PATCH_SGLANG_ABORT_B64} | base64 -d | python3",
+            f"echo {_PATCH_SUBSTEP_TIMING_B64} | base64 -d | python3",
+        )
 
     if miles.image_overlay is not None:
         image = miles.image_overlay(image)

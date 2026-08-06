@@ -28,9 +28,11 @@ TIMING_TIMEOUT_SECONDS = 10.0
 
 MIN_PUBLISH_INTERVAL_S = 3.0
 
-PER_SAMPLE_PHASES = frozenset({"reward", "sample_generation"})
+PER_SAMPLE_PHASES = frozenset({"reward", "reward_batch", "sample_generation"})
 
 _CLOSED_POSTERS: list[threading.Thread] = []
+_UNSUPPORTED = False
+_UNSUPPORTED_LOCK = threading.Lock()
 
 
 def _drain_closed_posters() -> None:
@@ -87,7 +89,6 @@ class RoleRecorder:
         self._snapshot_ready = threading.Event()
         self._poster: threading.Thread | None = None
         self._closed = False
-        self._unsupported = False
 
     def __enter__(self) -> "RoleRecorder":
         return self
@@ -101,7 +102,10 @@ class RoleRecorder:
         joined at process exit instead, the only point the snapshot could
         otherwise be lost at.
         """
-        self._publish(force=True)
+        try:
+            self._publish(force=True)
+        except Exception:
+            pass
         if self._poster is not None:
             _CLOSED_POSTERS.append(self._poster)
         self._closed = True
@@ -145,29 +149,44 @@ class RoleRecorder:
                         self.invocations[name].append(
                             [start - self._t0, end - self._t0]
                         )
-            self._publish()
+            try:
+                self._publish()
+            except Exception:
+                pass
 
     def _post_snapshots(self) -> None:
         while True:
-            self._snapshot_ready.wait()
-            self._snapshot_ready.clear()
-            with self._lock:
-                snapshot, self._snapshot = self._snapshot, None
-            if snapshot is not None and snapshot["phases"] != self._posted_phases:
-                self._posted_phases = snapshot["phases"]
-                result = status_reporter.post_item_result(dict(snapshot))
-                if result == "not_found":
-                    self._unsupported = True
-                    if os.environ.get(TIMING_MODE_ENV, "auto") == "require":
-                        print(
-                            "ERROR: substep_timing='require' was rejected with "
-                            "HTTP 404; timing is unavailable on this dashboard.",
-                            flush=True,
-                        )
-            if self._closed and self._snapshot is None:
-                if self._poster in _CLOSED_POSTERS:
-                    _CLOSED_POSTERS.remove(self._poster)
-                return
+            try:
+                self._snapshot_ready.wait()
+                self._snapshot_ready.clear()
+                with self._lock:
+                    snapshot, self._snapshot = self._snapshot, None
+                if snapshot is not None and snapshot["phases"] != self._posted_phases:
+                    result = status_reporter.post_item_result(dict(snapshot))
+                    if result == "ok":
+                        self._posted_phases = snapshot["phases"]
+                    elif result == "not_found":
+                        global _UNSUPPORTED
+                        with _UNSUPPORTED_LOCK:
+                            _UNSUPPORTED = True
+                        if os.environ.get(TIMING_MODE_ENV, "auto") == "require":
+                            print(
+                                "ERROR: substep_timing='require' was rejected with "
+                                "HTTP 404; timing is unavailable on this dashboard.",
+                                flush=True,
+                            )
+                    elif result == "failed":
+                        with self._lock:
+                            if self._snapshot is None:
+                                self._snapshot = snapshot
+                        time.sleep(0.05)
+                        self._snapshot_ready.set()
+                if self._closed and self._snapshot is None:
+                    if self._poster in _CLOSED_POSTERS:
+                        _CLOSED_POSTERS.remove(self._poster)
+                    return
+            except Exception:
+                time.sleep(0.05)
 
     def _publish(self, force: bool = False) -> None:
         """Snapshot the record so far; the dashboard overwrites the stored lane."""
@@ -179,7 +198,9 @@ class RoleRecorder:
         training_run_id = os.environ.get("TRAINING_GYM_TRAINING_RUN_ID", "")
         if not url or not training_run_id:
             return
-        if self._unsupported:
+        with _UNSUPPORTED_LOCK:
+            unsupported = _UNSUPPORTED
+        if unsupported:
             return
         if self._publish_gate is not None:
             if self._gate_answer is None:
@@ -271,7 +292,10 @@ def _lowest_rank_publishes() -> bool | None:
         return True
     if not dist.is_initialized():
         return None
-    return dist.get_rank() == min(dist.get_process_group_ranks(dist.group.WORLD))
+    get_group_ranks = getattr(dist, "get_process_group_ranks", None)
+    if get_group_ranks is None:
+        return dist.get_rank() == 0
+    return dist.get_rank() == min(get_group_ranks(dist.group.WORLD))
 
 
 @contextmanager
