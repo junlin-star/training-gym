@@ -15,14 +15,13 @@ if TYPE_CHECKING:
     from modal_training_gym.common.dataset import DatasetConfig
     from modal_training_gym.common.models import ModelConfig
 
-# Gemma-4 support landed in miles on 2026-06-24 (PR #1232), which also changed
-# model_provider.py (the bridge forward returns ``(logits, loss_mask)``),
-# arguments.py (Gemma-4 nests ``rope_theta`` per attention type), and
-# hf_weight_iterator_bridge.py (Gemma-4's ``layer_scalar``/``scale`` buffers and
-# the unmapped ``post_shared_expert_layernorm``). MilesRecipe's default image
-# predates all of that, so this recipe pins its own. Drop the override once the
-# shared default moves past 2026-06-24.
-_MILES_IMAGE_WITH_GEMMA4 = "radixark/miles:dev-202608041247"
+# No ``docker_image`` override: this recipe rides MilesRecipe's shared default.
+# Gemma-4 needs an image built after 2026-06-24 (PR #1232, which also changed
+# model_provider.py for the bridge's ``(logits, loss_mask)`` return, arguments.py
+# for Gemma-4's per-attention-type ``rope_theta`` nesting, and
+# hf_weight_iterator_bridge.py for its ``layer_scalar``/``scale`` buffers), and the
+# shared default now satisfies that. If it is ever rolled back before that date,
+# this recipe needs its own pin again.
 
 _PATCH_DIR = (
     Path(__file__).resolve().parents[2]
@@ -107,22 +106,27 @@ class Gemma4_26B_A4B_Recipe(MilesRecipe):
     Unlike the slime recipe this replaces, the vision tower is **not** frozen: miles
     has no ``--freeze-params-name-list`` equivalent, so RL updates the whole VLM.
 
-    **Status.** Both modes are validated end-to-end on 1x8xH200, two GRPO steps each.
+    **Status.** Both modes are validated end-to-end on 1x8xH200, two GRPO steps each,
+    on ``dev-202608051303`` (and before it on ``dev-202608041247``).
 
-    * Text (DAPO-Math-17k): ``train_rollout_logprob_abs_diff`` ~0.012,
-      ``train_rollout_kl`` ~0.001.
-    * Vision (geo3k, ``MultimodalDataset(modality="image")``):
-      ``ppo_kl`` ~-8.7e-10, ``ess_ratio`` 1.0.
+    * Text (DAPO-Math-17k): ``train_rollout_logprob_abs_diff`` ~0.011,
+      ``train_rollout_kl`` ~0.0008.
+    * Vision (geo3k, ``MultimodalDataset(modality="image")``): ``ppo_kl`` ~-8e-9,
+      ``loss`` ~-6e-9, ``ess_ratio`` 1.0.
 
     Both say the same thing -- Megatron and SGLang agree on the weights after sync,
     so Gemma-4's ``layer_scalar`` buffers survive the transfer despite SGLang
     logging them as default-initialised at load.
 
+    Losses sit at ~0 because these smoke runs truncate every response at 256 tokens,
+    so no sample reaches an answer, every reward is 0 and GRPO's advantages vanish.
+    That exercises the full pipeline but says nothing about learning; a real run
+    needs a longer ``rollout_max_response_len``.
+
     Vision mode needs ``apply_chat_template=True`` on the dataset: the processor and
     the patched rollout both require ``sample.prompt`` to be a templated string.
     """
 
-    docker_image: str = _MILES_IMAGE_WITH_GEMMA4
     gpu_type: str = "H200"
     colocate: bool = True
     image_run_commands: list[str] = field(default_factory=_image_patches)
