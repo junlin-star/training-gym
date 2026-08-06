@@ -378,6 +378,11 @@ def reconcile() -> None:
     min_containers=1,
     secrets=_function_secrets(),
 )
+# Without this a container takes one request at a time, so the SPA's own poll --
+# runs, deployments and evals every five seconds -- queues behind itself, and a
+# held-open log stream blocks every other request for as long as it is open.
+# Requests here wait on the volume and on Modal far more than they compute.
+@modal.concurrent(max_inputs=50, target_inputs=20)
 @modal.asgi_app(requires_proxy_auth=dashboard_requires_proxy_auth())
 def fastapi_app():
     import base64
@@ -389,6 +394,7 @@ def fastapi_app():
         HTTPException,
     )  # Request imported at module scope
     from fastapi.concurrency import run_in_threadpool
+    from fastapi.middleware.gzip import GZipMiddleware
     from fastapi.responses import (
         FileResponse,
         JSONResponse,
@@ -407,6 +413,9 @@ def fastapi_app():
     )
 
     web = FastAPI()
+    # The list endpoints answer with the whole summary, which is mostly repeated
+    # keys and ids and compresses to a fraction of itself.
+    web.add_middleware(GZipMiddleware, minimum_size=500)
 
     # ── Optional password protection ──────────────────────────────────────
     # When DASHBOARD_PASSWORD is set we gate the whole app behind HTTP Basic
