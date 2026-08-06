@@ -51,7 +51,7 @@ export const PHASE_COLORS = {
 export const TIMING_LABELS = {
   evaluate_rollouts: "Eval (before training)",
   evaluate_rollouts_end: "Eval (after training)",
-  generate_rollouts: "Waiting for rollouts",
+  generate_rollouts: "Rollout generation",
   offload_rollout: "Offload generation engines",
   compute_log_probs: "Calculate log probs",
   train_models: "Train",
