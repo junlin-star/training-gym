@@ -27,6 +27,12 @@
   const GROUP_GAP_PX = 12;
   const STEP_GAP_PX = 8;
   const STEP_LABEL_MIN_PX = 56;
+  const DETAIL_LEGEND = [
+    { label: "Log probs", color: colorFor("compute_log_probs") },
+    { label: "Forward/backward", color: colorFor("forward_backward") },
+    { label: "Optimizer step", color: colorFor("optimizer_step") },
+    { label: "Reward phases", color: colorFor("reward") },
+  ];
 
   // What each wait is actually waiting for, in steps rather than futures.
   const WAITS_ON = {
@@ -49,29 +55,12 @@
     })),
   );
   let showDetails = $state(false);
-  let expandedBars = $state(new Set());
   $effect(() => {
     timings;
-    expandedBars = new Set();
     pinned = false;
     tip = null;
   });
-  let visibleGroups = $derived(
-    groups.map((group) => {
-      const rows = showDetails
-        ? group.rows
-        : group.rows.filter(
-            (row) =>
-              row.depth === 0 ||
-              row.spans.some((span) => span.insideKey && expandedBars.has(span.insideKey)),
-          );
-      return {
-        ...group,
-        rows,
-        height: HEADER_PX + rows.length * (ROW_HEIGHT_PX + ROW_GAP_PX),
-      };
-    }),
-  );
+  let visibleGroups = $derived(groups);
   let trackHeight = $derived(
     visibleGroups.reduce((total, group) => total + group.height + GROUP_GAP_PX, 0),
   );
@@ -81,9 +70,7 @@
   // Deeper frames are lighter, so a nested phase reads as part of its parent
   // rather than as a different kind of work.
   function fill(bar) {
-    const base = colorFor(bar.name);
-    if (bar.depth === 0) return base;
-    return `color-mix(in srgb, ${base} ${Math.max(100 - bar.depth * 28, 40)}%, var(--color-c-gray-02))`;
+    return colorFor(bar.name);
   }
 
   let zoom = $state(1);
@@ -174,17 +161,10 @@
     tip = null;
   }
 
-  function toggleChildren(e, bar) {
-    e.stopPropagation();
-    if (!bar.children?.length) {
-      pinTip(e, bar);
-      return;
-    }
-    const next = new Set(expandedBars);
-    if (next.has(bar.key)) next.delete(bar.key);
-    else next.add(bar.key);
-    expandedBars = next;
-    pinTip(e, bar);
+  function displaySpans(row) {
+    return [...row.spans]
+      .filter((bar) => showDetails || bar.depth === 0)
+      .sort((a, b) => a.depth - b.depth || a.start - b.start || b.end - a.end);
   }
 </script>
 
@@ -206,6 +186,14 @@
           <span class="swatch swatch-stall"></span>
           stalled, waiting on somebody else
         </span>
+        {#if showDetails}
+          {#each DETAIL_LEGEND as item (item.label)}
+            <span class="legend-item legend-detail">
+              <span class="swatch" style:background={item.color}></span>
+              {item.label}
+            </span>
+          {/each}
+        {/if}
       </div>
       <div class="controls">
         <div class="zoom-controls">
@@ -242,7 +230,6 @@
           class="dl-btn"
           onclick={() => {
             showDetails = !showDetails;
-            expandedBars = new Set();
           }}
           aria-pressed={showDetails}
           title={showDetails ? "Hide phase details" : "Show phase details"}
@@ -265,12 +252,9 @@
             {#each group.rows as row, index (index)}
               <div
                 class="gutter-row"
-                class:lane={row.depth === 0}
-                class:nested={row.depth > 0}
-                class:continuation={row.continuation}
+                class:lane={true}
                 style:height={`${ROW_HEIGHT_PX}px`}
                 style:margin-bottom={`${ROW_GAP_PX}px`}
-                style:padding-left={`${row.depth * 10}px`}
                 title={`${row.label} — ${row.hint || group.hint}`}
               >
                 {row.label}
@@ -315,22 +299,26 @@
                     style:top={`${HEADER_PX + index * (ROW_HEIGHT_PX + ROW_GAP_PX)}px`}
                     style:height={`${ROW_HEIGHT_PX}px`}
                   >
-                    {#each row.spans as bar (bar.key)}
+                    {#each displaySpans(row) as bar (bar.key)}
                       <button
                         class="bar"
                         class:stall={bar.kind === "stall"}
                         class:untracked={bar.kind === "untracked"}
                         class:sampled={bar.kind === "sampled"}
+                        class:nested-bar={showDetails && bar.depth > 0}
+                        class:outlined={showDetails && bar.depth === 0 && bar.contains}
+                        class:expanded-parent={showDetails && bar.depth === 0 && bar.contains}
                         class:active={pinned && isActive(bar)}
                         aria-label={`${labelFor(bar.name)} ${fmtSecs(bar.duration)}`}
                         style:left={`${pct(bar.offset)}%`}
                         style:width={`max(3px, ${Math.max(pct(bar.duration), 0.02)}%)`}
                         style:--bar-color={colorFor(bar.name)}
-                        style:background={bar.kind === "work" ? fill(bar) : undefined}
+                        style:background={bar.kind === "work" && !(showDetails && bar.depth === 0 && bar.contains) ? fill(bar) : undefined}
+                        style:border-color={showDetails && bar.depth === 0 && bar.contains ? colorFor(bar.name) : undefined}
                         onmouseenter={(e) => showTip(e, bar)}
                         onmousemove={moveTip}
                         onmouseleave={hideTip}
-                        onclick={(e) => toggleChildren(e, bar)}
+                        onclick={(e) => pinTip(e, bar)}
                       >
                         {#if bar.kind === "sampled"}
                           <span
@@ -338,7 +326,7 @@
                             style:left={`${Math.min((bar.average / bar.duration) * 100, 100)}%`}
                           ></span>
                         {/if}
-                        {#if bar.kind === "work" && bar.rolloutId != null && bar.contains && widthPx(bar) > STEP_LABEL_MIN_PX}
+                        {#if bar.kind === "work" && bar.depth === 0 && bar.rolloutId != null && bar.contains && widthPx(bar) > STEP_LABEL_MIN_PX}
                           <span class="bar-text">Step {bar.rolloutId}</span>
                         {/if}
                       </button>
@@ -459,6 +447,10 @@
     gap: 5px;
   }
 
+  .legend-detail {
+    color: var(--muted);
+  }
+
   .swatch {
     width: 9px;
     height: 9px;
@@ -506,7 +498,6 @@
     border-left: 1px solid var(--border, #2f2f2f);
     border-right: 1px solid var(--border, #2f2f2f);
     font-variant-numeric: tabular-nums;
-    font-family: var(--font-mono);
   }
 
   .zoom-btn:hover:not(:disabled),
@@ -568,20 +559,6 @@
     letter-spacing: 0.04em;
   }
 
-  .gutter-row.nested {
-    color: var(--muted-strong, #8a8a8a);
-  }
-
-  .gutter-row.continuation {
-    color: var(--muted-strong, #8a8a8a);
-    font-weight: 500;
-    text-transform: none;
-  }
-
-  .gutter-row.continuation::before {
-    content: "↳ ";
-  }
-
   .viewport {
     flex: 1;
     min-width: 0;
@@ -616,12 +593,11 @@
   .step-text {
     display: block;
     padding: 0 6px;
-    font-size: 11px;
+    font-size: 10px;
     line-height: 20px;
     color: var(--muted);
     white-space: nowrap;
     font-variant-numeric: tabular-nums;
-    font-family: var(--font-mono);
   }
 
   .groups {
@@ -657,6 +633,21 @@
     background: transparent;
     font-family: inherit;
     transition: filter 0.1s ease;
+  }
+
+  .bar.outlined {
+    background: transparent;
+    border: 1px solid var(--bar-color);
+  }
+
+  .bar.expanded-parent {
+    z-index: 2;
+    pointer-events: none;
+  }
+
+  .bar.nested-bar {
+    border: 1px solid var(--bar-color);
+    z-index: 1;
   }
 
   /* A stall is the loop doing nothing, so it is a line rather than a block: the
@@ -697,14 +688,14 @@
     position: relative;
     align-self: flex-start;
     padding: 2px 4px 0;
-    font-size: 11px;
+    font-size: 10px;
     line-height: 1;
     font-weight: 600;
     color: var(--color-c-gray-100);
     text-shadow: 0 1px 2px var(--color-c-gray-02);
     white-space: nowrap;
     font-variant-numeric: tabular-nums;
-    font-family: var(--font-mono);
+    z-index: 3;
     pointer-events: none;
   }
 
@@ -762,7 +753,7 @@
 
   .tg-tip-dur,
   .tg-tip-child-values {
-    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
   }
 
   .tg-tip-children {

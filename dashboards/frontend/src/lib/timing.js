@@ -4,12 +4,11 @@ const slot = (name) => `var(--color-c-dataviz-${name})`;
 // never seen slime should be able to tell "the GPUs are training" from "we are
 // moving weights around" from "nothing is happening" without a glossary.
 export const CATEGORIES = {
-  train: { label: "Training compute", color: slot("primary-1") },
-  generate: { label: "Rollout generation", color: slot("primary-7") },
-  reward: { label: "Reward code", color: slot("primary-5") },
+  train: { label: "Training compute", color: slot("primary-7") },
+  generate: { label: "Rollout generation", color: slot("primary-2") },
   transfer: { label: "Moving weights", color: slot("primary-4") },
-  checkpoint: { label: "Checkpointing", color: slot("primary-3") },
-  eval: { label: "Eval", color: slot("primary-2") },
+  checkpoint: { label: "Checkpointing", color: slot("primary-5") },
+  eval: { label: "Eval", color: slot("primary-3") },
   idle: { label: "Waiting / untracked", color: "var(--color-c-gray-30)" },
 };
 
@@ -20,9 +19,9 @@ export const PHASE_CATEGORY = {
   optimizer_step: "train",
   generate_rollouts: "generate",
   generate_samples: "generate",
-  reward: "reward",
-  reward_batch: "reward",
-  reward_post_process: "reward",
+  reward: "generate",
+  reward_batch: "generate",
+  reward_post_process: "generate",
   weight_sync: "transfer",
   initial_weight_sync: "transfer",
   offload_train: "transfer",
@@ -32,6 +31,19 @@ export const PHASE_CATEGORY = {
   evaluate_rollouts_end: "eval",
   wait_for_rollout: "idle",
   wait_for_next_rollout: "idle",
+};
+
+export const PHASE_COLORS = {
+  compute_log_probs:
+    "color-mix(in srgb, var(--color-c-dataviz-primary-7) 62%, var(--color-c-gray-02))",
+  forward_backward: slot("primary-1"),
+  optimizer_step: slot("primary-7"),
+  reward:
+    "color-mix(in srgb, var(--color-c-dataviz-primary-2) 62%, var(--color-c-gray-02))",
+  reward_batch:
+    "color-mix(in srgb, var(--color-c-dataviz-primary-2) 62%, var(--color-c-gray-02))",
+  reward_post_process:
+    "color-mix(in srgb, var(--color-c-dataviz-primary-2) 62%, var(--color-c-gray-02))",
 };
 
 export const TIMING_LABELS = {
@@ -116,75 +128,6 @@ export const GROUPS = [
   },
 ];
 
-const LANES = [
-  {
-    key: "training",
-    label: "Training",
-    hint: "Training compute and its nested phases.",
-    names: new Set(["train_models", "compute_log_probs", "forward_backward", "optimizer_step"]),
-  },
-  {
-    key: "generation",
-    label: "Generation",
-    hint: "Rollout generation and reward processing.",
-    names: new Set([
-      "generate_samples",
-      "reward",
-      "reward_batch",
-      "reward_post_process",
-    ]),
-  },
-  {
-    key: "weight_sync",
-    label: "Weight sync",
-    hint: "Moving weights between the trainer and inference engines.",
-    names: new Set(["weight_sync", "initial_weight_sync", "offload_train", "offload_rollout"]),
-  },
-  {
-    key: "checkpoint",
-    label: "Checkpoint",
-    hint: "Checkpoint persistence.",
-    names: new Set(["checkpoint_save"]),
-  },
-  {
-    key: "eval",
-    label: "Eval",
-    hint: "Evaluation phases.",
-    names: new Set(["evaluate_rollouts", "evaluate_rollouts_end"]),
-  },
-  {
-    key: "waiting",
-    label: "Waiting",
-    hint: "Driver stalls and time spent waiting on another worker.",
-    names: new Set([
-      "wait_for_rollout",
-      "wait_for_next_rollout",
-      "generate_rollouts",
-      "untracked",
-    ]),
-  },
-  {
-    key: "other",
-    label: "Other",
-    hint: "A phase not recognized by this dashboard version.",
-    names: new Set(),
-  },
-];
-
-const LANE_OF_PHASE = new Map(
-  LANES.flatMap((lane) => [...lane.names].map((name) => [name, lane])),
-);
-
-const GROUP_OF_ROLE = new Map(
-  [
-    ["driver", "step"],
-    ["actor", "step"],
-    ["critic", "step"],
-    ["rollout", "generation"],
-  ],
-);
-const LANE_ORDER = new Map(LANES.map((lane, index) => [lane.key, index]));
-
 const NEGLIGIBLE_WORK_S = 0.0005;
 // Below this a hole is loop overhead rather than something to go and look at.
 const UNTRACKED_FLOOR_S = 0.25;
@@ -198,7 +141,7 @@ export function categoryOf(name) {
 }
 
 export function colorFor(name) {
-  return CATEGORIES[categoryOf(name)].color;
+  return PHASE_COLORS[name] || CATEGORIES[categoryOf(name)].color;
 }
 
 function merge(spans) {
@@ -231,7 +174,7 @@ function collect(timings) {
         const where = {
           rolloutId,
           role,
-          group: GROUP_OF_ROLE.get(role) ?? "step",
+          group: role === "rollout" ? "generation" : "step",
           name,
           category: categoryOf(name),
         };
@@ -376,44 +319,62 @@ function nest(spans) {
   return ordered;
 }
 
-// One fixed lane per phase family, split into continuation rows only when
-// spans in that lane and depth genuinely overlap on the shared wall clock.
-function rowsOf(spans) {
-  const rows = [];
-  for (const span of [...spans].sort(
-    (a, b) =>
-      (LANE_ORDER.get(LANE_OF_PHASE.get(a.name)?.key) ??
-        LANE_ORDER.get("other")) -
-        (LANE_ORDER.get(LANE_OF_PHASE.get(b.name)?.key) ??
-          LANE_ORDER.get("other")) ||
-      a.depth - b.depth ||
-      a.start - b.start ||
-      b.end - a.end,
-  )) {
-    const lane = LANE_OF_PHASE.get(span.name) || LANES[LANES.length - 1];
-    const continuation = rows.some(
-      (candidate) => candidate.lane === lane.key && candidate.depth === span.depth,
-    );
-    let row = rows.find(
-      (candidate) =>
-        candidate.lane === lane.key &&
-        candidate.depth === span.depth &&
-        candidate.spans[candidate.spans.length - 1].end <= span.start,
-    );
-    if (!row) {
-      row = {
-        lane: lane.key,
-        role: span.role,
-        depth: span.depth,
-        spans: [],
-        label: span.depth === 0 ? lane.label : `inside ${lane.label}`,
-        hint: lane.hint,
-        continuation,
-      };
-      rows.push(row);
+function rowsOf(spans, async) {
+  const driverSpans = spans.filter((span) => !async || span.role !== "rollout");
+  if (!async) {
+    return [
+      {
+        key: "driver",
+        label: "Training loop",
+        hint: "Driver and trainer phases on the shared wall clock.",
+        spans: driverSpans,
+      },
+    ];
+  }
+
+  const rows = [
+    {
+      key: "driver",
+      label: "Driver",
+      hint: "Driver and trainer phases on the shared wall clock.",
+      spans: driverSpans,
+    },
+  ];
+  const rolloutSpans = spans.filter((span) => span.role === "rollout");
+  const roots = rolloutSpans.filter((span) => span.depth === 0);
+  const packed = [];
+  for (const span of [...roots].sort((a, b) => a.start - b.start || b.end - a.end)) {
+    const row = packed.find((candidate) => candidate.end <= span.start);
+    if (row) {
+      row.end = span.end;
+      row.roots.push(span);
+    } else {
+      packed.push({ end: span.end, roots: [span] });
     }
-    row.spans.push(span);
-    span.row = rows.indexOf(row);
+  }
+  for (const [index, packedRow] of packed.entries()) {
+    const rootSet = new Set(packedRow.roots);
+    const ids = [
+      ...new Set(
+        packedRow.roots
+          .map((span) => span.rolloutId)
+          .filter((id) => id != null),
+      ),
+    ].sort((a, b) => a - b);
+    const label =
+      ids.length === 1
+        ? `Rollout ${ids[0]}`
+        : `Rollouts ${ids[0]}–${ids[ids.length - 1]}`;
+    rows.push({
+      key: `rollout-${index}`,
+      label,
+      hint: "Rollout engine phases packed by their actual wall-clock overlap.",
+      spans: rolloutSpans.filter((span) => {
+        let root = span;
+        while (root.parent) root = root.parent;
+        return rootSet.has(root);
+      }),
+    });
   }
   return rows;
 }
@@ -427,12 +388,12 @@ export function runTimeline(timings) {
   const runEnd = Math.max(...measured.map((span) => span.end));
   const steps = stepsOf(measured);
   const spans = nest([...measured, ...untrackedOf(measured, runStart, runEnd)]);
-  const generationSpans = spans.filter(
-    (span) => span.group === "generation" && span.kind !== "untracked",
-  );
+  const generationSpans = spans.filter((span) => span.role === "rollout");
   const stepSpans = spans.filter(
     (span) =>
-      span.group === "step" && span.kind !== "untracked" && span.kind !== "stall",
+      span.role !== "rollout" &&
+      span.kind !== "stall" &&
+      span.kind !== "untracked",
   );
   const async = generationSpans.some((generation) =>
     stepSpans.some(
@@ -449,11 +410,11 @@ export function runTimeline(timings) {
     span.average = span.total / span.count;
     span.inside = span.parent ? span.parent.name : null;
     span.insideKey = span.parent ? span.parent.key : null;
-    delete span.parent;
   }
 
-  const rows = rowsOf(spans);
+  const rows = rowsOf(spans, async);
   const groups = rows.length ? [{ ...GROUPS[0], rows }] : [];
+  for (const span of spans) delete span.parent;
 
   return {
     runStart,
