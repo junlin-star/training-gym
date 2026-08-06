@@ -35,20 +35,19 @@ export const PHASE_CATEGORY = {
 };
 
 export const PHASE_COLORS = {
-  compute_log_probs:
-    "color-mix(in srgb, var(--color-c-dataviz-primary-1) 72%, white)",
+  compute_log_probs: "var(--color-c-dataviz-primary-6)",
   forward_backward:
-    "color-mix(in srgb, var(--color-c-dataviz-primary-1) 84%, white)",
+    "color-mix(in srgb, var(--color-c-dataviz-primary-1) 55%, white)",
   optimizer_step:
-    "color-mix(in srgb, var(--color-c-dataviz-primary-1) 64%, white)",
+    "color-mix(in srgb, var(--color-c-dataviz-primary-1) 55%, var(--color-c-dataviz-primary-6))",
   reward:
-    "color-mix(in srgb, var(--color-c-dataviz-primary-3) 72%, white)",
+    "color-mix(in srgb, var(--color-c-dataviz-primary-3) 60%, var(--color-c-dataviz-primary-8))",
   reward_batch:
-    "color-mix(in srgb, var(--color-c-dataviz-primary-3) 72%, white)",
+    "color-mix(in srgb, var(--color-c-dataviz-primary-3) 60%, var(--color-c-dataviz-primary-8))",
   reward_post_process:
-    "color-mix(in srgb, var(--color-c-dataviz-primary-3) 72%, white)",
+    "color-mix(in srgb, var(--color-c-dataviz-primary-3) 60%, var(--color-c-dataviz-primary-8))",
   sample_generation:
-    "color-mix(in srgb, var(--color-c-dataviz-primary-3) 78%, white)",
+    "color-mix(in srgb, var(--color-c-dataviz-primary-3) 60%, var(--color-c-dataviz-primary-8))",
 };
 
 export const TIMING_LABELS = {

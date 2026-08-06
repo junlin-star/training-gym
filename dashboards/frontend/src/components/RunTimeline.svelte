@@ -29,12 +29,17 @@
     {
       label: "Forward/backward",
       color:
-        "color-mix(in srgb, var(--color-c-dataviz-primary-1) 84%, white)",
+        "color-mix(in srgb, var(--color-c-dataviz-primary-1) 55%, white)",
     },
     {
       label: "Optimizer step",
       color:
-        "color-mix(in srgb, var(--color-c-dataviz-primary-1) 64%, white)",
+        "color-mix(in srgb, var(--color-c-dataviz-primary-1) 55%, var(--color-c-dataviz-primary-6))",
+    },
+    {
+      label: "Sample generation",
+      color:
+        "color-mix(in srgb, var(--color-c-dataviz-primary-3) 60%, var(--color-c-dataviz-primary-8))",
     },
   ];
 
@@ -709,8 +714,12 @@
   }
 
   .bar.nested-bar {
+    min-width: 2px;
     border: 1px solid var(--bar-color);
     z-index: 3;
+    box-shadow:
+      inset 1px 0 var(--panel, #1a1a1a),
+      inset -1px 0 var(--panel, #1a1a1a);
   }
 
   /* A stall is the loop doing nothing, so it is a line rather than a block: the
