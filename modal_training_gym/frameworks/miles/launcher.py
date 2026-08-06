@@ -438,7 +438,9 @@ def build_miles_app(
             *proxy_auth_secrets(),
         ],
         timeout=24 * 60 * 60,
-        retries=Retries(max_retries=10, initial_delay=0.0),
+        # One dead node re-provisions the whole cluster, so a persistent
+        # bring-up failure costs (retries + 1) x total_nodes x gpus_per_node.
+        retries=Retries(max_retries=3, initial_delay=30.0),
         single_use_containers=True,
         experimental_options={"efa_enabled": True} if _multi_node else {},
         serialized=True,
