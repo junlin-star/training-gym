@@ -729,6 +729,9 @@ class MilesRecipe(BaseTrainRecipe):
 
     @classmethod
     def get_base_recipe(cls, model_config: ModelConfig) -> "MilesRecipe | None":
+        from modal_training_gym.train_recipes.miles_recipe.gemma4_26b_a4b import (
+            Gemma4_26B_A4B_Recipe,
+        )
         from modal_training_gym.train_recipes.miles_recipe.kimi import (
             Kimi_K2_5_LoRA_Recipe,
             Kimi_K2_6_LoRA_Recipe,
@@ -738,6 +741,8 @@ class MilesRecipe(BaseTrainRecipe):
             return Kimi_K2_5_LoRA_Recipe()
         if model_config.model_name == "moonshotai/Kimi-K2.6":
             return Kimi_K2_6_LoRA_Recipe()
+        if model_config.model_name == "google/gemma-4-26B-A4B-it":
+            return Gemma4_26B_A4B_Recipe()
         return None
 
     def download_model(self) -> None:

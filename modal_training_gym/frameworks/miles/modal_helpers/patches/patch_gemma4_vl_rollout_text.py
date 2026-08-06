@@ -90,5 +90,17 @@ if OLD not in src:
         "payload construction has changed. Re-check it before shipping."
     )
 
+# The injected branch reads `state.processor`, a local of the enclosing
+# generate(). Matching OLD only proves the *surrounding* lines are unchanged, so
+# check the binding too: if upstream renames it, the patch would still apply and
+# the branch would just never fire -- sending pre-expanded input_ids again and
+# putting VL back to silently failing on every request.
+if "state = GenerateState(args)" not in src:
+    raise SystemExit(
+        "Gemma-4 VL rollout text patch expects a local `state = GenerateState(args)` "
+        "in miles' sglang_rollout.py; it is gone, so the injected branch would never "
+        "fire. Re-check how the processor is reached before shipping."
+    )
+
 TARGET.write_text(src.replace(OLD, NEW, 1))
 print("Patched Gemma-4 VL rollout to send text instead of pre-expanded input_ids")

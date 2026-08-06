@@ -4,7 +4,7 @@ from dataclasses import field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from pydantic import ConfigDict
+from pydantic import ConfigDict, model_validator
 from pydantic.dataclasses import dataclass
 
 from modal_training_gym.common.errors import TrainingGymConfigError
@@ -242,6 +242,25 @@ class Gemma4_26B_A4B_Recipe(MilesRecipe):
     attention_softmax_in_fp32: bool = True
     no_gradient_accumulation_fusion: bool = True
     no_check_for_nan_in_loss_and_grad: bool = True
+
+    @model_validator(mode="after")
+    def _keep_image_patches(self) -> "Gemma4_26B_A4B_Recipe":
+        """Keep the build-time patches at the head of ``image_run_commands``.
+
+        They are a default, so a caller who passes ``image_run_commands`` to add
+        one of their own would otherwise replace them and lose the router timeout
+        and the VL rollout fix -- the second silently, as a blind model rather than
+        an error. Prepending instead of defaulting makes the field additive.
+        """
+        patches = _image_patches()
+        current = list(self.image_run_commands or [])
+        if current[: len(patches)] != patches:
+            object.__setattr__(
+                self,
+                "image_run_commands",
+                [*patches, *(c for c in current if c not in patches)],
+            )
+        return self
 
     def _for_dataset(self, dataset: "DatasetConfig | None") -> MilesRecipe:
         if not _has_images(dataset):
