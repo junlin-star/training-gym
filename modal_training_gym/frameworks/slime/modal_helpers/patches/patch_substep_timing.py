@@ -375,6 +375,18 @@ REWARD_SAMPLE_TARGET = PackageTarget(
     scope=None,
     blocks=(
         (
+            "sample_generation",
+            "            if custom_func_path is not None:\n"
+            "                custom_generate_func = load_function(custom_func_path)\n"
+            "                # if signature has evaluation, pass evaluation\n"
+            '                if "evaluation" in inspect.signature(custom_generate_func).parameters:\n'
+            "                    sample = await custom_generate_func(args, sample, sampling_params, evaluation=evaluation)\n"
+            "                else:\n"
+            "                    sample = await custom_generate_func(args, sample, sampling_params)\n"
+            "            else:\n"
+            "                sample = await generate(args, sample, sampling_params)\n",
+        ),
+        (
             "reward",
             "        if sample.reward is None:\n"
             '            with trace_span(sample, "reward_model"):\n'

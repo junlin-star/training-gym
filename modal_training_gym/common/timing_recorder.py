@@ -28,10 +28,7 @@ TIMING_TIMEOUT_SECONDS = 10.0
 
 MIN_PUBLISH_INTERVAL_S = 3.0
 
-PER_SAMPLE_PHASES = frozenset({"reward"})
-
-FINAL_POST_ATTEMPTS = 3
-FINAL_POST_RETRY_S = 0.5
+PER_SAMPLE_PHASES = frozenset({"reward", "sample_generation"})
 
 _CLOSED_POSTERS: list[threading.Thread] = []
 
@@ -157,14 +154,7 @@ class RoleRecorder:
                 snapshot, self._snapshot = self._snapshot, None
             if snapshot is not None and snapshot["phases"] != self._posted_phases:
                 self._posted_phases = snapshot["phases"]
-                # A lane that has closed has no successor snapshot to carry its
-                # phases, so its last one is retried rather than dropped.
-                attempts = FINAL_POST_ATTEMPTS if self._closed else 1
-                for attempt in range(attempts):
-                    if status_reporter.post_item(dict(snapshot)):
-                        break
-                    if attempt + 1 < attempts:
-                        time.sleep(FINAL_POST_RETRY_S * (attempt + 1))
+                status_reporter.post_item(dict(snapshot))
             if self._closed and self._snapshot is None:
                 if self._poster in _CLOSED_POSTERS:
                     _CLOSED_POSTERS.remove(self._poster)
@@ -258,12 +248,11 @@ def recording_lane(
 
 
 def _lowest_rank_publishes() -> bool | None:
-    """Whether this rank writes its lane; ``None`` until ranks are known.
+    """Whether global rank zero writes this lane; ``None`` until ranks are known.
 
     The lane is measured on every rank of the model and stored under one key, so
-    one rank writes it. Slime and miles give each model's train group its own
-    ``init_process_group``, so a rank's world is its model's group and that
-    group's lowest rank is this process's rank 0.
+    one rank writes it. This assumes the initialized world process group is the
+    model's train group, as established by the current Slime and Miles launchers.
     """
     try:
         import torch.distributed as dist

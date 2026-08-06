@@ -29,9 +29,8 @@ class PhaseTiming(BaseModel):
     repeatedly, more when its runs overlapped.
 
     ``invocations`` holds each run as ``[start_s, end_s]``, so a phase that ran a
-    few times draws as those runs rather than one bar over all of them. Empty for
-    a phase that runs once per sample, which the timeline draws as one block over
-    its span, labelled with the count and the average.
+    few times draws as those runs rather than one bar over all of them. It is
+    empty for sampled phases, which are represented by aggregate statistics.
     """
 
     count: int
@@ -99,6 +98,9 @@ class Substep(str, Enum):
     WAIT_FOR_NEXT_ROLLOUT = "wait_for_next_rollout"  # driver, on the next one's
     TRAIN_MODELS = "train_models"  # driver
     GENERATE_SAMPLES = "generate_samples"  # rollout worker
+    SAMPLE_GENERATION = (
+        "sample_generation"  # rollout worker, one run per generated sample
+    )
     REWARD = "reward"  # rollout worker, one run per sample
     REWARD_BATCH = "reward_batch"  # rollout worker, one run per scored batch
     REWARD_POST_PROCESS = "reward_post_process"  # rollout worker

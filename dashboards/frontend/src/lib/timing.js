@@ -4,12 +4,12 @@ const slot = (name) => `var(--color-c-dataviz-${name})`;
 // never seen slime should be able to tell "the GPUs are training" from "we are
 // moving weights around" from "nothing is happening" without a glossary.
 export const CATEGORIES = {
-  train: { label: "Training compute", color: slot("primary-7") },
-  generate: { label: "Rollout generation", color: slot("primary-2") },
-  transfer: { label: "Moving weights", color: slot("primary-4") },
-  checkpoint: { label: "Checkpointing", color: slot("primary-5") },
+  train: { label: "Train", color: slot("primary-7") },
+  generate: { label: "Rollout", color: slot("primary-2") },
+  transfer: { label: "Weight sync", color: slot("primary-4") },
+  checkpoint: { label: "Checkpoint", color: slot("primary-5") },
   eval: { label: "Eval", color: slot("primary-3") },
-  idle: { label: "Waiting / untracked", color: "var(--color-c-gray-30)" },
+  idle: { label: "Waiting", color: "var(--color-c-gray-30)" },
 };
 
 export const PHASE_CATEGORY = {
@@ -19,6 +19,7 @@ export const PHASE_CATEGORY = {
   optimizer_step: "train",
   generate_rollouts: "generate",
   generate_samples: "generate",
+  sample_generation: "generate",
   reward: "generate",
   reward_batch: "generate",
   reward_post_process: "generate",
@@ -36,7 +37,7 @@ export const PHASE_CATEGORY = {
 export const PHASE_COLORS = {
   compute_log_probs:
     "color-mix(in srgb, var(--color-c-dataviz-primary-7) 62%, var(--color-c-gray-02))",
-  forward_backward: slot("primary-1"),
+  forward_backward: "var(--color-c-dataviz-training-light)",
   optimizer_step: slot("primary-7"),
   reward:
     "color-mix(in srgb, var(--color-c-dataviz-primary-2) 62%, var(--color-c-gray-02))",
@@ -44,6 +45,7 @@ export const PHASE_COLORS = {
     "color-mix(in srgb, var(--color-c-dataviz-primary-2) 62%, var(--color-c-gray-02))",
   reward_post_process:
     "color-mix(in srgb, var(--color-c-dataviz-primary-2) 62%, var(--color-c-gray-02))",
+  sample_generation: slot("primary-2"),
 };
 
 export const TIMING_LABELS = {
@@ -51,7 +53,7 @@ export const TIMING_LABELS = {
   evaluate_rollouts_end: "Eval (after training)",
   generate_rollouts: "Waiting for rollouts",
   offload_rollout: "Offload generation engines",
-  compute_log_probs: "Log probs",
+  compute_log_probs: "Calculate log probs",
   train_models: "Train",
   checkpoint_save: "Save checkpoint",
   offload_train: "Offload trainer",
@@ -59,7 +61,8 @@ export const TIMING_LABELS = {
   initial_weight_sync: "Initial weight sync",
   wait_for_rollout: "Waiting for this rollout",
   wait_for_next_rollout: "Waiting for the next rollout",
-  generate_samples: "Generate samples",
+  generate_samples: "Rollout generation",
+  sample_generation: "Sample generation",
   reward: "Reward",
   reward_batch: "Reward (whole batch)",
   reward_post_process: "Reward post process",
@@ -67,34 +70,6 @@ export const TIMING_LABELS = {
   optimizer_step: "Optimizer step",
   untracked: "Untracked",
 };
-
-export const PHASE_HELP = {
-  train_models: "One optimizer update on the policy from this step's samples.",
-  compute_log_probs: "Recomputes sample log-probs under the current policy for the loss.",
-  forward_backward: "Forward + backward passes producing gradients.",
-  optimizer_step: "Applies the gradients to the weights.",
-  generate_rollouts: "Driver waiting on the engines to return this step's samples.",
-  generate_samples:
-    "The engines generating this step's samples (one measured interval; per-sample lengths are in the Rollouts tab).",
-  reward: "Your reward function scoring each sample.",
-  reward_batch: "Your reward function scoring the batch.",
-  reward_post_process: "Turning rewards into advantages for the batch.",
-  weight_sync: "Copies updated weights from the trainer to the inference engines.",
-  initial_weight_sync: "One-time engine and process-group bring-up before the loop starts.",
-  offload_train: "Moving the trainer model off/onto the GPUs between phases.",
-  offload_rollout: "Moving the generation model off/onto the GPUs between phases.",
-  checkpoint_save: "Writing a checkpoint to persistent storage.",
-  wait_for_rollout:
-    "Driver idle, waiting on this step's samples (generated during the previous step).",
-  wait_for_next_rollout:
-    "Driver idle, waiting on the next step's samples before pushing new weights.",
-  evaluate_rollouts: "Running evaluation on the current policy.",
-  evaluate_rollouts_end: "Running evaluation on the current policy.",
-};
-
-export function phaseHelp(name) {
-  return PHASE_HELP[name] || "";
-}
 
 // Phases where the worker whose lane they are on is blocked on somebody else:
 // they are drawn as stalls, and the work itself shows up on the row of the
@@ -108,8 +83,9 @@ const STALLS = new Set([
 ]);
 
 // A phase measured once per sample, kept as an aggregate rather than thousands
-// of intervals: it is drawn as its span with the count and average on it.
-const SAMPLED = new Set(["reward", "reward_batch"]);
+// of intervals.
+const SAMPLED = new Set(["reward", "reward_batch", "sample_generation"]);
+export const HIDDEN_PHASES = new Set(["reward", "reward_batch", "reward_post_process"]);
 
 const NESTS_IN = {
   compute_log_probs: ["train_models"],
@@ -118,6 +94,7 @@ const NESTS_IN = {
   reward: ["generate_samples"],
   reward_batch: ["generate_samples"],
   reward_post_process: ["generate_samples"],
+  sample_generation: ["generate_samples"],
 };
 
 export const GROUPS = [
@@ -180,7 +157,7 @@ function collect(timings) {
         };
         // Per-sample phases are aggregated even when an older record still
         // carries their runs: thousands of sub-millisecond slivers say less
-        // than one span with a count and an average on it.
+        // than one span across the calls' spread.
         const runs =
           !SAMPLED.has(name) && Array.isArray(phase?.invocations)
             ? phase.invocations
@@ -205,9 +182,7 @@ function collect(timings) {
           continue;
         }
         // Per-sample phases (and records written before runs were kept) have
-        // only the aggregate, so they are drawn as the span the calls are
-        // spread over, carrying their count and average rather than posing as
-        // one continuous run.
+        // only aggregate timing, so they are drawn across the calls' spread.
         spans.push({
           ...where,
           kind: STALLS.has(name)
@@ -298,6 +273,12 @@ function nest(spans) {
     if (parent) parent.children.push(span);
   }
   for (const span of ordered) {
+    const occurrences = new Map();
+    for (const child of [...span.children].sort((a, b) => a.start - b.start)) {
+      const occurrence = (occurrences.get(child.name) || 0) + 1;
+      occurrences.set(child.name, occurrence);
+      child.ordinal = occurrence;
+    }
     const duration = Math.max(span.end - span.start, 0);
     const children = new Map();
     for (const child of span.children) {
@@ -305,18 +286,70 @@ function nest(spans) {
       const current = children.get(child.name) ?? {
         name: child.name,
         duration: 0,
+        total: 0,
         count: 0,
+        longest: 0,
+        start: child.start,
+        end: child.end,
       };
       current.duration += childDuration;
+      current.total += child.total ?? childDuration;
       current.count += child.count || 1;
+      current.longest = Math.max(current.longest, child.longest || childDuration);
+      current.start = Math.min(current.start, child.start);
+      current.end = Math.max(current.end, child.end);
       children.set(child.name, current);
     }
     span.children = [...children.values()].map((child) => ({
       ...child,
       share: duration > 0 ? child.duration / duration : 0,
+      average: child.count ? child.total / child.count : 0,
     }));
   }
   return ordered;
+}
+
+function clipStalls(spans, async) {
+  const workByRow = new Map();
+  for (const span of spans) {
+    if (span.kind === "stall" || span.kind === "untracked") continue;
+    const row = async && span.role === "rollout" ? "generation" : "step";
+    const intervals = workByRow.get(row) || [];
+    intervals.push([span.start, span.end]);
+    workByRow.set(row, intervals);
+  }
+  const clipped = [];
+  for (const span of spans) {
+    if (span.kind !== "stall") {
+      clipped.push(span);
+      continue;
+    }
+    let pieces = [[span.start, span.end]];
+    for (const [workStart, workEnd] of workByRow.get(
+      async && span.role === "rollout" ? "generation" : "step",
+    ) || []) {
+      pieces = pieces.flatMap(([start, end]) =>
+        end <= workStart || start >= workEnd
+          ? [[start, end]]
+          : [
+              ...(start < workStart ? [[start, workStart]] : []),
+              ...(end > workEnd ? [[workEnd, end]] : []),
+            ],
+      );
+    }
+    for (const [start, end] of pieces) {
+      if (end - start >= NEGLIGIBLE_WORK_S) {
+        clipped.push({
+          ...span,
+          start,
+          end,
+          total: end - start,
+          duration: end - start,
+        });
+      }
+    }
+  }
+  return clipped;
 }
 
 function rowsOf(spans, async) {
@@ -361,13 +394,9 @@ function rowsOf(spans, async) {
           .filter((id) => id != null),
       ),
     ].sort((a, b) => a - b);
-    const label =
-      ids.length === 1
-        ? `Rollout ${ids[0]}`
-        : `Rollouts ${ids[0]}–${ids[ids.length - 1]}`;
     rows.push({
       key: `rollout-${index}`,
-      label,
+      label: "ROLLOUTS",
       hint: "Rollout engine phases packed by their actual wall-clock overlap.",
       spans: rolloutSpans.filter((span) => {
         let root = span;
@@ -387,9 +416,9 @@ export function runTimeline(timings) {
   const runStart = Math.min(...measured.map((span) => span.start));
   const runEnd = Math.max(...measured.map((span) => span.end));
   const steps = stepsOf(measured);
-  const spans = nest([...measured, ...untrackedOf(measured, runStart, runEnd)]);
-  const generationSpans = spans.filter((span) => span.role === "rollout");
-  const stepSpans = spans.filter(
+  const rawSpans = [...measured, ...untrackedOf(measured, runStart, runEnd)];
+  const generationSpans = rawSpans.filter((span) => span.role === "rollout");
+  const stepSpans = rawSpans.filter(
     (span) =>
       span.role !== "rollout" &&
       span.kind !== "stall" &&
@@ -400,6 +429,7 @@ export function runTimeline(timings) {
       (step) => generation.start < step.end && step.start < generation.end,
     ),
   );
+  const spans = nest(clipStalls(rawSpans, async));
 
   for (const span of spans) {
     span.key = `${span.rolloutId}:${span.role}:${span.name}:${span.start.toFixed(3)}`;
@@ -435,11 +465,13 @@ export function runTimeline(timings) {
   };
 }
 
-export function fmtSecs(s) {
+export function fmtSecs(s, unit = null) {
   if (s == null) return "—";
   const n = Number(s);
   if (!Number.isFinite(n)) return "—";
   const trim = (x) => x.toFixed(3).replace(/\.?0+$/, "");
+  if (unit === "ms") return `${trim(n * 1000)}ms`;
+  if (unit === "s") return `${trim(n)}s`;
   if (n > 0 && n < 0.01) return `${trim(n * 1000)}ms`;
   if (n >= 60) {
     const m = Math.floor(n / 60);

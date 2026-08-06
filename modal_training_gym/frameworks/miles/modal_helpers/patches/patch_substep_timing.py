@@ -329,6 +329,17 @@ PACKAGE_TARGETS: tuple[PackageTarget, ...] = (
         scope=None,
         blocks=(
             (
+                "sample_generation",
+                "            generate_fn = load_generate_function(custom_func_path) if custom_func_path else None\n"
+                "            if generate_fn is not None:\n"
+                "                output = await generate_fn(\n"
+                "                    GenerateFnInput(state=state, sample=sample, sampling_params=sampling_params, evaluation=evaluation)\n"
+                "                )\n"
+                "                sample = output.samples\n"
+                "            else:\n"
+                "                sample = await generate(args, sample, sampling_params)\n",
+            ),
+            (
                 "reward",
                 "        if sample.reward is None:\n"
                 "            sample.reward = await async_rm(args, sample)\n",

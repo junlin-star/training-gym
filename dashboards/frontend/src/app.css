@@ -159,6 +159,8 @@
   --color-c-dataviz-primary-6: #4fbe5f;
   --color-c-dataviz-primary-7: #648fe0;
   --color-c-dataviz-primary-8: #8d324c;
+  --color-c-dataviz-training-light: #8fb2f0;
+  --color-c-dataviz-training-boundary: #3f65ae;
   --color-c-dataviz-paired-1: #78a967;
   --color-c-dataviz-paired-2: #e06161;
   --color-c-dataviz-paired-3: #ca70ad;
@@ -2039,6 +2041,7 @@ table.training-runs-table td.row-open-cell {
   font-size: 12px;
   font-weight: 600;
   color: var(--text-bright);
+  text-transform: uppercase;
   margin-bottom: 6px;
 }
 

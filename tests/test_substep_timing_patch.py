@@ -181,6 +181,38 @@ def test_a_moved_anchor_fails_the_build(miles, tmp_path):
         miles._patch_file(work, miles.ENTRYPOINTS["train.py"])
 
 
+@pytest.mark.parametrize("framework", ["miles", "slime"])
+def test_per_sample_generation_target_wraps_only_generation_branch(
+    patchers, tmp_path, framework
+):
+    patcher = patchers[framework]
+    target = next(
+        target
+        for target in patcher.PACKAGE_TARGETS
+        if target.path.endswith("sglang_rollout.py")
+    )
+    blocks = dict(target.blocks)
+    source = (
+        "async def generate_and_rm(args, sample, sampling_params, evaluation=False):\n"
+        "    async with state.semaphore:\n"
+        "        with state.dp_rank_context() as _:\n"
+        f"{blocks['sample_generation']}"
+        f"{blocks['reward']}"
+        "    return sample\n"
+    )
+    work = tmp_path / target.path
+    work.parent.mkdir(parents=True)
+    work.write_text(source)
+    patcher.patch_package_file(tmp_path, target)
+    patched = work.read_text()
+    assert patched.count("with _tg_time_phase('sample_generation'):") == 1
+    assert patched.count("with _tg_time_phase('reward'):") == 1
+    assert patched.index("with _tg_time_phase('sample_generation'):") < patched.index(
+        "with _tg_time_phase('reward'):"
+    )
+    compile(patched, str(work), "exec")
+
+
 def test_missing_package_file_fails_the_build(miles, tmp_path):
     with pytest.raises(RuntimeError, match="layout changed"):
         miles.patch_package_file(tmp_path, miles.PACKAGE_TARGETS[0])

@@ -1,12 +1,11 @@
 <script>
-  import { ChevronDown, ChevronRight, Download, ZoomIn, ZoomOut } from "lucide-svelte";
+  import { Download, ZoomIn, ZoomOut } from "lucide-svelte";
   import {
     CATEGORIES,
-    categoryOf,
     colorFor,
     fmtSecs,
+    HIDDEN_PHASES,
     labelFor,
-    phaseHelp,
     runTimeline,
   } from "../lib/timing.js";
 
@@ -26,12 +25,9 @@
   const HEADER_PX = 0;
   const GROUP_GAP_PX = 12;
   const STEP_GAP_PX = 8;
-  const STEP_LABEL_MIN_PX = 56;
   const DETAIL_LEGEND = [
-    { label: "Log probs", color: colorFor("compute_log_probs") },
-    { label: "Forward/backward", color: colorFor("forward_backward") },
-    { label: "Optimizer step", color: colorFor("optimizer_step") },
-    { label: "Reward phases", color: colorFor("reward") },
+    { label: "Forward/backward", color: "var(--color-c-dataviz-training-light)" },
+    { label: "Optimizer step", color: "var(--color-c-dataviz-primary-7)" },
   ];
 
   // What each wait is actually waiting for, in steps rather than futures.
@@ -67,18 +63,8 @@
 
   const pct = (seconds) => (seconds / timeline.span) * 100;
 
-  // Deeper frames are lighter, so a nested phase reads as part of its parent
-  // rather than as a different kind of work.
-  function fill(bar) {
-    return colorFor(bar.name);
-  }
-
   let zoom = $state(1);
   let viewport = $state(null);
-  let viewportWidth = $state(900);
-
-  let contentWidth = $derived(viewportWidth * zoom);
-  const widthPx = (bar) => (bar.duration / timeline.span) * contentWidth;
 
   function setZoom(next, anchorX = null) {
     const clamped = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, next));
@@ -126,22 +112,36 @@
 
   let tip = $state(null);
   let pinned = $state(false);
+  let hideTimer = null;
 
   const isActive = (bar) => tip && tip.bar.key === bar.key;
 
+  function clearHideTimer() {
+    if (hideTimer !== null) {
+      window.clearTimeout(hideTimer);
+      hideTimer = null;
+    }
+  }
+
+  function scheduleHide() {
+    clearHideTimer();
+    if (!pinned) hideTimer = window.setTimeout(() => (tip = null), 180);
+  }
+
   function showTip(e, bar) {
+    clearHideTimer();
     if (pinned) return;
     tip = { x: e.clientX, y: e.clientY, bar };
   }
 
   function moveTip(e) {
+    clearHideTimer();
     if (pinned || !tip) return;
     tip = { ...tip, x: e.clientX, y: e.clientY };
   }
 
   function hideTip() {
-    if (pinned) return;
-    tip = null;
+    scheduleHide();
   }
 
   function pinTip(e, bar) {
@@ -161,9 +161,48 @@
     tip = null;
   }
 
+  function tipTitle(bar) {
+    if (bar.kind === "mean") return "Mean sample generation time";
+    if (bar.kind === "untracked") return "Untracked wall clock";
+    const name = labelFor(bar.name);
+    return bar.ordinal ? `${name} ${bar.ordinal}` : name;
+  }
+
+  function meanMarker(bar) {
+    return bar.children?.find((child) => child.name === "sample_generation") || null;
+  }
+
+  function nestedChild(bar, name) {
+    for (const child of bar.children || []) {
+      if (child.name === name) return child;
+      const nested = nestedChild(child, name);
+      if (nested) return nested;
+    }
+    return null;
+  }
+
+  function generationStats(bar) {
+    return bar.name === "generate_samples" ? nestedChild(bar, "sample_generation") : null;
+  }
+
+  function fmtDurationPair(mean, longest) {
+    const unit = fmtSecs(Math.max(Number(mean) || 0, Number(longest) || 0)).endsWith("ms")
+      ? "ms"
+      : "s";
+    return `mean ${fmtSecs(mean, unit)} · max ${fmtSecs(longest, unit)}`;
+  }
+
+  function rewardStats(bar) {
+    return bar.name === "generate_samples" ? nestedChild(bar, "reward") : null;
+  }
+
+  function hasVisibleChildren(bar) {
+    return bar.children?.some((child) => !HIDDEN_PHASES.has(child.name)) ?? false;
+  }
+
   function displaySpans(row) {
     return [...row.spans]
-      .filter((bar) => showDetails || bar.depth === 0)
+      .filter((bar) => !HIDDEN_PHASES.has(bar.name) && (showDetails || bar.depth === 0))
       .sort((a, b) => a.depth - b.depth || a.start - b.start || b.end - a.end);
   }
 </script>
@@ -176,7 +215,7 @@
   {:else}
     <div class="toolbar">
       <div class="legend">
-        {#each timeline.categories as key (key)}
+        {#each timeline.categories.filter((key) => key !== "idle") as key (key)}
           <span class="legend-item">
             <span class="swatch" style:background={CATEGORIES[key].color}></span>
             {CATEGORIES[key].label}
@@ -227,20 +266,14 @@
           Download JSON
         </button>
         <button
-          class="dl-btn"
+          class="dl-btn detail-btn"
           onclick={() => {
             showDetails = !showDetails;
           }}
           aria-pressed={showDetails}
-          title={showDetails ? "Hide phase details" : "Show phase details"}
+          title={showDetails ? "Hide detailed view" : "Show detailed view"}
         >
-          {#if showDetails}
-            <ChevronDown size={13} />
-            Hide phase details
-          {:else}
-            <ChevronRight size={13} />
-            Show phase details
-          {/if}
+          {showDetails ? "Hide detailed view" : "Show detailed view"}
         </button>
       </div>
     </div>
@@ -267,7 +300,6 @@
       <div
         class="viewport"
         bind:this={viewport}
-        bind:clientWidth={viewportWidth}
         use:wheelZoom
       >
         <div class="track" style:width={`${zoom * 100}%`}>
@@ -306,15 +338,21 @@
                         class:untracked={bar.kind === "untracked"}
                         class:sampled={bar.kind === "sampled"}
                         class:nested-bar={showDetails && bar.depth > 0}
-                        class:outlined={showDetails && bar.depth === 0 && bar.contains}
-                        class:expanded-parent={showDetails && bar.depth === 0 && bar.contains}
+                        class:outlined={showDetails && bar.depth === 0 && hasVisibleChildren(bar)}
+                        class:expanded-parent={showDetails && bar.depth === 0 && hasVisibleChildren(bar)}
                         class:active={pinned && isActive(bar)}
                         aria-label={`${labelFor(bar.name)} ${fmtSecs(bar.duration)}`}
                         style:left={`${pct(bar.offset)}%`}
-                        style:width={`max(3px, ${Math.max(pct(bar.duration), 0.02)}%)`}
+                        style:width={`max(1px, ${Math.max(pct(bar.duration), 0.01)}%)`}
                         style:--bar-color={colorFor(bar.name)}
-                        style:background={bar.kind === "work" && !(showDetails && bar.depth === 0 && bar.contains) ? fill(bar) : undefined}
-                        style:border-color={showDetails && bar.depth === 0 && bar.contains ? colorFor(bar.name) : undefined}
+                        style:background={bar.kind === "work" && !(showDetails && bar.depth === 0 && hasVisibleChildren(bar)) ? colorFor(bar.name) : undefined}
+                        style:border-color={
+                          showDetails && bar.depth === 0 && hasVisibleChildren(bar)
+                            ? bar.name === "train_models"
+                              ? "var(--color-c-dataviz-training-boundary)"
+                              : colorFor(bar.name)
+                            : undefined
+                        }
                         onmouseenter={(e) => showTip(e, bar)}
                         onmousemove={moveTip}
                         onmouseleave={hideTip}
@@ -326,8 +364,23 @@
                             style:left={`${Math.min((bar.average / bar.duration) * 100, 100)}%`}
                           ></span>
                         {/if}
-                        {#if bar.kind === "work" && bar.depth === 0 && bar.rolloutId != null && bar.contains && widthPx(bar) > STEP_LABEL_MIN_PX}
-                          <span class="bar-text">Step {bar.rolloutId}</span>
+                        {#if bar.name === "generate_samples" && meanMarker(bar)}
+                          <span
+                            class="mean-marker"
+                            role="img"
+                            aria-label={`Mean sample generation time ${fmtSecs(meanMarker(bar).average)}`}
+                            style:left={`${Math.min((meanMarker(bar).average / bar.duration) * 100, 100)}%`}
+                            onmouseenter={(e) =>
+                              showTip(e, {
+                                ...bar,
+                                key: `${bar.key}:mean`,
+                                name: "mean_sample",
+                                duration: meanMarker(bar).average,
+                                offset: bar.offset,
+                                kind: "mean",
+                              })}
+                            onmouseleave={hideTip}
+                          ></span>
                         {/if}
                       </button>
                     {/each}
@@ -344,34 +397,42 @@
 </div>
 
 {#if tip}
-  <div class="tg-tip" class:pinned style:left={`${tip.x}px`} style:top={`${tip.y}px`}>
-    <span class="tg-tip-head">
-      {#if tip.bar.kind === "untracked"}
-        Untracked wall clock
-      {:else}
-        {#if tip.bar.rolloutId != null}Step {tip.bar.rolloutId} ·{/if}
-        {CATEGORIES[categoryOf(tip.bar.name)].label.toLowerCase()}
-      {/if}
-    </span>
-    <span class="tg-tip-name">
-      {tip.bar.kind === "untracked" ? "Untracked wall clock" : labelFor(tip.bar.name)}
-    </span>
-    <span class="tg-tip-dur">{fmtSecs(tip.bar.duration)}</span>
-    <span class="tg-tip-when">
-      {fmtSecs(tip.bar.offset)} → {fmtSecs(tip.bar.offset + tip.bar.duration)} into the
-      run
-    </span>
-    {#if tip.bar.kind === "sampled"}
-      <span class="tg-tip-when">
-        {tip.bar.count} calls · average {fmtSecs(tip.bar.average)} · longest {fmtSecs(
-          tip.bar.longest,
-        )}, spread over the span rather than one run
+  <div
+    class="tg-tip"
+    class:pinned
+    role="tooltip"
+    style:left={`${tip.x}px`}
+    style:top={`${tip.y}px`}
+    onmouseenter={clearHideTimer}
+    onmouseleave={scheduleHide}
+  >
+    <div class="tg-tip-main">
+      <span class="tg-tip-time">
+        {tip.bar.rolloutId == null ? "" : `Step ${tip.bar.rolloutId} · `}{fmtSecs(tip.bar.duration)}
       </span>
-    {:else if tip.bar.count > 1}
+    </div>
+    <span class="tg-tip-name">{tipTitle(tip.bar)}</span>
+    {#if tip.bar.kind === "mean"}
+      <span class="tg-tip-when">Mean sample generation time</span>
+    {:else}
       <span class="tg-tip-when">
-        {tip.bar.count} runs · {fmtSecs(tip.bar.total)} of work · longest {fmtSecs(
-          tip.bar.longest,
+        {fmtSecs(tip.bar.offset)} → {fmtSecs(tip.bar.offset + tip.bar.duration)}
+      </span>
+    {/if}
+    {#if generationStats(tip.bar)}
+      <span class="tg-tip-stat">
+        Sample generation · {fmtDurationPair(
+          generationStats(tip.bar).average,
+          generationStats(tip.bar).longest ?? generationStats(tip.bar).duration,
         )}
+      </span>
+    {/if}
+    {#if rewardStats(tip.bar)}
+      <span class="tg-tip-stat">
+        Reward · {fmtDurationPair(
+          rewardStats(tip.bar).average,
+          rewardStats(tip.bar).longest ?? rewardStats(tip.bar).duration,
+        )} (per-call compute)
       </span>
     {/if}
     {#if tip.bar.kind === "stall"}
@@ -379,26 +440,23 @@
         stalled on {WAITS_ON[tip.bar.name]?.(tip.bar.rolloutId) ?? "another worker"}
       </span>
     {/if}
-    {#if tip.bar.inside}
-      <span class="tg-tip-when">ran inside {labelFor(tip.bar.inside).toLowerCase()}</span>
-    {/if}
-    {#if pinned && tip.bar.children?.length}
+    {#if tip.bar.children?.length}
       <div class="tg-tip-children">
-        {#each tip.bar.children as child (child.name)}
+        {#each tip.bar.children.filter((child) => !HIDDEN_PHASES.has(child.name)) as child (child.name)}
           <span class="tg-tip-child">
-            <span>{labelFor(child.name)}</span>
-            <span class="tg-tip-child-values"
-              >{fmtSecs(child.duration)}{#if child.count > 1} · {child.count} calls{/if} ·
-              {Math.round(child.share * 100)}%</span
-            >
+            <span class="tg-tip-child-line">
+              {labelFor(child.name)} · {fmtSecs(child.duration)}
+            </span>
+            {#if showDetails}
+              <span class="tg-tip-when">
+                {fmtSecs(child.start - timeline.runStart)} → {fmtSecs(child.end - timeline.runStart)}
+              </span>
+            {/if}
           </span>
         {/each}
       </div>
     {/if}
-    {#if tip.bar.kind !== "untracked" && phaseHelp(tip.bar.name)}
-      <span class="tg-tip-help">{phaseHelp(tip.bar.name)}</span>
-    {/if}
-    {#if pinned && tip.bar.category === "generate" && tip.bar.rolloutId != null && onOpenRollout}
+    {#if tip.bar.kind !== "untracked" && tip.bar.category === "generate" && tip.bar.rolloutId != null && onOpenRollout}
       <button
         class="tg-tip-action"
         onclick={(e) => {
@@ -622,10 +680,11 @@
     height: 100%;
     display: flex;
     align-items: center;
-    min-width: 3px;
+    min-width: 1px;
     padding: 0;
     border: none;
     border-radius: 1px;
+    box-sizing: border-box;
     outline: 1px solid var(--panel, #1a1a1a);
     overflow: hidden;
     cursor: pointer;
@@ -636,18 +695,18 @@
   }
 
   .bar.outlined {
-    background: transparent;
+    background: color-mix(in srgb, var(--bar-color) 35%, transparent);
     border: 1px solid var(--bar-color);
   }
 
   .bar.expanded-parent {
     z-index: 2;
-    pointer-events: none;
+    pointer-events: auto;
   }
 
   .bar.nested-bar {
     border: 1px solid var(--bar-color);
-    z-index: 1;
+    z-index: 3;
   }
 
   /* A stall is the loop doing nothing, so it is a line rather than a block: the
@@ -684,27 +743,12 @@
     background: var(--bar-color);
   }
 
-  .bar-text {
-    position: relative;
-    align-self: flex-start;
-    padding: 2px 4px 0;
-    font-size: 10px;
-    line-height: 1;
-    font-weight: 600;
-    color: var(--color-c-gray-100);
-    text-shadow: 0 1px 2px var(--color-c-gray-02);
-    white-space: nowrap;
-    font-variant-numeric: tabular-nums;
-    z-index: 3;
-    pointer-events: none;
-  }
-
   .bar:hover {
     filter: brightness(1.25);
   }
 
   .bar.active {
-    outline: 1px solid var(--text-bright, #fff);
+    outline: 2px solid var(--color-c-green-80, #6ac355);
     outline-offset: -1px;
     filter: brightness(1.3);
   }
@@ -713,7 +757,7 @@
     position: fixed;
     z-index: 1000;
     transform: translate(-50%, calc(-100% - 10px));
-    pointer-events: none;
+    pointer-events: auto;
     display: flex;
     flex-direction: column;
     gap: 1px;
@@ -727,16 +771,25 @@
     font-family: var(--font-sans);
   }
 
+  .tg-tip::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: -12px;
+    height: 12px;
+  }
+
   .tg-tip.pinned {
     border-color: var(--accent, #60a5fa);
     pointer-events: auto;
   }
 
-  .tg-tip-head {
+  .tg-tip-main {
     color: var(--muted);
-    font-size: 10px;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
   }
 
   .tg-tip-name {
@@ -744,15 +797,10 @@
     font-weight: 600;
   }
 
-  .tg-tip-dur,
-  .tg-tip-when,
-  .tg-tip-help {
+  .tg-tip-when {
     color: var(--muted);
-    font-variant-numeric: tabular-nums;
-  }
-
-  .tg-tip-dur,
-  .tg-tip-child-values {
+    font-family: var(--font-mono);
+    font-size: 9px;
     font-variant-numeric: tabular-nums;
   }
 
@@ -767,13 +815,15 @@
 
   .tg-tip-child {
     display: flex;
-    justify-content: space-between;
-    gap: 14px;
+    flex-direction: column;
+    gap: 1px;
   }
 
-  .tg-tip-help {
-    max-width: 360px;
-    white-space: normal;
+  .tg-tip-child-line {
+    color: var(--muted);
+    font-weight: 500;
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
   }
 
   .tg-tip-action {
@@ -789,5 +839,21 @@
 
   .tg-tip-action:hover {
     text-decoration: underline;
+  }
+
+  .detail-btn {
+    background: var(--color-c-gray-12, #262626);
+    border-color: var(--color-c-gray-25, #555);
+    color: var(--text-bright, #fff);
+  }
+
+  .mean-marker {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 2px;
+    background: var(--color-c-dataviz-primary-2);
+    cursor: help;
+    z-index: 4;
   }
 </style>
