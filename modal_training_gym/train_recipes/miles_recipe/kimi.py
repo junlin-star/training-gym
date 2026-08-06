@@ -73,9 +73,6 @@ class _KimiK2Recipe(MilesRecipe):
             "CUDA_DEVICE_MAX_CONNECTIONS": "1",
             "NCCL_NVLS_ENABLE": "1",
             "NCCL_TIMEOUT": "3600",
-            # Ray workers get this dict as their runtime env; without it the
-            # Megatron actor resolved a host libibverbs that could not satisfy
-            # the image's libmlx5 and failed importing mooncake.
             "LD_LIBRARY_PATH": (
                 "/usr/lib/x86_64-linux-gnu:/usr/local/nvidia/lib:"
                 "/usr/local/nvidia/lib64:/usr/local/cuda/lib64"
