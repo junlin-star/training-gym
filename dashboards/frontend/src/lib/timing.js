@@ -4,24 +4,13 @@ const slot = (name) => `var(--color-c-dataviz-${name})`;
 // never seen slime should be able to tell "the GPUs are training" from "we are
 // moving weights around" from "nothing is happening" without a glossary.
 export const CATEGORIES = {
-  train: { label: "Training compute", color: slot("primary-6") },
+  train: { label: "Training compute", color: slot("primary-1") },
   generate: { label: "Rollout generation", color: slot("primary-7") },
   reward: { label: "Reward code", color: slot("primary-5") },
   transfer: { label: "Moving weights", color: slot("primary-4") },
-  checkpoint: { label: "Checkpointing", color: slot("primary-8") },
-  eval: { label: "Eval", color: slot("primary-3") },
-  idle: { label: "Waiting / untracked", color: "var(--color-c-gray-30, #6a6a6a)" },
-};
-
-// Where two phases of one category sit next to each other often enough that
-// telling them apart matters, the second takes a neighbouring tone of the same
-// family -- still "this is training", but with a visible seam.
-export const TONES = {
-  compute_log_probs: slot("paired-1"),
-  forward_backward: slot("primary-1"),
-  optimizer_step: slot("paired-6"),
-  offload_train: slot("primary-4"),
-  offload_rollout: slot("primary-4"),
+  checkpoint: { label: "Checkpointing", color: slot("primary-3") },
+  eval: { label: "Eval", color: slot("primary-2") },
+  idle: { label: "Waiting / untracked", color: "var(--color-c-gray-30)" },
 };
 
 export const PHASE_CATEGORY = {
@@ -157,7 +146,7 @@ export function categoryOf(name) {
 }
 
 export function colorFor(name) {
-  return TONES[name] || CATEGORIES[categoryOf(name)].color;
+  return CATEGORIES[categoryOf(name)].color;
 }
 
 export function roleLabel(role) {
@@ -177,7 +166,8 @@ function merge(spans) {
 function collect(timings) {
   const spans = [];
   for (const [id, lanes] of Object.entries(timings || {})) {
-    const rolloutId = Number(id);
+    const parsedId = Number(id);
+    const rolloutId = Number.isFinite(parsedId) ? parsedId : null;
     for (const [role, lane] of Object.entries(lanes?.roles || {})) {
       const laneStart = Number(lane?.lane_start_unix_s);
       if (!Number.isFinite(laneStart)) continue;
@@ -246,7 +236,7 @@ function collect(timings) {
 function stepsOf(spans) {
   const byRollout = new Map();
   for (const span of spans) {
-    if (span.role !== "driver") continue;
+    if (span.role !== "driver" || span.rolloutId == null) continue;
     const step = byRollout.get(span.rolloutId) ?? {
       id: span.rolloutId,
       start: span.start,
@@ -307,7 +297,28 @@ function nest(spans) {
       .sort((a, b) => b.depth - a.depth)[0];
     span.depth = parent ? parent.depth + 1 : 0;
     span.parent = parent ?? null;
+    span.children = [];
     if (parent) parent.contains = true;
+    if (parent) parent.children.push(span);
+  }
+  for (const span of ordered) {
+    const duration = Math.max(span.end - span.start, 0);
+    const children = new Map();
+    for (const child of span.children) {
+      const childDuration = Math.max(child.end - child.start, 0);
+      const current = children.get(child.name) ?? {
+        name: child.name,
+        duration: 0,
+        count: 0,
+      };
+      current.duration += childDuration;
+      current.count += child.count || 1;
+      children.set(child.name, current);
+    }
+    span.children = [...children.values()].map((child) => ({
+      ...child,
+      share: duration > 0 ? child.duration / duration : 0,
+    }));
   }
   return ordered;
 }
@@ -377,10 +388,13 @@ export function runTimeline(timings) {
 
   for (const span of spans) {
     span.key = `${span.rolloutId}:${span.role}:${span.name}:${span.start.toFixed(3)}`;
+  }
+  for (const span of spans) {
     span.offset = span.start - runStart;
     span.duration = span.end - span.start;
     span.average = span.total / span.count;
     span.inside = span.parent ? span.parent.name : null;
+    span.insideKey = span.parent ? span.parent.key : null;
     delete span.parent;
   }
 

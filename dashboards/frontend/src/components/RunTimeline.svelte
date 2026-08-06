@@ -25,7 +25,8 @@
   const ROW_GAP_PX = 4;
   const HEADER_PX = 0;
   const GROUP_GAP_PX = 12;
-  const STEP_LABEL_MIN_PX = 36;
+  const STEP_GAP_PX = 8;
+  const STEP_LABEL_MIN_PX = 56;
 
   // What each wait is actually waiting for, in steps rather than futures.
   const WAITS_ON = {
@@ -48,9 +49,22 @@
     })),
   );
   let showDetails = $state(false);
+  let expandedBars = $state(new Set());
+  $effect(() => {
+    timings;
+    expandedBars = new Set();
+    pinned = false;
+    tip = null;
+  });
   let visibleGroups = $derived(
     groups.map((group) => {
-      const rows = showDetails ? group.rows : group.rows.filter((row) => row.depth === 0);
+      const rows = showDetails
+        ? group.rows
+        : group.rows.filter(
+            (row) =>
+              row.depth === 0 ||
+              row.spans.some((span) => span.insideKey && expandedBars.has(span.insideKey)),
+          );
       return {
         ...group,
         rows,
@@ -69,7 +83,7 @@
   function fill(bar) {
     const base = colorFor(bar.name);
     if (bar.depth === 0) return base;
-    return `color-mix(in srgb, ${base} ${Math.max(100 - bar.depth * 28, 40)}%, var(--color-c-gray-02, #111))`;
+    return `color-mix(in srgb, ${base} ${Math.max(100 - bar.depth * 28, 40)}%, var(--color-c-gray-02))`;
   }
 
   let zoom = $state(1);
@@ -159,6 +173,19 @@
     pinned = false;
     tip = null;
   }
+
+  function toggleChildren(e, bar) {
+    e.stopPropagation();
+    if (!bar.children?.length) {
+      pinTip(e, bar);
+      return;
+    }
+    const next = new Set(expandedBars);
+    if (next.has(bar.key)) next.delete(bar.key);
+    else next.add(bar.key);
+    expandedBars = next;
+    pinTip(e, bar);
+  }
 </script>
 
 <svelte:window onclick={clearPin} />
@@ -213,7 +240,10 @@
         </button>
         <button
           class="dl-btn"
-          onclick={() => (showDetails = !showDetails)}
+          onclick={() => {
+            showDetails = !showDetails;
+            expandedBars = new Set();
+          }}
           aria-pressed={showDetails}
           title={showDetails ? "Hide phase details" : "Show phase details"}
         >
@@ -229,7 +259,7 @@
     </div>
 
     <div class="chart">
-      <div class="gutter" style:padding-top={`${ROW_HEIGHT_PX + 6}px`}>
+      <div class="gutter" style:padding-top={`${ROW_HEIGHT_PX + STEP_GAP_PX}px`}>
         {#each visibleGroups as group (group.key)}
           <div style:margin-bottom={`${GROUP_GAP_PX}px`}>
             {#each group.rows as row, index (index)}
@@ -242,7 +272,7 @@
                 style:padding-left={`${row.depth * 10}px`}
                 title={row.depth === 0 ? `${group.label} — ${group.hint}` : row.label}
               >
-                {row.depth === 0 ? group.label : row.label}
+                {row.depth === 0 ? (index === 0 ? group.label : "") : row.label}
               </div>
             {/each}
           </div>
@@ -290,9 +320,6 @@
                         class:stall={bar.kind === "stall"}
                         class:untracked={bar.kind === "untracked"}
                         class:sampled={bar.kind === "sampled"}
-                        class:slim={bar.kind !== "stall" &&
-                          bar.kind !== "untracked" &&
-                          !bar.contains}
                         class:active={pinned && isActive(bar)}
                         aria-label={`${labelFor(bar.name)} ${fmtSecs(bar.duration)}`}
                         style:left={`${pct(bar.offset)}%`}
@@ -302,7 +329,7 @@
                         onmouseenter={(e) => showTip(e, bar)}
                         onmousemove={moveTip}
                         onmouseleave={hideTip}
-                        onclick={(e) => pinTip(e, bar)}
+                        onclick={(e) => toggleChildren(e, bar)}
                       >
                         {#if bar.kind === "sampled"}
                           <span
@@ -366,6 +393,19 @@
     {#if tip.bar.inside}
       <span class="tg-tip-when">ran inside {labelFor(tip.bar.inside).toLowerCase()}</span>
     {/if}
+    {#if pinned && tip.bar.children?.length}
+      <div class="tg-tip-children">
+        {#each tip.bar.children as child (child.name)}
+          <span class="tg-tip-child">
+            <span>{labelFor(child.name)}</span>
+            <span class="tg-tip-child-values"
+              >{fmtSecs(child.duration)}{#if child.count > 1} · {child.count} calls{/if} ·
+              {Math.round(child.share * 100)}%</span
+            >
+          </span>
+        {/each}
+      </div>
+    {/if}
     {#if tip.bar.kind !== "untracked" && phaseHelp(tip.bar.name)}
       <span class="tg-tip-help">{phaseHelp(tip.bar.name)}</span>
     {/if}
@@ -388,6 +428,7 @@
     display: flex;
     flex-direction: column;
     gap: 12px;
+    font-family: var(--font-sans);
   }
 
   .empty {
@@ -456,6 +497,7 @@
     font-size: 11px;
     padding: 3px 7px;
     cursor: pointer;
+    font-family: inherit;
   }
 
   .zoom-level {
@@ -463,6 +505,7 @@
     border-left: 1px solid var(--border, #2f2f2f);
     border-right: 1px solid var(--border, #2f2f2f);
     font-variant-numeric: tabular-nums;
+    font-family: var(--font-mono);
   }
 
   .zoom-btn:hover:not(:disabled),
@@ -488,6 +531,7 @@
     font-size: 11px;
     padding: 3px 8px;
     cursor: pointer;
+    font-family: inherit;
   }
 
   .dl-btn:hover {
@@ -513,6 +557,7 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    font-family: var(--font-sans);
   }
 
   .gutter-row.lane {
@@ -545,7 +590,7 @@
 
   .steps {
     position: relative;
-    margin-bottom: 6px;
+    margin-bottom: 8px;
   }
 
   .step {
@@ -565,6 +610,7 @@
     color: var(--muted);
     white-space: nowrap;
     font-variant-numeric: tabular-nums;
+    font-family: var(--font-mono);
   }
 
   .groups {
@@ -598,6 +644,7 @@
     cursor: pointer;
     pointer-events: auto;
     background: transparent;
+    font-family: inherit;
     transition: filter 0.1s ease;
   }
 
@@ -622,14 +669,6 @@
     border: 1px dashed var(--color-c-gray-25, #555);
   }
 
-  /* Leaf phases contain nothing, so they draw slim; a full-height bar means
-     there are nested phases showing underneath it. */
-  .bar.slim {
-    height: 8px;
-    top: 50%;
-    transform: translateY(-50%);
-  }
-
   .bar.sampled {
     background: color-mix(in srgb, var(--bar-color) 35%, transparent);
     border: 1px solid var(--bar-color);
@@ -650,9 +689,11 @@
     font-size: 11px;
     line-height: 1;
     font-weight: 600;
-    color: color-mix(in srgb, var(--bar-color) 68%, #000);
+    color: var(--color-c-gray-100);
+    text-shadow: 0 1px 2px var(--color-c-gray-02);
     white-space: nowrap;
     font-variant-numeric: tabular-nums;
+    font-family: var(--font-mono);
     pointer-events: none;
   }
 
@@ -681,6 +722,7 @@
     box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
     font-size: 11px;
     white-space: nowrap;
+    font-family: var(--font-sans);
   }
 
   .tg-tip.pinned {
@@ -696,7 +738,7 @@
   }
 
   .tg-tip-name {
-    color: var(--text-bright, #fff);
+    color: var(--color-c-gray-100);
     font-weight: 600;
   }
 
@@ -705,6 +747,26 @@
   .tg-tip-help {
     color: var(--muted);
     font-variant-numeric: tabular-nums;
+  }
+
+  .tg-tip-dur,
+  .tg-tip-child-values {
+    font-family: var(--font-mono);
+  }
+
+  .tg-tip-children {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin-top: 3px;
+    padding-top: 3px;
+    border-top: 1px solid var(--border, #3a3a3a);
+  }
+
+  .tg-tip-child {
+    display: flex;
+    justify-content: space-between;
+    gap: 14px;
   }
 
   .tg-tip-help {
@@ -719,7 +781,7 @@
     border: none;
     background: none;
     color: var(--accent, #60a5fa);
-    font: inherit;
+    font-family: inherit;
     cursor: pointer;
   }
 
