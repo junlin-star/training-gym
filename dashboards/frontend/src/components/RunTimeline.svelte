@@ -366,12 +366,6 @@
                         onmouseleave={hideTip}
                         onclick={(e) => pinTip(e, bar)}
                       >
-                        {#if bar.kind === "sampled"}
-                          <span
-                            class="tick"
-                            style:left={`${Math.min((bar.average / bar.duration) * 100, 100)}%`}
-                          ></span>
-                        {/if}
                       </button>
                     {/each}
                   </div>
@@ -716,15 +710,11 @@
 
   .bar.sampled {
     background: transparent;
-    border: 1px solid var(--bar-color);
-  }
-
-  .tick {
-    position: absolute;
-    top: 0;
-    bottom: 0;
-    width: 1px;
-    background: var(--bar-color);
+    border: none;
+    background: linear-gradient(var(--bar-color), var(--bar-color));
+    background-size: 100% 2px;
+    background-position: center;
+    background-repeat: no-repeat;
   }
 
   .bar.active {
