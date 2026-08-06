@@ -91,6 +91,7 @@ export const TOOLTIP_HIDDEN_PHASES = new Set([
 ]);
 
 const NESTS_IN = {
+  generate_samples: ["generate_rollouts"],
   compute_log_probs: ["train_models"],
   forward_backward: ["train_models"],
   optimizer_step: ["train_models"],
