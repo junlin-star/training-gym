@@ -657,17 +657,6 @@ class TrainConfig:
         except RuntimeError:
             framework_status_token = ""
 
-        if isinstance(self.recipe, (SlimeRecipe, MilesRecipe)):
-            from modal_training_gym.common.step_timing import probe_substep_timing
-
-            if not probe_substep_timing(
-                framework_status_url,
-                self.recipe.substep_timing,
-                training_run_id=training_run_id,
-                framework_status_token=framework_status_token,
-            ):
-                self.recipe.substep_timing = "off"
-
         print(f"TrainingRun recorded: {training_run_id}")
 
         app = self._build_app(training_run_id)

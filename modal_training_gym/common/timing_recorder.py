@@ -87,6 +87,7 @@ class RoleRecorder:
         self._snapshot_ready = threading.Event()
         self._poster: threading.Thread | None = None
         self._closed = False
+        self._unsupported = False
 
     def __enter__(self) -> "RoleRecorder":
         return self
@@ -154,7 +155,15 @@ class RoleRecorder:
                 snapshot, self._snapshot = self._snapshot, None
             if snapshot is not None and snapshot["phases"] != self._posted_phases:
                 self._posted_phases = snapshot["phases"]
-                status_reporter.post_item(dict(snapshot))
+                result = status_reporter.post_item_result(dict(snapshot))
+                if result == "not_found":
+                    self._unsupported = True
+                    if os.environ.get(TIMING_MODE_ENV, "auto") == "require":
+                        print(
+                            "ERROR: substep_timing='require' was rejected with "
+                            "HTTP 404; timing is unavailable on this dashboard.",
+                            flush=True,
+                        )
             if self._closed and self._snapshot is None:
                 if self._poster in _CLOSED_POSTERS:
                     _CLOSED_POSTERS.remove(self._poster)
@@ -169,6 +178,8 @@ class RoleRecorder:
         url = timing_url()
         training_run_id = os.environ.get("TRAINING_GYM_TRAINING_RUN_ID", "")
         if not url or not training_run_id:
+            return
+        if self._unsupported:
             return
         if self._publish_gate is not None:
             if self._gate_answer is None:

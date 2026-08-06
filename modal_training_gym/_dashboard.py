@@ -50,8 +50,6 @@ from modal_training_gym.common.run_summary import (
     build_run_summaries,
 )
 from modal_training_gym.common.step_timing import (
-    PROTOCOL as TIMING_PROTOCOL,
-    TIMING_CAPABILITY_PATH,
     RoleTimingRecord,
     legacy_run_to_records,
     load_run_async,
@@ -148,7 +146,6 @@ PASSWORD_EXEMPT_PATHS = frozenset(
         "/api/framework-status",
         "/api/training-rollouts",
         "/api/advantage-distributions",
-        TIMING_CAPABILITY_PATH,
         "/api/timing-events",
     }
 )
@@ -883,16 +880,6 @@ def fastapi_app():
                 ),
             )
         return JSONResponse(merged)
-
-    @web.get(TIMING_CAPABILITY_PATH)
-    async def timing_events_capability(
-        training_run_id: str,
-        authorization: str | None = Header(default=None),
-    ):
-        """Determines if step timing code is available for a run."""
-        await _require_framework_status_token(training_run_id, authorization)
-        await _get_run_or_404(training_run_id)
-        return JSONResponse({"protocol": TIMING_PROTOCOL})
 
     @web.post("/api/timing-events")
     async def timing_event(

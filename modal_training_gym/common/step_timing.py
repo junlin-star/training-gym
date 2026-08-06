@@ -3,17 +3,11 @@ from __future__ import annotations
 import time
 from enum import Enum
 from typing import Any, Awaitable
-from urllib.parse import urlencode
 
 from pydantic import BaseModel, Field
 
-from modal_training_gym.common.config import modal_proxy_auth_headers
 from modal_training_gym.common.status import SlimeStatus
 from modal_training_gym.utils.metadata import MetadataStore, vol_list, vol_put
-
-
-PROTOCOL = "training-gym-substep-timing"
-TIMING_CAPABILITY_PATH = "/api/timing-capability"
 
 
 class Role(str, Enum):
@@ -206,88 +200,6 @@ def _by_rollout(
     for record in records:
         steps.setdefault(record["rollout_id"], []).append(record)
     return steps
-
-
-# ---------- Legacy handling --------------
-
-
-def probe_substep_timing(
-    framework_status_url: str,
-    mode: str = "auto",
-    *,
-    training_run_id: str = "",
-    framework_status_token: str = "",
-) -> bool:
-    """Check the dashboard can accept timing records; return whether to enable.
-
-    Called on the host before the training app is spawned, so ``"require"``
-    fails while nothing is allocated rather than 40 GPUs in. ``"auto"`` warns
-    and disables instead: a run is worth more than its telemetry.
-    """
-    import json
-    import urllib.error
-    import urllib.request
-
-    if mode == "off":
-        return False
-    if not framework_status_url:
-        if mode == "require":
-            raise RuntimeError(
-                "substep_timing='require' but this run has no dashboard URL to "
-                "report timing to. Deploy the dashboard "
-                "(`modal deploy dashboards/app.py`) or set substep_timing='auto'."
-            )
-        return False
-
-    base = framework_status_url.rstrip("/")
-    suffix = "/api/framework-status"
-    if base.endswith(suffix):
-        base = base[: -len(suffix)]
-    url = f"{base}{TIMING_CAPABILITY_PATH}"
-    if training_run_id:
-        url = f"{url}?{urlencode({'training_run_id': training_run_id})}"
-
-    # A proxy-authenticated dashboard rejects an unsigned request at the proxy,
-    # which would read here as a dashboard that cannot accept timing at all.
-    headers = modal_proxy_auth_headers()
-    if framework_status_token:
-        headers["Authorization"] = f"Bearer {framework_status_token}"
-    request = urllib.request.Request(url, headers=headers)
-    problem = ""
-    try:
-        with urllib.request.urlopen(request, timeout=5.0) as response:
-            payload = json.loads(response.read() or b"{}")
-        if payload.get("protocol") != PROTOCOL:
-            problem = f"{url} did not identify as {PROTOCOL!r}"
-    except urllib.error.HTTPError as exc:
-        # 404 means an older dashboard without the route; anything else is a
-        # live dashboard failing, for which "redeploy" is the wrong advice.
-        if exc.code == 404:
-            problem = (
-                f"{url} returned 404 -- the deployed dashboard predates substep timing"
-            )
-        elif exc.code in (401, 403):
-            problem = (
-                f"{url} returned HTTP {exc.code} -- timing capability "
-                "authentication failed"
-            )
-        else:
-            problem = f"{url} returned HTTP {exc.code}"
-    except (OSError, ValueError) as exc:
-        problem = f"could not reach {url}: {exc}"
-
-    if not problem:
-        return True
-    if mode == "require":
-        advice = (
-            "Check the framework-status token and dashboard authentication."
-            if "authentication failed" in problem
-            else "Redeploy the dashboard (`modal deploy dashboards/app.py`) "
-            "or set substep_timing='auto'."
-        )
-        raise RuntimeError(f"substep_timing='require' but {problem}. {advice}")
-    print(f"WARNING: substep timing disabled for this run -- {problem}")
-    return False
 
 
 # Old step timing method grouped general training step i.e. forward/backward

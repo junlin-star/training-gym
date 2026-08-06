@@ -23,8 +23,8 @@ import json
 import os
 import threading
 from queue import Queue
-from typing import Any
-from urllib.error import URLError
+from typing import Any, Literal
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 
@@ -35,6 +35,7 @@ _STARTED = False
 _LOCK = threading.Lock()
 _DEFAULT_TIMEOUT_SECONDS = 2.0
 _STATUS_TOKEN_ENV = "TRAINING_GYM_FRAMEWORK_STATUS_TOKEN"
+PostResult = Literal["ok", "not_found", "failed"]
 
 
 def _resolve_url() -> str:
@@ -78,7 +79,7 @@ def _worker() -> None:
             _QUEUE.task_done()
 
 
-def _post(item: dict[str, Any]) -> bool:
+def _post(item: dict[str, Any]) -> PostResult:
     url = item.pop("_url", "")
     timeout = float(
         item.pop("_timeout", _DEFAULT_TIMEOUT_SECONDS) or _DEFAULT_TIMEOUT_SECONDS
@@ -87,7 +88,7 @@ def _post(item: dict[str, Any]) -> bool:
     # enqueue_item callers); don't re-resolve it here.
     token = str(item.pop("_token", "") or "").strip()
     if not url:
-        return False
+        return "failed"
     body = json.dumps(item, default=str).encode("utf-8")
 
     from modal_training_gym.common.config import modal_proxy_auth_headers
@@ -108,9 +109,11 @@ def _post(item: dict[str, Any]) -> bool:
     try:
         with urlopen(request, timeout=timeout) as response:
             response.read()
+    except HTTPError as exc:
+        return "not_found" if exc.code == 404 else "failed"
     except (OSError, URLError):
-        return False
-    return True
+        return "failed"
+    return "ok"
 
 
 def enqueue_item(item: dict[str, Any]) -> None:
@@ -131,6 +134,11 @@ def post_item(item: dict[str, Any]) -> bool:
     blocking up to the item's ``_timeout``. Returns whether it was accepted;
     failures are swallowed. Consumes the item's ``_url``/``_token`` keys, so a
     caller that retries must pass a copy."""
+    return _post(item) == "ok"
+
+
+def post_item_result(item: dict[str, Any]) -> PostResult:
+    """Synchronously POST and preserve whether the route returned 404."""
     return _post(item)
 
 
