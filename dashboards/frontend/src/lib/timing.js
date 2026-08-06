@@ -100,7 +100,7 @@ export const GROUPS = [
   },
   {
     key: "generation",
-    label: "Rollout generation",
+    label: "Generation",
     hint: "the inference engines producing samples",
     roles: ["rollout"],
   },

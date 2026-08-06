@@ -1356,7 +1356,8 @@
           {#if Object.keys(runTimings).length}
             <div class="rollout-chart">
               <div class="rollout-chart-title">
-                Substep timing across {Object.keys(runTimings).length} rollouts
+                Substep timing across {Object.keys(runTimings).length}
+                {Object.keys(runTimings).length === 1 ? "step" : "steps"}
               </div>
               <RunTimeline
                 timings={runTimings}

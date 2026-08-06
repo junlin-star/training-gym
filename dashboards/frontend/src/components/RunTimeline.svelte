@@ -19,8 +19,8 @@
 
   const ROW_HEIGHT_PX = 20;
   const ROW_GAP_PX = 6;
-  const HEADER_PX = 18;
-  const GROUP_GAP_PX = 20;
+  const HEADER_PX = 0;
+  const GROUP_GAP_PX = 22;
   const STEP_LABEL_PX = 18;
 
   // What each wait is actually waiting for, in steps rather than futures.
@@ -228,23 +228,17 @@
       <div class="gutter" style:padding-top={`${ROW_HEIGHT_PX + 6}px`}>
         {#each visibleGroups as group (group.key)}
           <div style:margin-bottom={`${GROUP_GAP_PX}px`}>
-            <div
-              class="gutter-head"
-              style:height={`${HEADER_PX}px`}
-              title={`${group.label} — ${group.hint}`}
-            >
-              {group.label}
-            </div>
             {#each group.rows as row, index (index)}
               <div
                 class="gutter-row"
+                class:lane={row.depth === 0}
                 class:nested={row.depth > 0}
                 style:height={`${ROW_HEIGHT_PX}px`}
                 style:margin-bottom={`${ROW_GAP_PX}px`}
-                style:padding-left={`${row.depth * 7}px`}
-                title={row.label}
+                style:padding-left={`${row.depth * 10}px`}
+                title={row.depth === 0 ? `${group.label} — ${group.hint}` : row.label}
               >
-                {row.label}
+                {row.depth === 0 ? group.label : row.label}
               </div>
             {/each}
           </div>
@@ -309,10 +303,8 @@
                             style:left={`${Math.min((bar.average / bar.duration) * 100, 100)}%`}
                           ></span>
                         {/if}
-                        {#if bar.rolloutId != null && widthPx(bar) > STEP_LABEL_PX}
-                          <span class="bar-text" class:on-dark={bar.kind === "work"}>
-                            {bar.rolloutId}
-                          </span>
+                        {#if bar.kind === "work" && bar.rolloutId != null && widthPx(bar) > STEP_LABEL_PX}
+                          <span class="bar-text">{bar.rolloutId}</span>
                         {/if}
                       </button>
                     {/each}
@@ -504,18 +496,8 @@
     width: 108px;
   }
 
-  .gutter-head {
-    font-size: 10px;
-    line-height: 15px;
-    color: var(--text-bright, #fff);
-    font-weight: 500;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
   .gutter-row {
-    font-size: 10px;
+    font-size: 11px;
     line-height: 20px;
     color: var(--muted);
     white-space: nowrap;
@@ -523,8 +505,15 @@
     text-overflow: ellipsis;
   }
 
+  .gutter-row.lane {
+    color: var(--text);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
   .gutter-row.nested {
-    opacity: 0.65;
+    color: var(--muted-strong, #8a8a8a);
   }
 
   .viewport {
@@ -560,8 +549,8 @@
 
   .step-text {
     display: block;
-    padding: 0 4px;
-    font-size: 10px;
+    padding: 0 6px;
+    font-size: 11px;
     line-height: 20px;
     color: var(--muted);
     white-space: nowrap;
@@ -636,16 +625,14 @@
   .bar-text {
     position: relative;
     display: block;
-    padding: 0 3px;
-    font-size: 10px;
+    padding: 0 4px;
+    font-size: 11px;
     line-height: 20px;
-    color: var(--muted);
+    font-weight: 600;
+    color: color-mix(in srgb, var(--bar-color) 70%, #000);
     white-space: nowrap;
+    font-variant-numeric: tabular-nums;
     pointer-events: none;
-  }
-
-  .bar-text.on-dark {
-    color: var(--color-c-gray-9, #0b0b0b);
   }
 
   .bar:hover {
