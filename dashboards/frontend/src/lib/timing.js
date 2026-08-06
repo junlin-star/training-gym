@@ -227,7 +227,9 @@ function nest(spans) {
         (other) =>
           other !== span &&
           other.rolloutId === span.rolloutId &&
-          other.group === span.group &&
+          (other.group === span.group ||
+            (span.name === "generate_samples" &&
+              other.name === "generate_rollouts")) &&
           other.start <= span.start &&
           span.end <= other.end &&
           (NESTS_IN[span.name] || []).includes(other.name),

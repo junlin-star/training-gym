@@ -258,7 +258,7 @@ def vol_list(
                     *(_read(path) for path in paths), return_exceptions=True
                 )
                 failures = [
-                    result for result in results if not isinstance(result, dict)
+                    result for result in results if isinstance(result, Exception)
                 ]
                 if failures and not allow_partial:
                     raise RuntimeError("Metadata listing encountered unreadable files")

@@ -91,6 +91,7 @@ class RoleRecorder:
         self._poster: threading.Thread | None = None
         self._closed = False
         self._post_retries = 0
+        self._unknown_run = False
 
     def __enter__(self) -> "RoleRecorder":
         return self
@@ -179,6 +180,8 @@ class RoleRecorder:
                                 "endpoint; timing is unavailable on this dashboard.",
                                 flush=True,
                             )
+                    elif result == "unknown_run":
+                        self._unknown_run = True
                     elif result == "failed":
                         self._post_retries += 1
                         if self._post_retries >= MAX_POST_RETRIES:
@@ -201,6 +204,8 @@ class RoleRecorder:
         if not self.phases:
             return
         if os.environ.get(TIMING_MODE_ENV, "auto") == "off":
+            return
+        if self._unknown_run:
             return
         url = timing_url()
         training_run_id = os.environ.get("TRAINING_GYM_TRAINING_RUN_ID", "")
