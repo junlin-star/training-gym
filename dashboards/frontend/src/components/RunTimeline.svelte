@@ -47,9 +47,12 @@
   let visibleGroups = $derived(
     groups.map((group) => {
       const rows = showDetails ? group.rows : group.rows.filter((row) => row.depth === 0);
+      // A row is "deep" only when the run has nested phases showing under it;
+      // its bars then draw slim so height reads as "something is inside here".
+      const maxDepth = rows.reduce((max, row) => Math.max(max, row.depth), 0);
       return {
         ...group,
-        rows,
+        rows: rows.map((row) => ({ ...row, leaf: row.depth === maxDepth })),
         height: HEADER_PX + rows.length * (ROW_HEIGHT_PX + ROW_GAP_PX),
       };
     }),
@@ -277,6 +280,7 @@
                 {#each group.rows as row, index (index)}
                   <div
                     class="row"
+                    class:leaf={row.leaf}
                     style:top={`${HEADER_PX + index * (ROW_HEIGHT_PX + ROW_GAP_PX)}px`}
                     style:height={`${ROW_HEIGHT_PX}px`}
                   >
@@ -577,6 +581,8 @@
     position: absolute;
     top: 0;
     height: 100%;
+    display: flex;
+    align-items: center;
     min-width: 2px;
     padding: 0;
     border: none;
@@ -609,6 +615,14 @@
     border: 1px dashed var(--color-c-gray-25, #555);
   }
 
+  /* Leaf phases contain nothing, so they draw slim; a full-height bar means
+     there are nested phases showing underneath it. */
+  .row.leaf .bar:not(.stall):not(.untracked) {
+    height: 11px;
+    top: 50%;
+    transform: translateY(-50%);
+  }
+
   .bar.sampled {
     background: color-mix(in srgb, var(--bar-color) 20%, transparent);
     border: 1px solid var(--bar-color);
@@ -624,12 +638,11 @@
 
   .bar-text {
     position: relative;
-    display: block;
-    padding: 0 4px;
+    padding: 0 5px;
     font-size: 11px;
-    line-height: 20px;
+    line-height: 1;
     font-weight: 600;
-    color: color-mix(in srgb, var(--bar-color) 70%, #000);
+    color: color-mix(in srgb, var(--bar-color) 68%, #000);
     white-space: nowrap;
     font-variant-numeric: tabular-nums;
     pointer-events: none;

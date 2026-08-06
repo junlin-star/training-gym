@@ -8,7 +8,7 @@ export const CATEGORIES = {
   generate: { label: "Rollout generation", color: slot("primary-7") },
   reward: { label: "Reward code", color: slot("paired-7") },
   transfer: { label: "Moving weights", color: slot("primary-2") },
-  checkpoint: { label: "Checkpointing", color: slot("primary-3") },
+  checkpoint: { label: "Checkpointing", color: slot("paired-3") },
   eval: { label: "Eval", color: slot("paired-4") },
   idle: { label: "Waiting / untracked", color: "var(--color-c-gray-30, #6a6a6a)" },
 };
