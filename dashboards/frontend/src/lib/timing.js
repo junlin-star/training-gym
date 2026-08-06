@@ -4,16 +4,21 @@ const slot = (name) => `var(--color-c-dataviz-${name})`;
 // never seen slime should be able to tell "the GPUs are training" from "we are
 // moving weights around" from "nothing is happening" without a glossary.
 export const CATEGORIES = {
-  train: { label: "Train", color: slot("primary-1") },
-  generate: { label: "Rollout", color: slot("primary-3") },
-  transfer: { label: "Weight sync", color: slot("primary-2") },
+  train: { label: "Train", color: slot("primary-3") },
+  generate: {
+    label: "Rollout",
+    color: "color-mix(in srgb, var(--color-c-dataviz-primary-5) 65%, white)",
+  },
+  transfer: { label: "Weight sync", color: slot("primary-7") },
   checkpoint: { label: "Checkpoint", color: slot("primary-5") },
-  eval: { label: "Eval", color: slot("primary-7") },
+  eval: { label: "Eval", color: slot("primary-2") },
   idle: { label: "Waiting", color: "var(--color-c-gray-30)" },
 };
 
 export const PHASE_CATEGORY = {
   train_models: "train",
+  training: "train",
+  train_model: "train",
   compute_log_probs: "train",
   forward_backward: "train",
   optimizer_step: "train",
@@ -35,11 +40,12 @@ export const PHASE_CATEGORY = {
 };
 
 export const PHASE_COLORS = {
-  compute_log_probs: "var(--color-c-dataviz-primary-6)",
+  compute_log_probs:
+    "color-mix(in srgb, var(--color-c-dataviz-primary-1) 65%, white)",
   forward_backward:
-    "color-mix(in srgb, var(--color-c-dataviz-primary-1) 55%, white)",
+    "var(--color-c-dataviz-primary-1)",
   optimizer_step:
-    "color-mix(in srgb, var(--color-c-dataviz-primary-1) 55%, var(--color-c-dataviz-primary-6))",
+    "color-mix(in srgb, var(--color-c-dataviz-primary-3) 65%, white)",
   reward:
     "color-mix(in srgb, var(--color-c-dataviz-primary-3) 60%, var(--color-c-dataviz-primary-8))",
   reward_batch:
@@ -57,6 +63,8 @@ export const TIMING_LABELS = {
   offload_rollout: "Offload generation engines",
   compute_log_probs: "Calculate log probs",
   train_models: "Train",
+  training: "Train",
+  train_model: "Train",
   checkpoint_save: "Save checkpoint",
   offload_train: "Offload trainer",
   weight_sync: "Push weights to engines",

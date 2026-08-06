@@ -6,6 +6,7 @@
     fmtSecs,
     HIDDEN_PHASES,
     labelFor,
+    PHASE_COLORS,
     runTimeline,
   } from "../lib/timing.js";
 
@@ -27,19 +28,20 @@
   const STEP_GAP_PX = 8;
   const DETAIL_LEGEND = [
     {
+      label: "Calculate log probs",
+      color: PHASE_COLORS.compute_log_probs,
+    },
+    {
       label: "Forward/backward",
-      color:
-        "color-mix(in srgb, var(--color-c-dataviz-primary-1) 55%, white)",
+      color: PHASE_COLORS.forward_backward,
     },
     {
       label: "Optimizer step",
-      color:
-        "color-mix(in srgb, var(--color-c-dataviz-primary-1) 55%, var(--color-c-dataviz-primary-6))",
+      color: PHASE_COLORS.optimizer_step,
     },
     {
       label: "Sample generation",
-      color:
-        "color-mix(in srgb, var(--color-c-dataviz-primary-3) 60%, var(--color-c-dataviz-primary-8))",
+      color: PHASE_COLORS.sample_generation,
     },
   ];
 
@@ -354,6 +356,12 @@
                         class:sampled={bar.kind === "sampled"}
                         class:nested-bar={showDetails && bar.depth > 0}
                         class:outlined={showDetails && bar.depth === 0 && hasVisibleChildren(bar)}
+                        class:train-parent={
+                          showDetails &&
+                          bar.depth === 0 &&
+                          hasVisibleChildren(bar) &&
+                          ["train_models", "training", "train_model"].includes(bar.name)
+                        }
                         class:expanded-parent={showDetails && bar.depth === 0 && hasVisibleChildren(bar)}
                         class:active={pinned && isActive(bar)}
                         aria-label={`${labelFor(bar.name)} ${fmtSecs(bar.duration)}`}
@@ -363,9 +371,7 @@
                         style:background={bar.kind === "work" && !(showDetails && bar.depth === 0 && hasVisibleChildren(bar)) ? colorFor(bar.name) : undefined}
                         style:border-color={
                           showDetails && bar.depth === 0 && hasVisibleChildren(bar)
-                            ? bar.name === "train_models"
-                              ? "var(--color-c-dataviz-training-boundary)"
-                              : colorFor(bar.name)
+                            ? colorFor(bar.name)
                             : undefined
                         }
                         onmouseenter={(e) => showTip(e, bar)}
@@ -379,7 +385,7 @@
                             style:left={`${Math.min((bar.average / bar.duration) * 100, 100)}%`}
                           ></span>
                         {/if}
-                        {#if bar.name === "generate_samples" && meanMarker(bar)}
+                        {#if showDetails && bar.name === "generate_samples" && meanMarker(bar)}
                           <span
                             class="mean-marker"
                             role="img"
@@ -708,6 +714,10 @@
     border: 1px solid var(--bar-color);
   }
 
+  .bar.train-parent {
+    border-width: 2px;
+  }
+
   .bar.expanded-parent {
     z-index: 2;
     pointer-events: auto;
@@ -715,11 +725,8 @@
 
   .bar.nested-bar {
     min-width: 2px;
-    border: 1px solid var(--bar-color);
     z-index: 3;
-    box-shadow:
-      inset 1px 0 var(--panel, #1a1a1a),
-      inset -1px 0 var(--panel, #1a1a1a);
+    outline: none;
   }
 
   /* A stall is the loop doing nothing, so it is a line rather than a block: the
@@ -865,7 +872,7 @@
     top: 0;
     bottom: 0;
     width: 2px;
-    background: var(--color-c-dataviz-primary-2);
+    background: var(--color-c-dataviz-primary-8);
     cursor: help;
     z-index: 4;
   }
