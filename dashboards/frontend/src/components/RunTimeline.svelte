@@ -15,6 +15,7 @@
     timings = null,
     downloadName = "substep_timing.json",
     onOpenRollout = null,
+    rolloutIds = [],
   } = $props();
 
   const MIN_ZOOM = 1;
@@ -408,7 +409,7 @@
         {/each}
       </div>
     {/if}
-    {#if tip.bar.name === "generate_samples" && tip.bar.kind === "work" && tip.bar.rolloutId != null && onOpenRollout}
+    {#if tip.bar.name === "generate_samples" && tip.bar.kind === "work" && tip.bar.rolloutId != null && rolloutIds.includes(Number(tip.bar.rolloutId)) && onOpenRollout}
       <button
         class="tg-tip-action"
         onclick={(e) => {
