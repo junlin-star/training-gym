@@ -107,15 +107,6 @@
     setZoom(zoom * Math.exp(-e.deltaY * WHEEL_SENSITIVITY), e.clientX);
   }
 
-  function wheelZoom(node) {
-    node.addEventListener("wheel", handleWheel, { capture: true, passive: false });
-    return {
-      destroy() {
-        node.removeEventListener("wheel", handleWheel, true);
-      },
-    };
-  }
-
   function downloadJson() {
     const blob = new Blob([JSON.stringify(timings || {}, null, 2)], {
       type: "application/json",
@@ -323,7 +314,7 @@
       <div
         class="viewport"
         bind:this={viewport}
-        use:wheelZoom
+        onwheel={handleWheel}
       >
         <div class="track" style:width={`${zoom * 100}%`}>
           <div class="steps" style:height={`${rowHeight}px`}>
