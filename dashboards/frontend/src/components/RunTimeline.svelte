@@ -172,7 +172,7 @@
 
   function tipTitle(bar) {
     if (bar.kind === "mean") return "Mean sample generation time";
-    if (bar.kind === "untracked") return "Untracked wall clock";
+    if (bar.kind === "untracked") return "Unaccounted time inside this phase";
     const name = labelFor(bar.name);
     return bar.ordinal ? `${name} ${bar.ordinal}` : name;
   }
@@ -213,7 +213,7 @@
     return [...row.spans]
       .filter(
         (bar) =>
-          bar.kind !== "untracked" &&
+          (bar.kind !== "untracked" || (showDetails && bar.depth > 0)) &&
           !HIDDEN_PHASES.has(bar.name) &&
           (showDetails || bar.depth === 0),
       )
@@ -457,6 +457,9 @@
       <span class="tg-tip-when">
         stalled on {WAITS_ON[tip.bar.name]?.(tip.bar.rolloutId) ?? "another worker"}
       </span>
+    {/if}
+    {#if tip.bar.kind === "untracked"}
+      <span class="tg-tip-when">work not covered by a measured child phase</span>
     {/if}
     {#if tip.bar.children?.length}
       <div class="tg-tip-children">
@@ -745,12 +748,14 @@
   }
 
   .bar.untracked {
-    background: repeating-linear-gradient(
-      -45deg,
-      var(--color-c-gray-12, #262626) 0 4px,
-      transparent 4px 8px
+    background: linear-gradient(
+      var(--color-c-gray-30, #6a6a6a),
+      var(--color-c-gray-30, #6a6a6a)
     );
-    border: 1px dashed var(--color-c-gray-25, #555);
+    background-size: 100% 2px;
+    background-position: center;
+    background-repeat: no-repeat;
+    border: none;
   }
 
   .bar.sampled {

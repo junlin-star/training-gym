@@ -97,7 +97,7 @@ export const TIMING_LABELS = {
   reward_post_process: "Reward post process",
   forward_backward: "Forward/backward",
   optimizer_step: "Optimizer step",
-  untracked: "Untracked",
+  untracked: "Unaccounted time",
 };
 
 // Phases where the worker whose lane they are on is blocked on somebody else:
@@ -301,6 +301,54 @@ function nest(spans) {
     if (parent) parent.contains = true;
     if (parent) parent.children.push(span);
   }
+  for (const parent of ordered) {
+    if (!parent.children.length) continue;
+    const covered = merge(parent.children.map((child) => [child.start, child.end]));
+    let cursor = parent.start;
+    for (const [start, end] of covered) {
+      if (start - cursor >= UNTRACKED_FLOOR_S) {
+        const gap = {
+          rolloutId: parent.rolloutId,
+          role: parent.role,
+          group: parent.group,
+          name: "untracked",
+          category: "idle",
+          kind: "untracked",
+          start: cursor,
+          end: start,
+          count: 1,
+          total: start - cursor,
+          longest: start - cursor,
+          depth: parent.depth + 1,
+          parent,
+          children: [],
+        };
+        parent.children.push(gap);
+        ordered.push(gap);
+      }
+      cursor = Math.max(cursor, end);
+    }
+    if (parent.end - cursor >= UNTRACKED_FLOOR_S) {
+      const gap = {
+        rolloutId: parent.rolloutId,
+        role: parent.role,
+        group: parent.group,
+        name: "untracked",
+        category: "idle",
+        kind: "untracked",
+        start: cursor,
+        end: parent.end,
+        count: 1,
+        total: parent.end - cursor,
+        longest: parent.end - cursor,
+        depth: parent.depth + 1,
+        parent,
+        children: [],
+      };
+      parent.children.push(gap);
+      ordered.push(gap);
+    }
+  }
   for (const span of ordered) {
     const occurrences = new Map();
     for (const child of [...span.children].sort((a, b) => a.start - b.start)) {
@@ -472,7 +520,9 @@ export function runTimeline(timings) {
     span.insideKey = span.parent ? span.parent.key : null;
   }
 
-  const visibleSpans = spans.filter((span) => span.kind !== "untracked");
+  const visibleSpans = spans.filter(
+    (span) => span.kind !== "untracked" || span.depth > 0,
+  );
   const rows = rowsOf(visibleSpans, async);
   const groups = rows.length ? [{ ...GROUPS[0], rows }] : [];
   for (const span of spans) delete span.parent;
