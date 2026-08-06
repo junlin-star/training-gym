@@ -33,7 +33,6 @@ def test_schema_metadata_drives_columns_and_filters():
 
     assert list(fields) == [
         "run_id",
-        "modal_app_id",
         "display_status",
         "display_stage",
         "model",
