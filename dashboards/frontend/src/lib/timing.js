@@ -9,9 +9,9 @@ export const CATEGORIES = {
     label: "Rollout",
     color: "color-mix(in srgb, var(--color-c-dataviz-primary-5) 65%, white)",
   },
-  transfer: { label: "Weight sync", color: slot("primary-7") },
-  checkpoint: { label: "Checkpoint", color: slot("primary-5") },
-  eval: { label: "Eval", color: slot("primary-2") },
+  transfer: { label: "Weight sync", color: slot("primary-4") },
+  checkpoint: { label: "Checkpoint", color: slot("primary-2") },
+  eval: { label: "Eval", color: slot("primary-7") },
   idle: { label: "Waiting", color: "var(--color-c-gray-30)" },
 };
 
@@ -40,12 +40,9 @@ export const PHASE_CATEGORY = {
 };
 
 export const PHASE_COLORS = {
-  compute_log_probs:
-    "color-mix(in srgb, var(--color-c-dataviz-primary-1) 65%, white)",
-  forward_backward:
-    "var(--color-c-dataviz-primary-1)",
-  optimizer_step:
-    "color-mix(in srgb, var(--color-c-dataviz-primary-3) 65%, white)",
+  compute_log_probs: "var(--color-c-dataviz-paired-3)",
+  forward_backward: "var(--color-c-dataviz-training-forward-backward)",
+  optimizer_step: "var(--color-c-dataviz-training-optimizer-step)",
   reward:
     "color-mix(in srgb, var(--color-c-dataviz-primary-3) 60%, var(--color-c-dataviz-primary-8))",
   reward_batch:
