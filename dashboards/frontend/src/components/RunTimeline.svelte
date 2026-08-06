@@ -710,11 +710,10 @@
     pointer-events: auto;
     background: transparent;
     font-family: inherit;
-    transition: filter 0.1s ease;
   }
 
   .bar.outlined {
-    background: color-mix(in srgb, var(--bar-color) 35%, transparent);
+    background: transparent;
     border: 1px solid var(--bar-color);
   }
 
@@ -755,7 +754,7 @@
   }
 
   .bar.sampled {
-    background: color-mix(in srgb, var(--bar-color) 35%, transparent);
+    background: transparent;
     border: 1px solid var(--bar-color);
   }
 
@@ -767,14 +766,9 @@
     background: var(--bar-color);
   }
 
-  .bar:hover {
-    filter: brightness(1.25);
-  }
-
   .bar.active {
     outline: 2px solid var(--color-c-green-80, #6ac355);
     outline-offset: -1px;
-    filter: brightness(1.3);
   }
 
   .tg-tip {

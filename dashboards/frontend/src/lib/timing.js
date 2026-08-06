@@ -4,14 +4,11 @@ const slot = (name) => `var(--color-c-dataviz-${name})`;
 // never seen slime should be able to tell "the GPUs are training" from "we are
 // moving weights around" from "nothing is happening" without a glossary.
 export const CATEGORIES = {
-  train: { label: "Train", color: slot("primary-3") },
-  generate: {
-    label: "Rollout",
-    color: "color-mix(in srgb, var(--color-c-dataviz-primary-5) 65%, white)",
-  },
-  transfer: { label: "Weight sync", color: slot("primary-4") },
+  train: { label: "Train", color: slot("primary-5") },
+  generate: { label: "Rollout", color: slot("primary-3") },
+  transfer: { label: "Weight sync", color: slot("primary-7") },
   checkpoint: { label: "Checkpoint", color: slot("primary-2") },
-  eval: { label: "Eval", color: slot("primary-7") },
+  eval: { label: "Eval", color: slot("primary-4") },
   idle: { label: "Waiting", color: "var(--color-c-gray-30)" },
 };
 
@@ -43,14 +40,10 @@ export const PHASE_COLORS = {
   compute_log_probs: "var(--color-c-dataviz-paired-3)",
   forward_backward: "var(--color-c-dataviz-training-forward-backward)",
   optimizer_step: "var(--color-c-dataviz-training-optimizer-step)",
-  reward:
-    "color-mix(in srgb, var(--color-c-dataviz-primary-3) 60%, var(--color-c-dataviz-primary-8))",
-  reward_batch:
-    "color-mix(in srgb, var(--color-c-dataviz-primary-3) 60%, var(--color-c-dataviz-primary-8))",
-  reward_post_process:
-    "color-mix(in srgb, var(--color-c-dataviz-primary-3) 60%, var(--color-c-dataviz-primary-8))",
-  sample_generation:
-    "color-mix(in srgb, var(--color-c-dataviz-primary-3) 60%, var(--color-c-dataviz-primary-8))",
+  reward: slot("primary-3"),
+  reward_batch: slot("primary-3"),
+  reward_post_process: slot("primary-3"),
+  sample_generation: slot("primary-3"),
 };
 
 export const TIMING_LABELS = {
