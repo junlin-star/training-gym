@@ -17,7 +17,6 @@ def test_model_file_diff_maps_to_related_tutorials() -> None:
 
     assert "Qwen3_8B" in report.affected_classes
     tutorial_slugs = {slug for slug, _, _ in report.affected_tutorials}
-    assert "agent/000_agent_sandbox" in tutorial_slugs
     assert "rl/003_on_policy_distillation" in tutorial_slugs
 
 

@@ -33,10 +33,6 @@ Repo: https://github.com/modal-projects/training-gym
 - [008_computer_use](https://gym.modal.dev/tutorials/rl/008_computer_use/): GUI grounding to predict click coordinates
 - [009_cross_tokenizer_distillation](https://gym.modal.dev/tutorials/rl/009_cross_tokenizer_distillation/): Cross-tokenizer agentic distillation on BFCL v3 multi-turn
 
-### Agents
-
-- [000_agent_sandbox](https://gym.modal.dev/tutorials/agent/000_agent_sandbox/): Build an LLM agent harness with a self-hosted model and Modal Sandbox tool execution
-
 ### Tools
 
 - [000_observability_dashboard](https://gym.modal.dev/tutorials/tools/000_observability_dashboard/): Deploy and use the observability dashboard — track runs, inspect rollouts, and profile step timings

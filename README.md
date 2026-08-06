@@ -114,12 +114,6 @@ Difficulty is a rough signal for where to start:
 |---|---|---|---|---|
 | [`000_qwen35b`](tutorials/singlenode/000_qwen35b/000_qwen35b.ipynb) | Train Qwen3.6-35B-A3B on DAPO-math with GRPO | Advanced | `slime` | <a href="https://modal.com/notebooks/new/https%3A%2F%2Fgithub.com%2Fmodal-projects%2Ftraining-gym%2Fblob%2Fmain%2Ftutorials%2Fsinglenode%2F000_qwen35b%2F000_qwen35b.ipynb" target="_blank" rel="nofollow noopener noreferrer"><img src="https://modal-cdn.com/open-in-modal.svg" alt="Open in Modal"></a> |
 
-### Agents
-
-| Tutorial | Summary | Difficulty | Framework | Launch |
-|---|---|---|---|---|
-| [`000_agent_sandbox`](https://gym.modal.dev/tutorials/agent/000_agent_sandbox/) | Build an LLM agent harness with a self-hosted model and Modal Sandbox tool execution | Beginner | Modal Sandbox | <a href="https://modal.com/notebooks/new/https%3A%2F%2Fgithub.com%2Fmodal-projects%2Ftraining-gym%2Fblob%2Fmain%2Ftutorials%2Fagent%2F000_agent_sandbox%2F000_agent_sandbox.ipynb" target="_blank" rel="nofollow noopener noreferrer"><img src="https://modal-cdn.com/open-in-modal.svg" alt="Open in Modal"></a> |
-
 ### Multinode
 
 | Tutorial | Summary | Difficulty | Framework | Launch |

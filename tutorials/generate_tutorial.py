@@ -62,17 +62,16 @@ _NB = "notebook"
 
 # Buckets the tutorial catalog is grouped into. Display order in the README
 # sections and ordering within each bucket fall back to meta["order"].
-_BUCKETS = ("intro", "rl", "sft", "singlenode", "agent", "multinode", "misc")
+_BUCKETS = ("intro", "rl", "sft", "singlenode", "multinode", "misc")
 # Docs-only buckets render on the docs site (scripts/generate_tutorial_pages.py)
 # but produce no runnable tutorials/<bucket>/ outputs and no README table rows.
 _DOCS_ONLY_BUCKETS = ("tools",)
-_DOCS_PAGE_BUCKETS = frozenset({"intro", "rl", "sft", "agent", "misc", "tools"})
+_DOCS_PAGE_BUCKETS = frozenset({"intro", "rl", "sft", "misc", "tools"})
 _BUCKET_DISPLAY = {
     "intro": "Intro",
     "rl": "RL",
     "sft": "SFT",
     "singlenode": "Single Node",
-    "agent": "Agents",
     "multinode": "Multinode",
     "misc": "Misc",
 }

@@ -14,7 +14,6 @@ src/content/docs/reference/evaluation/
 src/content/docs/reference/training/
 src/content/docs/tutorials/index.md
 src/content/docs/tutorials/rl/
-src/content/docs/tutorials/agent/
 src/content/docs/tutorials/intro/
 src/content/docs/tutorials/sft/
 src/content/docs/tutorials/misc/

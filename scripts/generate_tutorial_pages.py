@@ -17,12 +17,11 @@ TUTORIAL_SRC_DIR = ROOT / "tutorials" / "tutorial_generator"
 DEFAULT_OUTPUT_DIR = ROOT / "docs-next" / "src" / "content" / "docs" / "tutorials"
 REPO_URL = "https://github.com/modal-projects/training-gym"
 
-BUCKETS = ["intro", "rl", "sft", "agent", "misc", "tools"]
+BUCKETS = ["intro", "rl", "sft", "misc", "tools"]
 BUCKET_LABELS = {
     "intro": "Getting Started",
     "rl": "Reinforcement Learning",
     "sft": "Supervised Fine-Tuning",
-    "agent": "Agents",
     "misc": "Infrastructure",
     "tools": "Tools",
 }
