@@ -305,7 +305,7 @@
                 class="step"
                 style:left={`${pct(step.offset)}%`}
                 style:width={`${Math.max(pct(step.duration), 0.05)}%`}
-                title={`Step ${step.id}: ${fmtSecs(step.duration)} wall clock — ${fmtSecs(step.work)} working, ${fmtSecs(step.stalled)} waiting on the engines`}
+                title={`Step ${step.id}: ${fmtSecs(step.duration)} wall clock — ${fmtSecs(step.work)} work, ${fmtSecs(step.stalled)} measured stall`}
               >
                 <span class="step-text"
                   >Step {step.id} · {fmtSecs(step.duration)}</span
@@ -435,7 +435,7 @@
         {/each}
       </div>
     {/if}
-    {#if tip.bar.category === "generate" && tip.bar.rolloutId != null && onOpenRollout}
+    {#if tip.bar.name === "generate_samples" && tip.bar.kind === "work" && tip.bar.rolloutId != null && onOpenRollout}
       <button
         class="tg-tip-action"
         onclick={(e) => {
