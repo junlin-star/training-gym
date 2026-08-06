@@ -59,7 +59,6 @@ class _KimiK2Recipe(MilesRecipe):
     image_run_commands: list[str] = field(
         default_factory=lambda: [
             "rm -rf /root/.cache/huggingface 2>/dev/null || true",
-            "rm -rf /usr/local/lib/python3.12/dist-packages/nvidia/cudnn/ 2>/dev/null || true",
         ]
     )
     image_env: dict[str, str] = field(
@@ -74,6 +73,13 @@ class _KimiK2Recipe(MilesRecipe):
             "CUDA_DEVICE_MAX_CONNECTIONS": "1",
             "NCCL_NVLS_ENABLE": "1",
             "NCCL_TIMEOUT": "3600",
+            # Ray workers get this dict as their runtime env; without it the
+            # Megatron actor resolved a host libibverbs that could not satisfy
+            # the image's libmlx5 and failed importing mooncake.
+            "LD_LIBRARY_PATH": (
+                "/usr/lib/x86_64-linux-gnu:/usr/local/nvidia/lib:"
+                "/usr/local/nvidia/lib64:/usr/local/cuda/lib64"
+            ),
             "OPEN_TRAINING_INT4_FAKE_QAT_FLAG": "1",
             "OPEN_TRAINING_INT4_GROUP_SIZE": "32",
         }
@@ -157,6 +163,12 @@ class _KimiK2Recipe(MilesRecipe):
 
     rollout_num_gpus_per_engine: int = 8
     sglang_mem_fraction_static: float = 0.7
+    # sglang's 'auto' MoE runner picks the marlin kernel for this INT4
+    # checkpoint, and marlin's LoRA MoE path (lora_moe_runner_marlin.py ->
+    # moe_wna16_marlin.cuh:812) hits an illegal memory access while capturing
+    # decode CUDA graphs, at every batch size. Triton is the backend miles uses
+    # for MoE LoRA elsewhere and captures cleanly.
+    sglang_moe_runner_backend: str | None = "triton"
     sglang_ep_size: int = 8
     sglang_server_concurrency: int = 1024
     use_rollout_routing_replay: bool = True
