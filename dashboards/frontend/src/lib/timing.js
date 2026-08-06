@@ -1,18 +1,18 @@
 const slot = (name) => `var(--color-c-dataviz-${name})`;
 
-const ACTIVE_PALETTE = "mint";
+const ACTIVE_PALETTE = "teal";
 
 const PALETTE_SCHEMES = {
-  mint: {
-    train: slot("primary-1"),
+  teal: {
+    train: slot("primary-4"),
     generate: slot("primary-3"),
     transfer: slot("primary-2"),
     checkpoint: slot("primary-5"),
     eval: slot("primary-7"),
     trainInternals: {
-      compute_log_probs: slot("training-mint-log-probs"),
-      forward_backward: slot("training-mint-forward-backward"),
-      optimizer_step: slot("training-mint-optimizer-step"),
+      compute_log_probs: slot("paired-4"),
+      forward_backward: slot("primary-4"),
+      optimizer_step: slot("primary-7"),
     },
   },
   pink: {
