@@ -385,10 +385,10 @@
     {/if}
     {#if rewardStats(tip.bar)}
       <span class="tg-tip-stat">
-        Average reward time: {fmtSecs(rewardStats(tip.bar).average)}
+        Average reward calculation time: {fmtSecs(rewardStats(tip.bar).average)}
       </span>
       <span class="tg-tip-stat">
-        Longest reward time: {fmtSecs(
+        Longest reward calculation time: {fmtSecs(
           rewardStats(tip.bar).longest ?? rewardStats(tip.bar).duration,
         )}
       </span>
