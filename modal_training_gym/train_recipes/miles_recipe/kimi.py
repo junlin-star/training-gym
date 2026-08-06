@@ -73,10 +73,6 @@ class _KimiK2Recipe(MilesRecipe):
             "CUDA_DEVICE_MAX_CONNECTIONS": "1",
             "NCCL_NVLS_ENABLE": "1",
             "NCCL_TIMEOUT": "3600",
-            "LD_LIBRARY_PATH": (
-                "/usr/lib/x86_64-linux-gnu:/usr/local/nvidia/lib:"
-                "/usr/local/nvidia/lib64:/usr/local/cuda/lib64"
-            ),
             "OPEN_TRAINING_INT4_FAKE_QAT_FLAG": "1",
             "OPEN_TRAINING_INT4_GROUP_SIZE": "32",
         }

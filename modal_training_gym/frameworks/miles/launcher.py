@@ -90,6 +90,33 @@ def _build_miles_base_image(miles: MilesRecipe) -> Image:
     return image
 
 
+def build_ray_runtime_env(
+    *,
+    head_addr: str,
+    wandb_env: dict[str, str],
+    environment: dict,
+) -> dict:
+    """Runtime env for the Ray job that runs miles.
+
+    Ray workers do not pick up the container's linker path on their own, and
+    without it the Megatron actor can resolve a libibverbs that does not match
+    the image's libmlx5 and die importing mooncake. It is read from the
+    container rather than hardcoded, so whatever the image exports — including
+    any wheel-shipped nvidia lib dirs — is carried through unchanged. A recipe
+    can still override it through ``environment``.
+    """
+    env_vars: dict[str, str] = {
+        "no_proxy": f"127.0.0.1,{head_addr}",
+        "MASTER_ADDR": head_addr,
+    }
+    container_ld_library_path = os.environ.get("LD_LIBRARY_PATH")
+    if container_ld_library_path:
+        env_vars["LD_LIBRARY_PATH"] = container_ld_library_path
+    env_vars.update(wandb_env)
+    env_vars.update(environment)
+    return {"env_vars": env_vars}
+
+
 def build_miles_app(
     *,
     training_run_id: str,
@@ -682,14 +709,11 @@ def build_miles_app(
             if wandb_entity:
                 wandb_env["WANDB_ENTITY"] = wandb_entity
 
-            runtime_env = {
-                "env_vars": {
-                    "no_proxy": f"127.0.0.1,{cluster.head_addr}",
-                    "MASTER_ADDR": cluster.head_addr,
-                    **wandb_env,
-                    **miles.environment,
-                }
-            }
+            runtime_env = build_ray_runtime_env(
+                head_addr=cluster.head_addr,
+                wandb_env=wandb_env,
+                environment=miles.environment,
+            )
 
             mode = "async" if miles.async_mode else "sync"
             print(
