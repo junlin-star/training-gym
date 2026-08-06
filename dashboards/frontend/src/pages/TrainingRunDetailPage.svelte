@@ -1362,6 +1362,10 @@
               <RunTimeline
                 timings={runTimings}
                 downloadName={`substep_timing_${runId}.json`}
+                onOpenRollout={(id) => {
+                  selectTab("rollouts");
+                  if (expandedRolloutId !== id) void toggleRolloutDetail(id);
+                }}
               />
             </div>
           {/if}
@@ -1544,6 +1548,10 @@
                           <RunTimeline
                             timings={{ [r.rollout_id]: runTimings[r.rollout_id] }}
                             downloadName={`substep_timing_${runId}_rollout_${r.rollout_id}.json`}
+                            onOpenRollout={(id) => {
+                              selectTab("rollouts");
+                              if (expandedRolloutId !== id) void toggleRolloutDetail(id);
+                            }}
                           />
                         </div>
                       {/if}

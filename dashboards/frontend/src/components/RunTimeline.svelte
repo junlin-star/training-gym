@@ -6,22 +6,26 @@
     colorFor,
     fmtSecs,
     labelFor,
-    roleLabel,
+    phaseHelp,
     runTimeline,
   } from "../lib/timing.js";
 
-  let { timings = null, downloadName = "substep_timing.json" } = $props();
+  let {
+    timings = null,
+    downloadName = "substep_timing.json",
+    onOpenRollout = null,
+  } = $props();
 
   const MIN_ZOOM = 1;
   const MAX_ZOOM = 64;
   const ZOOM_BTN_FACTOR = 1.5;
   const WHEEL_SENSITIVITY = 0.0015;
 
-  const ROW_HEIGHT_PX = 20;
-  const ROW_GAP_PX = 6;
+  const ROW_HEIGHT_PX = 15;
+  const ROW_GAP_PX = 4;
   const HEADER_PX = 0;
-  const GROUP_GAP_PX = 22;
-  const STEP_LABEL_PX = 18;
+  const GROUP_GAP_PX = 12;
+  const STEP_LABEL_MIN_PX = 36;
 
   // What each wait is actually waiting for, in steps rather than futures.
   const WAITS_ON = {
@@ -31,7 +35,7 @@
         ? `this step's samples, generated during step ${id - 1}`
         : "this step's samples, generation started before the loop",
     wait_for_next_rollout: (id) =>
-      `step ${id + 1}'s samples, drained before the weights change`,
+      `step ${id + 1}'s samples`,
     evaluate_rollouts: () => "the engines running eval",
     evaluate_rollouts_end: () => "the engines running eval",
   };
@@ -47,12 +51,9 @@
   let visibleGroups = $derived(
     groups.map((group) => {
       const rows = showDetails ? group.rows : group.rows.filter((row) => row.depth === 0);
-      // A row is "deep" only when the run has nested phases showing under it;
-      // its bars then draw slim so height reads as "something is inside here".
-      const maxDepth = rows.reduce((max, row) => Math.max(max, row.depth), 0);
       return {
         ...group,
-        rows: rows.map((row) => ({ ...row, leaf: row.depth === maxDepth })),
+        rows,
         height: HEADER_PX + rows.length * (ROW_HEIGHT_PX + ROW_GAP_PX),
       };
     }),
@@ -280,7 +281,6 @@
                 {#each group.rows as row, index (index)}
                   <div
                     class="row"
-                    class:leaf={row.leaf}
                     style:top={`${HEADER_PX + index * (ROW_HEIGHT_PX + ROW_GAP_PX)}px`}
                     style:height={`${ROW_HEIGHT_PX}px`}
                   >
@@ -290,10 +290,13 @@
                         class:stall={bar.kind === "stall"}
                         class:untracked={bar.kind === "untracked"}
                         class:sampled={bar.kind === "sampled"}
+                        class:slim={bar.kind !== "stall" &&
+                          bar.kind !== "untracked" &&
+                          !bar.contains}
                         class:active={pinned && isActive(bar)}
                         aria-label={`${labelFor(bar.name)} ${fmtSecs(bar.duration)}`}
                         style:left={`${pct(bar.offset)}%`}
-                        style:width={`max(2px, ${Math.max(pct(bar.duration), 0.02)}%)`}
+                        style:width={`max(3px, ${Math.max(pct(bar.duration), 0.02)}%)`}
                         style:--bar-color={colorFor(bar.name)}
                         style:background={bar.kind === "work" ? fill(bar) : undefined}
                         onmouseenter={(e) => showTip(e, bar)}
@@ -307,8 +310,8 @@
                             style:left={`${Math.min((bar.average / bar.duration) * 100, 100)}%`}
                           ></span>
                         {/if}
-                        {#if bar.kind === "work" && bar.rolloutId != null && widthPx(bar) > STEP_LABEL_PX}
-                          <span class="bar-text">{bar.rolloutId}</span>
+                        {#if bar.kind === "work" && bar.rolloutId != null && bar.contains && widthPx(bar) > STEP_LABEL_MIN_PX}
+                          <span class="bar-text">Step {bar.rolloutId}</span>
                         {/if}
                       </button>
                     {/each}
@@ -321,24 +324,18 @@
       </div>
     </div>
 
-    <div class="hint">
-      One clock for the whole run. The training loop is on top and the machines it
-      waits on are underneath, indented where one phase ran inside another. A thin
-      grey line is the loop stalled on somebody else — the work itself is on the row
-      below. Hatched is wall clock no phase measured{#if timeline.untracked > 0.25},
-        {fmtSecs(timeline.untracked)} of it in this run{/if}. Hover for exact times,
-      click to pin, scroll to zoom.
-    </div>
   {/if}
 </div>
 
 {#if tip}
   <div class="tg-tip" class:pinned style:left={`${tip.x}px`} style:top={`${tip.y}px`}>
     <span class="tg-tip-head">
-      {#if tip.bar.rolloutId != null}Step {tip.bar.rolloutId} ·{/if}
-      {roleLabel(tip.bar.role)}
-      {#if tip.bar.kind !== "untracked"}
-        · {CATEGORIES[categoryOf(tip.bar.name)].label.toLowerCase()}{/if}
+      {#if tip.bar.kind === "untracked"}
+        Untracked wall clock
+      {:else}
+        {#if tip.bar.rolloutId != null}Step {tip.bar.rolloutId} ·{/if}
+        {CATEGORIES[categoryOf(tip.bar.name)].label.toLowerCase()}
+      {/if}
     </span>
     <span class="tg-tip-name">
       {tip.bar.kind === "untracked" ? "Untracked wall clock" : labelFor(tip.bar.name)}
@@ -366,13 +363,22 @@
         stalled on {WAITS_ON[tip.bar.name]?.(tip.bar.rolloutId) ?? "another worker"}
       </span>
     {/if}
-    {#if tip.bar.kind === "untracked"}
-      <span class="tg-tip-when">
-        the loop was between measured phases here — nothing claims this time
-      </span>
-    {/if}
     {#if tip.bar.inside}
       <span class="tg-tip-when">ran inside {labelFor(tip.bar.inside).toLowerCase()}</span>
+    {/if}
+    {#if tip.bar.kind !== "untracked" && phaseHelp(tip.bar.name)}
+      <span class="tg-tip-help">{phaseHelp(tip.bar.name)}</span>
+    {/if}
+    {#if pinned && tip.bar.category === "generate" && tip.bar.rolloutId != null && onOpenRollout}
+      <button
+        class="tg-tip-action"
+        onclick={(e) => {
+          e.stopPropagation();
+          onOpenRollout(tip.bar.rolloutId);
+        }}
+      >
+        Open in Rollouts →
+      </button>
     {/if}
   </div>
 {/if}
@@ -583,10 +589,11 @@
     height: 100%;
     display: flex;
     align-items: center;
-    min-width: 2px;
+    min-width: 3px;
     padding: 0;
     border: none;
-    border-radius: min(2px, 12%);
+    border-radius: 1px;
+    outline: 1px solid var(--panel, #1a1a1a);
     overflow: hidden;
     cursor: pointer;
     pointer-events: auto;
@@ -617,14 +624,14 @@
 
   /* Leaf phases contain nothing, so they draw slim; a full-height bar means
      there are nested phases showing underneath it. */
-  .row.leaf .bar:not(.stall):not(.untracked) {
-    height: 11px;
+  .bar.slim {
+    height: 8px;
     top: 50%;
     transform: translateY(-50%);
   }
 
   .bar.sampled {
-    background: color-mix(in srgb, var(--bar-color) 20%, transparent);
+    background: color-mix(in srgb, var(--bar-color) 35%, transparent);
     border: 1px solid var(--bar-color);
   }
 
@@ -638,7 +645,8 @@
 
   .bar-text {
     position: relative;
-    padding: 0 5px;
+    align-self: flex-start;
+    padding: 2px 4px 0;
     font-size: 11px;
     line-height: 1;
     font-weight: 600;
@@ -656,12 +664,6 @@
     outline: 1px solid var(--text-bright, #fff);
     outline-offset: -1px;
     filter: brightness(1.3);
-  }
-
-  .hint {
-    font-size: 10px;
-    color: var(--muted);
-    opacity: 0.7;
   }
 
   .tg-tip {
@@ -683,6 +685,7 @@
 
   .tg-tip.pinned {
     border-color: var(--accent, #60a5fa);
+    pointer-events: auto;
   }
 
   .tg-tip-head {
@@ -698,8 +701,29 @@
   }
 
   .tg-tip-dur,
-  .tg-tip-when {
+  .tg-tip-when,
+  .tg-tip-help {
     color: var(--muted);
     font-variant-numeric: tabular-nums;
+  }
+
+  .tg-tip-help {
+    max-width: 360px;
+    white-space: normal;
+  }
+
+  .tg-tip-action {
+    align-self: flex-start;
+    margin-top: 4px;
+    padding: 2px 0;
+    border: none;
+    background: none;
+    color: var(--accent, #60a5fa);
+    font: inherit;
+    cursor: pointer;
+  }
+
+  .tg-tip-action:hover {
+    text-decoration: underline;
   }
 </style>

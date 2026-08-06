@@ -6,25 +6,25 @@ const slot = (name) => `var(--color-c-dataviz-${name})`;
 export const CATEGORIES = {
   train: { label: "Training compute", color: slot("primary-6") },
   generate: { label: "Rollout generation", color: slot("primary-7") },
-  reward: { label: "Reward code", color: slot("paired-7") },
-  transfer: { label: "Moving weights", color: slot("primary-2") },
-  checkpoint: { label: "Checkpointing", color: slot("paired-3") },
-  eval: { label: "Eval", color: slot("paired-4") },
+  reward: { label: "Reward code", color: slot("primary-5") },
+  transfer: { label: "Moving weights", color: slot("primary-4") },
+  checkpoint: { label: "Checkpointing", color: slot("primary-8") },
+  eval: { label: "Eval", color: slot("primary-3") },
   idle: { label: "Waiting / untracked", color: "var(--color-c-gray-30, #6a6a6a)" },
 };
 
 // Where two phases of one category sit next to each other often enough that
 // telling them apart matters, the second takes a neighbouring tone of the same
 // family -- still "this is training", but with a visible seam.
-const TONES = {
+export const TONES = {
   compute_log_probs: slot("paired-1"),
   forward_backward: slot("primary-1"),
-  optimizer_step: slot("primary-5"),
+  optimizer_step: slot("paired-6"),
   offload_train: slot("primary-4"),
   offload_rollout: slot("primary-4"),
 };
 
-const PHASE_CATEGORY = {
+export const PHASE_CATEGORY = {
   train_models: "train",
   compute_log_probs: "train",
   forward_backward: "train",
@@ -64,6 +64,33 @@ export const TIMING_LABELS = {
   optimizer_step: "Optimizer step",
   untracked: "Untracked",
 };
+
+export const PHASE_HELP = {
+  train_models: "One optimizer update on the policy from this step's samples.",
+  compute_log_probs: "Recomputes sample log-probs under the current policy for the loss.",
+  forward_backward: "Forward + backward passes producing gradients.",
+  optimizer_step: "Applies the gradients to the weights.",
+  generate_rollouts: "Driver waiting on the engines to return this step's samples.",
+  generate_samples:
+    "The engines generating this step's samples (one measured interval; per-sample lengths are in the Rollouts tab).",
+  reward: "Your reward function scoring each sample.",
+  reward_batch: "Your reward function scoring the batch.",
+  reward_post_process: "Turning rewards into advantages for the batch.",
+  weight_sync: "Copies updated weights from the trainer to the inference engines.",
+  offload_train: "Moving the trainer model off/onto the GPUs between phases.",
+  offload_rollout: "Moving the generation model off/onto the GPUs between phases.",
+  checkpoint_save: "Writing a checkpoint to persistent storage.",
+  wait_for_rollout:
+    "Driver idle, waiting on this step's samples (generated during the previous step).",
+  wait_for_next_rollout:
+    "Driver idle, waiting on the next step's samples before pushing new weights.",
+  evaluate_rollouts: "Running evaluation on the current policy.",
+  evaluate_rollouts_end: "Running evaluation on the current policy.",
+};
+
+export function phaseHelp(name) {
+  return PHASE_HELP[name] || "";
+}
 
 // Phases where the worker whose lane they are on is blocked on somebody else:
 // they are drawn as stalls, and the work itself shows up on the row of the
@@ -197,7 +224,11 @@ function collect(timings) {
         // one continuous run.
         spans.push({
           ...where,
-          kind: SAMPLED.has(name) || count > 1 ? "sampled" : "work",
+          kind: STALLS.has(name)
+            ? "stall"
+            : SAMPLED.has(name) || count > 1
+              ? "sampled"
+              : "work",
           start: laneStart + (Number(phase?.first_start_s) || 0),
           end: laneStart + (Number(phase?.last_end_s) || 0),
           count,
@@ -284,15 +315,20 @@ function nest(spans) {
 // One row per worker per depth, split again only when two spans of the same
 // worker and depth genuinely overlap -- which in async is the next rollout
 // generating during this one's training, and in sync never happens.
-function rowsOf(spans, roles) {
+function rowsOf(spans, roles, mergeDepth0 = false) {
   const rows = [];
   const order = (span) => roles.indexOf(span.role);
   for (const span of [...spans].sort(
-    (a, b) => order(a) - order(b) || a.depth - b.depth || a.start - b.start,
+    (a, b) =>
+      (mergeDepth0 && a.depth === 0 && b.depth === 0
+        ? a.start - b.start || b.end - a.end
+        : order(a) - order(b) || a.depth - b.depth || a.start - b.start),
   )) {
     let row = rows.find(
       (candidate) =>
-        candidate.role === span.role &&
+        (mergeDepth0 && span.depth === 0
+          ? candidate.depth === 0
+          : candidate.role === span.role) &&
         candidate.depth === span.depth &&
         candidate.spans[candidate.spans.length - 1].end <= span.start,
     );
@@ -306,10 +342,11 @@ function rowsOf(spans, roles) {
   // A row is named for the worker it belongs to, and a nested row for the phase
   // its spans ran inside, so depth reads as containment rather than as a gap.
   for (const row of rows) {
-    if (!row.depth) {
+    if (!row.depth && !mergeDepth0) {
       row.label = roleLabel(row.role);
       continue;
     }
+    if (!row.depth) continue;
     const parents = [...new Set(row.spans.map((span) => span.inside))];
     row.label = parents.length === 1 ? `inside ${labelFor(parents[0])}` : "nested";
   }
@@ -319,12 +356,24 @@ function rowsOf(spans, roles) {
 export function runTimeline(timings) {
   const measured = collect(timings);
   if (!measured.length) {
-    return { span: 0, runStart: null, groups: [], steps: [], categories: [] };
+    return { span: 0, runStart: null, async: false, groups: [], steps: [], categories: [] };
   }
   const runStart = Math.min(...measured.map((span) => span.start));
   const runEnd = Math.max(...measured.map((span) => span.end));
   const steps = stepsOf(measured);
   const spans = nest([...measured, ...untrackedOf(measured, runStart, runEnd)]);
+  const generationSpans = spans.filter(
+    (span) => span.group === "generation" && span.kind !== "untracked",
+  );
+  const stepSpans = spans.filter(
+    (span) =>
+      span.group === "step" && span.kind !== "untracked" && span.kind !== "stall",
+  );
+  const async = generationSpans.some((generation) =>
+    stepSpans.some(
+      (step) => generation.start < step.end && step.start < generation.end,
+    ),
+  );
 
   for (const span of spans) {
     span.key = `${span.rolloutId}:${span.role}:${span.name}:${span.start.toFixed(3)}`;
@@ -335,14 +384,25 @@ export function runTimeline(timings) {
     delete span.parent;
   }
 
-  const groups = GROUPS.map((group) => {
-    const mine = spans.filter((span) => span.group === group.key);
-    return { ...group, rows: rowsOf(mine, group.roles) };
-  }).filter((group) => group.rows.length);
+  const groups = async
+    ? GROUPS.map((group) => {
+        const mine = spans.filter((span) => span.group === group.key);
+        return { ...group, rows: rowsOf(mine, group.roles) };
+      }).filter((group) => group.rows.length)
+    : [
+        {
+          key: "timeline",
+          label: "Timeline",
+          hint: GROUPS[0].hint,
+          roles: GROUPS.flatMap((group) => group.roles),
+          rows: rowsOf(spans, GROUPS.flatMap((group) => group.roles), true),
+        },
+      ].filter((group) => group.rows.length);
 
   return {
     runStart,
     span: Math.max(runEnd - runStart, 1e-6),
+    async,
     groups,
     steps: steps.map((step) => ({
       ...step,
