@@ -445,22 +445,27 @@
   }
 
   .legend {
+    flex: 1;
+    min-width: 0;
     display: flex;
-    flex-wrap: wrap;
-    gap: 6px 14px;
-    font-size: 11px;
+    flex-wrap: nowrap;
+    gap: 4px 10px;
+    overflow-x: auto;
+    font-size: 10px;
     color: var(--muted);
+    scrollbar-width: thin;
   }
 
   .legend-item {
     display: inline-flex;
     align-items: center;
-    gap: 5px;
+    gap: 4px;
+    flex-shrink: 0;
   }
 
   .swatch {
-    width: 9px;
-    height: 9px;
+    width: 8px;
+    height: 8px;
     border-radius: 2px;
     flex-shrink: 0;
   }
@@ -562,8 +567,6 @@
   .gutter-row.lane {
     color: var(--text);
     font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
   }
 
   .viewport {

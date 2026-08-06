@@ -2038,6 +2038,10 @@ table.training-runs-table td.row-open-cell {
   margin-bottom: 6px;
 }
 
+.substep-timing-title {
+  text-transform: none;
+}
+
 table.rollout-table {
   width: 100%;
   border-collapse: collapse;
