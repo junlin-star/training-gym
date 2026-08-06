@@ -1,57 +1,16 @@
 const slot = (name) => `var(--color-c-dataviz-${name})`;
 
-const ACTIVE_PALETTE = "mint";
-
-const PALETTE_SCHEMES = {
-  mint: {
-    train: slot("primary-1"),
-    generate: slot("primary-3"),
-    transfer: slot("primary-2"),
-    checkpoint: slot("primary-5"),
-    eval: slot("primary-7"),
-    trainInternals: {
-      compute_log_probs: slot("training-mint-log-probs"),
-      forward_backward: slot("training-mint-forward-backward"),
-      optimizer_step: slot("training-mint-optimizer-step"),
-    },
-  },
-  blue: {
-    train: slot("primary-7"),
-    generate: slot("primary-3"),
-    transfer: slot("primary-2"),
-    checkpoint: slot("primary-5"),
-    eval: slot("primary-1"),
-    trainInternals: {
-      compute_log_probs: slot("paired-4"),
-      forward_backward: slot("primary-4"),
-      optimizer_step: slot("primary-7"),
-    },
-  },
-  pink: {
-    train: slot("primary-5"),
-    generate: slot("primary-3"),
-    transfer: slot("primary-7"),
-    checkpoint: slot("primary-4"),
-    eval: slot("primary-2"),
-    trainInternals: {
-      compute_log_probs: slot("paired-3"),
-      forward_backward: slot("training-forward-backward"),
-      optimizer_step: slot("training-optimizer-step"),
-    },
-  },
-};
-
-const ACTIVE_SCHEME = PALETTE_SCHEMES[ACTIVE_PALETTE];
+export const TRAIN_OUTLINE_COLOR = slot("train-outline");
 
 // Colour carries the *kind* of cost, not the phase's name: a reader who has
 // never seen slime should be able to tell "the GPUs are training" from "we are
 // moving weights around" from "nothing is happening" without a glossary.
 export const CATEGORIES = {
-  train: { label: "Train", color: ACTIVE_SCHEME.train },
-  generate: { label: "Rollout", color: ACTIVE_SCHEME.generate },
-  transfer: { label: "Weight sync", color: ACTIVE_SCHEME.transfer },
-  checkpoint: { label: "Checkpoint", color: ACTIVE_SCHEME.checkpoint },
-  eval: { label: "Eval", color: ACTIVE_SCHEME.eval },
+  train: { label: "Train", color: slot("primary-1") },
+  generate: { label: "Rollout", color: slot("primary-3") },
+  transfer: { label: "Weight sync", color: slot("primary-2") },
+  checkpoint: { label: "Checkpoint", color: slot("primary-5") },
+  eval: { label: "Eval", color: slot("primary-4") },
   idle: { label: "Waiting", color: "var(--color-c-gray-30)" },
 };
 
@@ -80,7 +39,9 @@ export const PHASE_CATEGORY = {
 };
 
 export const PHASE_COLORS = {
-  ...ACTIVE_SCHEME.trainInternals,
+  compute_log_probs: slot("train-large"),
+  forward_backward: slot("train-alt-a"),
+  optimizer_step: slot("train-alt-b"),
   reward: slot("primary-3"),
   reward_batch: slot("primary-3"),
   reward_post_process: slot("primary-3"),

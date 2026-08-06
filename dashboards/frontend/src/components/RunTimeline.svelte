@@ -7,6 +7,7 @@
     HIDDEN_PHASES,
     labelFor,
     PHASE_COLORS,
+    TRAIN_OUTLINE_COLOR,
     runTimeline,
   } from "../lib/timing.js";
 
@@ -364,11 +365,20 @@
                         aria-label={`${labelFor(bar.name)} ${fmtSecs(bar.duration)}`}
                         style:left={`calc(${pct(bar.offset)}% + ${BAR_GAP_PX}px)`}
                         style:width={`max(1px, calc(${Math.max(pct(bar.duration), 0.01)}% - ${BAR_GAP_PX * 2}px))`}
-                        style:--bar-color={colorFor(bar.name)}
+                        style:--bar-color={
+                          showDetails &&
+                          bar.depth === 0 &&
+                          hasVisibleChildren(bar) &&
+                          ["train_models", "training", "train_model"].includes(bar.name)
+                            ? TRAIN_OUTLINE_COLOR
+                            : colorFor(bar.name)
+                        }
                         style:background={bar.kind === "work" && !(showDetails && bar.depth === 0 && hasVisibleChildren(bar)) ? colorFor(bar.name) : undefined}
                         style:border-color={
                           showDetails && bar.depth === 0 && hasVisibleChildren(bar)
-                            ? colorFor(bar.name)
+                            ? ["train_models", "training", "train_model"].includes(bar.name)
+                              ? TRAIN_OUTLINE_COLOR
+                              : colorFor(bar.name)
                             : undefined
                         }
                         onmouseenter={(e) => showTip(e, bar)}
