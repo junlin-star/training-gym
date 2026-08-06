@@ -1,14 +1,14 @@
 const slot = (name) => `var(--color-c-dataviz-${name})`;
 
-const ACTIVE_PALETTE = "teal";
+const ACTIVE_PALETTE = "blue";
 
 const PALETTE_SCHEMES = {
-  teal: {
-    train: slot("primary-4"),
+  blue: {
+    train: slot("primary-7"),
     generate: slot("primary-3"),
     transfer: slot("primary-2"),
     checkpoint: slot("primary-5"),
-    eval: slot("primary-7"),
+    eval: slot("primary-1"),
     trainInternals: {
       compute_log_probs: slot("paired-4"),
       forward_backward: slot("primary-4"),
@@ -446,7 +446,7 @@ function rowsOf(spans, async) {
   const rows = [
     {
       key: "driver",
-      label: "Driver",
+      label: "Train",
       hint: "Driver and trainer phases on the shared wall clock.",
       spans: driverSpans,
     },

@@ -726,6 +726,7 @@
   .bar.expanded-parent {
     z-index: 2;
     pointer-events: auto;
+    background: transparent !important;
   }
 
   .bar.nested-bar {
@@ -801,6 +802,7 @@
     right: 0;
     bottom: -12px;
     height: 12px;
+    pointer-events: none;
   }
 
   .tg-tip.pinned {
