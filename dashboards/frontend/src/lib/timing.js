@@ -361,7 +361,7 @@ function rowsOf(spans, async) {
     ].sort((a, b) => a - b);
     rows.push({
       key: `rollout-${index}`,
-      label: "ROLLOUTS",
+      label: "Rollouts",
       hint: "Rollout engine phases packed by their actual wall-clock overlap.",
       spans: rolloutSpans.filter((span) => {
         let root = span;

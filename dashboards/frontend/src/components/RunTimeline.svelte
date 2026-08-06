@@ -439,33 +439,32 @@
 
   .toolbar {
     display: flex;
+    flex-wrap: wrap;
     justify-content: space-between;
     align-items: flex-start;
     gap: 12px;
   }
 
   .legend {
-    flex: 1;
+    flex: 1 1 100%;
     min-width: 0;
     display: flex;
-    flex-wrap: nowrap;
-    gap: 4px 10px;
-    overflow-x: auto;
-    font-size: 10px;
+    flex-wrap: wrap;
+    gap: 3px 8px;
+    font-size: 9px;
     color: var(--muted);
-    scrollbar-width: thin;
   }
 
   .legend-item {
     display: inline-flex;
     align-items: center;
-    gap: 4px;
+    gap: 3px;
     flex-shrink: 0;
   }
 
   .swatch {
-    width: 8px;
-    height: 8px;
+    width: 7px;
+    height: 7px;
     border-radius: 2px;
     flex-shrink: 0;
   }
@@ -477,6 +476,7 @@
   }
 
   .controls {
+    margin-left: auto;
     display: flex;
     align-items: center;
     gap: 8px;
