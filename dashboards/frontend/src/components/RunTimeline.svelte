@@ -371,11 +371,7 @@
                         style:background={bar.kind === "work" && !(showDetails && bar.depth === 0 && hasVisibleChildren(bar)) ? colorFor(bar.name) : undefined}
                         style:border-color={
                           showDetails && bar.depth === 0 && hasVisibleChildren(bar)
-                            ? ["train_models", "training", "train_model"].includes(
-                                bar.name,
-                              )
-                              ? "var(--color-c-dataviz-training-outline)"
-                              : colorFor(bar.name)
+                            ? colorFor(bar.name)
                             : undefined
                         }
                         onmouseenter={(e) => showTip(e, bar)}

@@ -162,6 +162,9 @@
   --color-c-dataviz-training-outline: #7E3477;
   --color-c-dataviz-training-forward-backward: #FFDDFB;
   --color-c-dataviz-training-optimizer-step: #D982D1;
+  --color-c-dataviz-training-mint-forward-backward: #ADEAAB;
+  --color-c-dataviz-training-mint-optimizer-step: #4FBE5F;
+  --color-c-dataviz-training-mint-log-probs: #78A967;
   --color-c-dataviz-training-light: #8fb2f0;
   --color-c-dataviz-training-boundary: #3f65ae;
   --color-c-dataviz-paired-1: #78a967;
