@@ -19,6 +19,7 @@ class Qwen3_5_9b_Recipe(SlimeRecipe):
     rollout_max_response_len: int = 4096
     rollout_temperature: float = 1.0
     sglang_mem_fraction_static: float = 0.72
+    attention_backend: str = "flash"
 
     save_interval: int = 10
 
