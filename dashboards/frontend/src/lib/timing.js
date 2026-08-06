@@ -76,7 +76,6 @@ export const TIMING_LABELS = {
 // they are drawn as stalls, and the work itself shows up on the row of the
 // worker actually doing it.
 const STALLS = new Set([
-  "generate_rollouts",
   "wait_for_rollout",
   "wait_for_next_rollout",
   "evaluate_rollouts",
