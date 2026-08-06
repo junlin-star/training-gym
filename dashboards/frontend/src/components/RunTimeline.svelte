@@ -29,25 +29,6 @@
   const GROUP_GAP_PX = 12;
   const STEP_GAP_PX = 8;
   const BAR_GAP_PX = 1;
-  const DETAIL_LEGEND = [
-    {
-      label: "Calculate log probs",
-      color: PHASE_COLORS.compute_log_probs,
-    },
-    {
-      label: "Forward/backward",
-      color: PHASE_COLORS.forward_backward,
-    },
-    {
-      label: "Optimizer step",
-      color: PHASE_COLORS.optimizer_step,
-    },
-    {
-      label: "Sample generation",
-      color: PHASE_COLORS.sample_generation,
-    },
-  ];
-
   let showDetails = $state(false);
   let timeline = $derived(runTimeline(timings));
   let rowHeight = $derived(showDetails ? DETAIL_ROW_HEIGHT_PX : ROW_HEIGHT_PX);
@@ -184,6 +165,10 @@
     return bar.children?.some((child) => !HIDDEN_PHASES.has(child.name)) ?? false;
   }
 
+  function isExpandedParent(bar) {
+    return showDetails && bar.depth === 0 && hasVisibleChildren(bar);
+  }
+
   function displaySpans(row) {
     return [...row.spans]
       .filter(
@@ -221,14 +206,6 @@
             {CATEGORIES[key].label}
           </span>
         {/each}
-        {#if showDetails}
-          {#each DETAIL_LEGEND as item (item.label)}
-            <span class="legend-item legend-detail">
-              <span class="swatch" style={`background: ${item.color}`}></span>
-              {item.label}
-            </span>
-          {/each}
-        {/if}
       </div>
       <div class="controls">
         <div class="zoom-controls">
@@ -333,29 +310,25 @@
                         class:stall={bar.kind === "stall"}
                         class:sampled={bar.kind === "sampled"}
                         class:nested-bar={showDetails && bar.depth > 0}
-                        class:outlined={showDetails && bar.depth === 0 && hasVisibleChildren(bar)}
+                        class:outlined={isExpandedParent(bar)}
                         class:train-parent={
-                          showDetails &&
-                          bar.depth === 0 &&
-                          hasVisibleChildren(bar) &&
+                          isExpandedParent(bar) &&
                           ["train_models", "training", "train_model"].includes(bar.name)
                         }
-                        class:expanded-parent={showDetails && bar.depth === 0 && hasVisibleChildren(bar)}
+                        class:expanded-parent={isExpandedParent(bar)}
                         class:active={pinned && isActive(bar)}
                         aria-label={`${labelFor(bar.name)} ${fmtSecs(bar.duration)}`}
                         style:left={`calc(${pct(bar.offset)}% + ${visualInset(row, bar)}px)`}
                         style:width={`max(1px, calc(${Math.max(pct(bar.duration), 0.01)}% - ${visualInset(row, bar) * 2}px))`}
                         style:--bar-color={
-                          showDetails &&
-                          bar.depth === 0 &&
-                          hasVisibleChildren(bar) &&
+                          isExpandedParent(bar) &&
                           ["train_models", "training", "train_model"].includes(bar.name)
                             ? TRAIN_OUTLINE_COLOR
                             : colorFor(bar.name)
                         }
-                        style:background={bar.kind === "work" && !(showDetails && bar.depth === 0 && hasVisibleChildren(bar)) ? colorFor(bar.name) : undefined}
+                        style:background={bar.kind === "work" && !isExpandedParent(bar) ? colorFor(bar.name) : undefined}
                         style:border-color={
-                          showDetails && bar.depth === 0 && hasVisibleChildren(bar)
+                          isExpandedParent(bar)
                             ? ["train_models", "training", "train_model"].includes(bar.name)
                               ? TRAIN_OUTLINE_COLOR
                               : colorFor(bar.name)
@@ -482,10 +455,6 @@
     display: inline-flex;
     align-items: center;
     gap: 5px;
-  }
-
-  .legend-detail {
-    color: var(--muted);
   }
 
   .swatch {

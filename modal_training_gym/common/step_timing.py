@@ -202,8 +202,6 @@ def _by_rollout(
     return steps
 
 
-# Old step timing method grouped general training step i.e. forward/backward
-# under "optimizer step". New view more accurately reflects this.
 _LEGACY_RENAMES = {Substep.OPTIMIZER_STEP.value: Substep.TRAIN_MODELS.value}
 
 

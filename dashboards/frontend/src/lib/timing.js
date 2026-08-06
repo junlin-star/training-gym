@@ -42,10 +42,6 @@ export const PHASE_COLORS = {
   compute_log_probs: slot("train-large"),
   forward_backward: slot("train-alt-a"),
   optimizer_step: slot("train-alt-b"),
-  reward: slot("primary-3"),
-  reward_batch: slot("primary-3"),
-  reward_post_process: slot("primary-3"),
-  sample_generation: slot("primary-3"),
 };
 
 export const TIMING_LABELS = {
@@ -78,14 +74,16 @@ export const TIMING_LABELS = {
 const STALLS = new Set([
   "wait_for_rollout",
   "wait_for_next_rollout",
-  "evaluate_rollouts",
-  "evaluate_rollouts_end",
 ]);
 
-// A phase measured once per sample, kept as an aggregate rather than thousands
-// of intervals.
+// These phases have aggregate totals because recording every sample is noisy.
 const SAMPLED = new Set(["reward", "reward_batch", "sample_generation"]);
-export const HIDDEN_PHASES = new Set(["reward", "reward_batch", "reward_post_process"]);
+export const HIDDEN_PHASES = new Set([
+  "reward",
+  "reward_batch",
+  "reward_post_process",
+  "sample_generation",
+]);
 
 const NESTS_IN = {
   compute_log_probs: ["train_models"],
@@ -106,7 +104,7 @@ export const GROUPS = [
 ];
 
 const NEGLIGIBLE_WORK_S = 0.0005;
-// Below this a hole is loop overhead rather than something to go and look at.
+// Ignore sub-millisecond spans that cannot be read at timeline scale.
 
 export function labelFor(name) {
   return TIMING_LABELS[name] || name.replace(/_/g, " ");
@@ -154,16 +152,10 @@ function collect(timings) {
           name,
           category: categoryOf(name),
         };
-        // Per-sample phases are aggregated even when an older record still
-        // carries their runs: thousands of sub-millisecond slivers say less
-        // than one span across the calls' spread.
         const runs =
           !SAMPLED.has(name) && Array.isArray(phase?.invocations)
             ? phase.invocations
             : [];
-        // A phase that ran more than once is drawn as the runs themselves. Its
-        // first start to its last end is not an interval it was ever inside:
-        // an async step's two waits straddle the training between them.
         if (runs.length) {
           for (const [from, to] of runs) {
             const start = laneStart + (Number(from) || 0);
@@ -180,8 +172,6 @@ function collect(timings) {
           }
           continue;
         }
-        // Per-sample phases (and records written before runs were kept) have
-        // only aggregate timing, so they are drawn across the calls' spread.
         spans.push({
           ...where,
           kind: STALLS.has(name)
@@ -272,17 +262,11 @@ function nest(spans) {
       current.end = Math.max(current.end, child.end);
       children.set(child.name, current);
     }
-    const childOrdinals = new Map();
     span.children = [...children.values()].map((child) => {
-      const ordinal = (childOrdinals.get(child.name) || 0) + 1;
-      childOrdinals.set(child.name, ordinal);
       return {
         ...child,
         share: duration > 0 ? child.duration / duration : 0,
         average: child.count ? child.total / child.count : 0,
-        ...( ["forward_backward", "optimizer_step"].includes(child.name)
-          ? { ordinal }
-          : {}),
       };
     });
   }
@@ -402,10 +386,12 @@ export function runTimeline(timings) {
   const stepSpans = rawSpans.filter(
     (span) =>
       span.role !== "rollout" &&
-      span.kind !== "stall" &&
       span.kind !== "stall",
   );
-  const async = generationSpans.some((generation) =>
+  const sync = rawSpans.some(
+    (span) => span.role === "driver" && span.name === "generate_rollouts",
+  );
+  const async = !sync && generationSpans.some((generation) =>
     stepSpans.some(
       (step) => generation.start < step.end && step.start < generation.end,
     ),
