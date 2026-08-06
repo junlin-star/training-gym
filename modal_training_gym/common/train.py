@@ -656,7 +656,6 @@ class TrainConfig:
             )
         except RuntimeError:
             framework_status_token = ""
-
         print(f"TrainingRun recorded: {training_run_id}")
 
         app = self._build_app(training_run_id)
