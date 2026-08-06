@@ -7,8 +7,8 @@ export const CATEGORIES = {
   train: { label: "Train", color: slot("primary-5") },
   generate: { label: "Rollout", color: slot("primary-3") },
   transfer: { label: "Weight sync", color: slot("primary-7") },
-  checkpoint: { label: "Checkpoint", color: slot("primary-2") },
-  eval: { label: "Eval", color: slot("primary-4") },
+  checkpoint: { label: "Checkpoint", color: slot("primary-4") },
+  eval: { label: "Eval", color: slot("primary-2") },
   idle: { label: "Waiting", color: "var(--color-c-gray-30)" },
 };
 
