@@ -71,7 +71,7 @@ class RoleRecorder:
     def __init__(
         self,
         role: str,
-        rollout_id: int,
+        rollout_id: int | None,
         publish_gate: Callable[[], bool | None] | None = None,
     ) -> None:
         self.role = role

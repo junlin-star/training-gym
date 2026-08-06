@@ -267,12 +267,13 @@
                 class="gutter-row"
                 class:lane={row.depth === 0}
                 class:nested={row.depth > 0}
+                class:continuation={row.continuation}
                 style:height={`${ROW_HEIGHT_PX}px`}
                 style:margin-bottom={`${ROW_GAP_PX}px`}
                 style:padding-left={`${row.depth * 10}px`}
-                title={row.depth === 0 ? `${group.label} — ${group.hint}` : row.label}
+                title={`${row.label} — ${row.hint || group.hint}`}
               >
-                {row.depth === 0 ? (index === 0 ? group.label : "") : row.label}
+                {row.label}
               </div>
             {/each}
           </div>
@@ -569,6 +570,16 @@
 
   .gutter-row.nested {
     color: var(--muted-strong, #8a8a8a);
+  }
+
+  .gutter-row.continuation {
+    color: var(--muted-strong, #8a8a8a);
+    font-weight: 500;
+    text-transform: none;
+  }
+
+  .gutter-row.continuation::before {
+    content: "↳ ";
   }
 
   .viewport {

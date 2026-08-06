@@ -62,7 +62,9 @@ async def train(args):
     actor_model, critic_model = await create_training_models(args, pgs, rollout_manager)
 
     # always update weight first so that sglang has the loaded weights from training.
-    await actor_model.update_weights()
+    with _tg_role('driver', None) as _tg_rec:
+        with _tg_rec.phase('initial_weight_sync'):
+            await actor_model.update_weights()
 
     if args.check_weight_update_equal:
         await rollout_manager.check_weights.remote(action="compare")

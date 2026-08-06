@@ -144,6 +144,20 @@ def _wrap_driver_loop(src: str, path: Path) -> str:
     return "".join(new_lines)
 
 
+def _wrap_bootstrap_sync(src: str, path: Path) -> str:
+    anchor = (
+        "    # Always push actor weights to rollout once weights are loaded.\n"
+        "    actor_model.update_weights()\n"
+    )
+    replacement = (
+        "    # Always push actor weights to rollout once weights are loaded.\n"
+        "    with _tg_role('driver', None) as _tg_rec:\n"
+        "        with _tg_rec.phase('initial_weight_sync'):\n"
+        "            actor_model.update_weights()\n"
+    )
+    return replace_once(src, anchor, replacement, path)
+
+
 # Patches applied to the driver loop body after the rollout-status patcher has run.
 _SYNC_PHASE_WRAPS = [
     (
@@ -516,6 +530,7 @@ def _patch_file(path: Path, wraps: list[tuple[str, str]]) -> None:
     src = PREAMBLE + src
     for old, phase in wraps:
         src = replace_once(src, old, wrap_block(old, phase), path)
+    src = _wrap_bootstrap_sync(src, path)
     src = _wrap_driver_loop(src, path)  # last: it reindents the loop body
 
     missing = [phase for _, phase in wraps if phase_marker(phase) not in src]

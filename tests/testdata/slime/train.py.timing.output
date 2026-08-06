@@ -75,7 +75,9 @@ def train(args):
         ray.get(rollout_manager.onload_weights.remote())
 
     # Always push actor weights to rollout once weights are loaded.
-    actor_model.update_weights()
+    with _tg_role('driver', None) as _tg_rec:
+        with _tg_rec.phase('initial_weight_sync'):
+            actor_model.update_weights()
 
     if args.check_weight_update_equal:
         ray.get(rollout_manager.check_weights.remote(action="compare"))

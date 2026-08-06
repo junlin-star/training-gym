@@ -144,6 +144,20 @@ def _wrap_driver_loop(src: str, path: Path) -> str:
     return "".join(new_lines)
 
 
+def _wrap_bootstrap_sync(src: str, path: Path) -> str:
+    anchor = (
+        "    # always update weight first so that sglang has the loaded weights from training.\n"
+        "    await actor_model.update_weights()\n"
+    )
+    replacement = (
+        "    # always update weight first so that sglang has the loaded weights from training.\n"
+        "    with _tg_role('driver', None) as _tg_rec:\n"
+        "        with _tg_rec.phase('initial_weight_sync'):\n"
+        "            await actor_model.update_weights()\n"
+    )
+    return replace_once(src, anchor, replacement, path)
+
+
 @dataclass(frozen=True)
 class PackageTarget:
     """One file in the framework package that measures a non-driver lane.
@@ -452,6 +466,7 @@ def _patch_file(path: Path, wraps: list[tuple[str, str]]) -> None:
     src = PREAMBLE + src
     for old, phase in wraps:
         src = replace_once(src, old, wrap_block(old, phase), path)
+    src = _wrap_bootstrap_sync(src, path)
     src = _wrap_driver_loop(src, path)  # last: it reindents the loop body
 
     missing = [phase for _, phase in wraps if phase_marker(phase) not in src]

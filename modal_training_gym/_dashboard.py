@@ -905,7 +905,10 @@ def fastapi_app():
         # this misses is on the volume for the next read anyway.
         if entry is not None and entry.read_at is not None and not entry.lock.locked():
             async with entry.lock:
-                lanes = entry.lanes.setdefault(str(record.rollout_id), {"roles": {}})
+                rollout_key = (
+                    "bootstrap" if record.rollout_id is None else str(record.rollout_id)
+                )
+                lanes = entry.lanes.setdefault(rollout_key, {"roles": {}})
                 lanes["roles"].update(
                     rollout_lanes([record.model_dump(mode="json")])["roles"]
                 )
@@ -947,8 +950,12 @@ def fastapi_app():
             for record in legacy_run_to_records(run.substep_times):
                 found.setdefault(int(record["rollout_id"]), []).append(record)
         return {
-            str(rollout_id): rollout_lanes(records)
-            for rollout_id, records in sorted(found.items())
+            ("bootstrap" if rollout_id is None else str(rollout_id)): rollout_lanes(
+                records
+            )
+            for rollout_id, records in sorted(
+                found.items(), key=lambda item: (item[0] is None, item[0] or 0)
+            )
         }
 
     async def _run_timings(training_run_id: str) -> JsonDict:

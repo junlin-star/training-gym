@@ -24,6 +24,7 @@ export const PHASE_CATEGORY = {
   reward_batch: "reward",
   reward_post_process: "reward",
   weight_sync: "transfer",
+  initial_weight_sync: "transfer",
   offload_train: "transfer",
   offload_rollout: "transfer",
   checkpoint_save: "checkpoint",
@@ -43,6 +44,7 @@ export const TIMING_LABELS = {
   checkpoint_save: "Save checkpoint",
   offload_train: "Offload trainer",
   weight_sync: "Push weights to engines",
+  initial_weight_sync: "Initial weight sync",
   wait_for_rollout: "Waiting for this rollout",
   wait_for_next_rollout: "Waiting for the next rollout",
   generate_samples: "Generate samples",
@@ -66,6 +68,7 @@ export const PHASE_HELP = {
   reward_batch: "Your reward function scoring the batch.",
   reward_post_process: "Turning rewards into advantages for the batch.",
   weight_sync: "Copies updated weights from the trainer to the inference engines.",
+  initial_weight_sync: "One-time engine and process-group bring-up before the loop starts.",
   offload_train: "Moving the trainer model off/onto the GPUs between phases.",
   offload_rollout: "Moving the generation model off/onto the GPUs between phases.",
   checkpoint_save: "Writing a checkpoint to persistent storage.",
@@ -105,33 +108,82 @@ const NESTS_IN = {
   reward_post_process: ["generate_samples"],
 };
 
-// Two rows, in the order somebody debugging reads them: what the training loop
-// itself did, then what the machines generating rollouts did underneath it.
 export const GROUPS = [
   {
-    key: "step",
-    label: "Training loop",
-    hint: "the driver and the GPUs it trains on",
-    roles: ["driver", "actor", "critic"],
+    key: "timeline",
+    label: "Timeline",
+    hint: "measured phases on the shared wall clock",
+  },
+];
+
+const LANES = [
+  {
+    key: "training",
+    label: "Training",
+    hint: "Training compute and its nested phases.",
+    names: new Set(["train_models", "compute_log_probs", "forward_backward", "optimizer_step"]),
   },
   {
     key: "generation",
     label: "Generation",
-    hint: "the inference engines producing samples",
-    roles: ["rollout"],
+    hint: "Rollout generation and reward processing.",
+    names: new Set([
+      "generate_samples",
+      "reward",
+      "reward_batch",
+      "reward_post_process",
+    ]),
+  },
+  {
+    key: "weight_sync",
+    label: "Weight sync",
+    hint: "Moving weights between the trainer and inference engines.",
+    names: new Set(["weight_sync", "initial_weight_sync", "offload_train", "offload_rollout"]),
+  },
+  {
+    key: "checkpoint",
+    label: "Checkpoint",
+    hint: "Checkpoint persistence.",
+    names: new Set(["checkpoint_save"]),
+  },
+  {
+    key: "eval",
+    label: "Eval",
+    hint: "Evaluation phases.",
+    names: new Set(["evaluate_rollouts", "evaluate_rollouts_end"]),
+  },
+  {
+    key: "waiting",
+    label: "Waiting",
+    hint: "Driver stalls and time spent waiting on another worker.",
+    names: new Set([
+      "wait_for_rollout",
+      "wait_for_next_rollout",
+      "generate_rollouts",
+      "untracked",
+    ]),
+  },
+  {
+    key: "other",
+    label: "Other",
+    hint: "A phase not recognized by this dashboard version.",
+    names: new Set(),
   },
 ];
 
-const GROUP_OF_ROLE = new Map(
-  GROUPS.flatMap((group) => group.roles.map((role) => [role, group.key])),
+const LANE_OF_PHASE = new Map(
+  LANES.flatMap((lane) => [...lane.names].map((name) => [name, lane])),
 );
 
-const ROLE_LABELS = {
-  driver: "training loop",
-  actor: "trainer",
-  critic: "critic trainer",
-  rollout: "generation engines",
-};
+const GROUP_OF_ROLE = new Map(
+  [
+    ["driver", "step"],
+    ["actor", "step"],
+    ["critic", "step"],
+    ["rollout", "generation"],
+  ],
+);
+const LANE_ORDER = new Map(LANES.map((lane, index) => [lane.key, index]));
 
 const NEGLIGIBLE_WORK_S = 0.0005;
 // Below this a hole is loop overhead rather than something to go and look at.
@@ -149,10 +201,6 @@ export function colorFor(name) {
   return CATEGORIES[categoryOf(name)].color;
 }
 
-export function roleLabel(role) {
-  return ROLE_LABELS[role] || role;
-}
-
 function merge(spans) {
   const merged = [];
   for (const [start, end] of [...spans].sort((a, b) => a[0] - b[0])) {
@@ -167,7 +215,12 @@ function collect(timings) {
   const spans = [];
   for (const [id, lanes] of Object.entries(timings || {})) {
     const parsedId = Number(id);
-    const rolloutId = Number.isFinite(parsedId) ? parsedId : null;
+    const rolloutId =
+      id === "bootstrap"
+        ? null
+        : Number.isFinite(parsedId) && Number.isInteger(parsedId)
+          ? parsedId
+          : null;
     for (const [role, lane] of Object.entries(lanes?.roles || {})) {
       const laneStart = Number(lane?.lane_start_unix_s);
       if (!Number.isFinite(laneStart)) continue;
@@ -323,43 +376,44 @@ function nest(spans) {
   return ordered;
 }
 
-// One row per worker per depth, split again only when two spans of the same
-// worker and depth genuinely overlap -- which in async is the next rollout
-// generating during this one's training, and in sync never happens.
-function rowsOf(spans, roles, mergeDepth0 = false) {
+// One fixed lane per phase family, split into continuation rows only when
+// spans in that lane and depth genuinely overlap on the shared wall clock.
+function rowsOf(spans) {
   const rows = [];
-  const order = (span) => roles.indexOf(span.role);
   for (const span of [...spans].sort(
     (a, b) =>
-      (mergeDepth0 && a.depth === 0 && b.depth === 0
-        ? a.start - b.start || b.end - a.end
-        : order(a) - order(b) || a.depth - b.depth || a.start - b.start),
+      (LANE_ORDER.get(LANE_OF_PHASE.get(a.name)?.key) ??
+        LANE_ORDER.get("other")) -
+        (LANE_ORDER.get(LANE_OF_PHASE.get(b.name)?.key) ??
+          LANE_ORDER.get("other")) ||
+      a.depth - b.depth ||
+      a.start - b.start ||
+      b.end - a.end,
   )) {
+    const lane = LANE_OF_PHASE.get(span.name) || LANES[LANES.length - 1];
+    const continuation = rows.some(
+      (candidate) => candidate.lane === lane.key && candidate.depth === span.depth,
+    );
     let row = rows.find(
       (candidate) =>
-        (mergeDepth0 && span.depth === 0
-          ? candidate.depth === 0
-          : candidate.role === span.role) &&
+        candidate.lane === lane.key &&
         candidate.depth === span.depth &&
         candidate.spans[candidate.spans.length - 1].end <= span.start,
     );
     if (!row) {
-      row = { role: span.role, depth: span.depth, spans: [], label: "" };
+      row = {
+        lane: lane.key,
+        role: span.role,
+        depth: span.depth,
+        spans: [],
+        label: span.depth === 0 ? lane.label : `inside ${lane.label}`,
+        hint: lane.hint,
+        continuation,
+      };
       rows.push(row);
     }
     row.spans.push(span);
     span.row = rows.indexOf(row);
-  }
-  // A row is named for the worker it belongs to, and a nested row for the phase
-  // its spans ran inside, so depth reads as containment rather than as a gap.
-  for (const row of rows) {
-    if (!row.depth && !mergeDepth0) {
-      row.label = roleLabel(row.role);
-      continue;
-    }
-    if (!row.depth) continue;
-    const parents = [...new Set(row.spans.map((span) => span.inside))];
-    row.label = parents.length === 1 ? `inside ${labelFor(parents[0])}` : "nested";
   }
   return rows;
 }
@@ -398,20 +452,8 @@ export function runTimeline(timings) {
     delete span.parent;
   }
 
-  const groups = async
-    ? GROUPS.map((group) => {
-        const mine = spans.filter((span) => span.group === group.key);
-        return { ...group, rows: rowsOf(mine, group.roles) };
-      }).filter((group) => group.rows.length)
-    : [
-        {
-          key: "timeline",
-          label: "Timeline",
-          hint: GROUPS[0].hint,
-          roles: GROUPS.flatMap((group) => group.roles),
-          rows: rowsOf(spans, GROUPS.flatMap((group) => group.roles), true),
-        },
-      ].filter((group) => group.rows.length);
+  const rows = rowsOf(spans);
+  const groups = rows.length ? [{ ...GROUPS[0], rows }] : [];
 
   return {
     runStart,

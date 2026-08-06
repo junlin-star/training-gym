@@ -54,7 +54,7 @@ class RoleTimingRecord(BaseModel):
 
     # A path component of the record's key, so it must not be "." or ".."
     training_run_id: str = Field(pattern=r"^[A-Za-z0-9_-][A-Za-z0-9._-]*$")
-    rollout_id: int = Field(ge=0)
+    rollout_id: int | None = Field(default=None, ge=0)
     role: Role
     created_at: int = 0
     lane_start_unix_s: float | None = None
@@ -62,7 +62,8 @@ class RoleTimingRecord(BaseModel):
 
     @property
     def storage_key(self) -> str:
-        return f"{self.rollout_id:08d}__{self.role.value}"
+        rollout = "bootstrap" if self.rollout_id is None else f"{self.rollout_id:08d}"
+        return f"{rollout}__{self.role.value}"
 
     @staticmethod
     def store(training_run_id: str) -> str:
@@ -146,7 +147,12 @@ def measured_run_times(
     )
     step_times: dict[str, dict[str, int | None]] = {}
     substep_times: dict[str, dict[str, dict[str, float | None]]] = {}
-    for rollout_id, records in sorted(load_run(training_run_id).items()):
+    for rollout_id, records in sorted(
+        load_run(training_run_id).items(),
+        key=lambda item: (item[0] is None, item[0] or 0),
+    ):
+        if rollout_id is None:
+            continue
         substeps: dict[str, dict[str, float | None]] = {}
         step_duration = 0.0
         for record in records:
@@ -168,7 +174,7 @@ def measured_run_times(
     return step_times, substep_times
 
 
-def load_run(training_run_id: str) -> dict[int, list[dict[str, Any]]]:
+def load_run(training_run_id: str) -> dict[int | None, list[dict[str, Any]]]:
     """Every role record of a run, keyed by rollout id.
 
     Read whole, the way a run's rollouts are: the volume rate limits listings,
@@ -180,15 +186,19 @@ def load_run(training_run_id: str) -> dict[int, list[dict[str, Any]]]:
     return _by_rollout(vol_list(RoleTimingRecord.store(training_run_id)))
 
 
-async def load_run_async(training_run_id: str) -> dict[int, list[dict[str, Any]]]:
+async def load_run_async(
+    training_run_id: str,
+) -> dict[int | None, list[dict[str, Any]]]:
     """:func:`load_run` on the event loop, which reads the records together."""
     return _by_rollout(
         await vol_list(RoleTimingRecord.store(training_run_id), is_async=True)
     )
 
 
-def _by_rollout(records: list[dict[str, Any]]) -> dict[int, list[dict[str, Any]]]:
-    steps: dict[int, list[dict[str, Any]]] = {}
+def _by_rollout(
+    records: list[dict[str, Any]],
+) -> dict[int | None, list[dict[str, Any]]]:
+    steps: dict[int | None, list[dict[str, Any]]] = {}
     for record in records:
         steps.setdefault(record["rollout_id"], []).append(record)
     return steps
