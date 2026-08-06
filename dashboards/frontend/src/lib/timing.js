@@ -70,7 +70,6 @@ export const TIMING_LABELS = {
   reward_post_process: "Reward post process",
   forward_backward: "Forward/backward",
   optimizer_step: "Optimizer step",
-  untracked: "Unaccounted time",
 };
 
 // Phases where the worker whose lane they are on is blocked on somebody else:
@@ -109,7 +108,6 @@ export const GROUPS = [
 
 const NEGLIGIBLE_WORK_S = 0.0005;
 // Below this a hole is loop overhead rather than something to go and look at.
-const UNTRACKED_FLOOR_S = 0.25;
 
 export function labelFor(name) {
   return TIMING_LABELS[name] || name.replace(/_/g, " ");
@@ -226,34 +224,6 @@ function stepsOf(spans) {
   return [...byRollout.values()].sort((a, b) => a.start - b.start);
 }
 
-// Wall-clock the loop spent somewhere no phase measured. Drawn rather than left
-// blank: a hole in the driver's timeline is a finding, not decoration.
-function untrackedOf(spans, runStart, runEnd) {
-  const driver = spans.filter((span) => span.role === "driver");
-  if (!driver.length) return [];
-  const covered = merge(driver.map((span) => [span.start, span.end]));
-  const holes = [];
-  let cursor = runStart;
-  for (const [start, end] of covered) {
-    if (start - cursor >= UNTRACKED_FLOOR_S) holes.push([cursor, start]);
-    cursor = Math.max(cursor, end);
-  }
-  if (runEnd - cursor >= UNTRACKED_FLOOR_S) holes.push([cursor, runEnd]);
-  return holes.map(([start, end]) => ({
-    rolloutId: null,
-    role: "driver",
-    group: "step",
-    name: "untracked",
-    category: "idle",
-    kind: "untracked",
-    start,
-    end,
-    count: 1,
-    total: end - start,
-    longest: end - start,
-  }));
-}
-
 function nest(spans) {
   const ordered = [...spans].sort((a, b) => a.start - b.start || b.end - a.end);
   for (const span of ordered) {
@@ -274,57 +244,10 @@ function nest(spans) {
     if (parent) parent.contains = true;
     if (parent) parent.children.push(span);
   }
-  for (const parent of ordered) {
-    if (!parent.children.length) continue;
-    const covered = merge(parent.children.map((child) => [child.start, child.end]));
-    let cursor = parent.start;
-    for (const [start, end] of covered) {
-      if (start - cursor >= UNTRACKED_FLOOR_S) {
-        const gap = {
-          rolloutId: parent.rolloutId,
-          role: parent.role,
-          group: parent.group,
-          name: "untracked",
-          category: "idle",
-          kind: "untracked",
-          start: cursor,
-          end: start,
-          count: 1,
-          total: start - cursor,
-          longest: start - cursor,
-          depth: parent.depth + 1,
-          parent,
-          children: [],
-        };
-        parent.children.push(gap);
-        ordered.push(gap);
-      }
-      cursor = Math.max(cursor, end);
-    }
-    if (parent.end - cursor >= UNTRACKED_FLOOR_S) {
-      const gap = {
-        rolloutId: parent.rolloutId,
-        role: parent.role,
-        group: parent.group,
-        name: "untracked",
-        category: "idle",
-        kind: "untracked",
-        start: cursor,
-        end: parent.end,
-        count: 1,
-        total: parent.end - cursor,
-        longest: parent.end - cursor,
-        depth: parent.depth + 1,
-        parent,
-        children: [],
-      };
-      parent.children.push(gap);
-      ordered.push(gap);
-    }
-  }
   for (const span of ordered) {
     const occurrences = new Map();
     for (const child of [...span.children].sort((a, b) => a.start - b.start)) {
+      if (!["forward_backward", "optimizer_step"].includes(child.name)) continue;
       const occurrence = (occurrences.get(child.name) || 0) + 1;
       occurrences.set(child.name, occurrence);
       child.ordinal = occurrence;
@@ -350,11 +273,19 @@ function nest(spans) {
       current.end = Math.max(current.end, child.end);
       children.set(child.name, current);
     }
-    span.children = [...children.values()].map((child) => ({
-      ...child,
-      share: duration > 0 ? child.duration / duration : 0,
-      average: child.count ? child.total / child.count : 0,
-    }));
+    const childOrdinals = new Map();
+    span.children = [...children.values()].map((child) => {
+      const ordinal = (childOrdinals.get(child.name) || 0) + 1;
+      childOrdinals.set(child.name, ordinal);
+      return {
+        ...child,
+        share: duration > 0 ? child.duration / duration : 0,
+        average: child.count ? child.total / child.count : 0,
+        ...( ["forward_backward", "optimizer_step"].includes(child.name)
+          ? { ordinal }
+          : {}),
+      };
+    });
   }
   return ordered;
 }
@@ -362,7 +293,7 @@ function nest(spans) {
 function clipStalls(spans, async) {
   const workByRow = new Map();
   for (const span of spans) {
-    if (span.kind === "stall" || span.kind === "untracked") continue;
+    if (span.kind === "stall") continue;
     const row = async && span.role === "rollout" ? "generation" : "step";
     const intervals = workByRow.get(row) || [];
     intervals.push([span.start, span.end]);
@@ -467,13 +398,13 @@ export function runTimeline(timings) {
   const runStart = Math.min(...measured.map((span) => span.start));
   const runEnd = Math.max(...measured.map((span) => span.end));
   const steps = stepsOf(measured);
-  const rawSpans = [...measured, ...untrackedOf(measured, runStart, runEnd)];
+  const rawSpans = measured;
   const generationSpans = rawSpans.filter((span) => span.role === "rollout");
   const stepSpans = rawSpans.filter(
     (span) =>
       span.role !== "rollout" &&
       span.kind !== "stall" &&
-      span.kind !== "untracked",
+      span.kind !== "stall",
   );
   const async = generationSpans.some((generation) =>
     stepSpans.some(
@@ -493,9 +424,7 @@ export function runTimeline(timings) {
     span.insideKey = span.parent ? span.parent.key : null;
   }
 
-  const visibleSpans = spans.filter(
-    (span) => span.kind !== "untracked" || span.depth > 0,
-  );
+  const visibleSpans = spans;
   const rows = rowsOf(visibleSpans, async);
   const groups = rows.length ? [{ ...GROUPS[0], rows }] : [];
   for (const span of spans) delete span.parent;
@@ -510,9 +439,6 @@ export function runTimeline(timings) {
       offset: step.start - runStart,
       duration: step.end - step.start,
     })),
-    untracked: spans
-      .filter((span) => span.kind === "untracked")
-      .reduce((total, span) => total + span.duration, 0),
     categories: [...new Set(spans.map((span) => span.category))].sort(
       (a, b) => Object.keys(CATEGORIES).indexOf(a) - Object.keys(CATEGORIES).indexOf(b),
     ),

@@ -48,19 +48,6 @@
     },
   ];
 
-  // What each wait is actually waiting for, in steps rather than futures.
-  const WAITS_ON = {
-    generate_rollouts: () => "the engines generating this step's samples",
-    wait_for_rollout: (id) =>
-      id > 0
-        ? `this step's samples, generated during step ${id - 1}`
-        : "this step's samples, generation started before the loop",
-    wait_for_next_rollout: (id) =>
-      `step ${id + 1}'s samples`,
-    evaluate_rollouts: () => "the engines running eval",
-    evaluate_rollouts_end: () => "the engines running eval",
-  };
-
   let showDetails = $state(false);
   let timeline = $derived(runTimeline(timings));
   let rowHeight = $derived(showDetails ? DETAIL_ROW_HEIGHT_PX : ROW_HEIGHT_PX);
@@ -172,14 +159,8 @@
   }
 
   function tipTitle(bar) {
-    if (bar.kind === "mean") return "Mean sample generation time";
-    if (bar.kind === "untracked") return "Unaccounted time inside this phase";
     const name = labelFor(bar.name);
     return bar.ordinal ? `${name} ${bar.ordinal}` : name;
-  }
-
-  function meanMarker(bar) {
-    return bar.children?.find((child) => child.name === "sample_generation") || null;
   }
 
   function nestedChild(bar, name) {
@@ -195,13 +176,6 @@
     return bar.name === "generate_samples" ? nestedChild(bar, "sample_generation") : null;
   }
 
-  function fmtDurationPair(mean, longest) {
-    const unit = fmtSecs(Math.max(Number(mean) || 0, Number(longest) || 0)).endsWith("ms")
-      ? "ms"
-      : "s";
-    return `mean ${fmtSecs(mean, unit)} · max ${fmtSecs(longest, unit)}`;
-  }
-
   function rewardStats(bar) {
     return bar.name === "generate_samples" ? nestedChild(bar, "reward") : null;
   }
@@ -214,11 +188,18 @@
     return [...row.spans]
       .filter(
         (bar) =>
-          (bar.kind !== "untracked" || (showDetails && bar.depth > 0)) &&
           !HIDDEN_PHASES.has(bar.name) &&
+          (!showDetails || bar.kind !== "stall") &&
           (showDetails || bar.depth === 0),
       )
       .sort((a, b) => a.depth - b.depth || a.start - b.start || b.end - a.end);
+  }
+
+  function visualInset(row, bar) {
+    const previous = row.spans
+      .filter((candidate) => candidate.depth === bar.depth && candidate.end <= bar.start)
+      .sort((a, b) => b.end - a.end)[0];
+    return previous && bar.start > previous.end ? BAR_GAP_PX : 0;
   }
 </script>
 
@@ -350,7 +331,6 @@
                       <button
                         class="bar"
                         class:stall={bar.kind === "stall"}
-                        class:untracked={bar.kind === "untracked"}
                         class:sampled={bar.kind === "sampled"}
                         class:nested-bar={showDetails && bar.depth > 0}
                         class:outlined={showDetails && bar.depth === 0 && hasVisibleChildren(bar)}
@@ -363,8 +343,8 @@
                         class:expanded-parent={showDetails && bar.depth === 0 && hasVisibleChildren(bar)}
                         class:active={pinned && isActive(bar)}
                         aria-label={`${labelFor(bar.name)} ${fmtSecs(bar.duration)}`}
-                        style:left={`calc(${pct(bar.offset)}% + ${BAR_GAP_PX}px)`}
-                        style:width={`max(1px, calc(${Math.max(pct(bar.duration), 0.01)}% - ${BAR_GAP_PX * 2}px))`}
+                        style:left={`calc(${pct(bar.offset)}% + ${visualInset(row, bar)}px)`}
+                        style:width={`max(1px, calc(${Math.max(pct(bar.duration), 0.01)}% - ${visualInset(row, bar) * 2}px))`}
                         style:--bar-color={
                           showDetails &&
                           bar.depth === 0 &&
@@ -390,24 +370,6 @@
                           <span
                             class="tick"
                             style:left={`${Math.min((bar.average / bar.duration) * 100, 100)}%`}
-                          ></span>
-                        {/if}
-                        {#if showDetails && bar.name === "generate_samples" && meanMarker(bar)}
-                          <span
-                            class="mean-marker"
-                            role="img"
-                            aria-label={`Mean sample generation time ${fmtSecs(meanMarker(bar).average)}`}
-                            style:left={`${Math.min((meanMarker(bar).average / bar.duration) * 100, 100)}%`}
-                            onmouseenter={(e) =>
-                              showTip(e, {
-                                ...bar,
-                                key: `${bar.key}:mean`,
-                                name: "mean_sample",
-                                duration: meanMarker(bar).average,
-                                offset: bar.offset,
-                                kind: "mean",
-                              })}
-                            onmouseleave={hideTip}
                           ></span>
                         {/if}
                       </button>
@@ -440,36 +402,28 @@
       </span>
     </div>
     <span class="tg-tip-name">{tipTitle(tip.bar)}</span>
-    {#if tip.bar.kind === "mean"}
-      <span class="tg-tip-when">Mean sample generation time</span>
-    {:else}
-      <span class="tg-tip-when">
-        {fmtSecs(tip.bar.offset)} → {fmtSecs(tip.bar.offset + tip.bar.duration)}
-      </span>
-    {/if}
+    <span class="tg-tip-when">
+      {fmtSecs(tip.bar.offset)} → {fmtSecs(tip.bar.offset + tip.bar.duration)}
+    </span>
     {#if generationStats(tip.bar)}
       <span class="tg-tip-stat">
-        Sample generation · {fmtDurationPair(
-          generationStats(tip.bar).average,
+        average sample generation time: {fmtSecs(generationStats(tip.bar).average)}
+      </span>
+      <span class="tg-tip-stat">
+        longest sample generation time: {fmtSecs(
           generationStats(tip.bar).longest ?? generationStats(tip.bar).duration,
         )}
       </span>
     {/if}
     {#if rewardStats(tip.bar)}
       <span class="tg-tip-stat">
-        Reward · {fmtDurationPair(
-          rewardStats(tip.bar).average,
+        average reward time: {fmtSecs(rewardStats(tip.bar).average)}
+      </span>
+      <span class="tg-tip-stat">
+        longest reward time: {fmtSecs(
           rewardStats(tip.bar).longest ?? rewardStats(tip.bar).duration,
-        )} (per-call compute)
+        )}
       </span>
-    {/if}
-    {#if tip.bar.kind === "stall"}
-      <span class="tg-tip-when">
-        stalled on {WAITS_ON[tip.bar.name]?.(tip.bar.rolloutId) ?? "another worker"}
-      </span>
-    {/if}
-    {#if tip.bar.kind === "untracked"}
-      <span class="tg-tip-when">work not covered by a measured child phase</span>
     {/if}
     {#if tip.bar.children?.length}
       <div class="tg-tip-children">
@@ -487,7 +441,7 @@
         {/each}
       </div>
     {/if}
-    {#if tip.bar.kind !== "untracked" && tip.bar.category === "generate" && tip.bar.rolloutId != null && onOpenRollout}
+    {#if tip.bar.category === "generate" && tip.bar.rolloutId != null && onOpenRollout}
       <button
         class="tg-tip-action"
         onclick={(e) => {
@@ -736,11 +690,13 @@
   .bar.expanded-parent {
     z-index: 2;
     pointer-events: auto;
-    background: transparent !important;
+    background: color-mix(in srgb, var(--bar-color) 18%, transparent) !important;
   }
 
   .bar.nested-bar {
     min-width: 2px;
+    top: 4px;
+    height: calc(100% - 8px);
     z-index: 3;
     outline: none;
     border-radius: 0;
@@ -756,11 +712,6 @@
     background-size: 100% 2px;
     background-position: center;
     background-repeat: no-repeat;
-  }
-
-  .bar.untracked {
-    background: var(--color-c-gray-30, #6a6a6a);
-    border: none;
   }
 
   .bar.sampled {
@@ -876,13 +827,4 @@
     color: var(--text-bright, #fff);
   }
 
-  .mean-marker {
-    position: absolute;
-    top: 0;
-    bottom: 0;
-    width: 2px;
-    background: var(--color-c-dataviz-primary-8);
-    cursor: help;
-    z-index: 4;
-  }
 </style>
