@@ -6,7 +6,7 @@
 # What if you have a task where you want to score model outputs by running them in an environment?
 #
 # This tutorial trains a model on the
-# [hello-world](https://hub.harborframework.com/tasks/harbor/hello-world/latest)
+# [hello-world](https://hub.harborframework.com/datasets/harbor/hello-world/latest)
 # task from Harbor Hub, scoring solutions by spawning and executing them in Modal sandboxes.
 #
 # Workflow:
