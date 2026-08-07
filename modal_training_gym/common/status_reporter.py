@@ -110,7 +110,7 @@ def _post(item: dict[str, Any]) -> PostResult:
         with urlopen(request, timeout=timeout) as response:
             response.read()
     except HTTPError as exc:
-        if exc.code in {401, 404, 405}:
+        if exc.code in {404, 405}:
             return "not_found"
         if exc.code == 410:
             return "unknown_run"

@@ -92,6 +92,7 @@ class RoleRecorder:
         self._closed = False
         self._post_retries = 0
         self._unknown_run = False
+        self._require_failure_reported = False
 
     def __enter__(self) -> "RoleRecorder":
         return self
@@ -176,7 +177,7 @@ class RoleRecorder:
                         if os.environ.get(TIMING_MODE_ENV, "auto") == "require":
                             print(
                                 "ERROR: substep_timing='require' was rejected with "
-                                "HTTP 404/401/405 from the dashboard timing "
+                                "HTTP 404/405 from the dashboard timing "
                                 "endpoint; timing is unavailable on this dashboard.",
                                 flush=True,
                             )
@@ -186,6 +187,17 @@ class RoleRecorder:
                         self._post_retries += 1
                         if self._post_retries >= MAX_POST_RETRIES:
                             self._post_retries = 0
+                            if (
+                                os.environ.get(TIMING_MODE_ENV, "auto") == "require"
+                                and not self._require_failure_reported
+                            ):
+                                self._require_failure_reported = True
+                                print(
+                                    "ERROR: substep_timing='require' timing upload "
+                                    f"failed after {MAX_POST_RETRIES} attempts; "
+                                    "check dashboard authentication or connectivity.",
+                                    flush=True,
+                                )
                         else:
                             with self._lock:
                                 if self._snapshot is None:
