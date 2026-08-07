@@ -20,6 +20,10 @@ from contextvars import ContextVar
 from typing import Callable, Iterator
 
 from modal_training_gym.common import status_reporter
+from modal_training_gym.common.timing_limits import (
+    MAX_PHASE_INVOCATIONS,
+    MAX_TIMING_PHASES,
+)
 
 TIMING_MODE_ENV = "TRAINING_GYM_SUBSTEP_TIMING"
 TIMING_PATH = "/api/timing-events"
@@ -93,6 +97,7 @@ class RoleRecorder:
         self._closed = False
         self._post_retries = 0
         self._unknown_run = False
+        self._unknown_run_reported = False
         self._not_found_count = 0
         self._require_failure_reported = False
 
@@ -129,18 +134,19 @@ class RoleRecorder:
             with self._lock:
                 timing = self.phases.get(name)
                 if timing is None:
-                    self.phases[name] = {
-                        "count": 1,
-                        "total_duration_s": duration,
-                        "longest_duration_s": duration,
-                        "first_start_s": start - self._t0,
-                        "last_end_s": end - self._t0,
-                    }
-                    self.invocations[name] = (
-                        []
-                        if name in PER_SAMPLE_PHASES
-                        else [[start - self._t0, end - self._t0]]
-                    )
+                    if len(self.phases) < MAX_TIMING_PHASES:
+                        self.phases[name] = {
+                            "count": 1,
+                            "total_duration_s": duration,
+                            "longest_duration_s": duration,
+                            "first_start_s": start - self._t0,
+                            "last_end_s": end - self._t0,
+                        }
+                        self.invocations[name] = (
+                            []
+                            if name in PER_SAMPLE_PHASES
+                            else [[start - self._t0, end - self._t0]]
+                        )
                 else:
                     timing["count"] += 1
                     timing["total_duration_s"] += duration
@@ -151,7 +157,10 @@ class RoleRecorder:
                         timing["first_start_s"], start - self._t0
                     )
                     timing["last_end_s"] = max(timing["last_end_s"], end - self._t0)
-                    if name not in PER_SAMPLE_PHASES:
+                    if (
+                        name not in PER_SAMPLE_PHASES
+                        and len(self.invocations[name]) < MAX_PHASE_INVOCATIONS
+                    ):
                         self.invocations[name].append(
                             [start - self._t0, end - self._t0]
                         )
@@ -188,6 +197,13 @@ class RoleRecorder:
                                 )
                     elif result == "unknown_run":
                         self._unknown_run = True
+                        if not self._unknown_run_reported:
+                            self._unknown_run_reported = True
+                            print(
+                                "WARNING: substep timing upload received HTTP 410; "
+                                f"disabling lane {self.role}/{self.rollout_id}.",
+                                flush=True,
+                            )
                     elif result == "failed":
                         self._post_retries += 1
                         if self._post_retries >= MAX_POST_RETRIES:

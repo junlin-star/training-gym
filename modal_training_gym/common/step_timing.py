@@ -7,6 +7,10 @@ from typing import Any, Awaitable
 from pydantic import BaseModel, Field
 
 from modal_training_gym.common.status import SlimeStatus
+from modal_training_gym.common.timing_limits import (
+    MAX_PHASE_INVOCATIONS,
+    MAX_TIMING_PHASES,
+)
 from modal_training_gym.utils.metadata import MetadataStore, vol_list, vol_put
 
 TRAINING_RUN_ID_PATTERN = r"^[A-Za-z0-9_-][A-Za-z0-9._-]*$"
@@ -36,7 +40,9 @@ class PhaseTiming(BaseModel):
     longest_duration_s: float
     first_start_s: float
     last_end_s: float
-    invocations: list[tuple[float, float]] = Field(default_factory=list)
+    invocations: list[tuple[float, float]] = Field(
+        default_factory=list, max_length=MAX_PHASE_INVOCATIONS
+    )
 
     @property
     def average_duration_s(self) -> float:
@@ -55,7 +61,9 @@ class RoleTimingRecord(BaseModel):
     role: Role
     created_at: int = 0
     lane_start_unix_s: float | None = None
-    phases: dict[str, PhaseTiming] = Field(default_factory=dict)
+    phases: dict[str, PhaseTiming] = Field(
+        default_factory=dict, max_length=MAX_TIMING_PHASES
+    )
 
     @property
     def storage_key(self) -> str:
