@@ -18,6 +18,8 @@
     downloadName = "substep_timing.json",
     onOpenRollout = null,
     rolloutIds = [],
+    runOrigin = null,
+    showOpenRollout = true,
   } = $props();
 
   const MIN_ZOOM = 1;
@@ -34,6 +36,7 @@
   const BAR_GAP_PX = 1;
   let showDetails = $state(false);
   let timeline = $derived(runTimeline(timings));
+  let intervalOrigin = $derived(runOrigin ?? timeline.runStart);
   let rowHeight = $derived(showDetails ? DETAIL_ROW_HEIGHT_PX : ROW_HEIGHT_PX);
   let groups = $derived(
     timeline.groups.map((group) => ({
@@ -143,7 +146,7 @@
   }
 
   function tipTitle(bar) {
-    const name = labelFor(bar.name);
+    const name = labelFor(bar.name, bar.rolloutId);
     return bar.ordinal ? `${name} ${bar.ordinal}` : name;
   }
 
@@ -319,7 +322,7 @@
                         }
                         class:expanded-parent={isExpandedParent(bar)}
                         class:active={pinned && isActive(bar)}
-                        aria-label={`${labelFor(bar.name)} ${fmtSecs(bar.duration)}`}
+                        aria-label={`${labelFor(bar.name, bar.rolloutId)} ${fmtSecs(bar.duration)}`}
                         style:left={`calc(${pct(bar.offset)}% + ${visualInset(row, bar)}px)`}
                         style:width={`max(1px, calc(${Math.max(pct(bar.duration), 0.01)}% - ${visualInset(row, bar) * 2}px))`}
                         style:--bar-color={
@@ -371,9 +374,11 @@
       </span>
     </div>
     <span class="tg-tip-name">{tipTitle(tip.bar)}</span>
-    <span class="tg-tip-when">
-      {fmtSecs(tip.bar.offset)} → {fmtSecs(tip.bar.offset + tip.bar.duration)}
-    </span>
+    {#if tip.bar.count === 1}
+      <span class="tg-tip-when">
+        {fmtSecs(tip.bar.start - intervalOrigin)} → {fmtSecs(tip.bar.end - intervalOrigin)}
+      </span>
+    {/if}
     {#if generationStats(tip.bar)}
       <span class="tg-tip-stat">
         Average sample generation time: {fmtSecs(generationStats(tip.bar).average)}
@@ -389,18 +394,19 @@
         {#each tip.bar.children.filter((child) => !child.mergedGeneration && !TOOLTIP_HIDDEN_PHASES.has(child.name)) as child (child.name)}
           <span class="tg-tip-child">
             <span class="tg-tip-child-line">
-              {labelFor(child.name)} · {fmtSecs(child.duration)}
+              {labelFor(child.name, child.rolloutId)}
+              <span class="tg-tip-child-duration"> · {fmtSecs(child.duration)}</span>
             </span>
-            {#if showDetails}
+            {#if showDetails && child.count === 1}
               <span class="tg-tip-when">
-                {fmtSecs(child.start - timeline.runStart)} → {fmtSecs(child.end - timeline.runStart)}
+                {fmtSecs(child.start - intervalOrigin)} → {fmtSecs(child.end - intervalOrigin)}
               </span>
             {/if}
           </span>
         {/each}
       </div>
     {/if}
-    {#if tip.bar.name === "generate_samples" && tip.bar.kind === "work" && tip.bar.rolloutId != null && rolloutIds.includes(Number(tip.bar.rolloutId)) && onOpenRollout}
+    {#if showOpenRollout && tip.bar.name === "generate_samples" && tip.bar.kind === "work" && tip.bar.rolloutId != null && rolloutIds.includes(Number(tip.bar.rolloutId)) && onOpenRollout}
       <button
         class="tg-tip-action"
         onclick={(e) => {
@@ -588,7 +594,7 @@
     bottom: 0;
     border-left: 1px solid var(--border-strong, #4a4a4a);
     background: var(--color-c-gray-05, #171717);
-    overflow: hidden;
+    overflow: visible;
   }
 
   .step-text {
@@ -759,6 +765,11 @@
     font-family: inherit;
     font-size: inherit;
     font-variant-numeric: tabular-nums;
+  }
+
+  .tg-tip-child-duration {
+    font-family: var(--font-mono);
+    font-weight: 400;
   }
 
   .tg-tip-action {

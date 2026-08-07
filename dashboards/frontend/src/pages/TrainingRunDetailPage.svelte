@@ -25,6 +25,7 @@
     fetchRunLogs,
   } from "../lib/api.js";
   import { groupByRollout, rolloutIndex, rolloutScores } from "../lib/rolloutGrouping.js";
+  import { timingRunStart } from "../lib/timing.js";
 
   // Number of historical log lines requested per page.
   const HIST_PAGE = 500;
@@ -502,6 +503,7 @@
   });
 
   let runTimings = $state({});
+  let timelineRunOrigin = $derived(timingRunStart(runTimings));
   let stepTimingIds = $derived(
     Object.keys(runTimings).filter((id) => id !== "bootstrap"),
   );
@@ -1364,6 +1366,7 @@
               </div>
               <RunTimeline
                 timings={runTimings}
+                runOrigin={timelineRunOrigin}
                 timelineKey={runId}
                 downloadName={`substep_timing_${runId}.json`}
                 rolloutIds={rolloutSummaries.map((r) => r.rollout_id)}
@@ -1552,6 +1555,8 @@
                           <div class="rollout-chart-title">Substep timing</div>
                           <RunTimeline
                             timings={{ [r.rollout_id]: runTimings[r.rollout_id] }}
+                            runOrigin={timelineRunOrigin}
+                            showOpenRollout={false}
                             timelineKey={`${runId}:${r.rollout_id}`}
                             downloadName={`substep_timing_${runId}_rollout_${r.rollout_id}.json`}
                             rolloutIds={[r.rollout_id]}

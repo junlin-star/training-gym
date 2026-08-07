@@ -112,7 +112,16 @@ export const GROUPS = [
 const NEGLIGIBLE_WORK_S = 0.0005;
 // Ignore sub-millisecond spans that cannot be read at timeline scale.
 
-export function labelFor(name) {
+export function labelFor(name, rolloutId = null) {
+  if (
+    (name === "wait_for_rollout" || name === "wait_for_next_rollout") &&
+    rolloutId != null
+  ) {
+    const step = Number(rolloutId) + (name === "wait_for_next_rollout" ? 1 : 0);
+    if (Number.isInteger(step)) {
+      return `Waiting for rollout generation (step ${step})`;
+    }
+  }
   return TIMING_LABELS[name] || name.replace(/_/g, " ");
 }
 
@@ -518,6 +527,11 @@ export function runTimeline(timings) {
       (a, b) => Object.keys(CATEGORIES).indexOf(a) - Object.keys(CATEGORIES).indexOf(b),
     ),
   };
+}
+
+export function timingRunStart(timings) {
+  const measured = collect(timings);
+  return measured.length ? Math.min(...measured.map((span) => span.start)) : null;
 }
 
 export function fmtSecs(s, unit = null) {
