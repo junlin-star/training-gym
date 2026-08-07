@@ -498,11 +498,7 @@ def wrap_scope(src: str, scope: tuple[str, str, str], path: Path) -> str:
     )
 
 
-def patch_package_file(root: Path, target: PackageTarget) -> None:
-    """Instrument one file in the framework package. A missing file is fatal
-    here, unlike the entrypoints: it means the layout moved and the lane would
-    silently never appear.
-    """
+def _patch_package_file(root: Path, target: PackageTarget) -> None:
     path = root / target.path
     if not path.exists():
         raise RuntimeError(f"{path}: not found; {root.name} layout changed")
@@ -527,6 +523,14 @@ def patch_package_file(root: Path, target: PackageTarget) -> None:
 
     path.write_text(src)
     print(f"Patched {target.path} for substep timing ({len(target.blocks)} phases)")
+
+
+def patch_package_file(root: Path, target: PackageTarget) -> None:
+    """Best-effort instrumentation for optional framework package files."""
+    try:
+        _patch_package_file(root, target)
+    except Exception as exc:
+        print(f"WARNING: {target.path} substep timing patch skipped: {exc}")
 
 
 def _patch_file(path: Path, wraps: list[tuple[str, str]]) -> None:

@@ -124,16 +124,6 @@ export function colorFor(name) {
   return PHASE_COLORS[name] || CATEGORIES[categoryOf(name)].color;
 }
 
-function merge(spans) {
-  const merged = [];
-  for (const [start, end] of [...spans].sort((a, b) => a[0] - b[0])) {
-    const last = merged[merged.length - 1];
-    if (last && start <= last[1]) last[1] = Math.max(last[1], end);
-    else merged.push([start, end]);
-  }
-  return merged;
-}
-
 function collect(timings) {
   const spans = [];
   for (const [id, lanes] of Object.entries(timings || {})) {
@@ -378,13 +368,6 @@ function rowsOf(spans, async) {
   }
   for (const [index, packedRow] of packed.entries()) {
     const rootSet = new Set(packedRow.roots);
-    const ids = [
-      ...new Set(
-        packedRow.roots
-          .map((span) => span.rolloutId)
-          .filter((id) => id != null),
-      ),
-    ].sort((a, b) => a - b);
     rows.push({
       key: `rollout-${index}`,
       label: "Rollouts",

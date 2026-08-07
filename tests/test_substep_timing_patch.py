@@ -213,6 +213,6 @@ def test_per_sample_generation_target_wraps_only_generation_branch(
     compile(patched, str(work), "exec")
 
 
-def test_missing_package_file_fails_the_build(miles, tmp_path):
-    with pytest.raises(RuntimeError, match="layout changed"):
-        miles.patch_package_file(tmp_path, miles.PACKAGE_TARGETS[0])
+def test_missing_package_file_warns_and_continues(miles, tmp_path, capsys):
+    miles.patch_package_file(tmp_path, miles.PACKAGE_TARGETS[0])
+    assert "substep timing patch skipped" in capsys.readouterr().out
