@@ -38,6 +38,9 @@ PER_SAMPLE_PHASES = frozenset({"reward", "reward_batch", "sample_generation"})
 
 _CLOSED_POSTERS: list[threading.Thread] = []
 _UNSUPPORTED = False
+_NOT_FOUND_COUNT = 0
+_UNKNOWN_RUN_REPORTED = False
+_REQUIRE_FAILURE_REPORTED = False
 _UNSUPPORTED_LOCK = threading.Lock()
 
 
@@ -97,9 +100,6 @@ class RoleRecorder:
         self._closed = False
         self._post_retries = 0
         self._unknown_run = False
-        self._unknown_run_reported = False
-        self._not_found_count = 0
-        self._require_failure_reported = False
 
     def __enter__(self) -> "RoleRecorder":
         return self
@@ -170,6 +170,8 @@ class RoleRecorder:
                 pass
 
     def _post_snapshots(self) -> None:
+        global _NOT_FOUND_COUNT, _REQUIRE_FAILURE_REPORTED
+        global _UNKNOWN_RUN_REPORTED, _UNSUPPORTED
         while True:
             try:
                 self._snapshot_ready.wait()
@@ -181,24 +183,33 @@ class RoleRecorder:
                     if result == "ok":
                         self._posted_phases = snapshot["phases"]
                         self._post_retries = 0
-                        self._not_found_count = 0
+                        with _UNSUPPORTED_LOCK:
+                            _NOT_FOUND_COUNT = 0
                     elif result == "not_found":
-                        self._not_found_count += 1
-                        if self._not_found_count >= NOT_FOUND_LATCH_THRESHOLD:
-                            global _UNSUPPORTED
-                            with _UNSUPPORTED_LOCK:
+                        should_report = False
+                        with _UNSUPPORTED_LOCK:
+                            _NOT_FOUND_COUNT += 1
+                            if _NOT_FOUND_COUNT >= NOT_FOUND_LATCH_THRESHOLD:
                                 _UNSUPPORTED = True
-                            if os.environ.get(TIMING_MODE_ENV, "auto") == "require":
-                                print(
-                                    "ERROR: substep_timing='require' was rejected with "
-                                    "HTTP 404/405 from the dashboard timing "
-                                    "endpoint; timing is unavailable on this dashboard.",
-                                    flush=True,
-                                )
+                                if not _REQUIRE_FAILURE_REPORTED:
+                                    _REQUIRE_FAILURE_REPORTED = True
+                                    should_report = True
+                        if (
+                            should_report
+                            and os.environ.get(TIMING_MODE_ENV, "auto") == "require"
+                        ):
+                            print(
+                                "ERROR: substep_timing='require' was rejected with "
+                                "HTTP 404/405 from the dashboard timing "
+                                "endpoint; timing is unavailable on this dashboard.",
+                                flush=True,
+                            )
                     elif result == "unknown_run":
                         self._unknown_run = True
-                        if not self._unknown_run_reported:
-                            self._unknown_run_reported = True
+                        with _UNSUPPORTED_LOCK:
+                            should_report = not _UNKNOWN_RUN_REPORTED
+                            _UNKNOWN_RUN_REPORTED = True
+                        if should_report:
                             print(
                                 "WARNING: substep timing upload received HTTP 410; "
                                 f"disabling lane {self.role}/{self.rollout_id}.",
@@ -208,17 +219,17 @@ class RoleRecorder:
                         self._post_retries += 1
                         if self._post_retries >= MAX_POST_RETRIES:
                             self._post_retries = 0
-                            if (
-                                os.environ.get(TIMING_MODE_ENV, "auto") == "require"
-                                and not self._require_failure_reported
-                            ):
-                                self._require_failure_reported = True
-                                print(
-                                    "ERROR: substep_timing='require' timing upload "
-                                    f"failed after {MAX_POST_RETRIES} attempts; "
-                                    "check dashboard authentication or connectivity.",
-                                    flush=True,
-                                )
+                            if os.environ.get(TIMING_MODE_ENV, "auto") == "require":
+                                with _UNSUPPORTED_LOCK:
+                                    should_report = not _REQUIRE_FAILURE_REPORTED
+                                    _REQUIRE_FAILURE_REPORTED = True
+                                if should_report:
+                                    print(
+                                        "ERROR: substep_timing='require' timing upload "
+                                        f"failed after {MAX_POST_RETRIES} attempts; "
+                                        "check dashboard authentication or connectivity.",
+                                        flush=True,
+                                    )
                         else:
                             with self._lock:
                                 if self._snapshot is None:
