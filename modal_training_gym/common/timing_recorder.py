@@ -95,6 +95,7 @@ class RoleRecorder:
         self._lock = threading.Lock()
         self._snapshot: dict[str, object] | None = None
         self._posted_phases: dict[str, dict[str, object]] | None = None
+        self._last_attempted_phases: dict[str, dict[str, object]] | None = None
         self._snapshot_ready = threading.Event()
         self._poster: threading.Thread | None = None
         self._closed = False
@@ -179,6 +180,7 @@ class RoleRecorder:
                 with self._lock:
                     snapshot, self._snapshot = self._snapshot, None
                 if snapshot is not None and snapshot["phases"] != self._posted_phases:
+                    self._last_attempted_phases = snapshot["phases"]
                     result = status_reporter.post_item_result(dict(snapshot))
                     if result == "ok":
                         self._posted_phases = snapshot["phases"]
@@ -293,6 +295,18 @@ class RoleRecorder:
             "phases": phases,
         }
         with self._lock:
+            if (
+                not force
+                and self._snapshot is not None
+                and self._snapshot["phases"] == snapshot["phases"]
+            ):
+                return
+            if (
+                force
+                and self._last_attempted_phases is not None
+                and self._last_attempted_phases == snapshot["phases"]
+            ):
+                return
             self._snapshot = snapshot
             if self._poster is None:
                 self._poster = threading.Thread(
