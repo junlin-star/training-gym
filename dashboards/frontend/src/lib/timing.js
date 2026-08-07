@@ -334,25 +334,52 @@ function clipStalls(spans, async) {
 
 function rowsOf(spans, async) {
   if (!spans.length) return [];
+  const prepareRow = (row) => {
+    row.sortedSpans = [...row.spans].sort(
+      (a, b) => a.depth - b.depth || a.start - b.start || b.end - a.end,
+    );
+    row.insetKeys = new Set();
+    const byDepth = new Map();
+    for (const span of row.sortedSpans) {
+      const bucket = byDepth.get(span.depth) || [];
+      bucket.push(span);
+      byDepth.set(span.depth, bucket);
+    }
+    for (const spansAtDepth of byDepth.values()) {
+      const ends = [...spansAtDepth].sort((a, b) => a.end - b.end);
+      let endIndex = 0;
+      let previousEnd = null;
+      for (const span of spansAtDepth) {
+        while (endIndex < ends.length && ends[endIndex].end <= span.start) {
+          previousEnd = ends[endIndex].end;
+          endIndex += 1;
+        }
+        if (previousEnd !== null && span.start > previousEnd) {
+          row.insetKeys.add(span.key);
+        }
+      }
+    }
+    return row;
+  };
   const driverSpans = spans.filter((span) => !async || span.role !== "rollout");
   if (!async) {
-    return [
+    return [prepareRow(
       {
         key: "driver",
         label: "Training loop",
         hint: "Driver and trainer phases on the shared wall clock.",
         spans: driverSpans,
       },
-    ];
+    )];
   }
 
   const rows = [
-    {
+    prepareRow({
       key: "driver",
       label: "Train",
       hint: "Driver and trainer phases on the shared wall clock.",
       spans: driverSpans,
-    },
+    }),
   ];
   const rolloutSpans = spans.filter((span) => span.role === "rollout");
   const roots = rolloutSpans.filter((span) => span.depth === 0);
@@ -368,7 +395,7 @@ function rowsOf(spans, async) {
   }
   for (const [index, packedRow] of packed.entries()) {
     const rootSet = new Set(packedRow.roots);
-    rows.push({
+    rows.push(prepareRow({
       key: `rollout-${index}`,
       label: "Rollouts",
       hint: "Rollout engine phases packed by their actual wall-clock overlap.",
@@ -377,7 +404,7 @@ function rowsOf(spans, async) {
         while (root.parent) root = root.parent;
         return rootSet.has(root);
       }),
-    });
+    }));
   }
   return rows;
 }

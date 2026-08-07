@@ -173,21 +173,18 @@
   }
 
   function displaySpans(row) {
-    return [...row.spans]
+    return row.sortedSpans
       .filter(
         (bar) =>
           !HIDDEN_PHASES.has(bar.name) &&
+          // Stalls are intentionally hidden in detailed view.
           (!showDetails || bar.kind !== "stall") &&
           (showDetails || bar.depth === 0),
       )
-      .sort((a, b) => a.depth - b.depth || a.start - b.start || b.end - a.end);
   }
 
   function visualInset(row, bar) {
-    const previous = row.spans
-      .filter((candidate) => candidate.depth === bar.depth && candidate.end <= bar.start)
-      .sort((a, b) => b.end - a.end)[0];
-    return previous && bar.start > previous.end ? BAR_GAP_PX : 0;
+    return row.insetKeys.has(bar.key) ? BAR_GAP_PX : 0;
   }
 </script>
 
