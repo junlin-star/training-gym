@@ -188,15 +188,15 @@ def load_run(training_run_id: str) -> dict[int | None, list[dict[str, Any]]]:
 
 async def load_run_async(
     training_run_id: str,
-) -> dict[int | None, list[dict[str, Any]]]:
+) -> tuple[dict[int | None, list[dict[str, Any]]], bool]:
     """:func:`load_run` on the event loop, which reads the records together."""
-    return _by_rollout(
-        await vol_list(
-            RoleTimingRecord.store(training_run_id),
-            is_async=True,
-            allow_partial=True,
-        )
+    records, had_failures = await vol_list(
+        RoleTimingRecord.store(training_run_id),
+        is_async=True,
+        allow_partial=True,
+        return_failures=True,
     )
+    return _by_rollout(records), had_failures
 
 
 def _by_rollout(

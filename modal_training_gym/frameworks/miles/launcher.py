@@ -125,7 +125,8 @@ def build_miles_app(
         )
         image = image.run_commands(
             f"echo {_PATCH_SGLANG_ABORT_B64} | base64 -d | python3",
-            f"echo {_PATCH_SUBSTEP_TIMING_B64} | base64 -d | python3",
+            f"echo {_PATCH_SUBSTEP_TIMING_B64} | base64 -d | "
+            "TG_BEST_EFFORT_ENTRYPOINTS=1 python3",
         )
 
     if miles.image_overlay is not None:

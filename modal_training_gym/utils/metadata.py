@@ -225,6 +225,7 @@ def vol_list(
     *,
     is_async: bool = False,
     allow_partial: bool = False,
+    return_failures: bool = False,
 ) -> list[dict[str, Any]] | Awaitable[list[dict[str, Any]]]:
     from modal.exception import NotFoundError
 
@@ -262,8 +263,13 @@ def vol_list(
                 ]
                 if failures and not allow_partial:
                     raise RuntimeError("Metadata listing encountered unreadable files")
-                return [result for result in results if isinstance(result, dict)]
+                records = [result for result in results if isinstance(result, dict)]
+                if return_failures:
+                    return records, bool(failures)
+                return records
             except (FileNotFoundError, NotFoundError):
+                if return_failures:
+                    return [], False
                 return []
 
         return _run()

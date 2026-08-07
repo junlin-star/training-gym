@@ -948,8 +948,8 @@ def fastapi_app():
         return run_record.status.value in ENDED_RUN_STATUSES
 
     async def _read_run_timings(training_run_id: str) -> JsonDict:
-        found = await load_run_async(training_run_id)
-        if not found:
+        found, had_read_failures = await load_run_async(training_run_id)
+        if not found and not had_read_failures:
             # Only a run that measured nothing anywhere is pre-cutover; one with
             # partial timing keeps its gaps rather than inferring them.
             run = await _get_run_or_404(training_run_id)
