@@ -197,23 +197,20 @@ class RoleRecorder:
                                     _REQUIRE_FAILURE_REPORTED = True
                                     should_report = True
                         if should_report:
-                            mode = os.environ.get(TIMING_MODE_ENV, "auto")
-                            prefix = (
-                                "ERROR: substep_timing='require' was rejected with "
-                                "HTTP 404/405 from the dashboard timing endpoint; "
-                                if mode == "require"
-                                else "WARNING: dashboard does not support the "
-                                "substep timing endpoint (HTTP 404/405); "
-                            )
-                            suffix = (
-                                "timing is unavailable on this dashboard. The "
-                                "dashboard is too old; redeploy it to enable "
-                                "substep timing."
-                                if mode == "require"
-                                else "the dashboard is too old; redeploy it to "
-                                "enable substep timing."
-                            )
-                            print(prefix + suffix, flush=True)
+                            if os.environ.get(TIMING_MODE_ENV, "auto") == "require":
+                                message = (
+                                    "ERROR: substep_timing='require' was rejected "
+                                    "with HTTP 404/405 from the dashboard timing "
+                                    "endpoint; this dashboard is too old for "
+                                    "substep timing, redeploy it."
+                                )
+                            else:
+                                message = (
+                                    "WARNING: this dashboard is too old for substep "
+                                    "timing (HTTP 404/405 from its timing "
+                                    "endpoint); redeploy the dashboard to record it."
+                                )
+                            print(message, flush=True)
                     elif result == "unknown_run":
                         self._unknown_run = True
                         with _UNSUPPORTED_LOCK:
