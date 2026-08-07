@@ -1359,18 +1359,9 @@
               <pre class="[border:1px_solid_color-mix(in_srgb,var(--red,#f87171)_45%,transparent)] rounded-[8px] bg-[color-mix(in_srgb,var(--red,#f87171)_12%,transparent)] text-(--red,#f87171) [font-family:var(--font-mono)] text-[12px] leading-[17px] m-0 max-h-[320px] overflow-auto p-[12px_14px] whitespace-pre-wrap [word-break:break-word]">{run.error_message}</pre>
             </div>
           {/if}
-          {#if legacyTiming}
+          {#if !legacyTiming && stepTimingIds.length}
             <div class="rollout-chart">
-              <div class="rollout-chart-title substep-timing-title">
-                Substep Timing
-              </div>
-              <div class="detail-empty">
-                Substep timing isn't available for this run because it predates measured timing.
-              </div>
-            </div>
-          {:else if stepTimingIds.length}
-            <div class="rollout-chart">
-              <div class="rollout-chart-title substep-timing-title">
+              <div class="rollout-chart-title">
                 Substep Timing ({stepTimingIds.length}
                 {stepTimingIds.length === 1 ? "step" : "steps"})
               </div>
