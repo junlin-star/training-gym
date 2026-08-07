@@ -125,6 +125,10 @@ export function labelFor(name, rolloutId = null) {
   return TIMING_LABELS[name] || name.replace(/_/g, " ");
 }
 
+export function isLegacyTiming(timings) {
+  return timings?.metadata?.legacy_derived === true;
+}
+
 export function categoryOf(name) {
   return PHASE_CATEGORY[name] || "idle";
 }

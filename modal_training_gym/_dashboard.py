@@ -951,13 +951,16 @@ def fastapi_app():
 
     async def _read_run_timings(training_run_id: str) -> JsonDict:
         found, had_read_failures = await load_run_async(training_run_id)
+        legacy_derived = False
         if not found and not had_read_failures:
             # Only a run that measured nothing anywhere is pre-cutover; one with
             # partial timing keeps its gaps rather than inferring them.
             run = await _get_run_or_404(training_run_id)
-            for record in legacy_run_to_records(run.substep_times):
+            legacy_records = legacy_run_to_records(run.substep_times)
+            legacy_derived = bool(legacy_records)
+            for record in legacy_records:
                 found.setdefault(int(record["rollout_id"]), []).append(record)
-        return {
+        timings = {
             ("bootstrap" if rollout_id is None else str(rollout_id)): rollout_lanes(
                 records
             )
@@ -965,6 +968,9 @@ def fastapi_app():
                 found.items(), key=lambda item: (item[0] is None, item[0] or 0)
             )
         }
+        if legacy_derived:
+            timings["metadata"] = {"legacy_derived": True}
+        return timings
 
     async def _run_timings(training_run_id: str) -> JsonDict:
         """One run's stored RoleTimingRecords as lanes to draw, by rollout id."""

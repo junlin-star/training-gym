@@ -25,7 +25,7 @@
     fetchRunLogs,
   } from "../lib/api.js";
   import { groupByRollout, rolloutIndex, rolloutScores } from "../lib/rolloutGrouping.js";
-  import { timingRunStart } from "../lib/timing.js";
+  import { isLegacyTiming, timingRunStart } from "../lib/timing.js";
 
   // Number of historical log lines requested per page.
   const HIST_PAGE = 500;
@@ -503,9 +503,10 @@
   });
 
   let runTimings = $state({});
+  let legacyTiming = $derived(isLegacyTiming(runTimings));
   let timelineRunOrigin = $derived(timingRunStart(runTimings));
   let stepTimingIds = $derived(
-    Object.keys(runTimings).filter((id) => id !== "bootstrap"),
+    Object.keys(runTimings).filter((id) => id !== "bootstrap" && id !== "metadata"),
   );
 
   async function toggleRolloutDetail(rolloutId) {
@@ -1358,7 +1359,11 @@
               <pre class="[border:1px_solid_color-mix(in_srgb,var(--red,#f87171)_45%,transparent)] rounded-[8px] bg-[color-mix(in_srgb,var(--red,#f87171)_12%,transparent)] text-(--red,#f87171) [font-family:var(--font-mono)] text-[12px] leading-[17px] m-0 max-h-[320px] overflow-auto p-[12px_14px] whitespace-pre-wrap [word-break:break-word]">{run.error_message}</pre>
             </div>
           {/if}
-          {#if stepTimingIds.length}
+          {#if legacyTiming}
+            <div class="detail-empty">
+              Substep timing isn't available for this run because it predates measured timing.
+            </div>
+          {:else if stepTimingIds.length}
             <div class="rollout-chart">
               <div class="rollout-chart-title substep-timing-title">
                 Substep Timing ({stepTimingIds.length}
@@ -1550,7 +1555,7 @@
                     {:else if !expandedRollout || !sampleDist}
                       <div class="detail-empty">No rollouts recorded.</div>
                     {:else}
-                      {#if runTimings[r.rollout_id]}
+                      {#if runTimings[r.rollout_id] && !legacyTiming}
                         <div class="rollout-chart">
                           <div class="rollout-chart-title">Substep timing</div>
                           <RunTimeline
