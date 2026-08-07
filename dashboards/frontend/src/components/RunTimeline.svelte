@@ -658,7 +658,7 @@
   }
 
   .bar.nested-bar {
-    min-width: 2px;
+    min-width: 1px;
     top: 4px;
     height: calc(100% - 8px);
     z-index: 3;
