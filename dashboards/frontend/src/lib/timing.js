@@ -222,20 +222,36 @@ function stepsOf(spans) {
 
 function nest(spans) {
   const ordered = [...spans].sort((a, b) => a.start - b.start || b.end - a.end);
+  const byRolloutAndName = new Map();
+  for (const [index, span] of ordered.entries()) {
+    span.orderIndex = index;
+    const key = `${span.rolloutId}:${span.name}`;
+    const bucket = byRolloutAndName.get(key) || [];
+    bucket.push(span);
+    byRolloutAndName.set(key, bucket);
+  }
   for (const span of ordered) {
-    const parent = ordered
-      .filter(
-        (other) =>
+    let parent = null;
+    for (const parentName of NESTS_IN[span.name] || []) {
+      for (const other of byRolloutAndName.get(
+        `${span.rolloutId}:${parentName}`,
+      ) || []) {
+        if (
           other !== span &&
-          other.rolloutId === span.rolloutId &&
           (other.group === span.group ||
             (span.name === "generate_samples" &&
               other.name === "generate_rollouts")) &&
           other.start <= span.start &&
           span.end <= other.end &&
-          (NESTS_IN[span.name] || []).includes(other.name),
-      )
-      .sort((a, b) => b.depth - a.depth)[0];
+          (!parent ||
+            other.depth > parent.depth ||
+            (other.depth === parent.depth &&
+              other.orderIndex < parent.orderIndex))
+        ) {
+          parent = other;
+        }
+      }
+    }
     span.depth = parent ? parent.depth + 1 : 0;
     span.parent = parent ?? null;
     span.children = [];
@@ -278,6 +294,7 @@ function nest(spans) {
         average: child.count ? child.total / child.count : 0,
       };
     });
+    delete span.orderIndex;
   }
   return ordered;
 }
