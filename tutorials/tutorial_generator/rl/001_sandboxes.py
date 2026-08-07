@@ -276,7 +276,7 @@ def _train():
             max_tokens_per_gpu=4096,
             save_interval=10,
             image_overlay=lambda image: image.run_commands(
-                "uv pip install --system modal>=1.5.2",
+                "uv pip install --system 'modal>=1.5.2'",
             ),
         ),
     )
