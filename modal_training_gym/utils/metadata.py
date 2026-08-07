@@ -249,12 +249,25 @@ def vol_list(
                                 raise
                             await asyncio.sleep(2**attempt)
 
+            for attempt in range(3):
+                try:
+                    paths = [
+                        entry.path
+                        async for entry in vol.iterdir.aio(_store_path(store))
+                        if entry.path.endswith(".json")
+                    ]
+                    break
+                except (FileNotFoundError, NotFoundError):
+                    if return_failures:
+                        return [], False
+                    return []
+                except Exception as exc:
+                    if "rate limit" not in str(exc).lower() or attempt == 2:
+                        raise
+                    await asyncio.sleep(2**attempt)
+            else:
+                paths = []
             try:
-                paths = [
-                    entry.path
-                    async for entry in vol.iterdir.aio(_store_path(store))
-                    if entry.path.endswith(".json")
-                ]
                 results = await asyncio.gather(
                     *(_read(path) for path in paths), return_exceptions=True
                 )
