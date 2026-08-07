@@ -289,6 +289,48 @@ function nest(spans) {
   return ordered;
 }
 
+function mergeSyncGenerationSpans(spans) {
+  const drivers = new Map(
+    spans
+      .filter(
+        (span) =>
+          span.role === "driver" &&
+          span.name === "generate_rollouts" &&
+          span.rolloutId != null,
+      )
+      .map((span) => [span.rolloutId, span]),
+  );
+  for (const span of spans) {
+    if (span.role !== "rollout" || span.name !== "generate_samples") continue;
+    const driver = drivers.get(span.rolloutId);
+    if (!driver) continue;
+    const sampleGeneration = nestedChild(span, "sample_generation");
+    if (sampleGeneration) {
+      driver.aggregateStats = {
+        ...(driver.aggregateStats || {}),
+        sample_generation: sampleGeneration,
+      };
+    }
+    span.mergedGeneration = true;
+    for (const child of span.children || []) {
+      child.mergedGeneration = true;
+    }
+    if (span.parent) {
+      span.parent.children = span.parent.children.filter((child) => child !== span);
+    }
+  }
+  return spans;
+}
+
+function nestedChild(span, name) {
+  for (const child of span.children || []) {
+    if (child.name === name) return child;
+    const nested = nestedChild(child, name);
+    if (nested) return nested;
+  }
+  return null;
+}
+
 function clipStalls(spans, async) {
   const workByRow = new Map();
   for (const span of spans) {
@@ -382,7 +424,9 @@ function rowsOf(spans, async) {
     }),
   ];
   const rolloutSpans = spans.filter((span) => span.role === "rollout");
-  const roots = rolloutSpans.filter((span) => span.depth === 0);
+  const roots = rolloutSpans.filter(
+    (span) => span.depth === 0 && !span.mergedGeneration,
+  );
   const packed = [];
   for (const span of [...roots].sort((a, b) => a.start - b.start || b.end - a.end)) {
     const row = packed.find((candidate) => candidate.end <= span.start);
@@ -433,6 +477,7 @@ export function runTimeline(timings) {
     ),
   );
   const spans = nest(clipStalls(rawSpans, async));
+  if (sync) mergeSyncGenerationSpans(spans);
 
   for (const [index, span] of spans.entries()) {
     span.key = `${span.rolloutId}:${span.role}:${span.name}:${span.start.toFixed(3)}:${index}`;

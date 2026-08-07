@@ -157,11 +157,12 @@
   }
 
   function generationStats(bar) {
-    return bar.name === "generate_samples" ? nestedChild(bar, "sample_generation") : null;
-  }
-
-  function rewardStats(bar) {
-    return bar.name === "generate_samples" ? nestedChild(bar, "reward") : null;
+    if (bar.aggregateStats?.sample_generation) {
+      return bar.aggregateStats.sample_generation;
+    }
+    return bar.name === "generate_samples"
+      ? nestedChild(bar, "sample_generation")
+      : null;
   }
 
   function hasVisibleChildren(bar) {
@@ -176,6 +177,7 @@
     return row.sortedSpans
       .filter(
         (bar) =>
+          !bar.mergedGeneration &&
           !HIDDEN_PHASES.has(bar.name) &&
           // Stalls are intentionally hidden in detailed view.
           (!showDetails || bar.kind !== "stall") &&
@@ -382,19 +384,9 @@
         )}
       </span>
     {/if}
-    {#if rewardStats(tip.bar)}
-      <span class="tg-tip-stat">
-        Average reward calculation time: {fmtSecs(rewardStats(tip.bar).average)}
-      </span>
-      <span class="tg-tip-stat">
-        Longest reward calculation time: {fmtSecs(
-          rewardStats(tip.bar).longest ?? rewardStats(tip.bar).duration,
-        )}
-      </span>
-    {/if}
     {#if tip.bar.children?.length}
       <div class="tg-tip-children">
-        {#each tip.bar.children.filter((child) => !TOOLTIP_HIDDEN_PHASES.has(child.name)) as child (child.name)}
+        {#each tip.bar.children.filter((child) => !child.mergedGeneration && !TOOLTIP_HIDDEN_PHASES.has(child.name)) as child (child.name)}
           <span class="tg-tip-child">
             <span class="tg-tip-child-line">
               {labelFor(child.name)} · {fmtSecs(child.duration)}
@@ -763,8 +755,9 @@
 
   .tg-tip-child-line {
     color: var(--muted);
-    font-weight: 500;
-    font-family: var(--font-mono);
+    font-weight: 600;
+    font-family: inherit;
+    font-size: inherit;
     font-variant-numeric: tabular-nums;
   }
 
