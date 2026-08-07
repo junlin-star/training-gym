@@ -69,10 +69,13 @@ def _install():
     pass
 
 
-@code
-def _imports():
+@notebook_only
+def _import_modal():
     import modal
 
+
+@code
+def _imports():
     from modal_training_gym import (
         DeploymentConfig,
         EvalConfig,
@@ -98,8 +101,8 @@ def _dataset_intro():
     - `tests/` — verification tests (format varies by task)
 
     The hello-world task asks the agent to create `hello.txt` with
-    `Hello, world!` as its content. Its verifier checks the file inside the
-    task environment, so our eval and reward function do the same.
+    `Hello, world!` as its content. We check this file in our eval
+    and reward function, matching the task's verifier.
 
     A single dataset instance handles both training and eval —
     `prepare()` writes train and eval splits to the volume,
@@ -176,16 +179,22 @@ def _sandbox_scorer():
             cpu=(0.125, 1.0),
             memory=(128, 1024),
         )
-        process = sandbox.exec("python", "-c", code, timeout=3)
-        process.wait()
-        stderr = process.stderr.read()
+
+        stderr = None
+
         try:
+            process = sandbox.exec("python", "-c", code, timeout=3)
+            process.wait()
+            stderr = process.stderr.read()
             content = sandbox.filesystem.read_text("/app/hello.txt")
             score = float(content.strip() == EXPECTED_HELLO)
             metadata = {"hello_txt": content, "stderr": stderr}
-        except modal.exception.SandboxFilesystemNotFoundError:
+        except modal.exception.SandboxFilesystemError:
             score = 0.0
-            metadata = {"error": "hello.txt was not created", "stderr": stderr}
+            metadata = {"error": "hello.txt was not created or not readable", "stderr": stderr}
+        except modal.exception.SandboxTerminatedError:
+            score = 0.0
+            metadata = {"error": "Sandbox was terminated during execution", "stderr": stderr}
         finally:
             sandbox.terminate()
             sandbox.detach()

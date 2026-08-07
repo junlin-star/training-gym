@@ -27,8 +27,6 @@
 
 import modal
 
-import modal
-
 from modal_training_gym import (
     DeploymentConfig,
     EvalConfig,
@@ -50,8 +48,8 @@ from modal_training_gym import (
 # - `tests/` — verification tests (format varies by task)
 #
 # The hello-world task asks the agent to create `hello.txt` with
-# `Hello, world!` as its content. Its verifier checks the file inside the
-# task environment, so our eval and reward function do the same.
+# `Hello, world!` as its content. We check this file in our eval
+# and reward function, matching the task's verifier.
 #
 # A single dataset instance handles both training and eval —
 # `prepare()` writes train and eval splits to the volume,
@@ -99,16 +97,22 @@ def score_hello_file(code):
         cpu=(0.125, 1.0),
         memory=(128, 1024),
     )
-    process = sandbox.exec("python", "-c", code, timeout=3)
-    process.wait()
-    stderr = process.stderr.read()
+
+    stderr = None
+
     try:
+        process = sandbox.exec("python", "-c", code, timeout=3)
+        process.wait()
+        stderr = process.stderr.read()
         content = sandbox.filesystem.read_text("/app/hello.txt")
         score = float(content.strip() == EXPECTED_HELLO)
         metadata = {"hello_txt": content, "stderr": stderr}
-    except modal.exception.SandboxFilesystemNotFoundError:
+    except modal.exception.SandboxFilesystemError:
         score = 0.0
-        metadata = {"error": "hello.txt was not created", "stderr": stderr}
+        metadata = {"error": "hello.txt was not created or not readable", "stderr": stderr}
+    except modal.exception.SandboxTerminatedError:
+        score = 0.0
+        metadata = {"error": "Sandbox was terminated during execution", "stderr": stderr}
     finally:
         sandbox.terminate()
         sandbox.detach()
@@ -202,7 +206,7 @@ def _main_impl() -> None:
             max_tokens_per_gpu=4096,
             save_interval=10,
             image_overlay=lambda image: image.run_commands(
-                "uv pip install --system modal>=1.5.2",
+                "uv pip install --system 'modal>=1.5.2'",
             ),
         ),
     )
