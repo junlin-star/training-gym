@@ -1,14 +1,3 @@
-"""Container-side substep timing recorder, shared by slime and miles.
-
-Runs inside the training image, so is dependency-light and importable without a
-framework, torch or pydantic present.
-
-A record measures one ``(rollout_id, role)`` lane: per phase, how many times it
-ran, its summed and longest duration, when it first started and last ended, and
-each run's start and end unless it ran once per sample, which is thousands of
-runs a step.
-"""
-
 from __future__ import annotations
 
 import atexit
@@ -20,10 +9,6 @@ from contextvars import ContextVar
 from typing import Callable, Iterator
 
 from modal_training_gym.common import status_reporter
-from modal_training_gym.common.timing_limits import (
-    MAX_PHASE_INVOCATIONS,
-    MAX_TIMING_PHASES,
-)
 
 TIMING_MODE_ENV = "TRAINING_GYM_SUBSTEP_TIMING"
 TIMING_PATH = "/api/timing-events"
@@ -31,6 +16,7 @@ STATUS_PATH = "/api/framework-status"
 TIMING_TIMEOUT_SECONDS = 10.0
 
 MIN_PUBLISH_INTERVAL_S = 3.0
+MAX_PHASE_INVOCATIONS = 10_000
 MAX_POST_RETRIES = 5
 NOT_FOUND_LATCH_THRESHOLD = 3
 
@@ -63,19 +49,6 @@ def timing_url() -> str:
 
 
 class RoleRecorder:
-    """Accumulates measured phase timings for one ``(rollout_id, role)``.
-
-    Constructed by the patched driver loop (as ``_tg_rec``) and by
-    :func:`recording_lane` for the other lanes; publishes to
-    ``/api/timing-events``, which overwrites the lane's stored record.
-
-    Two timings exist: monotonic offsets relative to ``_t0`` to guarantee
-    positive duration, and ``lane_start_unix_s`` to align multiple processes.
-
-    A lane measured on every rank of a distributed model is published by one of
-    them, so the ranks do not overwrite each other's record.
-    """
-
     def __init__(
         self,
         role: str,
@@ -95,7 +68,7 @@ class RoleRecorder:
         self._lock = threading.Lock()
         self._snapshot: dict[str, object] | None = None
         self._posted_phases: dict[str, dict[str, object]] | None = None
-        self._last_attempted_phases: dict[str, dict[str, object]] | None = None
+        self._last_post_not_found = False
         self._snapshot_ready = threading.Event()
         self._poster: threading.Thread | None = None
         self._closed = False
@@ -106,14 +79,6 @@ class RoleRecorder:
         return self
 
     def __exit__(self, *exc: object) -> None:
-        """Hand the final snapshot over without waiting for it to be sent.
-
-        A lane closes on the framework's own loop, which in the async
-        entrypoints is the loop the next rollout runs on, so waiting here for a
-        POST would stall training on an unresponsive dashboard. The sender is
-        joined at process exit instead, the only point the snapshot could
-        otherwise be lost at.
-        """
         try:
             self._publish(force=True)
         except Exception:
@@ -125,7 +90,6 @@ class RoleRecorder:
 
     @contextmanager
     def phase(self, name: str) -> Iterator[None]:
-        """Times a phase, even if it raises."""
         start = time.monotonic()
         try:
             yield
@@ -135,19 +99,18 @@ class RoleRecorder:
             with self._lock:
                 timing = self.phases.get(name)
                 if timing is None:
-                    if len(self.phases) < MAX_TIMING_PHASES:
-                        self.phases[name] = {
-                            "count": 1,
-                            "total_duration_s": duration,
-                            "longest_duration_s": duration,
-                            "first_start_s": start - self._t0,
-                            "last_end_s": end - self._t0,
-                        }
-                        self.invocations[name] = (
-                            []
-                            if name in PER_SAMPLE_PHASES
-                            else [[start - self._t0, end - self._t0]]
-                        )
+                    self.phases[name] = {
+                        "count": 1,
+                        "total_duration_s": duration,
+                        "longest_duration_s": duration,
+                        "first_start_s": start - self._t0,
+                        "last_end_s": end - self._t0,
+                    }
+                    self.invocations[name] = (
+                        []
+                        if name in PER_SAMPLE_PHASES
+                        else [[start - self._t0, end - self._t0]]
+                    )
                 else:
                     timing["count"] += 1
                     timing["total_duration_s"] += duration
@@ -180,14 +143,15 @@ class RoleRecorder:
                 with self._lock:
                     snapshot, self._snapshot = self._snapshot, None
                 if snapshot is not None and snapshot["phases"] != self._posted_phases:
-                    self._last_attempted_phases = snapshot["phases"]
                     result = status_reporter.post_item_result(dict(snapshot))
                     if result == "ok":
+                        self._last_post_not_found = False
                         self._posted_phases = snapshot["phases"]
                         self._post_retries = 0
                         with _UNSUPPORTED_LOCK:
                             _NOT_FOUND_COUNT = 0
                     elif result == "not_found":
+                        self._last_post_not_found = True
                         should_report = False
                         with _UNSUPPORTED_LOCK:
                             _NOT_FOUND_COUNT += 1
@@ -251,7 +215,6 @@ class RoleRecorder:
                 time.sleep(0.05)
 
     def _publish(self, force: bool = False) -> None:
-        """Snapshot the record so far; the dashboard overwrites the stored lane."""
         if not self.phases:
             return
         if os.environ.get(TIMING_MODE_ENV, "auto") == "off":
@@ -306,10 +269,12 @@ class RoleRecorder:
                 and self._snapshot["phases"] == snapshot["phases"]
             ):
                 return
+            if force and self._last_post_not_found:
+                return
             if (
                 force
-                and self._last_attempted_phases is not None
-                and self._last_attempted_phases == snapshot["phases"]
+                and self._posted_phases is not None
+                and self._posted_phases == snapshot["phases"]
             ):
                 return
             self._snapshot = snapshot
@@ -330,7 +295,6 @@ _ACTIVE_LANE: ContextVar[RoleRecorder | None] = ContextVar(
 
 @contextmanager
 def time_phase(name: str) -> Iterator[None]:
-    """Record a phase on the active lane; a no-op when there is none."""
     rec = _ACTIVE_LANE.get()
     if rec is None:
         yield
@@ -345,7 +309,6 @@ def recording_lane(
     rollout_id: int,
     publish_gate: Callable[[], bool | None] | None = None,
 ) -> Iterator[RoleRecorder]:
-    """Install a :class:`RoleRecorder` as the active lane for a block."""
     rec = RoleRecorder(role, rollout_id, publish_gate)
     token = _ACTIVE_LANE.set(rec)
     try:
@@ -356,12 +319,6 @@ def recording_lane(
 
 
 def _lowest_rank_publishes() -> bool | None:
-    """Whether global rank zero writes this lane; ``None`` until ranks are known.
-
-    The lane is measured on every rank of the model and stored under one key, so
-    one rank writes it. This assumes the initialized world process group is the
-    model's train group, as established by the current Slime and Miles launchers.
-    """
     try:
         import torch.distributed as dist
     except ImportError:
@@ -378,7 +335,6 @@ def _lowest_rank_publishes() -> bool | None:
 def recording_lane_on_reporting_rank(
     rollout_id: int, role: str = "actor"
 ) -> Iterator[RoleRecorder]:
-    """An actor/critic lane measured on every rank, written by one of them."""
     with recording_lane(role, rollout_id, _lowest_rank_publishes) as rec:
         yield rec
 

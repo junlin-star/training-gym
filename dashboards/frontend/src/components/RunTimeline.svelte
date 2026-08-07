@@ -34,6 +34,8 @@
   const GROUP_GAP_PX = 12;
   const STEP_GAP_PX = 8;
   const BAR_GAP_PX = 1;
+  const BAR_EDGE_INSET_PX = 1;
+  const PARENT_EDGE_INSET_PX = 3;
   let showDetails = $state(false);
   let timeline = $derived(runTimeline(timings));
   let intervalOrigin = $derived(runOrigin ?? timeline.runStart);
@@ -182,7 +184,6 @@
         (bar) =>
           !bar.mergedGeneration &&
           !HIDDEN_PHASES.has(bar.name) &&
-          // Stalls are intentionally hidden in detailed view.
           (!showDetails || bar.kind !== "stall") &&
           (showDetails || bar.depth === 0),
       )
@@ -190,6 +191,20 @@
 
   function visualInset(row, bar) {
     return row.insetKeys.has(bar.key) ? BAR_GAP_PX : 0;
+  }
+
+  function visualEdgeInset(bar) {
+    return bar.offset + bar.duration >= timeline.span - 1e-6
+      ? BAR_EDGE_INSET_PX
+      : 0;
+  }
+
+  function visualWidth(row, bar) {
+    const inset = visualInset(row, bar) * 2 + visualEdgeInset(bar);
+    const width = `calc(${Math.max(pct(bar.duration), 0.01)}% - ${inset}px)`;
+    if (bar.insideEnd == null) return `max(1px, ${width})`;
+    const available = Math.max(pct(bar.insideEnd - bar.start), 0);
+    return `max(0px, min(${width}, calc(${available}% - ${PARENT_EDGE_INSET_PX + visualInset(row, bar)}px)))`;
   }
 </script>
 
@@ -324,7 +339,7 @@
                         class:active={pinned && isActive(bar)}
                         aria-label={`${labelFor(bar.name, bar.rolloutId)} ${fmtSecs(bar.duration)}`}
                         style:left={`calc(${pct(bar.offset)}% + ${visualInset(row, bar)}px)`}
-                        style:width={`max(1px, calc(${Math.max(pct(bar.duration), 0.01)}% - ${visualInset(row, bar) * 2}px))`}
+                        style:width={visualWidth(row, bar)}
                         style:--bar-color={
                           isExpandedParent(bar) &&
                           ["train_models", "training", "train_model"].includes(bar.name)
@@ -666,8 +681,6 @@
     border-radius: 0;
   }
 
-  /* A stall is the loop doing nothing, so it is a line rather than a block: the
-     work being waited on is drawn on the row underneath. */
   .bar.stall {
     background: linear-gradient(
       var(--color-c-gray-30, #6a6a6a),

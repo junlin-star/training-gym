@@ -51,7 +51,7 @@ from modal_training_gym.common.run_summary import (
 )
 from modal_training_gym.common.step_timing import (
     RoleTimingRecord,
-    TRAINING_RUN_ID_PATTERN,
+    is_safe_run_id,
     legacy_run_to_records,
     load_run_async,
     rollout_lanes,
@@ -138,9 +138,6 @@ MODAL_CREDS_SECRET_NAME = "_training-gym-modal-creds"
 # Set a real value via ``training-gym set-password``.
 DASHBOARD_PASSWORD_SECRET_NAME = "_training-gym-dashboard-password"
 
-# Routes that must bypass Basic Auth. These endpoints authenticate with their
-# own per-run bearer token; the proxy-auth status route must report only the
-# Modal-layer setting, independent of dashboard password protection.
 PASSWORD_EXEMPT_PATHS = frozenset(
     {
         DASHBOARD_PROXY_AUTH_PATH,
@@ -151,7 +148,6 @@ PASSWORD_EXEMPT_PATHS = frozenset(
     }
 )
 
-# Only ever the *expected* side of a comparison, so publishing it is safe.
 _MISSING_TOKEN_DUMMY = "training-gym-missing-token-dummy-never-issued"
 
 
@@ -411,6 +407,7 @@ def fastapi_app():
         MetadataStore,
         summary_items_from_payload,
         vol_get,
+        vol_get_summary_items,
         vol_get_summary_items_healed,
         vol_put_summary_items,
     )
@@ -456,23 +453,15 @@ def fastapi_app():
         key: (0.0, [], 0.0) for key in cache_keys
     }
 
-    # Timing is read a run at a time, like rollouts, so it cannot use the
-    # fixed-key cache above. One entry per run, each guarding its own read: a
-    # run's lanes, when the volume was last listed for them, and the lock every
-    # reader and writer of the entry holds. The bound keeps browsing many runs
-    # from growing this without limit.
     TIMING_CACHE_MAX_RUNS = 64
-    # Short, because a lane posted to another container of this app reaches
-    # this one only by being read again.
     TIMING_CACHE_TTL_S = 5.0
     TIMING_CACHE_FINAL_TTL_S = 60.0
+    seen_timing_runs: set[str] = set()
 
     class TimingEntry:
         def __init__(self) -> None:
             self.lanes: JsonDict = {}
             self.read_at: float | None = None
-            # A run that has ended writes no further records, so its lanes are
-            # read once and then answered from here for as long as it is held.
             self.final = False
             self.dirty = False
             self.lock = asyncio.Lock()
@@ -691,14 +680,11 @@ def fastapi_app():
         return token.strip()
 
     async def _require_framework_status_token(
-        training_run_id: str, authorization: str | None
+        training_run_id: str,
+        authorization: str | None,
+        *,
+        allow_deleted: bool = False,
     ) -> None:
-        """403 unless ``authorization`` carries the run's status token.
-
-        Handlers must call this *before* any lookup that can 404, or the
-        status code tells an anonymous caller which run ids exist. For the
-        same reason an unknown run is indistinguishable from a wrong token.
-        """
         try:
             expected_token = str(
                 (
@@ -713,12 +699,28 @@ def fastapi_app():
             expected_token = ""
         supplied = _bearer_token(authorization)
         if not expected_token:
-            # Spend the same comparison an existing token would, then refuse
-            # regardless of its outcome.
             _secrets.compare_digest(supplied, _MISSING_TOKEN_DUMMY)
+            if allow_deleted and training_run_id in seen_timing_runs:
+                try:
+                    await TrainingRun.from_id(training_run_id, is_async=True)
+                except KeyError:
+                    summaries = await run_in_threadpool(
+                        vol_get_summary_items,
+                        MetadataStore.TRAINING_RUNS_SUMMARY,
+                    )
+                    if not any(
+                        isinstance(item, dict)
+                        and item.get("training_run_id") == training_run_id
+                        for item in (summaries or [])
+                    ):
+                        raise HTTPException(
+                            status_code=410,
+                            detail=f"TrainingRun {training_run_id!r} no longer exists",
+                        ) from None
             raise HTTPException(status_code=403, detail="Invalid status token")
         if not _secrets.compare_digest(supplied, expected_token):
             raise HTTPException(status_code=403, detail="Invalid status token")
+        seen_timing_runs.add(training_run_id)
 
     async def _get_run_or_404(training_run_id: str) -> TrainingRun:
         try:
@@ -891,77 +893,54 @@ def fastapi_app():
         record: RoleTimingRecord,
         authorization: str | None = Header(default=None),
     ):
-        """Writes RoleTimingRecords to metadata volume and timing cache."""
-        await _require_framework_status_token(record.training_run_id, authorization)
-        try:
-            await _get_run_or_404(record.training_run_id)
-        except HTTPException as exc:
-            if exc.status_code == 404:
-                raise HTTPException(
-                    status_code=410,
-                    detail=exc.detail,
-                ) from exc
-            raise
+        await _require_framework_status_token(
+            record.training_run_id,
+            authorization,
+            allow_deleted=True,
+        )
 
         await record.save(is_async=True)
         entry = timing_cache.get(record.training_run_id)
-        # A lane posts its whole record, so an entry already holding this run
-        # can take it as it is rather than the next poll re-reading the run.
-        # Never waited on: the post comes from a training worker, and a record
-        # this misses is on the volume for the next read anyway.
         if entry is not None and entry.read_at is not None and not entry.lock.locked():
             async with entry.lock:
                 rollout_key = (
-                    "bootstrap" if record.rollout_id is None else str(record.rollout_id)
+                    "pre-loop" if record.rollout_id is None else str(record.rollout_id)
                 )
                 lanes = entry.lanes.setdefault(rollout_key, {"roles": {}})
                 lanes["roles"].update(
                     rollout_lanes([record.model_dump(mode="json")])["roles"]
                 )
-                # A lane still posting means the run is going, whatever a
-                # summary read before it started said.
                 entry.final = False
         elif entry is not None:
             entry.dirty = True
         return JSONResponse({"status": "ok"})
 
-    # A run in one of these writes no further timing, so its lanes are read once.
-    ENDED_RUN_STATUSES = frozenset({"completed", "failed", "stopped", "cancelled"})
-
     async def _run_has_ended(training_run_id: str) -> bool:
-        """Whether the run is over, so its lanes need reading only once.
-
-        Answered from the run summaries when this container happens to hold
-        them, and otherwise by reading the run. That read is worth its round
-        trip: it settles the entry for good, where treating an unknown run as
-        live costs a listing of the whole run every few seconds forever.
-        """
+        ended_statuses = frozenset({"completed", "failed", "stopped", "cancelled"})
         _expires_at, runs_cached, loaded_at = cache_entries["runs"]
         if loaded_at != 0.0:
             for run in runs_cached:
                 if isinstance(run, dict) and run.get("training_run_id") == (
                     training_run_id
                 ):
-                    return run.get("status") in ENDED_RUN_STATUSES
+                    return run.get("status") in ended_statuses
         try:
             run_record = await TrainingRun.from_id(training_run_id, is_async=True)
         except KeyError:
             return False
-        return run_record.status.value in ENDED_RUN_STATUSES
+        return run_record.status.value in ended_statuses
 
     async def _read_run_timings(training_run_id: str) -> JsonDict:
         found, had_read_failures = await load_run_async(training_run_id)
         legacy_derived = False
         if not found and not had_read_failures:
-            # Only a run that measured nothing anywhere is pre-cutover; one with
-            # partial timing keeps its gaps rather than inferring them.
             run = await _get_run_or_404(training_run_id)
             legacy_records = legacy_run_to_records(run.substep_times)
             legacy_derived = bool(legacy_records)
             for record in legacy_records:
                 found.setdefault(int(record["rollout_id"]), []).append(record)
         timings = {
-            ("bootstrap" if rollout_id is None else str(rollout_id)): rollout_lanes(
+            ("pre-loop" if rollout_id is None else str(rollout_id)): rollout_lanes(
                 records
             )
             for rollout_id, records in sorted(
@@ -973,12 +952,9 @@ def fastapi_app():
         return timings
 
     async def _run_timings(training_run_id: str) -> JsonDict:
-        """One run's stored RoleTimingRecords as lanes to draw, by rollout id."""
         entry = timing_cache.get(training_run_id)
         if entry is None:
             if len(timing_cache) >= TIMING_CACHE_MAX_RUNS:
-                # Drop the least recently read entry rather than the whole map,
-                # so browsing a 65th run doesn't cost every other run its lanes.
                 evictable = [
                     (other.read_at or 0.0, run_id)
                     for run_id, other in timing_cache.items()
@@ -989,8 +965,6 @@ def fastapi_app():
             entry = timing_cache.setdefault(training_run_id, TimingEntry())
         if entry.fresh:
             return entry.lanes
-        # The tab polls this while a run is active, so a poll arriving during a
-        # read waits for that read rather than starting a listing of its own.
         async with entry.lock:
             if not entry.fresh:
                 entry.dirty = False
@@ -1001,8 +975,10 @@ def fastapi_app():
 
     @web.get("/api/runs/{training_run_id}/timings")
     async def get_run_timings(
-        training_run_id: str = FastAPIPath(pattern=TRAINING_RUN_ID_PATTERN),
+        training_run_id: str = FastAPIPath(),
     ):
+        if not is_safe_run_id(training_run_id):
+            raise HTTPException(status_code=422, detail="unsafe training run id")
         return JSONResponse(await _run_timings(training_run_id))
 
     # ── Live Modal log stream (SSE, pure pass-through) ───────────────────

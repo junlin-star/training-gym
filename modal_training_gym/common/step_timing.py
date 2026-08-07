@@ -4,16 +4,21 @@ import time
 from enum import Enum
 from typing import Any, Awaitable
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from modal_training_gym.common.status import SlimeStatus
-from modal_training_gym.common.timing_limits import (
-    MAX_PHASE_INVOCATIONS,
-    MAX_TIMING_PHASES,
-)
+from modal_training_gym.common.timing_recorder import MAX_PHASE_INVOCATIONS
 from modal_training_gym.utils.metadata import MetadataStore, vol_list, vol_put
 
-TRAINING_RUN_ID_PATTERN = r"^[A-Za-z0-9_-][A-Za-z0-9._-]*$"
+
+def is_safe_run_id(value: str) -> bool:
+    allowed = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-"
+    return (
+        bool(value)
+        and value not in {".", ".."}
+        and value[0] != "."
+        and all(character in allowed for character in value)
+    )
 
 
 class Role(str, Enum):
@@ -24,17 +29,6 @@ class Role(str, Enum):
 
 
 class PhaseTiming(BaseModel):
-    """How long one phase took, for the times it ran in one rollout.
-
-    Offsets are seconds since the lane opened. ``total_duration_s`` is time spent
-    in the phase: less than ``last_end_s - first_start_s`` when the phase ran
-    repeatedly, more when its runs overlapped.
-
-    ``invocations`` holds each run as ``[start_s, end_s]``, so a phase that ran a
-    few times draws as those runs rather than one bar over all of them. It is
-    empty for sampled phases, which are represented by aggregate statistics.
-    """
-
     count: int
     total_duration_s: float
     longest_duration_s: float
@@ -50,24 +44,23 @@ class PhaseTiming(BaseModel):
 
 
 class RoleTimingRecord(BaseModel):
-    """One role's measured timing for one rollout.
-
-    Single writer per key, whole-file overwrite, last write wins.
-    """
-
-    # A path component of the record's key, so it must not be "." or ".."
-    training_run_id: str = Field(pattern=TRAINING_RUN_ID_PATTERN)
+    training_run_id: str
     rollout_id: int | None = Field(default=None, ge=0)
     role: Role
     created_at: int = 0
     lane_start_unix_s: float | None = None
-    phases: dict[str, PhaseTiming] = Field(
-        default_factory=dict, max_length=MAX_TIMING_PHASES
-    )
+    phases: dict[str, PhaseTiming] = Field(default_factory=dict)
+
+    @field_validator("training_run_id")
+    @classmethod
+    def validate_training_run_id(cls, value: str) -> str:
+        if not is_safe_run_id(value):
+            raise ValueError("unsafe training run id")
+        return value
 
     @property
     def storage_key(self) -> str:
-        rollout = "bootstrap" if self.rollout_id is None else f"{self.rollout_id:08d}"
+        rollout = "pre-loop" if self.rollout_id is None else f"{self.rollout_id:08d}"
         return f"{rollout}__{self.role.value}"
 
     @staticmethod
@@ -89,7 +82,6 @@ class RoleTimingRecord(BaseModel):
 
 
 class Substep(str, Enum):
-    # Included in legacy substep times
     EVAL_BEFORE = SlimeStatus.EVAL_ROLLOUT_LOGGING.value
     GENERATE_ROLLOUTS = SlimeStatus.ROLLOUT_LOGGING.value
     OFFLOAD_ROLLOUT = SlimeStatus.OFFLOAD_ROLLOUT.value
@@ -100,24 +92,18 @@ class Substep(str, Enum):
     WEIGHT_SYNC = SlimeStatus.WEIGHT_SYNC.value
     EVAL_AFTER = f"{SlimeStatus.EVAL_ROLLOUT_LOGGING.value}_end"
 
-    WAIT_FOR_ROLLOUT = "wait_for_rollout"  # driver, on this rollout's generation
-    WAIT_FOR_NEXT_ROLLOUT = "wait_for_next_rollout"  # driver, on the next one's
-    TRAIN_MODELS = "train_models"  # driver
-    GENERATE_SAMPLES = "generate_samples"  # rollout worker
-    SAMPLE_GENERATION = (
-        "sample_generation"  # rollout worker, one run per generated sample
-    )
-    REWARD = "reward"  # rollout worker, one run per sample
-    REWARD_BATCH = "reward_batch"  # rollout worker, one run per scored batch
-    REWARD_POST_PROCESS = "reward_post_process"  # rollout worker
-    FORWARD_BACKWARD = "forward_backward"  # actor / critic
+    WAIT_FOR_ROLLOUT = "wait_for_rollout"
+    WAIT_FOR_NEXT_ROLLOUT = "wait_for_next_rollout"
+    TRAIN_MODELS = "train_models"
+    GENERATE_SAMPLES = "generate_samples"
+    SAMPLE_GENERATION = "sample_generation"
+    REWARD = "reward"
+    REWARD_BATCH = "reward_batch"
+    REWARD_POST_PROCESS = "reward_post_process"
+    FORWARD_BACKWARD = "forward_backward"
 
 
 def rollout_lanes(records: list[dict[str, Any]]) -> dict[str, Any]:
-    """Returns which roles need to be drawn for UI for a run.
-
-    Keyed by role so the frontend indexes lanes by name rather than by position.
-    """
     lanes = {
         record["role"]: {
             "role": record["role"],
@@ -134,21 +120,7 @@ def measured_run_times(
 ) -> tuple[
     dict[str, dict[str, int | None]], dict[str, dict[str, dict[str, float | None]]]
 ]:
-    """How long each step of a run took, and each of its substeps.
-
-    Both are keyed by step number from one, the way a stored baseline of a
-    model's timings is, and a substep measured off the driver keeps its role in
-    its key: the actor and the critic record the same phase names, and their
-    times are not one substep.
-
-    A step is the driver's substeps of a rollout added up: the driver runs them
-    one after another, and the checkpoint or eval that landed on the rollout is
-    left out rather than making the step read many times slower than its
-    neighbours. The lanes are placed on the same wall clock
-    (``lane_start_unix_s`` plus each phase's offsets), since they are measured in
-    separate processes.
-    """
-    beside_the_step = (
+    not_in_step = (
         Substep.CHECKPOINT_SAVE.value,
         Substep.EVAL_BEFORE.value,
         Substep.EVAL_AFTER.value,
@@ -157,7 +129,7 @@ def measured_run_times(
     substep_times: dict[str, dict[str, dict[str, float | None]]] = {}
     for rollout_id, records in sorted(
         load_run(training_run_id).items(),
-        key=lambda item: (item[0] is None, item[0] or 0),
+        key=_rollout_sort_key,
     ):
         if rollout_id is None:
             continue
@@ -169,9 +141,12 @@ def measured_run_times(
                 continue
             role = record["role"]
             for name, phase in record["phases"].items():
-                if role == Role.DRIVER.value and name not in beside_the_step:
+                if role == Role.DRIVER.value and name not in not_in_step:
                     step_duration += phase["total_duration_s"]
-                key = name if role == Role.DRIVER.value else f"{name} ({role})"
+                if role == Role.DRIVER.value:
+                    key = name
+                else:
+                    key = f"{name} ({role})"
                 substeps[key] = {
                     "start": lane_start + phase["first_start_s"],
                     "duration_s": phase["total_duration_s"],
@@ -185,37 +160,30 @@ def measured_run_times(
 
 
 def load_run(training_run_id: str) -> dict[int | None, list[dict[str, Any]]]:
-    """Every role record of a run, keyed by rollout id.
-
-    Read whole, the way a run's rollouts are: the volume rate limits listings,
-    so one listing per rollout fails as soon as a page wants a few rows, and one
-    listing for the run is retried when it is the listing that is limited. A
-    rollout with no records is left out; the run may predate measured timing, in
-    which case the caller reads its legacy blob.
-    """
-    return _by_rollout(vol_list(RoleTimingRecord.store(training_run_id)))
+    records = vol_list(RoleTimingRecord.store(training_run_id))
+    grouped: dict[int | None, list[dict[str, Any]]] = {}
+    for record in records:
+        grouped.setdefault(record["rollout_id"], []).append(record)
+    return grouped
 
 
 async def load_run_async(
     training_run_id: str,
 ) -> tuple[dict[int | None, list[dict[str, Any]]], bool]:
-    """:func:`load_run` on the event loop, which reads the records together."""
     records, had_failures = await vol_list(
         RoleTimingRecord.store(training_run_id),
         is_async=True,
-        allow_partial=True,
         return_failures=True,
     )
-    return _by_rollout(records), had_failures
-
-
-def _by_rollout(
-    records: list[dict[str, Any]],
-) -> dict[int | None, list[dict[str, Any]]]:
-    steps: dict[int | None, list[dict[str, Any]]] = {}
+    grouped: dict[int | None, list[dict[str, Any]]] = {}
     for record in records:
-        steps.setdefault(record["rollout_id"], []).append(record)
-    return steps
+        grouped.setdefault(record["rollout_id"], []).append(record)
+    return grouped, had_failures
+
+
+def _rollout_sort_key(item: tuple[int | None, Any]) -> tuple[bool, int]:
+    rollout_id = item[0]
+    return rollout_id is None, 0 if rollout_id is None else rollout_id
 
 
 _LEGACY_RENAMES = {Substep.OPTIMIZER_STEP.value: Substep.TRAIN_MODELS.value}

@@ -14,7 +14,7 @@ def _phase(start: float, end: float, *, invocations=None) -> dict:
     }
 
 
-def test_measured_run_times_excludes_beside_step_phases(monkeypatch):
+def test_measured_run_times_excludes_not_in_step_phases(monkeypatch):
     monkeypatch.setattr(
         step_timing,
         "load_run",

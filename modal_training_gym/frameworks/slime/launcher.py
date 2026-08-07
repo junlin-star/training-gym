@@ -352,6 +352,36 @@ def build_slime_app(
             copy=True,
             ignore=["**/__pycache__", "**/*.pyc", "**/.git", "**/.venv"],
         )
+        image = image.run_commands(
+            f"echo {_PATCH_MEGATRON_BRIDGE_B64} | base64 -d | "
+            "TG_BEST_EFFORT_ENTRYPOINTS=1 python3",
+            f"echo {_PATCH_ADVANTAGES_B64} | base64 -d | "
+            "TG_BEST_EFFORT_ENTRYPOINTS=1 python3",
+            f"echo {_PATCH_BRIDGE_NONE_TASK_B64} | base64 -d | "
+            "TG_BEST_EFFORT_ENTRYPOINTS=1 python3",
+            f"echo {_PATCH_STOP_TOKEN_DIAG_B64} | base64 -d | "
+            "TG_BEST_EFFORT_ENTRYPOINTS=1 python3",
+            f"echo {_PATCH_QWEN3_ASR_EXPORT_B64} | base64 -d | "
+            "TG_BEST_EFFORT_ENTRYPOINTS=1 python3",
+            f"echo {_PATCH_QWEN3_VL_EXPORT_B64} | base64 -d | "
+            "TG_BEST_EFFORT_ENTRYPOINTS=1 python3",
+            f"echo {_PATCH_QWEN3_VL_TORCH_DIST_B64} | base64 -d | "
+            "TG_BEST_EFFORT_ENTRYPOINTS=1 python3",
+            f"echo {_PATCH_ROLLOUT_STATUS_B64} | base64 -d | "
+            "TG_BEST_EFFORT_ENTRYPOINTS=1 python3",
+            f"echo {_PATCH_ADVANTAGE_DIST_B64} | base64 -d | "
+            "TG_BEST_EFFORT_ENTRYPOINTS=1 python3",
+            f"echo {_PATCH_LOG_ELIDE_B64} | base64 -d | "
+            "TG_BEST_EFFORT_ENTRYPOINTS=1 python3",
+            f"echo {_PATCH_DIST_CKPT_QUANTIZED_B64} | base64 -d | "
+            "TG_BEST_EFFORT_ENTRYPOINTS=1 python3",
+            f"echo {_PATCH_ZERO_STD_METRICS_B64} | base64 -d | "
+            "TG_BEST_EFFORT_ENTRYPOINTS=1 python3",
+            f"echo {_PATCH_SGLANG_PARALLEL_ALIASES_B64} | base64 -d | "
+            "TG_BEST_EFFORT_ENTRYPOINTS=1 python3",
+            f"echo {_PATCH_SUBSTEP_TIMING_B64} | base64 -d | "
+            "TG_BEST_EFFORT_ENTRYPOINTS=1 python3",
+        )
 
     if slime.image_run_commands:
         image = image.run_commands(*slime.image_run_commands)

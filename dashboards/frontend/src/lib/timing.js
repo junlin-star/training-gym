@@ -2,9 +2,6 @@ const slot = (name) => `var(--color-c-dataviz-${name})`;
 
 export const TRAIN_OUTLINE_COLOR = slot("train-outline");
 
-// Colour carries the *kind* of cost, not the phase's name: a reader who has
-// never seen slime should be able to tell "the GPUs are training" from "we are
-// moving weights around" from "nothing is happening" without a glossary.
 export const CATEGORIES = {
   train: { label: "Train", color: slot("primary-1") },
   generate: { label: "Rollout", color: slot("primary-3") },
@@ -68,15 +65,11 @@ export const TIMING_LABELS = {
   optimizer_step: "Optimizer step",
 };
 
-// Phases where the worker whose lane they are on is blocked on somebody else:
-// they are drawn as stalls, and the work itself shows up on the row of the
-// worker actually doing it.
 const STALLS = new Set([
   "wait_for_rollout",
   "wait_for_next_rollout",
 ]);
 
-// These phases have aggregate totals because recording every sample is noisy.
 const SAMPLED = new Set(["reward", "reward_batch", "sample_generation"]);
 export const HIDDEN_PHASES = new Set([
   "reward",
@@ -110,8 +103,6 @@ export const GROUPS = [
 ];
 
 const NEGLIGIBLE_WORK_S = 0.0005;
-// Ignore sub-millisecond spans that cannot be read at timeline scale.
-
 export function labelFor(name, rolloutId = null) {
   if (
     (name === "wait_for_rollout" || name === "wait_for_next_rollout") &&
@@ -129,6 +120,12 @@ export function isLegacyTiming(timings) {
   return timings?.metadata?.legacy_derived === true;
 }
 
+export function rolloutIdForTimingKey(id) {
+  if (id === "") return null;
+  const parsedId = Number(id);
+  return Number.isInteger(parsedId) && parsedId >= 0 ? parsedId : null;
+}
+
 export function categoryOf(name) {
   return PHASE_CATEGORY[name] || "idle";
 }
@@ -140,13 +137,7 @@ export function colorFor(name) {
 function collect(timings) {
   const spans = [];
   for (const [id, lanes] of Object.entries(timings || {})) {
-    const parsedId = Number(id);
-    const rolloutId =
-      id === "bootstrap"
-        ? null
-        : Number.isFinite(parsedId) && Number.isInteger(parsedId)
-          ? parsedId
-          : null;
+    const rolloutId = rolloutIdForTimingKey(id);
     for (const [role, lane] of Object.entries(lanes?.roles || {})) {
       if (lane?.lane_start_unix_s == null) continue;
       const laneStart = Number(lane?.lane_start_unix_s);
@@ -201,8 +192,6 @@ function collect(timings) {
   return spans;
 }
 
-// Where each rollout's step sits on the run's clock, taken from the lane the
-// loop itself runs on so a step spans exactly what the driver did for it.
 function stepsOf(spans) {
   const byRollout = new Map();
   for (const span of spans) {
@@ -510,6 +499,8 @@ export function runTimeline(timings) {
     span.average = span.total / span.count;
     span.inside = span.parent ? span.parent.name : null;
     span.insideKey = span.parent ? span.parent.key : null;
+    span.insideStart = span.parent ? span.parent.start : null;
+    span.insideEnd = span.parent ? span.parent.end : null;
   }
 
   const visibleSpans = spans;

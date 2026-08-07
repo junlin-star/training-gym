@@ -134,15 +134,10 @@ def enqueue_item(item: dict[str, Any]) -> None:
 
 
 def post_item(item: dict[str, Any]) -> bool:
-    """Synchronously POST a pre-resolved item (same shape as ``enqueue_item``),
-    blocking up to the item's ``_timeout``. Returns whether it was accepted;
-    failures are swallowed. Consumes the item's ``_url``/``_token`` keys, so a
-    caller that retries must pass a copy."""
     return _post(item) == "ok"
 
 
 def post_item_result(item: dict[str, Any]) -> PostResult:
-    """Synchronously POST and classify dashboard route availability."""
     return _post(item)
 
 

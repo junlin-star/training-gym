@@ -25,7 +25,11 @@
     fetchRunLogs,
   } from "../lib/api.js";
   import { groupByRollout, rolloutIndex, rolloutScores } from "../lib/rolloutGrouping.js";
-  import { isLegacyTiming, timingRunStart } from "../lib/timing.js";
+  import {
+    isLegacyTiming,
+    rolloutIdForTimingKey,
+    timingRunStart,
+  } from "../lib/timing.js";
 
   // Number of historical log lines requested per page.
   const HIST_PAGE = 500;
@@ -506,7 +510,7 @@
   let legacyTiming = $derived(isLegacyTiming(runTimings));
   let timelineRunOrigin = $derived(timingRunStart(runTimings));
   let stepTimingIds = $derived(
-    Object.keys(runTimings).filter((id) => id !== "bootstrap" && id !== "metadata"),
+    Object.keys(runTimings).filter((id) => rolloutIdForTimingKey(id) !== null),
   );
 
   async function toggleRolloutDetail(rolloutId) {
