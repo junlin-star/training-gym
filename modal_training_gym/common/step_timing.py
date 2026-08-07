@@ -10,6 +10,8 @@ from modal_training_gym.common.status import SlimeStatus
 from modal_training_gym.common.timing_recorder import MAX_PHASE_INVOCATIONS
 from modal_training_gym.utils.metadata import MetadataStore, vol_list, vol_put
 
+MAX_TIMING_PHASES = 64
+
 
 def is_safe_run_id(value: str) -> bool:
     allowed = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-"
@@ -49,7 +51,9 @@ class RoleTimingRecord(BaseModel):
     role: Role
     created_at: int = 0
     lane_start_unix_s: float | None = None
-    phases: dict[str, PhaseTiming] = Field(default_factory=dict)
+    phases: dict[str, PhaseTiming] = Field(
+        default_factory=dict, max_length=MAX_TIMING_PHASES
+    )
 
     @field_validator("training_run_id")
     @classmethod
