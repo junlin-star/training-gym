@@ -69,11 +69,6 @@ def _install():
     pass
 
 
-@notebook_only
-def _import_modal():
-    import modal
-
-
 @code
 def _imports():
     from modal_training_gym import (
