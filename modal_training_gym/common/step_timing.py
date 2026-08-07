@@ -9,6 +9,8 @@ from pydantic import BaseModel, Field
 from modal_training_gym.common.status import SlimeStatus
 from modal_training_gym.utils.metadata import MetadataStore, vol_list, vol_put
 
+TRAINING_RUN_ID_PATTERN = r"^[A-Za-z0-9_-][A-Za-z0-9._-]*$"
+
 
 class Role(str, Enum):
     DRIVER = "driver"
@@ -48,7 +50,7 @@ class RoleTimingRecord(BaseModel):
     """
 
     # A path component of the record's key, so it must not be "." or ".."
-    training_run_id: str = Field(pattern=r"^[A-Za-z0-9_-][A-Za-z0-9._-]*$")
+    training_run_id: str = Field(pattern=TRAINING_RUN_ID_PATTERN)
     rollout_id: int | None = Field(default=None, ge=0)
     role: Role
     created_at: int = 0

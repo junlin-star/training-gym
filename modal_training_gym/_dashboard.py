@@ -51,6 +51,7 @@ from modal_training_gym.common.run_summary import (
 )
 from modal_training_gym.common.step_timing import (
     RoleTimingRecord,
+    TRAINING_RUN_ID_PATTERN,
     legacy_run_to_records,
     load_run_async,
     rollout_lanes,
@@ -394,6 +395,7 @@ def fastapi_app():
         FastAPI,
         Header,
         HTTPException,
+        Path as FastAPIPath,
     )  # Request imported at module scope
     from fastapi.concurrency import run_in_threadpool
     from fastapi.responses import (
@@ -992,7 +994,9 @@ def fastapi_app():
             return entry.lanes
 
     @web.get("/api/runs/{training_run_id}/timings")
-    async def get_run_timings(training_run_id: str):
+    async def get_run_timings(
+        training_run_id: str = FastAPIPath(pattern=TRAINING_RUN_ID_PATTERN),
+    ):
         return JSONResponse(await _run_timings(training_run_id))
 
     # ── Live Modal log stream (SSE, pure pass-through) ───────────────────

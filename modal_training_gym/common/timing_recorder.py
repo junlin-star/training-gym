@@ -28,6 +28,7 @@ TIMING_TIMEOUT_SECONDS = 10.0
 
 MIN_PUBLISH_INTERVAL_S = 3.0
 MAX_POST_RETRIES = 5
+NOT_FOUND_LATCH_THRESHOLD = 3
 
 PER_SAMPLE_PHASES = frozenset({"reward", "reward_batch", "sample_generation"})
 
@@ -92,6 +93,7 @@ class RoleRecorder:
         self._closed = False
         self._post_retries = 0
         self._unknown_run = False
+        self._not_found_count = 0
         self._require_failure_reported = False
 
     def __enter__(self) -> "RoleRecorder":
@@ -170,17 +172,20 @@ class RoleRecorder:
                     if result == "ok":
                         self._posted_phases = snapshot["phases"]
                         self._post_retries = 0
+                        self._not_found_count = 0
                     elif result == "not_found":
-                        global _UNSUPPORTED
-                        with _UNSUPPORTED_LOCK:
-                            _UNSUPPORTED = True
-                        if os.environ.get(TIMING_MODE_ENV, "auto") == "require":
-                            print(
-                                "ERROR: substep_timing='require' was rejected with "
-                                "HTTP 404/405 from the dashboard timing "
-                                "endpoint; timing is unavailable on this dashboard.",
-                                flush=True,
-                            )
+                        self._not_found_count += 1
+                        if self._not_found_count >= NOT_FOUND_LATCH_THRESHOLD:
+                            global _UNSUPPORTED
+                            with _UNSUPPORTED_LOCK:
+                                _UNSUPPORTED = True
+                            if os.environ.get(TIMING_MODE_ENV, "auto") == "require":
+                                print(
+                                    "ERROR: substep_timing='require' was rejected with "
+                                    "HTTP 404/405 from the dashboard timing "
+                                    "endpoint; timing is unavailable on this dashboard.",
+                                    flush=True,
+                                )
                     elif result == "unknown_run":
                         self._unknown_run = True
                     elif result == "failed":

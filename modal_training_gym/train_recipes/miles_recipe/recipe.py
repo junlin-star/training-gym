@@ -58,6 +58,8 @@ _MILES_SKIP = {
     "custom_megatron_before_train_step_hook",
 }
 
+DEFAULT_MILES_DOCKER_IMAGE = "radixark/miles:dev-202606111336"
+
 YAML_CONFIG_FIELDS = ("eval_config", "extra_config", "sglang_config")
 
 # Callable fields whose resolved import path Miles reads from a `--<name>-path`
@@ -416,7 +418,7 @@ class MilesRecipe(BaseTrainRecipe):
     recipe_type: RecipeType = RecipeType.MILES
 
     # ── Launcher instructions (not Miles CLI flags) ─────────────────────────
-    docker_image: str = "radixark/miles:dev-202606111336"
+    docker_image: str = DEFAULT_MILES_DOCKER_IMAGE
     gpu_type: str = "H100"
     memory: int | tuple[int, int] | None = None
     cloud: str | None = None

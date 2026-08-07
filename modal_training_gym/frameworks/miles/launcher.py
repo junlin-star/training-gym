@@ -53,6 +53,7 @@ from modal_training_gym.common.status import MilesStatus
 from modal_training_gym.train_recipes.miles_recipe.recipe import (
     CHECKPOINTS_PATH,
     DATA_PATH,
+    DEFAULT_MILES_DOCKER_IMAGE,
     HF_CACHE_PATH,
     MilesRecipe,
 )
@@ -76,13 +77,18 @@ _PATCH_SUBSTEP_TIMING_B64 = encode_patch("patch_substep_timing", _MILES_PATCHES)
 
 
 def _build_miles_base_image(miles: MilesRecipe) -> Image:
+    patch_prefix = (
+        ""
+        if miles.docker_image == DEFAULT_MILES_DOCKER_IMAGE
+        else "TG_BEST_EFFORT_ENTRYPOINTS=1 "
+    )
     image = (
         Image.from_registry(miles.docker_image)
         .entrypoint([])
         .run_commands(
             f"rm -rf {HF_CACHE_PATH} 2>/dev/null || true",
-            f"echo {_PATCH_SGLANG_ABORT_B64} | base64 -d | python3",
-            f"echo {_PATCH_SUBSTEP_TIMING_B64} | base64 -d | python3",
+            f"echo {_PATCH_SGLANG_ABORT_B64} | base64 -d | {patch_prefix}python3",
+            f"echo {_PATCH_SUBSTEP_TIMING_B64} | base64 -d | {patch_prefix}python3",
         )
     )
     if miles.image_env:
