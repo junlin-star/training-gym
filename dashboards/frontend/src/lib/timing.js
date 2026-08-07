@@ -426,7 +426,7 @@ function rowsOf(spans, async) {
     return [prepareRow(
       {
         key: "driver",
-        label: "Training loop",
+        label: "Train",
         hint: "Driver and trainer phases on the shared wall clock.",
         spans: driverSpans,
       },
