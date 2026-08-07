@@ -312,11 +312,20 @@ function mergeSyncGenerationSpans(spans) {
       };
     }
     span.mergedGeneration = true;
-    for (const child of span.children || []) {
-      child.mergedGeneration = true;
+    for (const candidate of spans) {
+      let parent = candidate.parent;
+      while (parent) {
+        if (parent === span) {
+          candidate.mergedGeneration = true;
+          break;
+        }
+        parent = parent.parent;
+      }
     }
     if (span.parent) {
-      span.parent.children = span.parent.children.filter((child) => child !== span);
+      span.parent.children = span.parent.children.filter(
+        (child) => child.name !== "generate_samples",
+      );
     }
   }
   return spans;
