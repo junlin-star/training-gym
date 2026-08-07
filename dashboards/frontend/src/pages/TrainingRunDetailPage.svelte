@@ -1360,8 +1360,13 @@
             </div>
           {/if}
           {#if legacyTiming}
-            <div class="detail-empty">
-              Substep timing isn't available for this run because it predates measured timing.
+            <div class="rollout-chart">
+              <div class="rollout-chart-title substep-timing-title">
+                Substep Timing
+              </div>
+              <div class="detail-empty">
+                Substep timing isn't available for this run because it predates measured timing.
+              </div>
             </div>
           {:else if stepTimingIds.length}
             <div class="rollout-chart">
