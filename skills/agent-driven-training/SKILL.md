@@ -1,9 +1,12 @@
 ---
 name: agent-driven-training
 description: >-
-  Use when asked to train, post-train, fine-tune, or improve a model; create or
-  launch a config; check run status or logs; diagnose failures, reward, or
-  performance; continue a checkpoint; or promote a Training Gym run.
+  Owns the complete Training Gym lifecycle or one requested stage: configure,
+  prove, smoke test, monitor, diagnose, continue, and promote.
+when_to_use: >-
+  User asks to train, post-train, fine-tune, or improve a model; launch a
+  config; inspect run status or logs; debug failure, reward, or performance;
+  continue a checkpoint; or promote a Training Gym run.
 ---
 
 # Agent-driven training
