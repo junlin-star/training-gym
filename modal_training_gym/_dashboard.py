@@ -901,7 +901,7 @@ def fastapi_app():
 
         await record.save(is_async=True)
         entry = timing_cache.get(record.training_run_id)
-        if entry is not None and entry.read_at is not None and not entry.lock.locked():
+        if entry is not None and entry.read_at is not None:
             async with entry.lock:
                 rollout_key = (
                     "pre-loop" if record.rollout_id is None else str(record.rollout_id)

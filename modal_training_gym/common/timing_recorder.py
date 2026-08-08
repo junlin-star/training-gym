@@ -17,6 +17,7 @@ TIMING_TIMEOUT_SECONDS = 10.0
 
 MIN_PUBLISH_INTERVAL_S = 3.0
 MAX_PHASE_INVOCATIONS = 10_000
+MAX_TIMING_PHASES = 64
 MAX_POST_RETRIES = 5
 NOT_FOUND_LATCH_THRESHOLD = 3
 
@@ -98,6 +99,8 @@ class RoleRecorder:
             duration = end - start
             with self._lock:
                 timing = self.phases.get(name)
+                if timing is None and len(self.phases) >= MAX_TIMING_PHASES:
+                    timing = {}
                 if timing is None:
                     self.phases[name] = {
                         "count": 1,
@@ -111,7 +114,7 @@ class RoleRecorder:
                         if name in PER_SAMPLE_PHASES
                         else [[start - self._t0, end - self._t0]]
                     )
-                else:
+                elif timing:
                     timing["count"] += 1
                     timing["total_duration_s"] += duration
                     timing["longest_duration_s"] = max(

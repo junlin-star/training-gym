@@ -7,10 +7,11 @@ from typing import Any, Awaitable
 from pydantic import BaseModel, Field, field_validator
 
 from modal_training_gym.common.status import SlimeStatus
-from modal_training_gym.common.timing_recorder import MAX_PHASE_INVOCATIONS
+from modal_training_gym.common.timing_recorder import (
+    MAX_PHASE_INVOCATIONS,
+    MAX_TIMING_PHASES,
+)
 from modal_training_gym.utils.metadata import MetadataStore, vol_list, vol_put
-
-MAX_TIMING_PHASES = 64
 
 
 def is_safe_run_id(value: str) -> bool:

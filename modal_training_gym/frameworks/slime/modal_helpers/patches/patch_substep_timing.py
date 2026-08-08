@@ -13,6 +13,7 @@ they open a lane at their entry point and the phases below use the module-level
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -558,14 +559,28 @@ def _patch_file(path: Path, wraps: list[tuple[str, str]]) -> None:
     print(f"Patched {path.name} for substep timing ({len(wraps)} phases)")
 
 
+def _patch_entrypoint(path: Path, wraps: list[tuple[str, str]]) -> None:
+    try:
+        _patch_file(path, wraps)
+    except Exception as exc:
+        if os.environ.get("TG_BEST_EFFORT_ENTRYPOINTS") != "1":
+            raise
+        print(f"WARNING: {path} substep timing patch skipped: {exc}")
+
+
 def main() -> None:
     """Patch this image's framework checkout, if it has one."""
     if not ROOT.is_dir():
         return
     for name, wraps in ENTRYPOINTS.items():
-        _patch_file(ROOT / name, wraps)
+        _patch_entrypoint(ROOT / name, wraps)
     for target in PACKAGE_TARGETS:
-        patch_package_file(ROOT, target)
+        try:
+            patch_package_file(ROOT, target)
+        except Exception as exc:
+            if os.environ.get("TG_BEST_EFFORT_ENTRYPOINTS") != "1":
+                raise
+            print(f"WARNING: {target} substep timing patch skipped: {exc}")
 
 
 if __name__ == "__main__":
