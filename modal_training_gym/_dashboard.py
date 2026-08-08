@@ -8,6 +8,7 @@ it uses the local ``dashboards/frontend`` directory instead.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import os
 import secrets as _secrets
 import time
@@ -138,6 +139,9 @@ MODAL_CREDS_SECRET_NAME = "_training-gym-modal-creds"
 # Set a real value via ``training-gym set-password``.
 DASHBOARD_PASSWORD_SECRET_NAME = "_training-gym-dashboard-password"
 
+# Routes that must bypass Basic Auth. These endpoints authenticate with their
+# own per-run bearer token; the proxy-auth status route must report only the
+# Modal-layer setting, independent of dashboard password protection.
 PASSWORD_EXEMPT_PATHS = frozenset(
     {
         DASHBOARD_PROXY_AUTH_PATH,
@@ -148,6 +152,7 @@ PASSWORD_EXEMPT_PATHS = frozenset(
     }
 )
 
+# Only ever the *expected* side of a comparison, so publishing it is safe.
 _MISSING_TOKEN_DUMMY = "training-gym-missing-token-dummy-never-issued"
 
 
@@ -456,7 +461,7 @@ def fastapi_app():
     TIMING_CACHE_MAX_RUNS = 64
     TIMING_CACHE_TTL_S = 5.0
     TIMING_CACHE_FINAL_TTL_S = 60.0
-    seen_timing_runs: set[str] = set()
+    remembered_timing_tokens: dict[str, str] = {}
 
     class TimingEntry:
         def __init__(self) -> None:
@@ -685,6 +690,14 @@ def fastapi_app():
         *,
         allow_deleted: bool = False,
     ) -> None:
+        """403 unless ``authorization`` carries the run's status token.
+
+        Handlers must call this *before* any lookup that can 404, or the
+        status code tells an anonymous caller which run ids exist. For the
+        same reason an unknown run is indistinguishable from a wrong token.
+        A 410 requires a matching remembered token hash, never bare run-id
+        recognition.
+        """
         try:
             expected_token = str(
                 (
@@ -700,7 +713,13 @@ def fastapi_app():
         supplied = _bearer_token(authorization)
         if not expected_token:
             _secrets.compare_digest(supplied, _MISSING_TOKEN_DUMMY)
-            if allow_deleted and training_run_id in seen_timing_runs:
+            remembered = remembered_timing_tokens.get(training_run_id)
+            supplied_hash = hashlib.sha256(supplied.encode()).hexdigest()
+            if (
+                allow_deleted
+                and remembered is not None
+                and _secrets.compare_digest(supplied_hash, remembered)
+            ):
                 try:
                     await TrainingRun.from_id(training_run_id, is_async=True)
                 except KeyError:
@@ -720,7 +739,11 @@ def fastapi_app():
             raise HTTPException(status_code=403, detail="Invalid status token")
         if not _secrets.compare_digest(supplied, expected_token):
             raise HTTPException(status_code=403, detail="Invalid status token")
-        seen_timing_runs.add(training_run_id)
+        remembered_timing_tokens[training_run_id] = hashlib.sha256(
+            expected_token.encode()
+        ).hexdigest()
+        if len(remembered_timing_tokens) > TIMING_CACHE_MAX_RUNS:
+            del remembered_timing_tokens[next(iter(remembered_timing_tokens))]
 
     async def _get_run_or_404(training_run_id: str) -> TrainingRun:
         try:
@@ -901,8 +924,10 @@ def fastapi_app():
 
         await record.save(is_async=True)
         entry = timing_cache.get(record.training_run_id)
-        if entry is not None and entry.read_at is not None:
+        if entry is not None:
             async with entry.lock:
+                entry.dirty = True
+                entry.final = False
                 rollout_key = (
                     "pre-loop" if record.rollout_id is None else str(record.rollout_id)
                 )
@@ -910,9 +935,6 @@ def fastapi_app():
                 lanes["roles"].update(
                     rollout_lanes([record.model_dump(mode="json")])["roles"]
                 )
-                entry.final = False
-        elif entry is not None:
-            entry.dirty = True
         return JSONResponse({"status": "ok"})
 
     async def _run_has_ended(training_run_id: str) -> bool:

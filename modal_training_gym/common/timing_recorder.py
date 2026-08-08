@@ -75,6 +75,7 @@ class RoleRecorder:
         self._closed = False
         self._post_retries = 0
         self._unknown_run = False
+        self._permanent_reported = False
 
     def __enter__(self) -> "RoleRecorder":
         return self
@@ -187,6 +188,14 @@ class RoleRecorder:
                             print(
                                 "WARNING: substep timing upload received HTTP 410; "
                                 f"disabling lane {self.role}/{self.rollout_id}.",
+                                flush=True,
+                            )
+                    elif result == "permanent":
+                        if not self._permanent_reported:
+                            self._permanent_reported = True
+                            print(
+                                "WARNING: substep timing upload rejected with a "
+                                "permanent client error; dropping snapshot.",
                                 flush=True,
                             )
                     elif result == "failed":
