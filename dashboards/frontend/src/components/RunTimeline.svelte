@@ -34,8 +34,6 @@
   const GROUP_GAP_PX = 12;
   const STEP_GAP_PX = 8;
   const BAR_GAP_PX = 1;
-  const BAR_EDGE_INSET_PX = 1;
-  const PARENT_EDGE_INSET_PX = 3;
   let showDetails = $state(false);
   let timeline = $derived(runTimeline(timings));
   let intervalOrigin = $derived(runOrigin ?? timeline.runStart);
@@ -45,6 +43,9 @@
       ...group,
       height: HEADER_PX + group.rows.length * (rowHeight + ROW_GAP_PX),
     })),
+  );
+  let legendCategories = $derived(
+    timeline.categories.filter((key) => !(showDetails && key === "idle")),
   );
   $effect(() => {
     timelineKey;
@@ -193,18 +194,35 @@
     return row.insetKeys.has(bar.key) ? BAR_GAP_PX : 0;
   }
 
-  function visualEdgeInset(bar) {
-    return bar.offset + bar.duration >= timeline.span - 1e-6
-      ? BAR_EDGE_INSET_PX
-      : 0;
+  function visibleChildren(bar) {
+    return showDetails
+      ? (bar.children || []).filter((child) => !HIDDEN_PHASES.has(child.name))
+      : [];
   }
 
-  function visualWidth(row, bar) {
-    const inset = visualInset(row, bar) * 2 + visualEdgeInset(bar);
-    const width = `calc(${Math.max(pct(bar.duration), 0.01)}% - ${inset}px)`;
-    if (bar.insideEnd == null) return `max(1px, ${width})`;
-    const available = Math.max(pct(bar.insideEnd - bar.start), 0);
-    return `max(0px, min(${width}, calc(${available}% - ${PARENT_EDGE_INSET_PX + visualInset(row, bar)}px)))`;
+  function shellLeft(row, bar) {
+    if (bar.insideStart == null) {
+      return `calc(${pct(bar.offset)}% + ${visualInset(row, bar)}px)`;
+    }
+    const duration = Math.max(bar.insideEnd - bar.insideStart, 0);
+    const start = duration
+      ? Math.min(1, Math.max(0, (bar.start - bar.insideStart) / duration))
+      : 0;
+    return `${start * 100}%`;
+  }
+
+  function shellWidth(bar) {
+    if (bar.insideStart == null) {
+      return `${Math.max(pct(bar.duration), 0.01)}%`;
+    }
+    const duration = Math.max(bar.insideEnd - bar.insideStart, 0);
+    const end = duration
+      ? Math.min(1, Math.max(0, (bar.end - bar.insideStart) / duration))
+      : 0;
+    const start = duration
+      ? Math.min(1, Math.max(0, (bar.start - bar.insideStart) / duration))
+      : 0;
+    return `${Math.max(0, end - start) * 100}%`;
   }
 </script>
 
@@ -216,7 +234,7 @@
   {:else}
     <div class="toolbar">
       <div class="legend">
-        {#each timeline.categories as key (key)}
+        {#each legendCategories as key (key)}
           <span class="legend-item">
             <span
               class="swatch"
@@ -324,42 +342,59 @@
                     style:top={`${HEADER_PX + index * (rowHeight + ROW_GAP_PX)}px`}
                     style:height={`${rowHeight}px`}
                   >
-                    {#each displaySpans(row) as bar (bar.key)}
-                      <button
-                        class="bar"
-                        class:stall={bar.kind === "stall"}
-                        class:sampled={bar.kind === "sampled"}
-                        class:nested-bar={showDetails && bar.depth > 0}
-                        class:outlined={isExpandedParent(bar)}
-                        class:train-parent={
-                          isExpandedParent(bar) &&
-                          ["train_models", "training", "train_model"].includes(bar.name)
-                        }
-                        class:expanded-parent={isExpandedParent(bar)}
-                        class:active={pinned && isActive(bar)}
-                        aria-label={`${labelFor(bar.name, bar.rolloutId)} ${fmtSecs(bar.duration)}`}
-                        style:left={`calc(${pct(bar.offset)}% + ${visualInset(row, bar)}px)`}
-                        style:width={visualWidth(row, bar)}
-                        style:--bar-color={
-                          isExpandedParent(bar) &&
-                          ["train_models", "training", "train_model"].includes(bar.name)
-                            ? TRAIN_OUTLINE_COLOR
-                            : colorFor(bar.name)
-                        }
-                        style:background={bar.kind === "work" && !isExpandedParent(bar) ? colorFor(bar.name) : undefined}
-                        style:border-color={
-                          isExpandedParent(bar)
-                            ? ["train_models", "training", "train_model"].includes(bar.name)
+                    {#snippet renderBar(bar, row)}
+                      <div
+                        class="bar-shell"
+                        class:nested-shell={bar.depth > 0}
+                        style:left={shellLeft(row, bar)}
+                        style:width={shellWidth(bar)}
+                      >
+                        <button
+                          class="bar"
+                          class:stall={bar.kind === "stall"}
+                          class:sampled={bar.kind === "sampled"}
+                          class:nested-bar={showDetails && bar.depth > 0}
+                          class:outlined={isExpandedParent(bar)}
+                          class:train-parent={
+                            isExpandedParent(bar) &&
+                            ["train_models", "training", "train_model"].includes(bar.name)
+                          }
+                          class:expanded-parent={isExpandedParent(bar)}
+                          class:active={pinned && isActive(bar)}
+                          aria-label={`${labelFor(bar.name, bar.rolloutId)} ${fmtSecs(bar.duration)}`}
+                          style:left="0"
+                          style:width="100%"
+                          style:--bar-color={
+                            isExpandedParent(bar) &&
+                            ["train_models", "training", "train_model"].includes(bar.name)
                               ? TRAIN_OUTLINE_COLOR
                               : colorFor(bar.name)
-                            : undefined
-                        }
-                        onmouseenter={(e) => showTip(e, bar)}
-                        onmousemove={moveTip}
-                        onmouseleave={hideTip}
-                        onclick={(e) => pinTip(e, bar)}
-                      >
-                      </button>
+                          }
+                          style:background={bar.kind === "work" && !isExpandedParent(bar) ? colorFor(bar.name) : undefined}
+                          style:border-color={
+                            isExpandedParent(bar)
+                              ? ["train_models", "training", "train_model"].includes(bar.name)
+                                ? TRAIN_OUTLINE_COLOR
+                                : colorFor(bar.name)
+                              : undefined
+                          }
+                          onmouseenter={(e) => showTip(e, bar)}
+                          onmousemove={moveTip}
+                          onmouseleave={hideTip}
+                          onclick={(e) => pinTip(e, bar)}
+                        >
+                        </button>
+                        {#if visibleChildren(bar).length}
+                          <div class="bar-children">
+                            {#each visibleChildren(bar) as child (child.key)}
+                              {@render renderBar(child, row)}
+                            {/each}
+                          </div>
+                        {/if}
+                      </div>
+                    {/snippet}
+                    {#each displaySpans(row).filter((bar) => bar.depth === 0) as bar (bar.key)}
+                      {@render renderBar(bar, row)}
                     {/each}
                   </div>
                 {/each}
@@ -655,6 +690,29 @@
     pointer-events: auto;
     background: transparent;
     font-family: inherit;
+  }
+
+  .bar-shell {
+    position: absolute;
+    top: 0;
+    height: 100%;
+    pointer-events: none;
+  }
+
+  .bar-shell > .bar {
+    pointer-events: auto;
+  }
+
+  .bar-children {
+    position: absolute;
+    inset: 2px;
+    z-index: 3;
+    overflow: hidden;
+    pointer-events: none;
+  }
+
+  .bar-children > .bar-shell {
+    pointer-events: auto;
   }
 
   .bar.outlined {
