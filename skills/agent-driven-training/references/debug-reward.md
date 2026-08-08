@@ -24,6 +24,25 @@ Do not infer learning from the final value alone.
 Ceiling thresholds are task-relative. Require enough steps and samples to
 separate saturation from normal variance.
 
+## Decide whether to stop an active run
+
+Set an early efficacy checkpoint proportional to the run length; for example,
+reassess a 150-step run across roughly steps 10–40. If enough samples show that
+reward remains flat outside normal noise, declines, or is otherwise
+uninformative, stop the run instead of waiting for completion. Do not stop on a
+single noisy point, but do not keep a healthy yet ineffective job alive merely
+because it has not failed.
+
+Use `training-gym run get <run-id> --verbose` to obtain the Modal app ID, then
+stop it:
+
+```bash
+modal app stop <app-id>
+```
+
+Diagnose the trajectory, change one parameter, and launch a fresh smoke test
+before promoting again.
+
 ## Select and download traces
 
 Estimate the export before downloading:

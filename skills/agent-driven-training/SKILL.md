@@ -74,23 +74,11 @@ Promote only when the proof and smoke runs are healthy and the reward remains
 informative. Launch a fresh full run from the final config and monitor it until
 completion or an early-stop decision.
 
-A full run is not a commitment to spend its entire configured horizon. Set an
-early efficacy checkpoint proportional to the run length; for example,
-reassess a 150-step run across roughly steps 10–40. If enough samples show that
-reward remains flat outside normal noise, declines, or is otherwise
-uninformative, stop the run instead of waiting for completion. Do not stop on a
-single noisy point, but do not keep a healthy yet ineffective job alive merely
-because it has not failed.
-
-Use `training-gym run get <run-id> --verbose` to obtain the Modal app ID, then
-stop it:
-
-```bash
-modal app stop <app-id>
-```
-
-Diagnose the reward trajectory, change one parameter, and launch a fresh smoke
-test before promoting again.
+A full run is not a commitment to spend its entire configured horizon.
+Reassess efficacy early; if reward remains flat, declines, or is otherwise
+uninformative, read [debug-reward.md](references/debug-reward.md) and make an
+early-stop decision rather than letting a healthy but ineffective job finish
+by default.
 
 Report the run ID, checkpoint, early-versus-late reward, task-specific success
 rate, timing, and whether all apps stopped. For checkpoint continuation, read
