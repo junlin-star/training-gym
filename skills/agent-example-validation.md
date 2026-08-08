@@ -1,23 +1,8 @@
----
-name: example-validation
-description: >-
-  Tiered validation pipeline for checking whether tutorials and examples
-  still run as documented: Tier 0 (local compile), Tier 1 (cheap drift
-  checks), Tier 2 (scheduled smoke on Modal), Tier 3 (full multi-node
-  validation). Covers discovery, pass criteria, and failure recording.
-  Use when validating, testing, or checking tutorials and examples for drift.
-when_to_use: >-
-  User validates a tutorial or example, checks if docs match code, runs
-  tiered validation, tests whether examples still work, or asks about the
-  validation pipeline for this repo.
----
-
-# Validating Example Drift
+# Agent Guide: Validating Example Drift
 
 This document defines a durable validation pipeline for agents that need to check whether the examples in this repository still run as documented.
 
-Use [modal-infrastructure](../modal-infrastructure/SKILL.md) only when
-validation requires raw Modal app, container, volume, or scheduling diagnosis.
+Use this runbook together with [agent-modal-training.md](agent-modal-training.md), which covers Modal launch and debugging workflow.
 
 ## Goal
 
@@ -31,9 +16,7 @@ validation requires raw Modal app, container, volume, or scheduling diagnosis.
 - Keep the default pipeline cheap enough to run automatically after example-facing changes.
 - Treat dataset prep, model download, checkpoint conversion, and training as separate checkpoints.
 - Prefer the smallest runnable path that still exercises the real entrypoint.
-- Use detached Modal runs for long-lived validation; consult
-  [modal-infrastructure](../modal-infrastructure/SKILL.md) for low-level app
-  lifecycle details.
+- Use detached Modal runs for long-lived training and follow the detached-app workflow in [agent-modal-training.md](agent-modal-training.md).
 
 ## Discovering What To Validate
 
@@ -74,7 +57,7 @@ Run on every PR that changes an example directory, shared training utility, shar
 
 Run nightly or before cutting a release branch.
 
-- Exercise one real remote path per maintained flow.
+- Exercise one real remote path per joy/initial-setuptained flow.
 - Prefer single-node or smallest-cluster commands when the example supports them.
 - Confirm the app launches, user code starts, and the first meaningful artifact or log marker appears.
 
@@ -109,7 +92,7 @@ For normal agent validation, use this order:
 
 Use a separate scheduled workflow for repo-wide confidence:
 
-1. Nightly: Tier 2 for each maintained user-facing workflow.
+1. Nightly: Tier 2 for each joy/initial-setuptained user-facing workflow.
 2. Weekly: Tier 3 for workflows with canonical multi-stage or multi-node training paths.
 3. After major dependency, Modal runtime, or CUDA image changes: rerun Tier 3 for every workflow that shares the changed dependency surface.
 

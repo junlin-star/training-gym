@@ -1,22 +1,6 @@
----
-name: modal-infrastructure
-description: >-
-  Operates raw Modal infrastructure: runs, apps, containers, volumes,
-  scheduling, image builds, caches, and endpoint authentication.
-when_to_use: >-
-  Use for explicit raw Modal operations or when the Training Gym CLI cannot
-  explain an infrastructure failure. Use agent-driven-training for normal
-  Training Gym lifecycle work.
----
-
-# Modal infrastructure operations
+# Agent Guide: Running Training Jobs On Modal
 
 This document captures durable repo-specific workflow for agents launching and debugging training jobs on Modal in this repository.
-
-For routine Training Gym lifecycle work, use
-[agent-driven-training](../agent-driven-training/SKILL.md). Use this runbook
-when the request explicitly concerns Modal infrastructure or the Training Gym
-CLI cannot explain the underlying failure.
 
 ## Scope
 
@@ -31,7 +15,6 @@ CLI cannot explain the underlying failure.
 - Set `MODAL_ENVIRONMENT` explicitly, or pass `--env <env>`, when the target environment matters.
 - If your local setup relies on shell init for auth or helper tooling, ensure that setup is loaded before launching jobs.
 - Store credentials in local shell config or Modal secrets, not in tracked files.
-- **Proxy-auth tokens for served endpoints.** SGLang endpoints from `DeploymentConfig.serve()` are public by default (`unauthenticated=True`). Pass `unauthenticated=False` to require Modal proxy auth — then *any* call to that endpoint — `EvalConfig.evaluate()`, `deployment.generate()`, an OPD teacher `/generate`, health/readiness polls — must send a proxy-auth token pair or it returns **HTTP 401**. vLLM cannot honor `unauthenticated` (`modal.experimental.http_server` has no proxy-auth knob): `True` (default) is a silent no-op for `VllmRecipe`; explicit `False` emits `warnings.warn` because the endpoint remains public. Create a token in the Modal dashboard (Settings → Proxy Auth Tokens) and export it in the launching shell as `MODAL_KEY` (`wk-…`) and `MODAL_SECRET` (`ws-…`); the package turns these into `Modal-Key`/`Modal-Secret` headers. For calls issued from **remote workers** (e.g. a custom rm/reward function hitting a teacher endpoint), the driver's shell env does not reach the worker — forward the pair into the worker by attaching a `modal.Secret` (e.g. via the recipe's `train_function_kwargs={"secrets": [...]}`).
 
 ## Finding The Right Entrypoint
 
@@ -78,8 +61,6 @@ modal app logs <app-id>
 modal app stop <app-id>
 ```
 
-Do not stop an app during a status or diagnosis-only request.
-
 ## Reading App State
 
 - `modal app list --json` is the fastest way to confirm that an app exists and whether workers are active.
@@ -95,11 +76,12 @@ Do not stop an app during a status or diagnosis-only request.
 - In general, the examples in this repo build on training frameworks with notoriously noisy logs. It's often best to be proactively defensive with context by filtering the logs, either with `grep`/`rg`, or with the extra parameters available to `modal app logs`:
 
 ```bash
+
 # Fetch the last 500 log entries and grep them
 modal app logs <app-id> --tail 500 | rg "error|CUDA|OOM|loss"
 
 # Fetch only stderr from a particular function call
-modal app logs <app-id> --source stderr --function-call <function-call-id>
+modal app logs <app-id> --source stderr --function-call-id <function-call-id>
 
 # Search for specific keywords in logs
 modal app logs <app-id> --search "error"

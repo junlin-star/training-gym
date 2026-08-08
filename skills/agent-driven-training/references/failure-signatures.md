@@ -50,7 +50,7 @@ traffic plus an active Modal task indicates a slow held-out eval, not a hang.
 ## Cleanup and relaunch
 
 There is currently no `training-gym run kill` command. If the authorized task
-includes stopping or fixing the run, obtain the Modal app ID from `run get`,
+includes stopping or fixing the run, obtain the Modal app ID from `training-gym run get`,
 then:
 
 ```bash
