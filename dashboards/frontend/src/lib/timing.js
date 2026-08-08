@@ -264,6 +264,10 @@ function nest(spans) {
       const childDuration = Math.max(child.end - child.start, 0);
       const current = children.get(child.name) ?? {
         name: child.name,
+        kind: child.kind,
+        category: child.category,
+        role: child.role,
+        rolloutId: child.rolloutId,
         duration: 0,
         total: 0,
         count: 0,
@@ -501,6 +505,22 @@ export function runTimeline(timings) {
     span.insideKey = span.parent ? span.parent.key : null;
     span.insideStart = span.parent ? span.parent.start : null;
     span.insideEnd = span.parent ? span.parent.end : null;
+  }
+
+  function hydrateNestedChildren(parent) {
+    for (const child of parent.children || []) {
+      child.offset = child.start - runStart;
+      child.depth = parent.depth + 1;
+      child.inside = parent.name;
+      child.insideKey = parent.key;
+      child.insideStart = parent.start;
+      child.insideEnd = parent.end;
+      child.key = `${parent.key}:child:${child.name}`;
+      hydrateNestedChildren(child);
+    }
+  }
+  for (const span of spans) {
+    hydrateNestedChildren(span);
   }
 
   const visibleSpans = spans;
