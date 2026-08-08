@@ -739,6 +739,7 @@ def fastapi_app():
             raise HTTPException(status_code=403, detail="Invalid status token")
         if not _secrets.compare_digest(supplied, expected_token):
             raise HTTPException(status_code=403, detail="Invalid status token")
+        remembered_timing_tokens.pop(training_run_id, None)
         remembered_timing_tokens[training_run_id] = hashlib.sha256(
             expected_token.encode()
         ).hexdigest()
