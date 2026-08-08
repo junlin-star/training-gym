@@ -115,4 +115,15 @@ def test_unknown_run_latches_all_lanes(monkeypatch, capsys):
 
     assert len(posted) == 1
     assert timing_recorder._UNKNOWN_RUNS == {"deleted-run"}
-    assert capsys.readouterr().out.count("HTTP 410") == 1
+
+    monkeypatch.setenv("TRAINING_GYM_TRAINING_RUN_ID", "other-run")
+    third = RoleRecorder("driver", 2)
+    with third.phase("train"):
+        pass
+    third.__exit__(None, None, None)
+    if third._poster is not None:
+        third._poster.join(timeout=1)
+
+    assert len(posted) == 2
+    assert timing_recorder._UNKNOWN_RUNS == {"deleted-run", "other-run"}
+    assert capsys.readouterr().out.count("HTTP 410") == 2
