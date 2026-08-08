@@ -26,7 +26,7 @@ PER_SAMPLE_PHASES = frozenset({"reward", "reward_batch", "sample_generation"})
 _CLOSED_POSTERS: list[threading.Thread] = []
 _UNSUPPORTED = False
 _NOT_FOUND_COUNT = 0
-_UNKNOWN_RUN_REPORTED = False
+_UNKNOWN_RUNS: set[str] = set()
 _REQUIRE_FAILURE_REPORTED = False
 _UNSUPPORTED_LOCK = threading.Lock()
 
@@ -74,7 +74,6 @@ class RoleRecorder:
         self._poster: threading.Thread | None = None
         self._closed = False
         self._post_retries = 0
-        self._unknown_run = False
         self._permanent_reported = False
 
     def __enter__(self) -> "RoleRecorder":
@@ -139,7 +138,7 @@ class RoleRecorder:
 
     def _post_snapshots(self) -> None:
         global _NOT_FOUND_COUNT, _REQUIRE_FAILURE_REPORTED
-        global _UNKNOWN_RUN_REPORTED, _UNSUPPORTED
+        global _UNSUPPORTED
         while True:
             try:
                 self._snapshot_ready.wait()
@@ -180,14 +179,14 @@ class RoleRecorder:
                                 )
                             print(message, flush=True)
                     elif result == "unknown_run":
-                        self._unknown_run = True
+                        training_run_id = str(snapshot["training_run_id"])
                         with _UNSUPPORTED_LOCK:
-                            should_report = not _UNKNOWN_RUN_REPORTED
-                            _UNKNOWN_RUN_REPORTED = True
+                            should_report = training_run_id not in _UNKNOWN_RUNS
+                            _UNKNOWN_RUNS.add(training_run_id)
                         if should_report:
                             print(
                                 "WARNING: substep timing upload received HTTP 410; "
-                                f"disabling lane {self.role}/{self.rollout_id}.",
+                                f"disabling timing for run {training_run_id}.",
                                 flush=True,
                             )
                     elif result == "permanent":
@@ -231,15 +230,16 @@ class RoleRecorder:
             return
         if os.environ.get(TIMING_MODE_ENV, "auto") == "off":
             return
-        if self._unknown_run:
-            return
         url = timing_url()
         training_run_id = os.environ.get("TRAINING_GYM_TRAINING_RUN_ID", "")
         if not url or not training_run_id:
             return
         with _UNSUPPORTED_LOCK:
             unsupported = _UNSUPPORTED
+            unknown_run = training_run_id in _UNKNOWN_RUNS
         if unsupported:
+            return
+        if unknown_run:
             return
         if self._publish_gate is not None:
             if self._gate_answer is None:
