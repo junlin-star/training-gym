@@ -354,33 +354,33 @@ def build_slime_app(
         )
         image = image.run_commands(
             f"echo {_PATCH_MEGATRON_BRIDGE_B64} | base64 -d | "
-            "TG_BEST_EFFORT_ENTRYPOINTS=1 python3",
+            "TG_BEST_EFFORT_ENTRYPOINTS=1 python3 || true",
             f"echo {_PATCH_ADVANTAGES_B64} | base64 -d | "
-            "TG_BEST_EFFORT_ENTRYPOINTS=1 python3",
+            "TG_BEST_EFFORT_ENTRYPOINTS=1 python3 || true",
             f"echo {_PATCH_BRIDGE_NONE_TASK_B64} | base64 -d | "
-            "TG_BEST_EFFORT_ENTRYPOINTS=1 python3",
+            "TG_BEST_EFFORT_ENTRYPOINTS=1 python3 || true",
             f"echo {_PATCH_STOP_TOKEN_DIAG_B64} | base64 -d | "
-            "TG_BEST_EFFORT_ENTRYPOINTS=1 python3",
+            "TG_BEST_EFFORT_ENTRYPOINTS=1 python3 || true",
             f"echo {_PATCH_QWEN3_ASR_EXPORT_B64} | base64 -d | "
-            "TG_BEST_EFFORT_ENTRYPOINTS=1 python3",
+            "TG_BEST_EFFORT_ENTRYPOINTS=1 python3 || true",
             f"echo {_PATCH_QWEN3_VL_EXPORT_B64} | base64 -d | "
-            "TG_BEST_EFFORT_ENTRYPOINTS=1 python3",
+            "TG_BEST_EFFORT_ENTRYPOINTS=1 python3 || true",
             f"echo {_PATCH_QWEN3_VL_TORCH_DIST_B64} | base64 -d | "
-            "TG_BEST_EFFORT_ENTRYPOINTS=1 python3",
+            "TG_BEST_EFFORT_ENTRYPOINTS=1 python3 || true",
             f"echo {_PATCH_ROLLOUT_STATUS_B64} | base64 -d | "
-            "TG_BEST_EFFORT_ENTRYPOINTS=1 python3",
+            "TG_BEST_EFFORT_ENTRYPOINTS=1 python3 || true",
             f"echo {_PATCH_ADVANTAGE_DIST_B64} | base64 -d | "
-            "TG_BEST_EFFORT_ENTRYPOINTS=1 python3",
+            "TG_BEST_EFFORT_ENTRYPOINTS=1 python3 || true",
             f"echo {_PATCH_LOG_ELIDE_B64} | base64 -d | "
-            "TG_BEST_EFFORT_ENTRYPOINTS=1 python3",
+            "TG_BEST_EFFORT_ENTRYPOINTS=1 python3 || true",
             f"echo {_PATCH_DIST_CKPT_QUANTIZED_B64} | base64 -d | "
-            "TG_BEST_EFFORT_ENTRYPOINTS=1 python3",
+            "TG_BEST_EFFORT_ENTRYPOINTS=1 python3 || true",
             f"echo {_PATCH_ZERO_STD_METRICS_B64} | base64 -d | "
-            "TG_BEST_EFFORT_ENTRYPOINTS=1 python3",
+            "TG_BEST_EFFORT_ENTRYPOINTS=1 python3 || true",
             f"echo {_PATCH_SGLANG_PARALLEL_ALIASES_B64} | base64 -d | "
-            "TG_BEST_EFFORT_ENTRYPOINTS=1 python3",
+            "TG_BEST_EFFORT_ENTRYPOINTS=1 python3 || true",
             f"echo {_PATCH_SUBSTEP_TIMING_B64} | base64 -d | "
-            "TG_BEST_EFFORT_ENTRYPOINTS=1 python3",
+            "TG_BEST_EFFORT_ENTRYPOINTS=1 python3 || true",
         )
 
     if slime.image_run_commands:
