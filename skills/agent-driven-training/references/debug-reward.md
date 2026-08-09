@@ -33,8 +33,8 @@ uninformative, stop the run instead of waiting for completion. Do not stop on a
 single noisy point, but do not keep a healthy yet ineffective job alive merely
 because it has not failed.
 
-Use `training-gym run get <run-id> --verbose` to obtain the Modal app ID, then
-stop it:
+To stop it, use `training-gym run get <run-id> --verbose` to obtain the Modal 
+app ID, then:
 
 ```bash
 modal app stop <app-id>

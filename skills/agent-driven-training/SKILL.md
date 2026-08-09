@@ -32,8 +32,8 @@ Create or adapt a config for the requested task. Before spending GPU capacity:
 - test custom reward extraction on correct, incorrect, malformed, and
   missing-answer responses.
 
-The predicted answer must come from the model response and be compared with the
-reference answer; it must not be read from prompt or reference fields.
+The predicted answer must come from the model response; it must not be read from 
+prompt or reference fields.
 
 ## 2. Prove one step
 
@@ -81,8 +81,17 @@ early-stop decision rather than letting a healthy but ineffective job finish
 by default.
 
 Report the run ID, checkpoint, early-versus-late reward, task-specific success
-rate, timing, and whether all apps stopped. For checkpoint continuation, read
-[continuation.md](references/continuation.md) before launching.
+rate, timing, and whether all apps stopped.
+
+Continue from a checkpoint only when the run is healthy and preserving its
+optimizer and scheduler state avoids discarding useful progress, such as after
+an interruption or while reward is still improving at the configured horizon.
+For Slime, keep the original model path and set `recipe.load` to the training
+checkpoint; when extending the saved scheduler horizon, also set
+`extra_config={"override_opt_param_scheduler": True}`. Launch with a fresh run
+ID and prove one step before proceeding. Prefer a new run when changing the
+objective or when reward is saturated, corrupted, or based on a broken reward
+function.
 
 ## References
 
@@ -94,5 +103,3 @@ Read only the reference matching the current decision:
   inspection, reward bugs, hacking, and saturation.
 - [debug-systems.md](references/debug-systems.md) — phase timing, bottlenecks,
   tuning experiments, and final-step evaluation.
-- [continuation.md](references/continuation.md) — checkpoint compatibility and
-  Slime continuation.
