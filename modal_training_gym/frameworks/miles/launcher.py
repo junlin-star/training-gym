@@ -835,12 +835,6 @@ def build_miles_app(
                     "TRAINING_GYM_TRACE_SAMPLE_LIMIT": str(
                         getattr(miles, "trace_sample_limit", 16)
                     ),
-                    "TRAINING_GYM_IMAGE_SAMPLE_LIMIT": str(
-                        getattr(miles, "image_sample_limit", 16)
-                    ),
-                    "TRAINING_GYM_TRAJECTORY_SAMPLE_LIMIT": str(
-                        getattr(miles, "trajectory_sample_limit", 16)
-                    ),
                     "TRAINING_GYM_FRAMEWORK_STATUS_URL": phase_report_url,
                 },
                 framework_status_token=framework_status_token,
