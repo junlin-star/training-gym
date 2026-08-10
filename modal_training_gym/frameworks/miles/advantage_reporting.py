@@ -85,12 +85,25 @@ def report_advantage_distribution(
 
     n = len(advantages)
     try:
+        # These depend only on rollout_data shape / parallel topology, which
+        # are identical across CP ranks — a bail-out here is symmetric.
         device = advantages[0].device
         sums = torch.zeros(n, dtype=torch.float64, device=device)
         counts = torch.zeros(n, dtype=torch.float64, device=device)
+        failed = torch.zeros(1, dtype=torch.float64, device=device)
         cp_size = parallel_state.cp.size
         cp_rank = parallel_state.cp.rank
+    except Exception as exc:
+        _warn_once(exc)
+        return
 
+    # The per-rank math below (cp_utils call + mask loop) could fail on only
+    # some CP ranks; a plain early return there would strand the peers in the
+    # all-reduce and hang the training step. Instead record the failure in a
+    # tensor that rides along in the collective, so every rank still
+    # participates and then degrades together.
+    compute_exc: Exception | None = None
+    try:
         if cp_size == 1:
             local_masks = loss_masks
         else:
@@ -112,14 +125,25 @@ def report_advantage_distribution(
             m = min(adv.numel(), mask.numel())
             sums[i] = (adv[:m] * mask[:m]).sum()
             counts[i] = mask[:m].sum()
+    except Exception as exc:
+        compute_exc = exc
+        failed[0] = 1.0
 
+    try:
         if cp_size > 1:
             # Every CP rank holds a token-shard of the same samples; reduce so
             # each sample's mean is taken over its full response.
             dist.all_reduce(sums, group=parallel_state.cp.group)
             dist.all_reduce(counts, group=parallel_state.cp.group)
+            dist.all_reduce(failed, group=parallel_state.cp.group)
     except Exception as exc:
         _warn_once(exc)
+        return
+
+    if compute_exc is not None:
+        _warn_once(compute_exc)
+    if failed.item() > 0:
+        # Some CP rank's shard is missing — the means would be wrong.
         return
 
     if cp_rank != 0:

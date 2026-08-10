@@ -36,4 +36,8 @@ jobs:
         run: uv run modal run scripts/fetch_miles_patch_snapshots.py
 
       - name: Verify committed snapshot is current
-        run: git diff --exit-code -- tests/testdata/miles/*.input
+        # `git add` first so newly created (untracked) or deleted snapshot
+        # files also count as drift — plain `git diff` only sees tracked paths.
+        run: |
+          git add -A -- tests/testdata/miles
+          git diff --cached --exit-code -- tests/testdata/miles
