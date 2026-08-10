@@ -94,9 +94,7 @@ def _clean_prompt(text: str) -> str:
     cleaned = re.sub(r"<(?:bos|eos)>", "", cleaned)
     cleaned = re.sub(r"<\|[^|<>]*\|>", "", cleaned)
     cleaned = re.sub(r"</?think>", "", cleaned)
-    # Drop standalone role-header lines left behind by the template. "model" and
-    # "thought" are ordinary words, so they only count as headers when the prompt
-    # actually carried Gemma's markers.
+    # Drop standalone role-header lines left behind by the template.
     roles = (
         "system|user|assistant|model|thought" if is_gemma else "system|user|assistant"
     )

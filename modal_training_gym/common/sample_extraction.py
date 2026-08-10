@@ -35,8 +35,7 @@ _TRACE_MAX_SPANS = 256
 _TRACE_ATTR_STR_MAX = 200
 # Input-image capture (image-modality runs). The limit bounds *distinct* images, not
 # samples: a prompt group's ``n_samples_per_prompt`` samples share one screenshot. Each
-# distinct image is thumbnailed and size-capped before it goes on the payload. No
-# recipe field maps to it; override through ``SlimeRecipe.environment`` if needed.
+# distinct image is thumbnailed and size-capped before it goes on the payload.
 IMAGE_SAMPLE_LIMIT_ENV = "TRAINING_GYM_IMAGE_SAMPLE_LIMIT"
 _IMAGE_LIMIT_DEFAULT = 16
 _IMAGE_MAX_DIM = 512
@@ -491,12 +490,13 @@ def _image_candidates(sample: Any) -> list[Any]:
 
 
 def _raw_image_key(value: Any) -> Any:
-    """Cheap hashable identity for an *unencoded* image candidate.
+    """Hashable identity for an *unencoded* image candidate.
 
-    Lets the store recognise a repeat before paying for a decode + thumbnail + base64
-    pass. ``id()`` is sound for PIL Images because a store lives for one payload only,
-    during which the samples keep those objects alive; a missed match only costs a
-    redundant encode, since the content hash still collapses the duplicate.
+    Lets the store recognise a repeat before paying for a decode + thumbnail +
+    base64 pass. Content-derived wherever the value exposes its bytes, so samples
+    that decoded the same picture separately still collapse. ``id()`` is the last
+    resort, and the store pins those objects so it cannot be recycled onto a
+    different image.
     """
     if isinstance(value, str):
         if len(value) <= 512:
@@ -504,6 +504,17 @@ def _raw_image_key(value: Any) -> Any:
         return ("s", hashlib.md5(value.encode()).hexdigest())
     if isinstance(value, (bytes, bytearray)):
         return ("b", hashlib.md5(bytes(value)).hexdigest())
+    tobytes = getattr(value, "tobytes", None)
+    if callable(tobytes):
+        try:
+            return (
+                "c",
+                getattr(value, "mode", ""),
+                getattr(value, "size", ()),
+                hashlib.md5(tobytes()).hexdigest(),
+            )
+        except Exception:
+            pass
     return ("o", id(value))
 
 
@@ -527,41 +538,44 @@ class RolloutImageStore:
         # "" marks a candidate already known to be unusable, so a sample whose
         # first candidate fails doesn't re-attempt it once per sample.
         self._ref_by_raw: dict[Any, str] = {}
+        self._pinned: list[Any] = []
 
     @property
     def count(self) -> int:
         """Distinct images captured so far."""
         return len(self._ref_by_uri)
 
+    def _key(self, candidate: Any) -> Any:
+        key = _raw_image_key(candidate)
+        if key[0] == "o":
+            self._pinned.append(candidate)
+        return key
+
     def annotate(self, sample: Any, metadata: dict[str, Any]) -> bool:
         """Write this sample's image keys onto ``metadata``; True if one resolves."""
         if not self._limit:
             return False
         for candidate in _image_candidates(sample):
-            raw_key = _raw_image_key(candidate)
-            cached = self._ref_by_raw.get(raw_key)
+            key = self._key(candidate)
+            cached = self._ref_by_raw.get(key)
             if cached is not None:
                 if not cached:
                     continue
                 metadata["image_ref"] = cached
                 return True
-            # Cap before encoding: _image_to_data_uri is the expensive part and
-            # past the cap its result is discarded. Costs dedup for a stored image
-            # reappearing under a different raw key, which needs two identical
-            # images from separate prompt groups.
             if self.count >= self._limit:
-                self._ref_by_raw[raw_key] = ""
+                self._ref_by_raw[key] = ""
                 continue
             uri = _image_to_data_uri(candidate)
             if not uri:
-                self._ref_by_raw[raw_key] = ""
+                self._ref_by_raw[key] = ""
                 continue
             ref = self._ref_by_uri.get(uri)
             if ref is None:
                 ref = hashlib.md5(uri.encode()).hexdigest()[:_IMAGE_REF_CHARS]
                 self._ref_by_uri[uri] = ref
                 metadata["image"] = uri
-            self._ref_by_raw[raw_key] = ref
+            self._ref_by_raw[key] = ref
             metadata["image_ref"] = ref
             return True
         return False

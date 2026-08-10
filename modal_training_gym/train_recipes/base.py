@@ -3,7 +3,7 @@ import functools
 import json
 import os
 from abc import ABC
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar
@@ -38,6 +38,24 @@ def carry_explicit_fields(source: Any, rebuilt: Any) -> Any:
     if explicit is not None:
         object.__setattr__(rebuilt, "_explicit_fields", frozenset(explicit))
     return rebuilt
+
+
+def explicit_fields_from(cls: type, data: Any) -> frozenset[str]:
+    """Field names the caller supplied, from whatever pydantic is validating.
+
+    A ``Recipe(...)`` call arrives as ``ArgsKwargs``; ``model_validate`` and
+    ``TypeAdapter`` pass a mapping, whose keys are the supplied fields. Anything
+    else carries no record of what was chosen, so it yields the empty set and
+    ``carry_explicit_fields`` has to restore it.
+    """
+    if isinstance(data, Mapping):
+        return frozenset(str(key) for key in data)
+    names: set[str] = set()
+    if args := getattr(data, "args", None):
+        names.update(f.name for f in _dc.fields(cls)[: len(args)])
+    if kwargs := getattr(data, "kwargs", None):
+        names.update(kwargs)
+    return frozenset(names)
 
 
 @functools.cache

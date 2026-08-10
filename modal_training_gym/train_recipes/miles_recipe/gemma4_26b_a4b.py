@@ -41,7 +41,6 @@ def _has_images(dataset: "DatasetConfig | None") -> bool:
     return "image" in (getattr(dataset, "multimodal_keys", None) or {})
 
 
-# 1 TiB: the checkpoint overflows the container's default disk.
 _EPHEMERAL_DISK_MIB = 1_048_576
 
 
@@ -54,14 +53,8 @@ _VISION_MODE: dict[str, Any] = {
     "global_batch_size": 64,
     "rollout_max_response_len": 256,
     "rollout_temperature": 1.0,
-    # Truncated sampling, tuned on the VL validation runs. Deliberately not a
-    # text default: truncating the rollout distribution moves it away from the
-    # policy being trained, which is a cost the text path has no reason to pay.
     "rollout_top_p": 0.95,
     "rollout_top_k": 64,
-    # The math reward makes no sense on an image task. Cleared so a VL run
-    # without a `custom_rm_function` fails instead of scoring GUI grounding or
-    # chart QA with `gemma_math`.
     "rm_type": None,
     "sglang_max_running_requests": 8,
     "save_interval": 10,
@@ -134,8 +127,6 @@ class Gemma4_26B_A4B_Recipe(MilesRecipe):
     # vision mode sets both.
     rollout_top_p: float | None = None
     # generation_config.json's eos_token_id: <eos>, <turn|>, <|tool_response>.
-    # SGLang already stops on these from the checkpoint config; set explicitly so
-    # termination does not depend on that.
     rollout_stop_token_ids: list[int] | None = field(
         default_factory=lambda: [1, 106, 50]
     )

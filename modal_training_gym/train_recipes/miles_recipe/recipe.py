@@ -12,6 +12,7 @@ from modal_training_gym.common.wandb import WandbConfig
 from modal_training_gym.train_recipes.base import (
     BaseTrainRecipe,
     RecipeType,
+    explicit_fields_from,
     # Re-exported for backwards compatibility (e.g. frameworks/miles/launcher.py
     # imports the volume paths from this module).
     CHECKPOINTS_PATH as CHECKPOINTS_PATH,
@@ -700,15 +701,9 @@ class MilesRecipe(BaseTrainRecipe):
 
         Mirrors ``SlimeRecipe``; see ``BaseTrainRecipe.explicit_fields``.
         """
-        import dataclasses
-
-        names: set[str] = set()
-        if args := getattr(data, "args", None):
-            names.update(f.name for f in dataclasses.fields(cls)[: len(args)])
-        if kwargs := getattr(data, "kwargs", None):
-            names.update(kwargs)
+        names = explicit_fields_from(cls, data)
         recipe = handler(data)
-        object.__setattr__(recipe, "_explicit_fields", frozenset(names))
+        object.__setattr__(recipe, "_explicit_fields", names)
         return recipe
 
     # ── Container → miles flag converters ────────────────────────────────────

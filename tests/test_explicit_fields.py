@@ -160,7 +160,6 @@ def test_vision_mode_clears_the_math_reward(image_dataset):
     resolved = vision_recipe()._for_dataset(image_dataset)
     assert resolved.rm_type is None
     assert "--rm-type" not in resolved.cli_args()
-    # ...while the text path keeps it.
     assert Gemma4_26B_A4B_Recipe().rm_type == "gemma_math"
 
 
@@ -178,3 +177,22 @@ def test_image_dataset_without_a_reward_is_rejected(image_dataset):
 def test_rollout_function_counts_as_a_reward(image_dataset):
     recipe = Gemma4_26B_A4B_Recipe(rollout_function="pkg.mod.rollout")
     assert recipe._for_dataset(image_dataset).rm_type is None
+
+
+def test_mapping_validation_records_supplied_fields():
+    """model_validate/TypeAdapter pass a mapping, not ArgsKwargs."""
+    from pydantic import TypeAdapter
+
+    recipe = TypeAdapter(Gemma4_26B_A4B_Recipe).validate_python({"num_rollout": 5})
+
+    assert "num_rollout" in recipe.explicit_fields
+    assert "rollout_batch_size" not in recipe.explicit_fields
+
+
+def test_mapping_validated_recipe_keeps_its_value_in_vision_mode(image_dataset):
+    from pydantic import TypeAdapter
+
+    recipe = TypeAdapter(Gemma4_26B_A4B_Recipe).validate_python(
+        {"num_rollout": 5, "custom_rm_function": _reward}
+    )
+    assert recipe._for_dataset(image_dataset).num_rollout == 5
