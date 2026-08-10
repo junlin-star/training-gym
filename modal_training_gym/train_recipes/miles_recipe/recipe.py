@@ -651,8 +651,18 @@ class MilesRecipe(BaseTrainRecipe):
             return self
         cfg = dict(self.extra_config or {})
         for field_name, config_key in _HOOK_PATH_CONFIG_KEYS.items():
+            # Migrate a miles-native key (e.g. custom_rollout_log_function_path)
+            # out of the escape hatch: miles applies custom-config YAML keys
+            # onto args *after* argparse, so leaving it would clobber the CLI
+            # flag that points at the gym wrapper and bypass reporting.
+            native_key = config_key.removeprefix("training_gym_")
+            native_value = cfg.pop(native_key, None)
             value = getattr(self, field_name)
-            if value is None or cfg.get(config_key):
+            if cfg.get(config_key):
+                continue
+            if value is None:
+                if isinstance(native_value, str) and native_value.strip():
+                    cfg[config_key] = native_value
                 continue
             if isinstance(value, str):
                 cfg[config_key] = value

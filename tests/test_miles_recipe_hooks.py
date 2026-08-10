@@ -33,6 +33,45 @@ def test_yaml_path_extra_config_with_hook_raises() -> None:
         )
 
 
+def test_native_key_in_extra_config_is_migrated() -> None:
+    # miles applies custom-config YAML keys onto args after argparse, so a
+    # native key left in extra_config would clobber the wrapper CLI flag.
+    recipe = MilesRecipe(
+        extra_config={"custom_rollout_log_function_path": "my_pkg.hooks.log_fn"}
+    )
+    assert "custom_rollout_log_function_path" not in recipe.extra_config
+    assert (
+        recipe.extra_config["training_gym_custom_rollout_log_function_path"]
+        == "my_pkg.hooks.log_fn"
+    )
+
+
+def test_native_key_dropped_when_training_gym_key_present() -> None:
+    recipe = MilesRecipe(
+        extra_config={
+            "custom_rollout_log_function_path": "old.fn",
+            "training_gym_custom_rollout_log_function_path": "my_pkg.hooks.log_fn",
+        }
+    )
+    assert "custom_rollout_log_function_path" not in recipe.extra_config
+    assert (
+        recipe.extra_config["training_gym_custom_rollout_log_function_path"]
+        == "my_pkg.hooks.log_fn"
+    )
+
+
+def test_hook_field_wins_over_native_key() -> None:
+    recipe = MilesRecipe(
+        custom_rollout_log_function="field.fn",
+        extra_config={"custom_rollout_log_function_path": "native.fn"},
+    )
+    assert "custom_rollout_log_function_path" not in recipe.extra_config
+    assert (
+        recipe.extra_config["training_gym_custom_rollout_log_function_path"]
+        == "field.fn"
+    )
+
+
 _KEY = "training_gym_custom_rollout_log_function_path"
 
 

@@ -132,10 +132,17 @@ def report_advantage_distribution(
     try:
         if cp_size > 1:
             # Every CP rank holds a token-shard of the same samples; reduce so
-            # each sample's mean is taken over its full response.
-            dist.all_reduce(sums, group=parallel_state.cp.group)
-            dist.all_reduce(counts, group=parallel_state.cp.group)
-            dist.all_reduce(failed, group=parallel_state.cp.group)
+            # each sample's mean is taken over its full response. Go through
+            # miles' own GeneralPGUtil rather than raw dist.all_reduce — with
+            # torchft fault tolerance the CP group is a raw ProcessGroup that
+            # torch.distributed's module-level collectives can't dispatch to.
+            from miles.utils.ft_utils.process_group_utils import GeneralPGUtil
+
+            cp_group = parallel_state.cp.group
+            pg_util = GeneralPGUtil.create(cp_group)
+            pg_util.all_reduce(sums, cp_group, dist.ReduceOp.SUM)
+            pg_util.all_reduce(counts, cp_group, dist.ReduceOp.SUM)
+            pg_util.all_reduce(failed, cp_group, dist.ReduceOp.SUM)
     except Exception as exc:
         _warn_once(exc)
         return
