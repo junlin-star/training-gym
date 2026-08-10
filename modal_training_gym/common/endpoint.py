@@ -10,6 +10,7 @@ from typing import Any
 import httpx
 import modal
 
+from modal_training_gym.common.checkpoint import Checkpoint
 from modal_training_gym.common.config import modal_proxy_auth_headers
 from modal_training_gym.common.errors import TrainingGymConfigError
 from modal_training_gym.model import ModelConfig
@@ -23,6 +24,7 @@ def _create_endpoint_and_wait_for_url(
     *,
     endpoint_name: str,
     model_name: str,
+    checkpoint: Checkpoint | None,
     unauthenticated: bool,
     environment: str | None,
     routing_region: str | None,
@@ -46,6 +48,10 @@ def _create_endpoint_and_wait_for_url(
         command.append("--unauthenticated")
     if routing_region:
         command.extend(["--routing-region", routing_region])
+
+    if checkpoint:
+        command.extend(["--custom-volume-name", checkpoint.checkpoints_volume_name])
+        command.extend(["--custom-volume-path", checkpoint.path])
 
     subprocess.run(command, check=True, timeout=120)
 
@@ -90,6 +96,7 @@ class Endpoint:
     def launch(
         cls,
         model: ModelConfig | str,
+        checkpoint: Checkpoint | None = None,
         *,
         endpoint_name: str | None = None,
         unauthenticated: bool,
@@ -114,6 +121,7 @@ class Endpoint:
         url = _create_endpoint_and_wait_for_url(
             endpoint_name=endpoint_name,
             model_name=model_name,
+            checkpoint=checkpoint,
             unauthenticated=unauthenticated,
             environment=environment,
             routing_region=routing_region,
