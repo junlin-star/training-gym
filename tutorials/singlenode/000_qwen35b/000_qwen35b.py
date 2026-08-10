@@ -32,8 +32,6 @@ import modal
 
 from modal_training_gym import (
     DeploymentConfig,
-    EvalConfig,
-    EvalRowResult,
     HuggingFaceDataset,
     ModelDeployment,
     Qwen3_6_35B,
