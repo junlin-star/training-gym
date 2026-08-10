@@ -59,7 +59,6 @@ def list_checkpoints(training_run_id: str) -> list[Checkpoint]:
 
 
 def _to_volume_path(checkpoint_dir: str, checkpoints_mount_path: str) -> str:
-    """Convert a container path into a path relative to the volume root."""
     checkpoint_dir_norm = os.path.normpath(checkpoint_dir)
     checkpoints_mount_path_norm = os.path.normpath(checkpoints_mount_path)
 
