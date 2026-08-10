@@ -15,13 +15,14 @@ import json
 import os
 
 import pytest
-from modal.exception import NotFoundError
+from modal.exception import ExecutionError, NotFoundError
 
 from modal_training_gym.common import run as run_mod
 from modal_training_gym.common.framework import Framework
 from modal_training_gym.common.train_result import TrainResult
 from modal_training_gym.common.training_rollout import TrainingRolloutResult
-from modal_training_gym.utils.metadata import MetadataStore, vol_list
+from modal_training_gym.utils import metadata as metadata_mod
+from modal_training_gym.utils.metadata import MetadataStore, vol_get_summary_items, vol_list
 
 
 @pytest.mark.parametrize("fw", list(Framework))
@@ -77,6 +78,40 @@ def test_list_treats_missing_modal_directory_as_empty(fake_volume):
 
     assert vol_list("missing-store") == []
     assert asyncio.run(vol_list("missing-store", is_async=True)) == []
+
+
+def test_summary_read_treats_persistent_missing_volume_block_as_disposable(
+    fake_volume, monkeypatch
+):
+    error = ExecutionError("Request failed with status 404 Not Found: block not found")
+
+    def missing_sync(*_args, **_kwargs):
+        raise error
+
+    async def missing_async(*_args, **_kwargs):
+        raise error
+
+    monkeypatch.setattr(metadata_mod, "vol_get", missing_sync)
+    assert vol_get_summary_items(MetadataStore.TRAINING_RUNS_SUMMARY) is None
+
+    monkeypatch.setattr(metadata_mod, "vol_get", missing_async)
+    assert (
+        asyncio.run(
+            vol_get_summary_items(MetadataStore.TRAINING_RUNS_SUMMARY, is_async=True)
+        )
+        is None
+    )
+
+
+def test_summary_read_does_not_mask_other_execution_errors(fake_volume, monkeypatch):
+    error = ExecutionError("Request failed with status 500 Internal Server Error")
+
+    def fail(*_args, **_kwargs):
+        raise error
+
+    monkeypatch.setattr(metadata_mod, "vol_get", fail)
+    with pytest.raises(ExecutionError, match="500 Internal"):
+        vol_get_summary_items(MetadataStore.TRAINING_RUNS_SUMMARY)
 
 
 @pytest.mark.parametrize("fw", list(Framework))

@@ -153,6 +153,19 @@ def _store_path(store: MetadataStore | str) -> str:
     return store
 
 
+def _is_missing_volume_block(exc: BaseException) -> bool:
+    """Recognize Modal's stale summary-block response without masking other I/O errors."""
+
+    from modal.exception import ExecutionError
+
+    message = str(exc).lower()
+    return (
+        isinstance(exc, ExecutionError)
+        and "404 not found" in message
+        and "block not found" in message
+    )
+
+
 def vol_remove(store: MetadataStore | str, key: str) -> bool:
     """Delete a single item from a store. Returns True if removed."""
     from modal.exception import InvalidError, NotFoundError
@@ -479,6 +492,21 @@ def vol_get_summary_items(
                 payload = await vol_get(store, key, is_async=True)
             except KeyError:
                 return None
+            except Exception as exc:
+                if not _is_missing_volume_block(exc):
+                    raise
+                # Summary files are disposable caches. A stale Volume block
+                # reference must not prevent the caller from rebuilding the
+                # summary from canonical per-item records.
+                await _safe_reload(vol, is_async=True)
+                try:
+                    payload = await vol_get(store, key, is_async=True)
+                except KeyError:
+                    return None
+                except Exception as retry_exc:
+                    if _is_missing_volume_block(retry_exc):
+                        return None
+                    raise
             return summary_items_from_payload(payload, payload_key=payload_key)
 
         return _run()
@@ -487,6 +515,18 @@ def vol_get_summary_items(
         payload = vol_get(store, key)
     except KeyError:
         return None
+    except Exception as exc:
+        if not _is_missing_volume_block(exc):
+            raise
+        _safe_reload(vol)
+        try:
+            payload = vol_get(store, key)
+        except KeyError:
+            return None
+        except Exception as retry_exc:
+            if _is_missing_volume_block(retry_exc):
+                return None
+            raise
     return summary_items_from_payload(payload, payload_key=payload_key)
 
 
