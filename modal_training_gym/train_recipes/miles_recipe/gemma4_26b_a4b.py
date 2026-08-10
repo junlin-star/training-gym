@@ -46,8 +46,7 @@ _EPHEMERAL_DISK_MIB = 1_048_576
 
 
 # Applied over the text defaults on an image dataset, for fields the caller left
-# alone: smaller rollouts (images are expensive) plus the sampling defaults
-# SGLang's /generate path does not read from generation_config.json.
+# alone: smaller rollouts, since images are expensive.
 _VISION_MODE: dict[str, Any] = {
     "num_rollout": 15,
     "rollout_batch_size": 8,
@@ -55,11 +54,15 @@ _VISION_MODE: dict[str, Any] = {
     "global_batch_size": 64,
     "rollout_max_response_len": 256,
     "rollout_temperature": 1.0,
-    # From generation_config.json, which miles' /generate path does not apply.
+    # Truncated sampling, tuned on the VL validation runs. Deliberately not a
+    # text default: truncating the rollout distribution moves it away from the
+    # policy being trained, which is a cost the text path has no reason to pay.
     "rollout_top_p": 0.95,
     "rollout_top_k": 64,
-    # generation_config.json's eos_token_id: <eos>, <turn|>, <|tool_response>.
-    "rollout_stop_token_ids": [1, 106, 50],
+    # The math reward makes no sense on an image task. Cleared so a VL run
+    # without a `custom_rm_function` fails instead of scoring GUI grounding or
+    # chart QA with `gemma_math`.
+    "rm_type": None,
     "sglang_max_running_requests": 8,
     "save_interval": 10,
 }
@@ -72,7 +75,9 @@ class Gemma4_26B_A4B_Recipe(MilesRecipe):
     One checkpoint, two modes: these fields train on text, and an image dataset
     (``MultimodalDataset(modality="image")``) makes ``_for_dataset`` swap in
     ``_VISION_MODE`` for every field the caller left alone. Vision datasets need
-    ``apply_chat_template=True`` so the prompt reaches the processor as a string.
+    ``apply_chat_template=True`` so the prompt reaches the processor as a string,
+    and a ``custom_rm_function``: the text path's ``gemma_math`` reward is
+    cleared in vision mode, since no built-in scores an image task.
 
     Follows upstream ``scripts/run_gemma_4_26b_a4b.py``; the comments below mark
     where it does not, since three of its flags fail on any image with Gemma-4.
@@ -126,9 +131,17 @@ class Gemma4_26B_A4B_Recipe(MilesRecipe):
     rollout_max_response_len: int = 256
     rollout_temperature: float = 1.0
     # Widened to None so text mode omits the flag and Miles keeps its default;
-    # vision mode sets both from generation_config.json.
+    # vision mode sets both.
     rollout_top_p: float | None = None
-    rollout_stop_token_ids: list[int] | None = None
+    # generation_config.json's eos_token_id: <eos>, <turn|>, <|tool_response>.
+    # Both modes: Miles' /generate path does not read generation_config.json, so
+    # without these a rollout runs past <turn|> into a hallucinated next turn
+    # until rollout_max_response_len. The slime recipe this was ported from set
+    # them on the text path too; the port dropped that by following upstream's
+    # run script, which does not set them either.
+    rollout_stop_token_ids: list[int] | None = field(
+        default_factory=lambda: [1, 106, 50]
+    )
     global_batch_size: int = 256
     save_interval: int = 20
 

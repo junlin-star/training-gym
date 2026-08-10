@@ -137,3 +137,22 @@ def test_gemma4_only_overrides_fields_miles_declares():
     preset_only = {f.name for f in dc.fields(Gemma4_26B_A4B_Recipe)} - base_names
 
     assert preset_only == set()
+
+
+def test_text_mode_stops_on_the_models_eos_set():
+    """Miles' /generate path ignores generation_config.json, so both modes set it."""
+    assert Gemma4_26B_A4B_Recipe().rollout_stop_token_ids == [1, 106, 50]
+
+
+def test_vision_mode_clears_the_math_reward(image_dataset):
+    """`gemma_math` cannot score an image task; a VL run must bring its own."""
+    resolved = Gemma4_26B_A4B_Recipe()._for_dataset(image_dataset)
+    assert resolved.rm_type is None
+    assert "--rm-type" not in resolved.cli_args()
+    # ...while the text path keeps it.
+    assert Gemma4_26B_A4B_Recipe().rm_type == "gemma_math"
+
+
+def test_caller_supplied_rm_type_survives_vision_mode(image_dataset):
+    recipe = Gemma4_26B_A4B_Recipe(rm_type="deepscaler")
+    assert recipe._for_dataset(image_dataset).rm_type == "deepscaler"
