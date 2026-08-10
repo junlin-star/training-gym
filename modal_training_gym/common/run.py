@@ -399,8 +399,6 @@ def mark_training_attempt_started(
     run.ended_at = None
     run.completed_at = None
     run.duration_seconds = None
-    # A retry re-fetches the failed attempt's record, so clear its error too —
-    # otherwise the dashboard shows that failure banner for the whole new attempt.
     run.error_message = None
     run.metadata = metadata
     return attempt_count
