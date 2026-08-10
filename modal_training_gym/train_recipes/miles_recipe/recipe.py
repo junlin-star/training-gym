@@ -332,6 +332,9 @@ class MilesRecipe(BaseTrainRecipe):
         Pack samples up to ``max_tokens_per_gpu`` instead of a fixed micro batch.
     max_tokens_per_gpu : int
         Token budget per GPU per micro-batch when dynamic batching is on.
+    micro_batch_size : int | None
+        Fixed micro-batch size when dynamic batching is off; ``None`` leaves
+        Miles' own default.
 
     ## Eval
 
@@ -404,6 +407,9 @@ class MilesRecipe(BaseTrainRecipe):
         Fall back to NCCL all-reduce instead of sglang's custom kernel.
     sglang_cuda_graph_bs : list[int] | None
         Batch sizes to capture CUDA graphs for.
+    sglang_attention_backend : str | None
+        sglang attention kernel backend, e.g. ``"triton"``. ``None`` leaves
+        sglang's own selection (FlashAttention) in place.
     sglang_moe_runner_backend : str | None
         MoE GEMM runner for the engines, e.g. ``"triton"``. ``None`` leaves
         sglang's ``auto`` selection in place.
@@ -415,6 +421,20 @@ class MilesRecipe(BaseTrainRecipe):
         Parser for tool-call output, e.g. ``"qwen25"``.
     sglang_reasoning_parser : str | None
         Parser for reasoning/thinking output.
+    sglang_disable_cuda_graph : bool
+        Run the engines in eager mode instead of capturing CUDA graphs.
+    sglang_disable_overlap_schedule : bool
+        Disable sglang's overlapped scheduler.
+    sglang_disable_radix_cache : bool
+        Disable prefix (radix) caching across requests.
+
+    ## Offload
+
+    no_offload_train : bool
+        Keep the training weights and optimizer resident instead of offloading
+        them between rollout and train phases (colocated runs).
+    no_offload_rollout : bool
+        Keep the rollout engines resident instead of offloading them.
     """
 
     # ── App identity ─────────────────────────────────────────────────────────
@@ -563,6 +583,7 @@ class MilesRecipe(BaseTrainRecipe):
     # ── Dynamic batching ────────────────────────────────────────────────────
     use_dynamic_batch_size: bool = True
     max_tokens_per_gpu: int = 9216
+    micro_batch_size: int | None = None
 
     # ── Eval ────────────────────────────────────────────────────────────────
     eval_interval: int | None = None
@@ -580,11 +601,19 @@ class MilesRecipe(BaseTrainRecipe):
     sglang_enable_dp_lm_head: bool = False
     sglang_disable_custom_all_reduce: bool = False
     sglang_cuda_graph_bs: list[int] | None = None
+    sglang_attention_backend: str | None = None
     sglang_moe_runner_backend: str | None = None
     sglang_max_running_requests: int | None = None
     sglang_server_concurrency: int | None = None
     sglang_tool_call_parser: str | None = None
     sglang_reasoning_parser: str | None = None
+    sglang_disable_cuda_graph: bool = False
+    sglang_disable_overlap_schedule: bool = False
+    sglang_disable_radix_cache: bool = False
+
+    # ── Offload ─────────────────────────────────────────────────────────────
+    no_offload_train: bool = False
+    no_offload_rollout: bool = False
 
     # ── Config overrides ────────────────────────────────────────────────────
     extra_config: dict | str | None = None

@@ -1224,12 +1224,11 @@ def build_slime_app(
                     "TRAINING_GYM_TRACE_SAMPLE_LIMIT": str(
                         getattr(slime, "trace_sample_limit", 16)
                     ),
-                    "TRAINING_GYM_IMAGE_SAMPLE_LIMIT": str(
-                        getattr(slime, "image_sample_limit", 16)
-                    ),
-                    "TRAINING_GYM_TRAJECTORY_SAMPLE_LIMIT": str(
-                        getattr(slime, "trajectory_sample_limit", 16)
-                    ),
+                    # The image and trajectory caps have no recipe field to read
+                    # — they defaulted here to the same value `sample_extraction`
+                    # already falls back to, so setting them was a no-op that read
+                    # like a live knob. Both stay tunable through
+                    # `SlimeRecipe.environment`, which merges in below.
                     "TRAINING_GYM_FRAMEWORK_STATUS_URL": phase_report_url,
                     **wandb_env,
                     **slime.environment,

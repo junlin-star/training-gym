@@ -41,6 +41,10 @@ def _has_images(dataset: "DatasetConfig | None") -> bool:
     return "image" in (getattr(dataset, "multimodal_keys", None) or {})
 
 
+# 1 TiB: the checkpoint overflows the container's default disk.
+_EPHEMERAL_DISK_MIB = 1_048_576
+
+
 # Applied over the text defaults on an image dataset, for fields the caller left
 # alone: smaller rollouts (images are expensive) plus the sampling defaults
 # SGLang's /generate path does not read from generation_config.json.
@@ -82,9 +86,11 @@ class Gemma4_26B_A4B_Recipe(MilesRecipe):
     ref_load: str = "google/gemma-4-26B-A4B-it"
     megatron_to_hf_mode: str = "bridge"
     miles_model_script: str = "scripts/models/gemma-4-26b-a4b-it.sh"
-    # Model overflows container disk, so reserve 1 TiB.
+    # Model overflows container disk, so reserve 1 TiB. Typed as MilesRecipe has
+    # it: the launcher also takes "secrets" and "experimental_options" here, and
+    # narrowing to int would reject both.
     train_function_kwargs: dict[str, Any] = field(
-        default_factory=lambda: {"ephemeral_disk": 1_048_576}
+        default_factory=lambda: {"ephemeral_disk": _EPHEMERAL_DISK_MIB}
     )
 
     actor_num_nodes: int = 1
@@ -190,6 +196,24 @@ class Gemma4_26B_A4B_Recipe(MilesRecipe):
                 self,
                 "image_run_commands",
                 [*patches, *(c for c in current if c not in patches)],
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _keep_disk_reservation(self) -> "Gemma4_26B_A4B_Recipe":
+        """Keep the disk reservation when a caller supplies their own kwargs.
+
+        Same additive reasoning as ``_keep_image_patches``: the dict is replaced
+        wholesale, so passing ``{"secrets": [...]}`` would drop the reservation
+        and the run would die part-way through the checkpoint download. A caller
+        who names ``ephemeral_disk`` still wins.
+        """
+        kwargs = self.train_function_kwargs or {}
+        if "ephemeral_disk" not in kwargs:
+            object.__setattr__(
+                self,
+                "train_function_kwargs",
+                {"ephemeral_disk": _EPHEMERAL_DISK_MIB, **kwargs},
             )
         return self
 

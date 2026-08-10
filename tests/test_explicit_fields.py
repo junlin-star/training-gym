@@ -111,3 +111,29 @@ def test_image_patches_survive_caller_supplied_run_commands():
         **{f.name: getattr(recipe, f.name) for f in dc.fields(recipe) if f.init}
     )
     assert len([c for c in again.image_run_commands if "base64 -d | python3" in c]) == 2
+
+
+def test_disk_reservation_survives_caller_supplied_train_kwargs():
+    """Attaching a secret must not silently drop the 1 TiB reservation."""
+    secret = object()
+    recipe = Gemma4_26B_A4B_Recipe(train_function_kwargs={"secrets": [secret]})
+
+    assert recipe.train_function_kwargs["ephemeral_disk"] == 1_048_576
+    assert recipe.train_function_kwargs["secrets"] == [secret]
+
+
+def test_caller_can_still_choose_the_disk_size():
+    recipe = Gemma4_26B_A4B_Recipe(train_function_kwargs={"ephemeral_disk": 512})
+    assert recipe.train_function_kwargs == {"ephemeral_disk": 512}
+
+
+def test_gemma4_only_overrides_fields_miles_declares():
+    """A bare MilesRecipe must be able to override anything the preset sets.
+
+    ``_merge_recipe`` iterates ``dataclasses.fields(MilesRecipe)``, so a field the
+    preset declares on its own is unreachable from a plain ``MilesRecipe(...)``.
+    """
+    base_names = {f.name for f in dc.fields(MilesRecipe)}
+    preset_only = {f.name for f in dc.fields(Gemma4_26B_A4B_Recipe)} - base_names
+
+    assert preset_only == set()

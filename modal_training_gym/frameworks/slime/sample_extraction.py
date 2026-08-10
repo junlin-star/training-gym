@@ -34,7 +34,8 @@ _TRACE_MAX_SPANS = 256
 _TRACE_ATTR_STR_MAX = 200
 # Input-image capture (image-modality runs). The limit bounds *distinct* images, not
 # samples: a prompt group's ``n_samples_per_prompt`` samples share one screenshot. Each
-# distinct image is thumbnailed and size-capped before it goes on the payload.
+# distinct image is thumbnailed and size-capped before it goes on the payload. No
+# recipe field maps to it; override through ``SlimeRecipe.environment`` if needed.
 IMAGE_SAMPLE_LIMIT_ENV = "TRAINING_GYM_IMAGE_SAMPLE_LIMIT"
 _IMAGE_LIMIT_DEFAULT = 16
 _IMAGE_MAX_DIM = 512
