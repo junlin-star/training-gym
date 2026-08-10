@@ -714,6 +714,18 @@ def build_miles_app(
                 miles.save = original_save
                 miles.load = original_load
 
+            phase_report_url = (
+                os.environ.get("TRAINING_GYM_FRAMEWORK_STATUS_URL")
+                or framework_status_url
+                or ""
+            )
+            if not phase_report_url:
+                print(
+                    "WARNING: no dashboard URL passed to train() and no "
+                    "TRAINING_GYM_FRAMEWORK_STATUS_URL set inside the "
+                    "container. Phase reporting is disabled for this run."
+                )
+                
             wandb_env = {}
             if wandb_run_id:
                 wandb_env["WANDB_RUN_ID"] = wandb_run_id
@@ -723,8 +735,12 @@ def build_miles_app(
 
             runtime_env = build_ray_runtime_env(
                 head_addr=cluster.head_addr,
+                    "TRAINING_GYM_TRAINING_RUN_ID": training_run_id,
+                    "TRAINING_GYM_APP_NAME": app_name,
+                    "TRAINING_GYM_FRAMEWORK_STATUS_URL": phase_report_url,
                 wandb_env=wandb_env,
                 environment=miles.environment,
+                    "TRAINING_GYM_FRAMEWORK_STATUS_TOKEN": framework_status_token,
             )
 
             mode = "async" if miles.async_mode else "sync"
