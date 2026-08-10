@@ -399,6 +399,7 @@ def mark_training_attempt_started(
     run.ended_at = None
     run.completed_at = None
     run.duration_seconds = None
+    run.error_message = None
     run.metadata = metadata
     return attempt_count
 
