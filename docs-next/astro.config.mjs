@@ -155,15 +155,6 @@ export default defineConfig({
               ],
             },
             {
-              label: 'Evaluation',
-              items: [
-                { label: 'EvalConfig', link: '/reference/evaluation/evalconfig/' },
-                { label: 'EvalResult', link: '/reference/evaluation/evalresult/' },
-                { label: 'EvalRowResult', link: '/reference/evaluation/evalrowresult/' },
-                { label: 'HarborEval', link: '/reference/evaluation/harboreval/' },
-              ],
-            },
-            {
               label: 'Models',
               items: [
                 { label: 'ToolCall', link: '/reference/models/toolcall/' },
