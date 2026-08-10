@@ -121,8 +121,9 @@ class Gemma4_26B_A4B_Recipe(MilesRecipe):
     n_samples_per_prompt: int = 8
     rollout_max_response_len: int = 256
     rollout_temperature: float = 1.0
+    # Widened to None so text mode omits the flag and Miles keeps its default;
+    # vision mode sets both from generation_config.json.
     rollout_top_p: float | None = None
-    rollout_top_k: int | None = None
     rollout_stop_token_ids: list[int] | None = None
     global_batch_size: int = 256
     save_interval: int = 20

@@ -181,6 +181,8 @@ class MilesRecipe(BaseTrainRecipe):
         Shuffle the prompt dataset between epochs.
     rollout_top_p : float
         Nucleus-sampling top-p for rollout generation.
+    rollout_top_k : int | None
+        Top-k for rollout generation; ``None`` leaves Miles' own default.
     rollout_stop_token_ids : list[int] | None
         Extra token ids that terminate generation.
     use_miles_router : bool
@@ -488,6 +490,7 @@ class MilesRecipe(BaseTrainRecipe):
     rollout_temperature: float = 1.0
     rollout_shuffle: bool = True
     rollout_top_p: float = 1.0
+    rollout_top_k: int | None = None
     rollout_stop_token_ids: list[int] | None = None
     rollout_num_gpus_per_engine: int = 1
     use_miles_router: bool = False

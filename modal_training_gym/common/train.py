@@ -59,18 +59,12 @@ def _merge_recipe(base: BaseTrainRecipe, overrides: BaseTrainRecipe) -> BaseTrai
             break
         declared |= set(getattr(cls, "__annotations__", {}))
 
-    # explicit_fields knows what the caller passed, which the value cannot: a
-    # value equal to the framework default but not the preset's would otherwise
-    # be dropped here while _for_dataset still treats it as chosen. The value
-    # comparison stays as the fallback for recipes without the tracking.
-    chosen = declared | set(getattr(overrides, "explicit_fields", frozenset()))
-
     for f in _dc.fields(overrides):
         if f.name not in base_fields:
             continue
         user_val = getattr(overrides, f.name)
         default_val = _field_default(f)
-        if f.name in chosen or default_val is _dc.MISSING or user_val != default_val:
+        if f.name in declared or default_val is _dc.MISSING or user_val != default_val:
             base_fields[f.name] = user_val
     return carry_explicit_fields(overrides, type(base)(**base_fields))
 
