@@ -543,12 +543,10 @@ class RolloutImageStore:
                     continue
                 metadata["image_ref"] = cached
                 return True
-            # Check the cap before encoding, not after: _image_to_data_uri is the
-            # expensive decode/thumbnail/re-encode, and past the cap its result can
-            # only be discarded. The trade-off is losing dedup for a stored image
-            # that reappears under a different raw key once the cap is reached,
-            # which needs two byte-identical images from separate prompt groups --
-            # samples inside one group share a raw key and hit the cache above.
+            # Cap before encoding: _image_to_data_uri is the expensive part and
+            # past the cap its result is discarded. Costs dedup for a stored image
+            # reappearing under a different raw key, which needs two identical
+            # images from separate prompt groups.
             if self.count >= self._limit:
                 self._ref_by_raw[raw_key] = ""
                 continue

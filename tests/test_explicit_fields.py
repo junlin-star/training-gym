@@ -1,11 +1,9 @@
-"""Caller-set field tracking, and the vision-mode resolution that depends on it.
+"""Caller-set field tracking and the vision-mode resolution built on it.
 
-``_for_dataset`` overrides only the fields the caller left alone, so anything that
-loses the record of what the caller chose turns vision mode into a blanket
-overwrite of their settings. The record is seeded by a pydantic wrap validator
-that mutates the instance ``handler(data)`` returns, which holds only because
-pydantic-core hands back the same ``self_instance`` it initialised -- an
-implementation detail worth pinning.
+``_for_dataset`` overrides only the fields the caller left alone, so losing that
+record turns vision mode into a blanket overwrite. The record depends on pydantic
+handing the wrap validator back the same instance it initialised, which these
+tests pin.
 """
 
 import dataclasses as dc
@@ -64,12 +62,7 @@ def test_post_construction_assignment_counts_as_chosen(image_dataset):
 
 
 def test_swept_value_survives_a_revalidating_rebuild(image_dataset):
-    """TrainingGroup mutates then rebuilds; the rebuild must keep the override.
-
-    Rebuilding as ``type(r)(**all_fields)`` passes every field as a kwarg, which
-    would mark them all explicit and make vision mode a no-op -- hence
-    ``carry_explicit_fields`` restoring the real set.
-    """
+    """TrainingGroup mutates then rebuilds; the rebuild must keep the override."""
     recipe = Gemma4_26B_A4B_Recipe()
     recipe.rollout_temperature = 0.3
     values = {f.name: getattr(recipe, f.name) for f in dc.fields(recipe) if f.init}
@@ -93,11 +86,7 @@ def test_subclass_declared_fields_count_as_chosen(image_dataset):
 
 
 def test_recipe_own_fields_are_not_treated_as_caller_choices():
-    """The preset's own declarations are the defaults vision mode overrides.
-
-    Counting them as chosen is the failure mode that silently disables vision
-    mode, so keep the walk stopping at the class that defines ``_for_dataset``.
-    """
+    """The preset's own declarations are the defaults vision mode overrides."""
     recipe = Gemma4_26B_A4B_Recipe()
     assert recipe.explicit_fields == frozenset()
 

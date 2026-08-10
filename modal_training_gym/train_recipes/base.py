@@ -45,15 +45,8 @@ def _declared_below(cls: type) -> frozenset[str]:
     """Fields declared by subclasses below the recipe that owns ``_for_dataset``.
 
     Those are the caller's own config, so they count as chosen. The walk stops at
-    whichever comes first in the MRO:
-
-    * the recipe that defines ``_for_dataset`` (a modality-aware preset such as
-      ``Gemma4_26B_A4B_Recipe``) — the fields it declares are precisely the
-      text-mode defaults that ``_for_dataset`` exists to override, so counting
-      them as caller-set would make vision mode a silent no-op; or
-    * the framework base recipe (``SlimeRecipe`` / ``MilesRecipe``, i.e. the
-      direct subclass of ``BaseTrainRecipe``), for every ordinary recipe — whose
-      fields are framework defaults, not the caller's choice.
+    the recipe defining ``_for_dataset`` — whose own fields are the defaults it
+    exists to override — or at the framework base recipe, whichever comes first.
     """
     names: set[str] = set()
     for klass in cls.__mro__:
@@ -140,11 +133,10 @@ class BaseTrainRecipe(ABC):
     def explicit_fields(self) -> frozenset[str]:
         """Names of the fields the caller chose.
 
-        ``_for_dataset`` needs this to tell a caller's choice from a default, which
-        the value alone cannot: an explicit ``num_rollout=2`` is indistinguishable
-        from an unset field defaulting to 2. Pydantic records constructor arguments
-        for models but not for dataclasses, so each framework recipe installs a
-        ``_capture_explicit_fields`` wrap-validator that seeds ``_explicit_fields``.
+        The value alone cannot tell: an explicit ``num_rollout=2`` is
+        indistinguishable from an unset field defaulting to 2. Pydantic tracks
+        constructor arguments for models but not dataclasses, so each framework
+        recipe installs a ``_capture_explicit_fields`` wrap-validator.
         """
         return getattr(self, "_explicit_fields", frozenset()) | _declared_below(
             type(self)

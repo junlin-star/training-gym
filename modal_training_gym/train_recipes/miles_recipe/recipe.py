@@ -614,9 +614,7 @@ class MilesRecipe(BaseTrainRecipe):
     def _capture_explicit_fields(cls, data: Any, handler: Any) -> "MilesRecipe":
         """Record which fields the caller passed, for ``_for_dataset``.
 
-        Mirrors ``SlimeRecipe``: pydantic tracks constructor arguments for models
-        but not for dataclasses, and ``explicit_fields`` (on ``BaseTrainRecipe``)
-        needs them to tell a caller's choice from a coincidentally equal default.
+        Mirrors ``SlimeRecipe``; see ``BaseTrainRecipe.explicit_fields``.
         """
         import dataclasses
 
