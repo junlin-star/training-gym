@@ -86,9 +86,7 @@ class Gemma4_26B_A4B_Recipe(MilesRecipe):
     ref_load: str = "google/gemma-4-26B-A4B-it"
     megatron_to_hf_mode: str = "bridge"
     miles_model_script: str = "scripts/models/gemma-4-26b-a4b-it.sh"
-    # Model overflows container disk, so reserve 1 TiB. Typed as MilesRecipe has
-    # it: the launcher also takes "secrets" and "experimental_options" here, and
-    # narrowing to int would reject both.
+    # Model overflows container disk, so reserve 1 TiB.
     train_function_kwargs: dict[str, Any] = field(
         default_factory=lambda: {"ephemeral_disk": _EPHEMERAL_DISK_MIB}
     )
