@@ -137,6 +137,8 @@ eval_dataset = HaikuDataset(n_rows=5)
 def run_eval(deployment, *, max_concurrency: int = 2) -> float:
     from concurrent.futures import ThreadPoolExecutor
 
+    deployment.wait_until_ready(timeout=3000)
+
     def _score_one(example):
         topic = str(example[eval_dataset.input_column])
         prompt = eval_dataset.prompt_template.format(input=topic)

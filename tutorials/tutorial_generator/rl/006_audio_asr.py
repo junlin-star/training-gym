@@ -325,6 +325,8 @@ def _eval():
     ) -> list[dict]:
         from concurrent.futures import ThreadPoolExecutor
 
+        deployment.wait_until_ready(timeout=3000)
+
         def _score_one(example):
             return transcribe_and_score(deployment, example)
 

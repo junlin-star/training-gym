@@ -487,6 +487,8 @@ def _eval_function():
     def run_eval(deployment, *, max_concurrency: int = 4):
         from concurrent.futures import ThreadPoolExecutor
 
+        deployment.wait_until_ready(timeout=3000)
+
         def _score_one(example):
             return bfcl_eval_fn(deployment, example)
 
