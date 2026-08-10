@@ -218,11 +218,7 @@ def build_miles_app(
         )
 
     def _set_custom_config_value(key: str, value: str) -> None:
-        cfg = (
-            dict(miles.extra_config or {})
-            if isinstance(miles.extra_config, dict)
-            else {}
-        )
+        cfg = dict(miles.extra_config or {})
         cfg[key] = value
         miles.extra_config = cfg
 

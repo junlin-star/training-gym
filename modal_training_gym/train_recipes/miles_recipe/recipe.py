@@ -396,7 +396,7 @@ class MilesRecipe(BaseTrainRecipe):
 
     ## Config Overrides
 
-    extra_config : dict | str | None
+    extra_config : dict | None
         Primary escape hatch: dict written to YAML at ``--custom-config-path``; its keys
         become Miles args and override same-named fields.
     sglang_config : dict | str | None
@@ -600,7 +600,7 @@ class MilesRecipe(BaseTrainRecipe):
     sglang_reasoning_parser: str | None = None
 
     # ── Config overrides ────────────────────────────────────────────────────
-    extra_config: dict | str | None = None
+    extra_config: dict | None = None
     sglang_config: dict | str | None = None
     apply_chat_template_kwargs: str | dict = ""
     train_env_vars: dict | str | None = None
@@ -630,23 +630,7 @@ class MilesRecipe(BaseTrainRecipe):
 
     @model_validator(mode="after")
     def _resolve_callable_paths(self) -> "MilesRecipe":
-        if self.extra_config is not None and not isinstance(self.extra_config, dict):
-            set_hooks = [
-                field_name
-                for field_name in _HOOK_PATH_CONFIG_KEYS
-                if getattr(self, field_name) is not None
-            ]
-            if set_hooks:
-                raise ValueError(
-                    f"{', '.join(set_hooks)} cannot be combined with a YAML-path "
-                    "extra_config: the gym stashes these hooks inside the "
-                    "extra_config dict. Either pass extra_config inline as a "
-                    "dict, or set the hook's import path directly in the YAML "
-                    "under its `training_gym_*_path` key "
-                    f"({', '.join(_HOOK_PATH_CONFIG_KEYS.values())})."
-                )
-            return self
-        cfg = dict(self.extra_config or {})
+        cfg = dict(self.extra_config) if isinstance(self.extra_config, dict) else {}
         for field_name, config_key in _HOOK_PATH_CONFIG_KEYS.items():
             native_key = config_key.removeprefix("training_gym_")
             native_value = cfg.pop(native_key, None)

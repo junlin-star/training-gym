@@ -1,6 +1,6 @@
 """MilesRecipe hook stashing: the four intercepted log/megatron hooks ride
-inside ``extra_config`` under ``training_gym_*`` keys, which is impossible when
-``extra_config`` is a YAML file path rather than a dict.
+inside ``extra_config`` under ``training_gym_*`` keys. ``extra_config`` is
+dict-only (matching ``SlimeRecipe``) so the keys are always stashable.
 """
 
 from types import SimpleNamespace
@@ -20,17 +20,12 @@ def test_str_hook_is_stashed_in_extra_config() -> None:
     )
 
 
-def test_yaml_path_extra_config_without_hooks_is_allowed() -> None:
-    recipe = MilesRecipe(extra_config="configs/extra.yaml")
-    assert recipe.extra_config == "configs/extra.yaml"
-
-
-def test_yaml_path_extra_config_with_hook_raises() -> None:
-    with pytest.raises(ValueError, match="custom_rollout_log_function"):
-        MilesRecipe(
-            extra_config="configs/extra.yaml",
-            custom_rollout_log_function="my_pkg.hooks.log_fn",
-        )
+def test_yaml_path_extra_config_is_rejected() -> None:
+    # dict-only, matching SlimeRecipe: a YAML *path* can't stash the
+    # training_gym_* hook keys and its native keys would clobber the wrapper
+    # CLI flags at runtime.
+    with pytest.raises(ValueError, match="extra_config"):
+        MilesRecipe(extra_config="configs/extra.yaml")
 
 
 def test_native_key_in_extra_config_is_migrated() -> None:
