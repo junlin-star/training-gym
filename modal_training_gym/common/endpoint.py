@@ -68,13 +68,27 @@ def _create_endpoint_and_wait_for_url(
 
 
 class Endpoint:
+    url: str
     endpoint_name: str
     model_name: str
-    url: str
     requires_proxy_auth: bool
 
     def __init__(
         self,
+        url: str,
+        *,
+        endpoint_name: str,
+        model_name: str,
+        requires_proxy_auth: bool,
+    ):
+        self.endpoint_name = endpoint_name
+        self.model_name = model_name
+        self.url = url
+        self.requires_proxy_auth = requires_proxy_auth
+
+    @classmethod
+    def launch(
+        cls,
         model: ModelConfig | str,
         *,
         endpoint_name: str | None = None,
@@ -97,9 +111,7 @@ class Endpoint:
             ).hexdigest()[:12]
             endpoint_name = f"training-gym-{digest}"
 
-        self.endpoint_name = endpoint_name
-        self.model_name = model_name
-        self.url = _create_endpoint_and_wait_for_url(
+        url = _create_endpoint_and_wait_for_url(
             endpoint_name=endpoint_name,
             model_name=model_name,
             unauthenticated=unauthenticated,
@@ -108,7 +120,12 @@ class Endpoint:
             wait_timeout_sec=wait_timeout_sec,
         )
 
-        self.requires_proxy_auth = not unauthenticated
+        return cls(
+            url,
+            endpoint_name=endpoint_name,
+            model_name=model_name,
+            requires_proxy_auth=not unauthenticated,
+        )
 
     def _headers(self) -> dict[str, str]:
         headers: dict[str, str] = {}
