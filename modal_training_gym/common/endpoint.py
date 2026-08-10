@@ -10,7 +10,7 @@ from typing import Any
 import httpx
 import modal
 
-from modal_training_gym.common.checkpoint import Checkpoint
+from modal_training_gym.common.checkpoint import Checkpoint, CheckpointType
 from modal_training_gym.common.config import modal_proxy_auth_headers
 from modal_training_gym.common.errors import TrainingGymConfigError
 from modal_training_gym.model import ModelConfig
@@ -161,10 +161,9 @@ class Endpoint:
         serving recipe. Pass ``checkpoint`` to serve trained weights instead of
         the base model: Modal mounts the checkpoint's volume into the endpoint
         (``--custom-volume-name`` / ``--custom-volume-path``) while still
-        serving them against ``model`` as the base. The checkpoint directory
-        has to look like a HuggingFace model — it must contain ``config.json``,
-        so convert Megatron checkpoints with ``convert_checkpoint_to_hf()``
-        first.
+        serving them against ``model`` as the base. The checkpoint must be in
+        Hugging Face format; Megatron checkpoints need to be converted with
+        ``convert_checkpoint_to_hf()`` first.
 
         When ``endpoint_name`` is omitted, a stable name is derived by hashing
         the serving spec, so relaunching with the same model, checkpoint, and
@@ -180,6 +179,12 @@ class Endpoint:
         traffic; call ``wait_until_ready()`` for that. Raises ``TimeoutError``
         if no URL is published within ``wait_timeout_sec``.
         """
+        if checkpoint and checkpoint.checkpoint_type is not CheckpointType.hf:
+            raise TrainingGymConfigError(
+                "Checkpoint must be in Hugging Face format. Convert it with "
+                "`convert_checkpoint_to_hf()` first."
+            )
+
         model_name = _resolve_model_name(model)
 
         if not endpoint_name:
