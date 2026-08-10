@@ -16,6 +16,25 @@ from modal_training_gym.frameworks.slime.advantage_reporting import (
     _advantage_samples_payload as _advantage_samples_payload,
 )
 
+_warned_compute_failure = False
+
+
+def _warn_once(exc: Exception) -> None:
+    """Surface the first advantage-math failure instead of dying silently.
+
+    The compute block is deliberately fail-open (reporting must never break
+    training), but a drifted miles API — e.g. a renamed ``cp_utils`` helper —
+    would otherwise just make advantage data vanish from the dashboard.
+    """
+    global _warned_compute_failure
+    if _warned_compute_failure:
+        return
+    _warned_compute_failure = True
+    print(
+        f"[training-gym] advantage-distribution reporting disabled: {exc!r}",
+        flush=True,
+    )
+
 
 def report_advantage_distribution(
     rollout_id: int,
@@ -99,7 +118,8 @@ def report_advantage_distribution(
             # each sample's mean is taken over its full response.
             dist.all_reduce(sums, group=parallel_state.cp.group)
             dist.all_reduce(counts, group=parallel_state.cp.group)
-    except Exception:
+    except Exception as exc:
+        _warn_once(exc)
         return
 
     if cp_rank != 0:

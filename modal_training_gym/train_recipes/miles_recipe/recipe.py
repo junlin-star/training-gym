@@ -631,6 +631,23 @@ class MilesRecipe(BaseTrainRecipe):
     @model_validator(mode="after")
     def _resolve_callable_paths(self) -> "MilesRecipe":
         if self.extra_config is not None and not isinstance(self.extra_config, dict):
+            # The four intercepted hooks ride along inside extra_config under
+            # `training_gym_*` keys; with a YAML *path* there is no dict to
+            # stash them in, so they would be silently dropped. Fail loudly.
+            set_hooks = [
+                field_name
+                for field_name in _HOOK_PATH_CONFIG_KEYS
+                if getattr(self, field_name) is not None
+            ]
+            if set_hooks:
+                raise ValueError(
+                    f"{', '.join(set_hooks)} cannot be combined with a YAML-path "
+                    "extra_config: the gym stashes these hooks inside the "
+                    "extra_config dict. Either pass extra_config inline as a "
+                    "dict, or set the hook's import path directly in the YAML "
+                    "under its `training_gym_*_path` key "
+                    f"({', '.join(_HOOK_PATH_CONFIG_KEYS.values())})."
+                )
             return self
         cfg = dict(self.extra_config or {})
         for field_name, config_key in _HOOK_PATH_CONFIG_KEYS.items():
