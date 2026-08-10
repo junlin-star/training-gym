@@ -36,6 +36,10 @@ class Checkpoint:
     checkpoints_volume_name: str = ""
     checkpoints_mount_path: str = ""
 
+    @property
+    def path_relative_to_volume(self) -> str:
+        return _to_volume_path(self.path, self.checkpoints_mount_path)
+
 
 def list_checkpoints(training_run_id: str) -> list[Checkpoint]:
     result = TrainResult.from_training_run_id(training_run_id)

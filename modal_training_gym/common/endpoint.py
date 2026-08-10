@@ -51,7 +51,7 @@ def _create_endpoint_and_wait_for_url(
 
     if checkpoint:
         command.extend(["--custom-volume-name", checkpoint.checkpoints_volume_name])
-        command.extend(["--custom-volume-path", checkpoint.path])
+        command.extend(["--custom-volume-path", checkpoint.path_relative_to_volume])
 
     subprocess.run(command, check=True, timeout=120)
 
@@ -112,6 +112,14 @@ class Endpoint:
                 "routing_region": routing_region,
                 "unauthenticated": unauthenticated,
             }
+
+            if checkpoint:
+                spec.update(
+                    {
+                        "checkpoint_run": checkpoint.training_run_id,
+                        "checkpoint_name": checkpoint.name,
+                    }
+                )
 
             digest = hashlib.sha256(
                 json.dumps(spec, sort_keys=True, separators=(",", ":")).encode()
