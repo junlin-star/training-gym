@@ -80,11 +80,11 @@ def report_advantage_distribution(
             )
 
             local_masks = get_local_response_loss_masks(
-                list(total_lengths),
-                list(response_lengths),
-                loss_masks,
-                getattr(args, "qkv_format", "thd"),
-                rollout_data.get("max_seq_lens"),
+                total_lengths=list(total_lengths),
+                response_lengths=list(response_lengths),
+                loss_masks=loss_masks,
+                qkv_format=getattr(args, "qkv_format", "thd"),
+                max_seq_lens=rollout_data.get("max_seq_lens"),
             )
 
         for i in range(n):

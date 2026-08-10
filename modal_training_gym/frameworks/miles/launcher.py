@@ -78,9 +78,6 @@ _PATCH_ROLLOUT_STATUS_B64 = encode_patch(
 )
 _PATCH_ADVANTAGE_DIST_B64 = encode_patch("patch_advantage_distribution", _MILES_PATCHES)
 
-# Rewrite miles' train entrypoints / log_utils to report phase + advantage
-# data to the dashboard. Idempotent (marker-guarded), so they are re-run after
-# a `local_miles` checkout overwrites the patched files.
 _REPORTING_PATCH_COMMANDS = (
     f"echo {_PATCH_ROLLOUT_STATUS_B64} | base64 -d | python3",
     f"echo {_PATCH_ADVANTAGE_DIST_B64} | base64 -d | python3",
@@ -191,8 +188,12 @@ def build_miles_app(
             copy=True,
             ignore=["**/__pycache__", "**/*.pyc", "**/.git", "**/.venv"],
         )
-        # The local checkout just overwrote the patched train entrypoints.
-        image = image.run_commands(*_REPORTING_PATCH_COMMANDS)
+        # The local checkout just overwrote the patched miles sources; re-apply
+        # every build-time patch (all are marker-guarded, so re-running is safe).
+        image = image.run_commands(
+            f"echo {_PATCH_SGLANG_ABORT_B64} | base64 -d | python3",
+            *_REPORTING_PATCH_COMMANDS,
+        )
 
     if miles.image_overlay is not None:
         image = miles.image_overlay(image)
