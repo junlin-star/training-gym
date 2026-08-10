@@ -32,7 +32,7 @@ the failing component.
 ## Cleanup and relaunch
 
 If the authorized task includes stopping or fixing the run, obtain the Modal 
-app ID from `training-gym run get`, then:
+app ID from `training-gym run get`, then use:
 
 ```bash
 modal app stop <app-id>
