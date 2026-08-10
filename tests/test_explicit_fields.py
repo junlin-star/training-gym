@@ -13,11 +13,22 @@ import pytest
 from pydantic import ConfigDict
 
 from modal_training_gym.common.dataset import MultimodalDataset
+from modal_training_gym.common.errors import TrainingGymConfigError
 from modal_training_gym.train_recipes.base import carry_explicit_fields
 from modal_training_gym.train_recipes.miles_recipe import (
     Gemma4_26B_A4B_Recipe,
     MilesRecipe,
 )
+
+
+def _reward(*args, **kwargs):
+    return 0.0
+
+
+def vision_recipe(cls=None, **kwargs):
+    """Gemma-4 recipe that satisfies vision mode's reward requirement."""
+    cls = cls or Gemma4_26B_A4B_Recipe
+    return cls(custom_rm_function=_reward, **kwargs)
 
 
 @pytest.fixture
@@ -36,14 +47,14 @@ def test_constructor_kwargs_are_recorded():
 
 def test_caller_value_survives_vision_mode(image_dataset):
     """An explicit value must win over the vision default, even when they differ."""
-    resolved = Gemma4_26B_A4B_Recipe(num_rollout=5)._for_dataset(image_dataset)
+    resolved = vision_recipe(num_rollout=5)._for_dataset(image_dataset)
     assert resolved.num_rollout == 5
     # ...while a field left alone still picks the vision default up.
     assert resolved.rollout_batch_size == 8
 
 
 def test_vision_mode_applies_when_nothing_was_set(image_dataset):
-    resolved = Gemma4_26B_A4B_Recipe()._for_dataset(image_dataset)
+    resolved = vision_recipe()._for_dataset(image_dataset)
     assert resolved.num_rollout == 15
     assert resolved.rollout_top_k == 64
 
@@ -55,7 +66,7 @@ def test_text_dataset_leaves_recipe_alone():
 
 def test_post_construction_assignment_counts_as_chosen(image_dataset):
     """A sweep sets values with setattr; they must not be treated as defaults."""
-    recipe = Gemma4_26B_A4B_Recipe()
+    recipe = vision_recipe()
     recipe.rollout_temperature = 0.3
     assert "rollout_temperature" in recipe.explicit_fields
     assert recipe._for_dataset(image_dataset).rollout_temperature == 0.3
@@ -63,7 +74,7 @@ def test_post_construction_assignment_counts_as_chosen(image_dataset):
 
 def test_swept_value_survives_a_revalidating_rebuild(image_dataset):
     """TrainingGroup mutates then rebuilds; the rebuild must keep the override."""
-    recipe = Gemma4_26B_A4B_Recipe()
+    recipe = vision_recipe()
     recipe.rollout_temperature = 0.3
     values = {f.name: getattr(recipe, f.name) for f in dc.fields(recipe) if f.init}
     rebuilt = carry_explicit_fields(recipe, type(recipe)(**values))
@@ -82,7 +93,7 @@ def test_subclass_declared_fields_count_as_chosen(image_dataset):
         num_rollout: int = 5
 
     assert "num_rollout" in Custom().explicit_fields
-    assert Custom()._for_dataset(image_dataset).num_rollout == 5
+    assert vision_recipe(Custom)._for_dataset(image_dataset).num_rollout == 5
 
 
 def test_recipe_own_fields_are_not_treated_as_caller_choices():
@@ -146,7 +157,7 @@ def test_text_mode_stops_on_the_models_eos_set():
 
 def test_vision_mode_clears_the_math_reward(image_dataset):
     """`gemma_math` cannot score an image task; a VL run must bring its own."""
-    resolved = Gemma4_26B_A4B_Recipe()._for_dataset(image_dataset)
+    resolved = vision_recipe()._for_dataset(image_dataset)
     assert resolved.rm_type is None
     assert "--rm-type" not in resolved.cli_args()
     # ...while the text path keeps it.
@@ -156,3 +167,14 @@ def test_vision_mode_clears_the_math_reward(image_dataset):
 def test_caller_supplied_rm_type_survives_vision_mode(image_dataset):
     recipe = Gemma4_26B_A4B_Recipe(rm_type="deepscaler")
     assert recipe._for_dataset(image_dataset).rm_type == "deepscaler"
+
+
+def test_image_dataset_without_a_reward_is_rejected(image_dataset):
+    """Clearing the math reward must fail loudly, not leave the run unscored."""
+    with pytest.raises(TrainingGymConfigError, match="needs its own reward"):
+        Gemma4_26B_A4B_Recipe()._for_dataset(image_dataset)
+
+
+def test_rollout_function_counts_as_a_reward(image_dataset):
+    recipe = Gemma4_26B_A4B_Recipe(rollout_function="pkg.mod.rollout")
+    assert recipe._for_dataset(image_dataset).rm_type is None

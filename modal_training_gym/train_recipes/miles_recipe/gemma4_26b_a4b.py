@@ -134,11 +134,8 @@ class Gemma4_26B_A4B_Recipe(MilesRecipe):
     # vision mode sets both.
     rollout_top_p: float | None = None
     # generation_config.json's eos_token_id: <eos>, <turn|>, <|tool_response>.
-    # Both modes: Miles' /generate path does not read generation_config.json, so
-    # without these a rollout runs past <turn|> into a hallucinated next turn
-    # until rollout_max_response_len. The slime recipe this was ported from set
-    # them on the text path too; the port dropped that by following upstream's
-    # run script, which does not set them either.
+    # SGLang already stops on these from the checkpoint config; set explicitly so
+    # termination does not depend on that.
     rollout_stop_token_ids: list[int] | None = field(
         default_factory=lambda: [1, 106, 50]
     )
@@ -228,9 +225,26 @@ class Gemma4_26B_A4B_Recipe(MilesRecipe):
             )
         return self
 
+    def _brings_own_reward(self) -> bool:
+        if self.custom_rm_function is not None or self.rollout_function is not None:
+            return True
+        if "rm_type" in self.explicit_fields and self.rm_type:
+            return True
+        extra = self.extra_config
+        if isinstance(extra, str) and extra:
+            return True
+        return isinstance(extra, dict) and bool(extra.get("custom_rm_path"))
+
     def _for_dataset(self, dataset: "DatasetConfig | None") -> MilesRecipe:
         if not _has_images(dataset):
             return self
+        if not self._brings_own_reward():
+            raise TrainingGymConfigError(
+                f"{type(self).__name__} on an image dataset needs its own reward: "
+                f"the text default rm_type={self.rm_type!r} scores maths, not "
+                "images, so vision mode clears it. Pass custom_rm_function=..., "
+                "or rm_type=... to choose a built-in deliberately."
+            )
         # Keyed on what the caller passed, not on how the value compares: an
         # explicit value equal to the text default must still win.
         explicit = self.explicit_fields
