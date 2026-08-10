@@ -124,6 +124,9 @@ READABLE_ID_PACKAGES = (
     "fire==0.7.1",
     "termcolor==3.3.0",
 )
+READABLE_ID_INSTALL_COMMAND = (
+    f"python3 -m pip install {shlex.join(READABLE_ID_PACKAGES)}"
+)
 
 
 def _modal_retry_policy(max_retries: int) -> Retries | None:
@@ -225,9 +228,9 @@ def _build_slime_base_image() -> "Image":
 
 
 def _install_readable_id_dependency(image: "Image") -> "Image":
-    """Install the pinned readable-ID dependency without a mutable tool image."""
+    """Install readable IDs through the pinned base image's working interpreter."""
 
-    return image.pip_install(*READABLE_ID_PACKAGES)
+    return image.run_commands(READABLE_ID_INSTALL_COMMAND)
 
 
 def _build_conversion_config(slime_cfg: Any, model: Any = None) -> dict[str, Any]:
