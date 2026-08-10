@@ -106,8 +106,7 @@ class Endpoint:
     ## Attributes
 
     url : str
-        Base URL of the endpoint, with no trailing slash, so request paths
-        such as ``/v1/chat/completions`` are appended to it.
+        Base URL of the endpoint.
     endpoint_name : str
         Modal endpoint name, as passed to ``modal endpoint create --name`` and
         shown by ``modal endpoint list``. The endpoint's Modal app is named
@@ -136,7 +135,7 @@ class Endpoint:
     ):
         self.endpoint_name = endpoint_name
         self.model_name = model_name
-        self.url = url
+        self.url = url.rstrip("/")
         self.requires_proxy_auth = requires_proxy_auth
 
     @classmethod
