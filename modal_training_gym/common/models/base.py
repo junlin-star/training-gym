@@ -563,9 +563,6 @@ def parse_gemma4_response(text: str) -> ParsedResponse:
     # inside one and close it with a bare ``<channel|>``.
     if "<channel|>" in text:
         head, text = text.split("<channel|>", 1)
-        # Front, not back: this block opens the response, so it precedes every
-        # complete block collected above. Appending reads them back-to-front
-        # whenever a reply carries more than one thought section.
         thoughts.insert(0, head.replace("<|channel>thought", "").strip())
     # A channel left open means the model never stopped reasoning.
     if "<|channel>thought" in text:
