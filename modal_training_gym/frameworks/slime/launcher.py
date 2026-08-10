@@ -115,6 +115,15 @@ SLIME_IMAGE = "slimerl/slime@sha256:269b44b17e3f7136447db4cdaa3bf36ef9e3169f1596
 # policies ("limit"/"ignore"), letting sandboxes burst on Modal and bill by
 # actual CPU-/RAM-second usage instead of over-provisioning a static reservation.
 HARBOR_PKG_VERSION = "0.8.0"
+# This is a tiny runtime-only dependency used by ``common.ids``.  Keep both
+# the package and installer deterministic: Modal's ``uv_pip_install`` defaults
+# to the mutable ``ghcr.io/astral-sh/uv:latest`` image, which can make an
+# otherwise sealed training image fail (or drift) after receipt generation.
+READABLE_ID_PACKAGES = (
+    "randomname==0.2.1",
+    "fire==0.7.1",
+    "termcolor==3.3.0",
+)
 
 
 def _modal_retry_policy(max_retries: int) -> Retries | None:
@@ -213,6 +222,12 @@ def _build_slime_base_image() -> "Image":
             f"echo {_PATCH_MEGAGEM_ROLLOUT_DATA_B64} | base64 -d | python3",
         )
     )
+
+
+def _install_readable_id_dependency(image: "Image") -> "Image":
+    """Install the pinned readable-ID dependency without a mutable tool image."""
+
+    return image.pip_install(*READABLE_ID_PACKAGES)
 
 
 def _build_conversion_config(slime_cfg: Any, model: Any = None) -> dict[str, Any]:
@@ -765,7 +780,7 @@ def build_slime_app(
         image = image.env(slime.image_env)
 
     image = image.add_local_python_source("modal_training_gym", copy=True)
-    image = image.uv_pip_install("randomname")
+    image = _install_readable_id_dependency(image)
     image = mount_tools_dir(image)
 
     if caller_script is not None:
