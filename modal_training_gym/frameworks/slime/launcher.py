@@ -115,10 +115,8 @@ SLIME_IMAGE = "slimerl/slime@sha256:269b44b17e3f7136447db4cdaa3bf36ef9e3169f1596
 # policies ("limit"/"ignore"), letting sandboxes burst on Modal and bill by
 # actual CPU-/RAM-second usage instead of over-provisioning a static reservation.
 HARBOR_PKG_VERSION = "0.8.0"
-# This is a tiny runtime-only dependency used by ``common.ids``.  Keep both
-# the package and installer deterministic: Modal's ``uv_pip_install`` defaults
-# to the mutable ``ghcr.io/astral-sh/uv:latest`` image, which can make an
-# otherwise sealed training image fail (or drift) after receipt generation.
+# Pin the complete small dependency closure; do not introduce a mutable
+# installer image into scientific runtime builds.
 READABLE_ID_PACKAGES = (
     "randomname==0.2.1",
     "fire==0.7.1",
@@ -227,10 +225,12 @@ def _build_slime_base_image() -> "Image":
     )
 
 
-def _install_readable_id_dependency(image: "Image") -> "Image":
-    """Install readable IDs through the pinned base image's working interpreter."""
+def _add_training_gym_runtime(image: "Image") -> "Image":
+    """Ship runtime code and pinned ID dependencies before recipe environment."""
 
-    return image.run_commands(READABLE_ID_INSTALL_COMMAND)
+    return image.add_local_python_source("modal_training_gym", copy=True).run_commands(
+        READABLE_ID_INSTALL_COMMAND
+    )
 
 
 def _build_conversion_config(slime_cfg: Any, model: Any = None) -> dict[str, Any]:
@@ -779,11 +779,10 @@ def build_slime_app(
 
     if slime.image_run_commands:
         image = image.run_commands(*slime.image_run_commands)
+    image = _add_training_gym_runtime(image)
     if slime.image_env:
         image = image.env(slime.image_env)
 
-    image = image.add_local_python_source("modal_training_gym", copy=True)
-    image = _install_readable_id_dependency(image)
     image = mount_tools_dir(image)
 
     if caller_script is not None:
