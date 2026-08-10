@@ -1,9 +1,10 @@
-"""HTTP queue / URL / token plumbing + run-context helpers for slime's
-in-container dashboard reporting.
+"""HTTP queue / URL / token plumbing + run-context helpers for in-container
+dashboard reporting.
 
-Split out of :mod:`.phase_reporting` (which re-exports these). Everything here
-is duck-typed and dependency-light so it stays importable inside the training
-container without slime/torch present.
+Shared by the slime and miles frameworks (both expose it through their
+``phase_reporting`` modules). Everything here is duck-typed and
+dependency-light so it stays importable inside the training container without
+slime/miles/torch present.
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ from typing import Any
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
+# Legacy env names kept for backwards compatibility with older images.
 PHASE_REPORT_URL_ENV = "SLIME_PHASE_REPORT_URL"
 PHASE_REPORT_TOKEN_ENV = "SLIME_PHASE_REPORT_TOKEN"
 
@@ -133,7 +135,7 @@ def _ensure_worker() -> None:
             return
         thread = threading.Thread(
             target=_worker,
-            name="slime-phase-reporter",
+            name="training-gym-phase-reporter",
             daemon=True,
         )
         thread.start()

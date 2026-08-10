@@ -55,6 +55,8 @@ _MILES_SKIP = {
     "rollout_function",
     "custom_megatron_before_log_prob_hook",
     "custom_megatron_before_train_step_hook",
+    "capture_trace",
+    "trace_sample_limit",
 }
 
 YAML_CONFIG_FIELDS = ("eval_config", "extra_config", "sglang_config")
@@ -68,6 +70,20 @@ _HOOK_PATH_FLAGS = {
     "custom_eval_rollout_log_function": "custom_eval_rollout_log_function_path",
     "custom_megatron_before_log_prob_hook": "custom_megatron_before_log_prob_hook_path",
     "custom_megatron_before_train_step_hook": "custom_megatron_before_train_step_hook_path",
+}
+
+_HOOK_PATH_CONFIG_KEYS = {
+    "custom_rollout_log_function": "training_gym_custom_rollout_log_function_path",
+    "custom_eval_rollout_log_function": "training_gym_custom_eval_rollout_log_function_path",
+    "custom_megatron_before_log_prob_hook": "training_gym_custom_megatron_before_log_prob_hook_path",
+    "custom_megatron_before_train_step_hook": "training_gym_custom_megatron_before_train_step_hook_path",
+}
+
+_HOOK_WRAPPER_PATHS = {
+    "custom_rollout_log_function": "modal_training_gym.frameworks.miles.phase_reporting.log_rollout_data",
+    "custom_eval_rollout_log_function": "modal_training_gym.frameworks.miles.phase_reporting.log_eval_rollout_data",
+    "custom_megatron_before_log_prob_hook": "modal_training_gym.frameworks.miles.phase_reporting.before_log_prob_hook",
+    "custom_megatron_before_train_step_hook": "modal_training_gym.frameworks.miles.phase_reporting.before_train_step_hook",
 }
 
 
@@ -128,6 +144,12 @@ class MilesRecipe(BaseTrainRecipe):
         Extra shell commands run while building the image.
     image_env : dict[str, str]
         Extra env vars baked into the image.
+    capture_trace : bool
+        Attach miles' per-sample execution trace (generate/reward/tool-call
+        timeline) to recorded rollouts for the dashboard.
+    trace_sample_limit : int
+        With ``capture_trace``, number of samples per rollout that get a
+        trace attached (sampling keeps the added data volume small).
 
     ## Cluster and Parallelism
 
@@ -363,13 +385,14 @@ class MilesRecipe(BaseTrainRecipe):
     rollout_function : Callable | str | None
         Replaces Miles' entire rollout loop (``--rollout-function-path``).
     custom_rollout_log_function : Callable | str | None
-        Called with each rollout's data for logging.
+        Called with each rollout's data for logging; the gym wraps it so
+        phase reporting and dashboard capture still run.
     custom_eval_rollout_log_function : Callable | str | None
         Same as above, for eval rollouts.
     custom_megatron_before_log_prob_hook : Callable | str | None
-        Runs in the Megatron trainer before log-prob computation.
+        Hook run in the Megatron trainer before log-prob computation.
     custom_megatron_before_train_step_hook : Callable | str | None
-        Runs in the Megatron trainer before each train step.
+        Hook run in the Megatron trainer before each train step.
 
     ## Config Overrides
 
@@ -593,9 +616,34 @@ class MilesRecipe(BaseTrainRecipe):
     custom_megatron_before_log_prob_hook: Callable | str | None = None
     custom_megatron_before_train_step_hook: Callable | str | None = None
 
+    # ── Per-sample execution tracing (dashboard timeline) ───────────────────
+    # When True, the rollout recorder attaches miles' per-sample trace (the
+    # generate/reward/tool-call timeline) to the first `trace_sample_limit`
+    # samples of each rollout. Off by default — traces inflate payloads, so
+    # sampling keeps the added volume well under 1%. Not a miles CLI flag.
+    capture_trace: bool = False
+    trace_sample_limit: int = 16
+
     # ── Validators ───────────────────────────────────────────────────────────
 
     _SKIP_FIELDS: ClassVar[frozenset[str]] = frozenset(_MILES_SKIP)
+
+    @model_validator(mode="after")
+    def _resolve_callable_paths(self) -> "MilesRecipe":
+        if self.extra_config is not None and not isinstance(self.extra_config, dict):
+            return self
+        cfg = dict(self.extra_config or {})
+        for field_name, config_key in _HOOK_PATH_CONFIG_KEYS.items():
+            value = getattr(self, field_name)
+            if value is None or cfg.get(config_key):
+                continue
+            if isinstance(value, str):
+                cfg[config_key] = value
+            else:
+                cfg[config_key] = self._callable_path(value)
+        if cfg != (self.extra_config or {}):
+            object.__setattr__(self, "extra_config", cfg)
+        return self
 
     @model_validator(mode="after")
     def _validate_gpu_allocation(self) -> "MilesRecipe":
@@ -694,6 +742,9 @@ class MilesRecipe(BaseTrainRecipe):
             fields.update(self._wandb_to_fields(self.wandb))
         out = self._emit_fields(fields)
         for src, dst in _HOOK_PATH_FLAGS.items():
+            if src in _HOOK_WRAPPER_PATHS:
+                out[dst] = _HOOK_WRAPPER_PATHS[src]
+                continue
             if path := self._path_or_callable_path(fields.get(src)):
                 out[dst] = path
         return out

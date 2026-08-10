@@ -10,24 +10,23 @@ module stays importable outside the training container.
 from __future__ import annotations
 
 import time
-from typing import Any
 
-from .reporting import (
+from modal_training_gym.common.reporting import (
     _arg_value,
     _enqueue_advantage,
     _positive_int,
     _run_context,
 )
-from .sample_extraction import _coerce_float
+from modal_training_gym.common.sample_extraction import _coerce_float
 
 
 def _advantage_samples_payload(
     sample_sums: list[float],
     sample_counts: list[float],
-    sample_indices: list[int],
-    raw_rewards: list[Any],
+    sample_indices: list[int | None],
+    raw_rewards: list[object],
     n_samples_per_prompt: int,
-) -> list[dict[str, Any]]:
+) -> list[dict[str, float | int | None]]:
     """Build the per-sample advantage rows from masked ``(sum, count)`` pairs.
 
     Pure (no torch / mpu) so the group-index and divide-by-count logic is
@@ -36,7 +35,7 @@ def _advantage_samples_payload(
     sample belongs to (``sample_index // n_samples_per_prompt``).
     """
     n_per = max(1, int(n_samples_per_prompt or 1))
-    out: list[dict[str, Any]] = []
+    out: list[dict[str, float | int | None]] = []
     for i in range(len(sample_sums)):
         count = sample_counts[i] if i < len(sample_counts) else 0.0
         advantage = (sample_sums[i] / count) if count else 0.0
@@ -58,10 +57,14 @@ def _advantage_samples_payload(
 
 def report_advantage_distribution(
     rollout_id: int,
-    args: Any,
-    rollout_data: Any,
+    args: object,
+    rollout_data: object,
 ) -> None:
     """Emit per-sample advantages (tagged with their GRPO group) for one step.
+
+    ``args`` is slime's argparse namespace and ``rollout_data`` its per-step
+    dict of tensors — neither type is importable outside the training
+    container, so both are taken as ``object`` and duck-typed.
 
     Injected into slime's ``log_rollout_data`` so it fires right after
     ``compute_advantages_and_returns``. slime itself only logs the *mean*
