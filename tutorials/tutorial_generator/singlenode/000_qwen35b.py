@@ -49,7 +49,7 @@ def _run_instructions():
     """
     Run with:
     ```
-    uv run modal run -d tutorials/rl/004_qwen35b/004_qwen35b.py
+    uv run modal run -d tutorials/singlenode/000_qwen35b/000_qwen35b.py
     ```
     """
 
@@ -116,7 +116,7 @@ def _dataset_preview():
 @code
 def _dataset_preview_code():
     rows = dataset.load()
-    for row in rows[:2]:
+    for row in rows.select(range(2)):
         prompt = row["prompt"]
         if isinstance(prompt, list):
             prompt = prompt[0]["content"] if prompt else ""
