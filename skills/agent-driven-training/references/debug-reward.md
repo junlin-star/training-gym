@@ -30,10 +30,10 @@ Set an early efficacy checkpoint proportional to the run length; for example,
 reassess a 150-step run across roughly steps 10–40. If enough samples show that
 reward remains flat outside normal noise, declines, or is otherwise
 uninformative, stop the run instead of waiting for completion. Do not stop on a
-single noisy point, but do not keep a healthy yet ineffective job alive merely
+single noisy point, but do not keep a healthy yet ineffective job alive only
 because it has not failed.
 
-To stop it, use `training-gym run get <run-id> --verbose` to obtain the Modal 
+To stop it, use `training-gym run get <run-id>` to obtain the Modal 
 app ID, then:
 
 ```bash
@@ -43,32 +43,14 @@ modal app stop <app-id>
 Diagnose the trajectory, change one parameter, and launch a fresh smoke test
 before promoting again.
 
-## Select and download traces
+## Download representative traces
 
-Estimate the export before downloading:
-
-```bash
-training-gym run trace <run-id> --out ./traces --dry-run --json
-```
-
-Select representative baseline, low-reward, transition, and recent steps:
+Choose baseline, anomalous, transition, and recent steps based on the observed
+reward trajectory, then download their traces after a dry-run:
 
 ```bash
-training-gym run trace <run-id> --out ./traces --step 0,3,9 --yes
-jq '.steps | sort_by(.mean_reward)' ./traces/<run-id>/manifest.json
+training-gym run trace <run-id> --out ./traces --step <steps>
 ```
-
-`manifest.json` identifies each step file and records its sample count and mean
-reward. Inspect structured samples by score:
-
-```bash
-jq '.samples | sort_by(.score) | .[:10]' \
-  ./traces/<run-id>/step_0003.json
-```
-
-Prefer `jq` over text grep for selecting low-score records. Use text search
-inside the selected records for repeated errors or suspicious response
-patterns.
 
 ## Classify samples
 
