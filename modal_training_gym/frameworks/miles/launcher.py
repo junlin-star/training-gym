@@ -189,9 +189,16 @@ def build_miles_app(
             ignore=["**/__pycache__", "**/*.pyc", "**/.git", "**/.venv"],
         )
         # The local checkout just overwrote the patched miles sources; re-apply
-        # every build-time patch (all are marker-guarded, so re-running is safe).
+        # every build-time patch (all marker-guarded, so re-running is a no-op
+        # on already-patched files). The reporting patchers warn on a missed
+        # anchor; the sglang one raises, so let it fail open here — a drifted
+        # local checkout shouldn't hard-fail the image build, but the lost
+        # crash protection should be visible in the build log.
         image = image.run_commands(
-            f"echo {_PATCH_SGLANG_ABORT_B64} | base64 -d | python3",
+            f"echo {_PATCH_SGLANG_ABORT_B64} | base64 -d | python3"
+            " || echo 'WARNING: sglang abort patch did not apply to the"
+            " local_miles checkout; transient router failures during rollout"
+            " cleanup may crash the run'",
             *_REPORTING_PATCH_COMMANDS,
         )
 

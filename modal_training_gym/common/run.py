@@ -249,15 +249,19 @@ class TrainingRun(BaseModel):
         metadata["framework_progress"] = progress
         self.metadata = metadata
 
-        current_step = progress.get("current")
-        record_step_time_event(
-            cast(MutableMapping[str, Any], _step_times_dict()),
-            self.training_run_id,
-            current_step,
-            status.value,
-            update.step_event.strip(),
-            update.event_ts or time.time(),
-        )
+        # Step timing is slime-only: miles never emits step_event markers, and
+        # without a step window even plain phase updates would be misrecorded
+        # as substep entries.
+        if self.framework is Framework.SLIME:
+            current_step = progress.get("current")
+            record_step_time_event(
+                cast(MutableMapping[str, Any], _step_times_dict()),
+                self.training_run_id,
+                current_step,
+                status.value,
+                update.step_event.strip(),
+                update.event_ts or time.time(),
+            )
         return status
 
     def record_latest_rollout(self, rollout: TrainingRolloutResult) -> None:

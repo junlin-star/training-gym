@@ -7,7 +7,7 @@ try:
         report_step_event as _tg_report,
     )
 except ImportError:
-    def _tg_report(status, args=None, rollout_id=None, step_event=''): pass
+    def _tg_report(status, args=None, rollout_id=None): pass
 
 import asyncio
 import logging

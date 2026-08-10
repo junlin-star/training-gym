@@ -1,10 +1,5 @@
 """Patch miles train entrypoints to report training-loop phase status.
 
-Mirror of slime's rollout-status patch adapted to miles' async/await driver
-(``/root/miles/train.py`` / ``train_async.py``). Unlike slime, no step-timing
-(``step_event`` start/finish) markers are injected — miles reports phase
-transitions and step progress only.
-
 Executed at image-build time via ``python3 <this file>``.
 """
 
@@ -25,7 +20,7 @@ PREAMBLE = (
     "        report_step_event as _tg_report,\n"
     "    )\n"
     "except ImportError:\n"
-    "    def _tg_report(status, args=None, rollout_id=None, step_event=''): pass\n"
+    "    def _tg_report(status, args=None, rollout_id=None): pass\n"
     "\n"
 )
 

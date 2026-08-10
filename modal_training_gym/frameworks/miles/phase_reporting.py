@@ -12,9 +12,9 @@ they reference must stay importable here. The implementation is split across:
 - :mod:`.advantage_reporting` — torch/megatron advantage-distribution math
 
 Mirror of :mod:`modal_training_gym.frameworks.slime.phase_reporting` with two
-differences: statuses come from :class:`MilesStatus`, and step-timing events
-(``step_event`` start/finish markers that drive the dashboard's step-time
-charts) are intentionally not emitted for miles.
+differences: statuses come from :class:`MilesStatus`, and miles has no step
+timing at all — no ``step_event`` markers are emitted, and the dashboard skips
+step-time recording for miles runs entirely.
 """
 
 from __future__ import annotations
@@ -100,16 +100,15 @@ def report_step_event(
     status: MilesStatus | str,
     args: Any = None,
     rollout_id: int | None = None,
-    step_event: str = "",
 ) -> None:
     """Report one training-loop phase transition tagged with ``status``.
 
     ``status`` may be a plain string — the patched miles train.py passes phase
     names as literals so the injected code stays stdlib-only.
 
-    Unlike slime, miles does not track step times: ``step_event`` is accepted
-    for patch-code symmetry but never forwarded, so the dashboard gets phase +
-    progress updates without start/finish timing events.
+    Unlike slime, miles does not track step times: there is no ``step_event``
+    parameter, so the dashboard gets phase + progress updates without
+    start/finish timing events.
     """
     payload = {
         **_run_context(args),
