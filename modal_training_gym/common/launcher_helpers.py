@@ -720,6 +720,8 @@ async def build_terminal_run_record(run_record: Any, training_run_id: str) -> An
         "active_attempt_id",
         "active_attempt_root",
         "attempt_mode",
+        "event_journal_contract",
+        "event_journal_enabled",
         "attempt_failures",
         "finalized_from_terminal_parent",
         "last_attempt_ended_at",

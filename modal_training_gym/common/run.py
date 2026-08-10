@@ -301,8 +301,8 @@ class TrainingRun(BaseModel):
             )
         if event_kind is not None and not journal_enabled:
             # Legacy recipes keep their historical mutable reporting path.
-            # The explicit journal contract is enabled only for committed
-            # attempt mode, whose retry semantics require it.
+            # Committed attempts and the explicitly flagged D1a single-attempt
+            # legacy run opt into immutable attempt authority.
             event_kind = None
         if event_kind is not None and not identity_exists:
             raise RuntimeError("cannot journal a training run without an attempt")
@@ -425,8 +425,15 @@ def _attempt_identity_from_payload(
 
 def training_run_event_journal_enabled(payload: dict[str, Any]) -> bool:
     metadata = payload.get("metadata")
-    if isinstance(metadata, dict) and metadata.get("attempt_mode") == "committed":
-        return True
+    if isinstance(metadata, dict):
+        if metadata.get("attempt_mode") == "committed":
+            return True
+        if (
+            metadata.get("event_journal_enabled") is True
+            and metadata.get("event_journal_contract")
+            == "d1a_legacy_single_attempt_v1"
+        ):
+            return True
     config = payload.get("config")
     if not isinstance(config, dict):
         return False

@@ -263,6 +263,51 @@ def test_real_save_chain_materializes_terminal_after_stale_cache_write(
     assert summaries[0]["error_message"] == "primary failure"
 
 
+def test_d1a_legacy_event_journal_keeps_completed_attempt_after_stale_cache(
+    fake_volume,
+) -> None:
+    attempt_id = "d1a-attempt-001"
+    metadata = {
+        "attempt_mode": "legacy",
+        "event_journal_enabled": True,
+        "event_journal_contract": "d1a_legacy_single_attempt_v1",
+        "attempt_count": 1,
+        "active_attempt_id": attempt_id,
+        "attempts": [
+            {
+                "attempt": 1,
+                "attempt_id": attempt_id,
+                "status": "running",
+            }
+        ],
+    }
+    run = TrainingRun(
+        training_run_id="run-a",
+        framework=Framework.SLIME,
+        config={"recipe": {"attempt_mode": "legacy"}},
+        metadata=metadata,
+    )
+    run.save(event_kind="started")
+    stale = run.model_copy(deep=True)
+
+    run.status = TrainingRunStatus.COMPLETED
+    run.metadata["attempts"][0]["status"] = "completed"
+    run.save()
+    stale.save_cache()
+
+    materialized = TrainingRun.from_id("run-a")
+    assert materialized.status == TrainingRunStatus.COMPLETED
+    assert materialized.metadata["attempt_count"] == 1
+    assert materialized.metadata["active_attempt_id"] == attempt_id
+    assert materialized.metadata["attempts"] == [
+        {
+            "attempt": 1,
+            "attempt_id": attempt_id,
+            "status": "completed",
+        }
+    ]
+
+
 def test_framework_progress_uses_cache_without_growing_journal(fake_volume) -> None:
     run = TrainingRun(
         training_run_id="run-a",

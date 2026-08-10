@@ -1,4 +1,5 @@
 import dataclasses as _dc
+import math
 import secrets as _secrets
 import threading
 import time
@@ -28,6 +29,227 @@ from modal_training_gym.train_recipes.miles_recipe import MilesConfig
 from modal_training_gym.train_recipes.slime_recipe import SlimeRecipe
 from pydantic import ConfigDict
 from pydantic.dataclasses import dataclass
+
+
+_D1A_MATRIX_MARKER = "DRIFT_ASYNC_RL_D1_MATRIX"
+_D1A_STARTUP_BINDING_TIMEOUT = (
+    "DRIFT_ASYNC_RL_D1_MATRIX_STARTUP_BINDING_TIMEOUT_SECONDS"
+)
+_D1A_PRE_SPAWN_BINDING_POLL_SECONDS = 1.0
+
+
+def _d1a_pre_spawn_binding_polls(recipe: BaseTrainRecipe) -> int | None:
+    """Read the receipt-sealed D1a metadata join budget from the recipe."""
+
+    image_env = getattr(recipe, "image_env", None)
+    if not isinstance(image_env, dict) or image_env.get(_D1A_MATRIX_MARKER) != "1":
+        return None
+    raw_timeout = image_env.get(_D1A_STARTUP_BINDING_TIMEOUT)
+    try:
+        timeout = int(raw_timeout)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("D1a recipe lacks a valid startup binding timeout") from exc
+    if str(timeout) != raw_timeout or timeout <= 0:
+        raise ValueError("D1a startup binding timeout must be a canonical positive integer")
+    return max(1, int(timeout / _D1A_PRE_SPAWN_BINDING_POLL_SECONDS))
+
+
+def _persist_and_verify_d1a_pre_spawn_app_binding(
+    run_record: TrainingRun,
+    *,
+    polls: int,
+    poll_seconds: float = _D1A_PRE_SPAWN_BINDING_POLL_SECONDS,
+    sleep: Any = time.sleep,
+    monotonic: Any = time.monotonic,
+    deadline_monotonic: float | None = None,
+) -> TrainingRun:
+    """Durably bind the named Modal app before any paid D1a task is spawned."""
+
+    if isinstance(polls, bool) or not isinstance(polls, int) or polls < 1:
+        raise ValueError("D1a pre-spawn binding polls must be a positive integer")
+    if (
+        isinstance(poll_seconds, bool)
+        or not isinstance(poll_seconds, int | float)
+        or not math.isfinite(float(poll_seconds))
+        or poll_seconds < 0
+    ):
+        raise ValueError(
+            "D1a pre-spawn binding interval must be finite and nonnegative"
+        )
+    if (
+        deadline_monotonic is not None
+        and (
+            isinstance(deadline_monotonic, bool)
+            or not isinstance(deadline_monotonic, int | float)
+            or not math.isfinite(float(deadline_monotonic))
+        )
+    ):
+        raise ValueError("D1a pre-spawn binding deadline must be finite")
+    expected = {
+        "training_run_id": str(run_record.training_run_id or ""),
+        "modal_app_id": str(run_record.modal_app_id or ""),
+        "modal_app_url": str(run_record.modal_app_url or ""),
+    }
+    if not all(expected.values()):
+        raise RuntimeError("D1a pre-spawn app binding is incomplete")
+    last_transient_error: Exception | None = None
+    record_type = type(run_record)
+    for index in range(polls):
+        if (
+            deadline_monotonic is not None
+            and monotonic() >= deadline_monotonic
+        ):
+            break
+        try:
+            run_record.save()
+        except Exception as exc:
+            # ``TrainingRun.save`` writes the canonical per-run record before
+            # refreshing its disposable summary.  A summary failure therefore
+            # does not imply that the authoritative write failed.  Always read
+            # canonical state independently so a durable binding can be joined
+            # without keeping a live Modal app open until the poll cap.
+            last_transient_error = exc
+        try:
+            latest = record_type.from_id(run_record.training_run_id)
+        except Exception as exc:
+            last_transient_error = exc
+            latest = None
+        if latest is not None:
+            observed = {
+                key: str(getattr(latest, key, "") or "") for key in expected
+            }
+            conflicting = any(
+                observed[key] and observed[key] != value
+                for key, value in expected.items()
+            )
+            if conflicting:
+                raise RuntimeError(
+                    "D1a authoritative pre-spawn app binding changed: "
+                    f"expected={expected} observed={observed}"
+                )
+            observed_function_id = str(
+                getattr(latest, "function_call_id", "") or ""
+            )
+            observed_metadata = getattr(latest, "metadata", None)
+            if observed_function_id:
+                raise RuntimeError(
+                    "D1a pre-spawn TrainingRun already has a FunctionCall binding"
+                )
+            journal_contract_exact = (
+                isinstance(observed_metadata, dict)
+                and observed_metadata.get("event_journal_enabled") is True
+                and observed_metadata.get("event_journal_contract")
+                == "d1a_legacy_single_attempt_v1"
+            )
+            within_deadline = (
+                deadline_monotonic is None
+                or monotonic() < deadline_monotonic
+            )
+            if observed == expected and journal_contract_exact and within_deadline:
+                return latest
+        if index + 1 < polls:
+            sleep_seconds = float(poll_seconds)
+            if deadline_monotonic is not None:
+                remaining = deadline_monotonic - monotonic()
+                if remaining <= 0:
+                    break
+                sleep_seconds = min(sleep_seconds, remaining)
+            sleep(sleep_seconds)
+    failure = RuntimeError(
+        "D1a app binding was not durably persisted before paid task spawn"
+    )
+    if last_transient_error is not None:
+        raise failure from last_transient_error
+    raise failure
+
+
+def _persist_and_verify_d1a_initial_run_record(
+    run_record: TrainingRun,
+    *,
+    polls: int,
+    poll_seconds: float = _D1A_PRE_SPAWN_BINDING_POLL_SECONDS,
+    sleep: Any = time.sleep,
+    monotonic: Any = time.monotonic,
+    deadline_monotonic: float | None = None,
+) -> TrainingRun:
+    """Retry the unpaid initial metadata publication across transport errors."""
+
+    if isinstance(polls, bool) or not isinstance(polls, int) or polls < 1:
+        raise ValueError("D1a initial-record polls must be a positive integer")
+    if (
+        isinstance(poll_seconds, bool)
+        or not isinstance(poll_seconds, int | float)
+        or not math.isfinite(float(poll_seconds))
+        or poll_seconds < 0
+    ):
+        raise ValueError(
+            "D1a initial-record interval must be finite and nonnegative"
+        )
+    if (
+        deadline_monotonic is not None
+        and (
+            isinstance(deadline_monotonic, bool)
+            or not isinstance(deadline_monotonic, int | float)
+            or not math.isfinite(float(deadline_monotonic))
+        )
+    ):
+        raise ValueError("D1a initial-record deadline must be finite")
+    expected_run_id = str(run_record.training_run_id or "")
+    last_transient_error: Exception | None = None
+    record_type = type(run_record)
+    for index in range(polls):
+        if (
+            deadline_monotonic is not None
+            and monotonic() >= deadline_monotonic
+        ):
+            break
+        try:
+            run_record.save()
+        except Exception as exc:
+            # The canonical run may already be durable even when its summary
+            # refresh raises.  Verify canonical state in a separate operation.
+            last_transient_error = exc
+        try:
+            latest = record_type.from_id(expected_run_id)
+        except Exception as exc:
+            last_transient_error = exc
+            latest = None
+        if latest is not None:
+            observed_run_id = str(getattr(latest, "training_run_id", "") or "")
+            observed_app_id = str(getattr(latest, "modal_app_id", "") or "")
+            observed_function_id = str(
+                getattr(latest, "function_call_id", "") or ""
+            )
+            observed_metadata = getattr(latest, "metadata", None)
+            if observed_run_id != expected_run_id:
+                raise RuntimeError("D1a initial TrainingRun identity changed")
+            if observed_app_id or observed_function_id:
+                raise RuntimeError(
+                    "D1a initial TrainingRun already has a remote object binding"
+                )
+            if (
+                isinstance(observed_metadata, dict)
+                and observed_metadata.get("event_journal_enabled") is True
+                and observed_metadata.get("event_journal_contract")
+                == "d1a_legacy_single_attempt_v1"
+                and (
+                    deadline_monotonic is None
+                    or monotonic() < deadline_monotonic
+                )
+            ):
+                return latest
+        if index + 1 < polls:
+            sleep_seconds = float(poll_seconds)
+            if deadline_monotonic is not None:
+                remaining = deadline_monotonic - monotonic()
+                if remaining <= 0:
+                    break
+                sleep_seconds = min(sleep_seconds, remaining)
+            sleep(sleep_seconds)
+    failure = RuntimeError("D1a initial TrainingRun was not durably persisted")
+    if last_transient_error is not None:
+        raise failure from last_transient_error
+    raise failure
 
 
 def _merge_recipe(base: SlimeRecipe, overrides: SlimeRecipe) -> SlimeRecipe:
@@ -73,13 +295,20 @@ def _resolve_slime_recipe(
     *,
     merge_model_recipe: bool,
 ) -> SlimeRecipe:
+    # ``build_slime_app`` consumes launcher-only callables while constructing
+    # its serialized Modal functions (for example, it clears image_overlay
+    # after applying it).  A TrainConfig may legitimately be built more than
+    # once -- notably an image-only preflight followed by the paid launch -- so
+    # never hand the config-owned recipe to the app builder itself.
     if not merge_model_recipe:
-        recipe.validate_model_parallelism(model)
-        return recipe
+        resolved = _dc.replace(recipe)
+        resolved.validate_model_parallelism(model)
+        return resolved
     base_recipe = SlimeRecipe.get_base_recipe(model)
     if base_recipe is None:
-        recipe.validate_model_parallelism(model)
-        return recipe
+        resolved = _dc.replace(recipe)
+        resolved.validate_model_parallelism(model)
+        return resolved
     resolved = _merge_recipe(base_recipe, recipe)
     resolved.validate_model_parallelism(model)
     return resolved
@@ -424,6 +653,16 @@ class TrainConfig:
 
     def _build_run_metadata(self) -> dict[str, Any] | None:
         metadata: dict[str, Any] = {}
+        image_env = getattr(self.recipe, "image_env", None)
+        if (
+            isinstance(image_env, dict)
+            and image_env.get(_D1A_MATRIX_MARKER) == "1"
+        ):
+            # D1a retains legacy artifact roots but needs immutable attempt
+            # events so a racing dashboard cache save cannot regress terminal
+            # provenance after a costly single-attempt run.
+            metadata["event_journal_enabled"] = True
+            metadata["event_journal_contract"] = "d1a_legacy_single_attempt_v1"
         if self.group_id:
             metadata["group_id"] = self.group_id
         if self.group_overrides is not None or self.group_axes is not None:
@@ -511,7 +750,19 @@ class TrainConfig:
         from modal_training_gym.cli.setup import ensure_dashboard_deployed
 
         training_run_id = self.training_run_id
-        ensure_dashboard_deployed()
+        d1a_pre_spawn_binding_polls = _d1a_pre_spawn_binding_polls(self.recipe)
+        d1a_pre_spawn_binding_deadline = (
+            time.monotonic()
+            + d1a_pre_spawn_binding_polls * _D1A_PRE_SPAWN_BINDING_POLL_SECONDS
+            if d1a_pre_spawn_binding_polls is not None
+            else None
+        )
+        if d1a_pre_spawn_binding_polls is None:
+            ensure_dashboard_deployed()
+        # Receipt-bound D1a is reachable only through its lifecycle wrapper,
+        # which verifies this dashboard dependency before atomically consuming
+        # the one-launch reservation. Repeating that fallible external call
+        # afterward could burn the authorization without creating any app.
         framework_status_url = get_framework_status_url() or ""
         framework_status_token = _secrets.token_urlsafe(32)
 
@@ -535,15 +786,33 @@ class TrainConfig:
             started_at=created_at,
             metadata=self._build_run_metadata(),
         )
-        try:
-            run_record.save()
-            vol_put(
-                MetadataStore.FRAMEWORK_STATUS_TOKENS,
-                training_run_id,
-                {"token": framework_status_token},
+        if d1a_pre_spawn_binding_polls is not None:
+            run_record = _persist_and_verify_d1a_initial_run_record(
+                run_record,
+                polls=d1a_pre_spawn_binding_polls,
+                deadline_monotonic=d1a_pre_spawn_binding_deadline,
             )
-        except RuntimeError:
-            framework_status_token = ""
+            try:
+                vol_put(
+                    MetadataStore.FRAMEWORK_STATUS_TOKENS,
+                    training_run_id,
+                    {"token": framework_status_token},
+                )
+            except Exception:
+                # The remote initializer republishes this token before work.
+                # Its own failure remains fatal; no paid D1 science can start
+                # before that initializer and the outer watchdog handshake.
+                framework_status_token = ""
+        else:
+            try:
+                run_record.save()
+                vol_put(
+                    MetadataStore.FRAMEWORK_STATUS_TOKENS,
+                    training_run_id,
+                    {"token": framework_status_token},
+                )
+            except RuntimeError:
+                framework_status_token = ""
         print(f"TrainingRun recorded: {training_run_id}")
 
         app = self._build_app()
@@ -557,10 +826,17 @@ class TrainConfig:
 
                 run_record.modal_app_id = modal_app_id
                 run_record.modal_app_url = modal_app_url
-                try:
-                    run_record.save()
-                except RuntimeError:
-                    pass
+                if d1a_pre_spawn_binding_polls is not None:
+                    run_record = _persist_and_verify_d1a_pre_spawn_app_binding(
+                        run_record,
+                        polls=d1a_pre_spawn_binding_polls,
+                        deadline_monotonic=d1a_pre_spawn_binding_deadline,
+                    )
+                else:
+                    try:
+                        run_record.save()
+                    except RuntimeError:
+                        pass
 
                 def _set_status(
                     status: FrameworkStatus, *, is_active: bool = True
@@ -616,10 +892,16 @@ class TrainConfig:
         run_record.function_call_id = function_call.object_id
         run_record._function_call = function_call
         run_record._status_display = status_display if show_output else None
-        try:
-            run_record.save()
-        except RuntimeError:
-            pass
+        if d1a_pre_spawn_binding_polls is None:
+            try:
+                run_record.save()
+            except RuntimeError:
+                pass
+        # D1a deliberately leaves the FunctionCall ID only on this returned
+        # in-memory object. Its remote GPU function publishes the immutable
+        # started event, then blocks waiting for the outer lifecycle. Only
+        # after the watchdog's remote startup ACK does that lifecycle merge
+        # this ID into the authoritative attempt record, releasing science.
         print(
             f"Launched training {run_record.training_run_id}: "
             f"app={run_record.modal_app_id}, function_call={run_record.function_call_id}"

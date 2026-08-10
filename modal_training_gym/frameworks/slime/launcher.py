@@ -561,6 +561,7 @@ def _scientific_run_contract(
     has_hybrid_spec: bool,
     has_gdn: bool,
     train_ephemeral_disk: Any,
+    train_timeout_seconds: int,
     train_experimental_options: Mapping[str, Any],
     image_overlay_contract: dict[str, Any] | None,
 ) -> dict[str, Any]:
@@ -648,6 +649,7 @@ def _scientific_run_contract(
             "cloud": recipe.cloud,
             "region": recipe.region,
             "ephemeral_disk": _contract_value(train_ephemeral_disk),
+            "timeout_seconds": train_timeout_seconds,
             "experimental_options": _contract_value(train_experimental_options),
         },
     }
@@ -674,6 +676,177 @@ def _validate_committed_dataset_inputs(
             "deleting and rebuilding shared materialized data on retry would "
             "invalidate an authenticated parent boundary"
         )
+
+
+def _pop_train_function_timeout(train_function_kwargs: dict[str, Any]) -> int:
+    """Remove and validate the per-run Modal function timeout.
+
+    Keeping this value recipe-controlled lets short, hard-capped scientific jobs
+    fail closed well before the framework's extended-horizon default.  A bool is
+    rejected explicitly because it is an ``int`` subclass but cannot be a
+    meaningful duration here.
+    """
+
+    timeout = train_function_kwargs.pop("timeout", 48 * 60 * 60)
+    if isinstance(timeout, bool) or not isinstance(timeout, int) or timeout <= 0:
+        raise TypeError("slime.train_function_kwargs['timeout'] must be a positive integer")
+    return timeout
+
+
+async def _require_d1a_function_call_binding(
+    run_record: Any,
+    *,
+    polls: int = 15 * 60 * 4,
+    poll_seconds: float = 0.25,
+) -> Any:
+    """Join the local spawn ID into the remote run object before paid work.
+
+    ``TrainConfig.launch`` only learns Modal's FunctionCall ID after spawning
+    this function.  The remote initializer can therefore load an earlier record
+    with an empty ID and later overwrite the local binding from stale memory.
+    Receipt-bound D1a runs wait for the local writer, then copy its nonempty ID
+    into the long-lived remote object so every later status save preserves it.
+    The default 15-minute join allowance matches the sealed local cold-start
+    allowance; a queued H200 container must not fail provenance after 30 seconds.
+    """
+
+    if os.environ.get("DRIFT_ASYNC_RL_D1_MATRIX") != "1":
+        return run_record
+    if isinstance(polls, bool) or not isinstance(polls, int) or polls < 1:
+        raise ValueError("D1a function-binding polls must be a positive integer")
+    if poll_seconds < 0:
+        raise ValueError("D1a function-binding poll interval must be nonnegative")
+    record_type = type(run_record)
+    last_transient_error: Exception | None = None
+    for index in range(polls):
+        try:
+            latest = await record_type.from_id(
+                run_record.training_run_id,
+                is_async=True,
+            )
+        except Exception as exc:
+            last_transient_error = exc
+            latest = None
+        if latest is not None:
+            latest_run_id = str(getattr(latest, "training_run_id", "") or "")
+            latest_app_id = str(getattr(latest, "modal_app_id", "") or "")
+            if latest_run_id != str(run_record.training_run_id):
+                raise RuntimeError(
+                    "D1a persisted TrainingRun identity changed during remote startup"
+                )
+            if latest_app_id and latest_app_id != str(
+                getattr(run_record, "modal_app_id", "") or ""
+            ):
+                raise RuntimeError(
+                    "D1a persisted app binding changed during remote startup"
+                )
+        function_call_id = str(getattr(latest, "function_call_id", "") or "")
+        if function_call_id:
+            run_record.function_call_id = function_call_id
+            return run_record
+        if index + 1 < polls:
+            await asyncio.sleep(poll_seconds)
+    failure = RuntimeError(
+        "D1a FunctionCall ID was not durably joined into the remote TrainingRun"
+    )
+    if last_transient_error is not None:
+        raise failure from last_transient_error
+    raise failure
+
+
+async def _persist_and_verify_d1a_terminal_success(
+    run_record: Any,
+    *,
+    expected_attempt_id: str,
+    attempts: int = 3,
+    retry_seconds: float = 1.0,
+) -> Any:
+    """Durably prove D1a success without retrying any scientific work."""
+
+    if isinstance(attempts, bool) or not isinstance(attempts, int) or attempts < 1:
+        raise ValueError("D1a terminal metadata attempts must be a positive integer")
+    if (
+        isinstance(retry_seconds, bool)
+        or not isinstance(retry_seconds, int | float)
+        or retry_seconds < 0
+    ):
+        raise ValueError("D1a terminal metadata retry interval must be nonnegative")
+    expected_run_id = str(getattr(run_record, "training_run_id", "") or "")
+    expected_app_id = str(getattr(run_record, "modal_app_id", "") or "")
+    expected_function_id = str(getattr(run_record, "function_call_id", "") or "")
+    expected_root = f"/checkpoints/{expected_run_id}"
+    if not all((expected_run_id, expected_app_id, expected_function_id, expected_attempt_id)):
+        raise RuntimeError("D1a terminal success lacks its exact run/app/function/attempt IDs")
+
+    record_type = type(run_record)
+    last_error: Exception | None = None
+    for index in range(attempts):
+        try:
+            await run_record.save(is_async=True)
+            persisted = await record_type.from_id(expected_run_id, is_async=True)
+            metadata = getattr(persisted, "metadata", None)
+            attempts_ledger = metadata.get("attempts") if isinstance(metadata, dict) else None
+            sole_attempt = (
+                attempts_ledger[0]
+                if isinstance(attempts_ledger, list) and len(attempts_ledger) == 1
+                else None
+            )
+            observed_status = getattr(
+                getattr(persisted, "status", None),
+                "value",
+                getattr(persisted, "status", None),
+            )
+            if not (
+                str(getattr(persisted, "training_run_id", "") or "") == expected_run_id
+                and str(getattr(persisted, "modal_app_id", "") or "") == expected_app_id
+                and str(getattr(persisted, "function_call_id", "") or "")
+                == expected_function_id
+                and observed_status == TrainingRunStatus.COMPLETED.value
+                and isinstance(metadata, dict)
+                and metadata.get("attempt_mode") == "legacy"
+                and metadata.get("event_journal_enabled") is True
+                and metadata.get("event_journal_contract")
+                == "d1a_legacy_single_attempt_v1"
+                and metadata.get("attempt_count") == 1
+                and metadata.get("active_attempt_id") == expected_attempt_id
+                and metadata.get("logical_save_root") == expected_root
+                and metadata.get("active_attempt_root") == expected_root
+                and isinstance(sole_attempt, dict)
+                and sole_attempt.get("attempt") == 1
+                and sole_attempt.get("attempt_id") == expected_attempt_id
+                and sole_attempt.get("attempt_root") == expected_root
+                and sole_attempt.get("status") == "completed"
+            ):
+                raise RuntimeError(
+                    "authoritative D1a terminal run/attempt record differs from success"
+                )
+            return persisted
+        except Exception as exc:
+            last_error = exc
+            if index + 1 < attempts:
+                await asyncio.sleep(retry_seconds)
+    raise RuntimeError(
+        f"D1a terminal success was not durably persisted after {attempts} metadata attempts"
+    ) from last_error
+
+
+def _restore_d1a_terminal_binding(authoritative: Any, latest: Any) -> Any:
+    """Merge the exact live D1a object IDs into a stale mutable cache read."""
+
+    for field in ("modal_app_id", "function_call_id"):
+        expected = str(getattr(authoritative, field, "") or "")
+        observed = str(getattr(latest, field, "") or "")
+        if not expected:
+            raise RuntimeError(f"authoritative D1a {field} is empty at terminal save")
+        if observed and observed != expected:
+            raise RuntimeError(f"persisted D1a {field} conflicts with the exact live binding")
+        setattr(latest, field, expected)
+    expected_url = str(getattr(authoritative, "modal_app_url", "") or "")
+    observed_url = str(getattr(latest, "modal_app_url", "") or "")
+    if observed_url and expected_url and observed_url != expected_url:
+        raise RuntimeError("persisted D1a modal_app_url conflicts with the live binding")
+    latest.modal_app_url = expected_url
+    return latest
 
 
 def build_slime_app(
@@ -1213,6 +1386,7 @@ def build_slime_app(
     if user_experimental_options is not None:
         train_experimental_options.update(user_experimental_options)
     train_ephemeral_disk = train_function_kwargs.pop("ephemeral_disk", None)
+    train_timeout_seconds = _pop_train_function_timeout(train_function_kwargs)
     if train_function_kwargs:
         unsupported = ", ".join(sorted(train_function_kwargs))
         raise TypeError(f"Unsupported slime.train_function_kwargs keys: {unsupported}")
@@ -1228,6 +1402,7 @@ def build_slime_app(
             has_hybrid_spec=bool(_has_hybrid_spec),
             has_gdn=bool(_has_gdn),
             train_ephemeral_disk=train_ephemeral_disk,
+            train_timeout_seconds=train_timeout_seconds,
             train_experimental_options=train_experimental_options,
             image_overlay_contract=image_overlay_contract,
         )
@@ -1307,7 +1482,7 @@ def build_slime_app(
         volumes=all_volumes,
         secrets=train_secrets or None,
         ephemeral_disk=train_ephemeral_disk,
-        timeout=48 * 60 * 60,  # 2d — extended-horizon runs
+        timeout=train_timeout_seconds,
         # Retry policy is recipe-controlled. In committed attempt mode a retry
         # writes to a fresh namespace and may load only an authenticated boundary;
         # without a boundary it restarts from the recipe's original initialization.
@@ -1428,6 +1603,9 @@ def build_slime_app(
                 wandb_cfg=slime.wandb,
                 wandb_entity=initialized_wandb_entity,
                 framework_status_token=framework_status_token,
+            )
+            initialized_run_record = await _require_d1a_function_call_binding(
+                initialized_run_record
             )
             return (
                 initialized_cluster,
@@ -2034,6 +2212,11 @@ def build_slime_app(
             latest_run_record = await build_terminal_run_record(
                 run_record, training_run_id
             )
+            if os.environ.get("DRIFT_ASYNC_RL_D1_MATRIX") == "1":
+                latest_run_record = _restore_d1a_terminal_binding(
+                    run_record,
+                    latest_run_record,
+                )
             latest_attempt_id = str(
                 (latest_run_record.metadata or {}).get("active_attempt_id") or ""
             )
@@ -2053,9 +2236,24 @@ def build_slime_app(
                 except Exception as exc:
                     print(f"Failed to read step times: {exc}")
 
+                terminal_d1a_success = (
+                    os.environ.get("DRIFT_ASYNC_RL_D1_MATRIX") == "1"
+                    and latest_run_record.status == TrainingRunStatus.COMPLETED
+                )
                 try:
-                    await latest_run_record.save(is_async=True)
+                    if terminal_d1a_success:
+                        await _persist_and_verify_d1a_terminal_success(
+                            latest_run_record,
+                            expected_attempt_id=attempt_id,
+                        )
+                    else:
+                        await latest_run_record.save(is_async=True)
                 except Exception as exc:
+                    if terminal_d1a_success:
+                        raise RuntimeError(
+                            "D1a completed scientific work but terminal metadata "
+                            "persistence/readback failed"
+                        ) from exc
                     print(f"Failed to save run record: {exc}")
                 else:
                     if step_times_read:
