@@ -82,20 +82,22 @@ def report_advantage_distribution(
     if response_lengths is None or total_lengths is None:
         return
 
-    n = len(advantages)
+    # Topology reads are deterministic per build, so a failure here is
+    # symmetric across CP ranks and an early return cannot strand peers.
     try:
-        device = advantages[0].device
-        sums = torch.zeros(n, dtype=torch.float64, device=device)
-        counts = torch.zeros(n, dtype=torch.float64, device=device)
-        failed = torch.zeros(1, dtype=torch.float64, device=device)
         cp_size = parallel_state.cp.size
         cp_rank = parallel_state.cp.rank
     except Exception as exc:
         _warn_once(exc)
         return
 
+    n = len(advantages)
+    sums = counts = None
     compute_exc: Exception | None = None
     try:
+        device = advantages[0].device
+        sums = torch.zeros(n, dtype=torch.float64, device=device)
+        counts = torch.zeros(n, dtype=torch.float64, device=device)
         if cp_size == 1:
             local_masks = loss_masks
         else:
@@ -119,26 +121,42 @@ def report_advantage_distribution(
             counts[i] = mask[:m].sum()
     except Exception as exc:
         compute_exc = exc
-        failed[0] = 1.0
 
-    try:
-        if cp_size > 1:
-            # Every CP rank holds a token-shard of the same samples; reduce so
-            # each sample's mean is taken over its full response.
+    if cp_size > 1:
+        # Every CP rank holds a token-shard of the same samples; reduce so
+        # each sample's mean is taken over its full response. Reduce the
+        # 1-element failed flag first: it is the only tensor a rank that
+        # failed above can still contribute, and it lets every rank agree
+        # to skip the sums/counts collective instead of stranding peers.
+        try:
             from miles.utils.ft_utils.process_group_utils import GeneralPGUtil
+
+            if sums is not None:
+                failed_device = sums.device
+            elif torch.cuda.is_available():
+                failed_device = torch.device("cuda", torch.cuda.current_device())
+            else:
+                failed_device = torch.device("cpu")
+            failed = torch.zeros(1, dtype=torch.float64, device=failed_device)
+            if compute_exc is not None:
+                failed[0] = 1.0
 
             cp_group = parallel_state.cp.group
             pg_util = GeneralPGUtil.create(cp_group)
-            pg_util.all_reduce(sums, cp_group, dist.ReduceOp.SUM)
-            pg_util.all_reduce(counts, cp_group, dist.ReduceOp.SUM)
             pg_util.all_reduce(failed, cp_group, dist.ReduceOp.SUM)
-    except Exception as exc:
-        _warn_once(exc)
-        return
+            any_failed = failed.item() > 0
+            if not any_failed:
+                pg_util.all_reduce(sums, cp_group, dist.ReduceOp.SUM)
+                pg_util.all_reduce(counts, cp_group, dist.ReduceOp.SUM)
+        except Exception as exc:
+            _warn_once(exc)
+            return
+    else:
+        any_failed = compute_exc is not None
 
     if compute_exc is not None:
         _warn_once(compute_exc)
-    if failed.item() > 0:
+    if any_failed:
         return
 
     if cp_rank != 0:
