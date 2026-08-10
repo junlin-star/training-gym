@@ -31,16 +31,14 @@
 import modal
 
 from modal_training_gym import (
-    DeploymentConfig,
-    EvalConfig,
-    EvalRowResult,
+    CheckpointType,
+    Endpoint,
     HuggingFaceDataset,
-    ModelDeployment,
     Qwen3_6_35B,
     TrainConfig,
+    convert_checkpoint_to_hf,
     list_checkpoints,
 )
-from modal_training_gym.deploy_recipes.sglang_recipe import Qwen3_6_35b_SglangRecipe
 from modal_training_gym.train_recipes.slime_recipe import Qwen3_6_35b_Recipe
 
 # ## Load DAPO-math from HuggingFace
@@ -86,8 +84,9 @@ def _main_impl() -> None:
     # - Built-in slime model args come from
     #   `scripts/models/qwen3.5-35B-A3B.sh`; the tutorial does not patch slime.
 
+    model = Qwen3_6_35B()
     training_run = TrainConfig(
-        model=Qwen3_6_35B(),
+        model=model,
         dataset=dataset,
         recipe=Qwen3_6_35b_Recipe(
             rm_type="deepscaler",
@@ -98,20 +97,36 @@ def _main_impl() -> None:
     train_result = training_run.train()
     print(f"Training run id: {train_result.training_run_id}")
 
-    # ## Serve and evaluate
+    # ## Convert the checkpoint to HuggingFace format
     #
-    # Serve the trained checkpoint and run a quick math eval.
+    # Slime writes Megatron-format checkpoints, which inference engines
+    # can't read. `convert_checkpoint_to_hf` runs the conversion on a GPU
+    # container sized from the training run and writes the result back to
+    # the same checkpoints volume as a sibling `*_hf` directory.
+    #
+    # Checkpoints already in HuggingFace format are passed through, so
+    # re-running this cell is cheap.
 
     checkpoint = list_checkpoints(train_result.training_run_id)[-1]
-    trained_deployment = DeploymentConfig(
-        model=Qwen3_6_35B(),
-        recipe=Qwen3_6_35b_SglangRecipe(),
-        checkpoint=checkpoint,
-        app_name="qwen3-6-35b-math-serve",
-        served_model_name="qwen3-6-35b-math",
-        unauthenticated=True,
-    ).serve()
-    print(f"Trained model URL: {trained_deployment.url}")
+    if checkpoint.checkpoint_type is CheckpointType.megatron:
+        checkpoint = convert_checkpoint_to_hf(checkpoint, model)
+    print(f"Serving checkpoint: {checkpoint.path}")
+
+    # ## Serve the trained model
+    #
+    # `Endpoint.launch` provisions a Modal endpoint that mounts the
+    # checkpoint volume and serves the weights behind an OpenAI-compatible
+    # API. The endpoint name is derived from the model and checkpoint, so
+    # re-running this cell reuses the same endpoint instead of creating a
+    # second one.
+    #
+    # `launch` returns as soon as the endpoint has a URL; loading a 35B MoE
+    # checkpoint off the volume takes considerably longer than that, which
+    # is what `wait_until_ready` waits for.
+
+    endpoint = Endpoint.launch(model, checkpoint, unauthenticated=True)
+    endpoint.wait_until_ready(timeout_sec=45 * 60)
+    print(f"Trained model URL: {endpoint.url}")
 
 @tutorial_cli_app.local_entrypoint()
 def main() -> None:
