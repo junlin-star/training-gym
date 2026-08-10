@@ -592,6 +592,7 @@ class SlimeRecipe(BaseTrainRecipe):
     save: str = "/checkpoints"
     load: str = ""
     no_save_optim: bool = False
+    no_load_optim: bool = False
     megatron_to_hf_mode: str = ""
 
     # Regex patterns of parameter names to freeze (slime's

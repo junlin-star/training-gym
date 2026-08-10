@@ -20,7 +20,7 @@
 # before training, enabling fast batched weight sync during training steps.
 # Run with:
 # ```
-# uv run modal run -d tutorials/rl/004_qwen35b/004_qwen35b.py
+# uv run modal run -d tutorials/singlenode/000_qwen35b/000_qwen35b.py
 # ```
 # ## Prerequisites
 #

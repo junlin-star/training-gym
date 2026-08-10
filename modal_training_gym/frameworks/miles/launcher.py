@@ -65,6 +65,7 @@ from modal_training_gym.frameworks.miles.modal_helpers.utils import (
 )
 
 MILES_ROOT = "/root/miles"
+SYSTEM_LIB_DIR = "/usr/lib/x86_64-linux-gnu"
 # v0.8.0+ makes per-task CPU/memory requests configurable via enforcement
 # policies ("limit"/"ignore"), letting sandboxes burst on Modal and bill by
 # actual CPU-/RAM-second usage instead of over-provisioning a static reservation.
@@ -88,6 +89,44 @@ def _build_miles_base_image(miles: MilesRecipe) -> Image:
     if miles.image_run_commands:
         image = image.run_commands(*miles.image_run_commands)
     return image
+
+
+def _compose_ld_library_path() -> str:
+    parts = [SYSTEM_LIB_DIR]
+    for part in os.environ.get("LD_LIBRARY_PATH", "").split(":"):
+        if part and part not in parts:
+            parts.append(part)
+    return ":".join(parts)
+
+
+def build_ray_runtime_env(
+    *,
+    head_addr: str,
+    wandb_env: dict[str, str],
+    environment: dict,
+) -> dict:
+    """Runtime env for the Ray job that runs miles.
+
+    Ray workers do not pick up the container's linker path on their own, and
+    without it the Megatron actor can resolve a libibverbs that does not match
+    the image's libmlx5 and die importing mooncake. The system lib dir is put
+    in front for that reason; the rest is read from the container, so whatever
+    the image exports — including any wheel-shipped nvidia lib dirs — is
+    carried through. Composing it here rather than in an ``image_env`` entry
+    keeps it independent of whether the base image exports ``LD_LIBRARY_PATH``
+    in its own ``ENV``: a Dockerfile ``$LD_LIBRARY_PATH`` expands to an empty
+    string when it does not, which would drop those dirs and leave a trailing
+    empty entry that the loader reads as the working directory. A recipe can
+    still override the whole thing through ``environment``.
+    """
+    env_vars: dict[str, str] = {
+        "no_proxy": f"127.0.0.1,{head_addr}",
+        "MASTER_ADDR": head_addr,
+        "LD_LIBRARY_PATH": _compose_ld_library_path(),
+    }
+    env_vars.update(wandb_env)
+    env_vars.update(environment)
+    return {"env_vars": env_vars}
 
 
 def build_miles_app(
@@ -702,14 +741,11 @@ def build_miles_app(
             if wandb_entity:
                 wandb_env["WANDB_ENTITY"] = wandb_entity
 
-            runtime_env = {
-                "env_vars": {
-                    "no_proxy": f"127.0.0.1,{cluster.head_addr}",
-                    "MASTER_ADDR": cluster.head_addr,
-                    **wandb_env,
-                    **miles.environment,
-                }
-            }
+            runtime_env = build_ray_runtime_env(
+                head_addr=cluster.head_addr,
+                wandb_env=wandb_env,
+                environment=miles.environment,
+            )
 
             mode = "async" if miles.async_mode else "sync"
             print(

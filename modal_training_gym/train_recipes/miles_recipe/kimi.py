@@ -61,11 +61,6 @@ class _KimiK2Recipe(MilesRecipe):
             "rm -rf /root/.cache/huggingface 2>/dev/null || true",
         ]
     )
-    image_env: dict[str, str] = field(
-        default_factory=lambda: {
-            "LD_LIBRARY_PATH": "/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH"
-        }
-    )
     miles_model_script: str = "scripts/models/kimi-k2-thinking.sh"
     environment: dict[str, str] = field(
         default_factory=lambda: {
