@@ -728,6 +728,7 @@ async def build_terminal_run_record(run_record: Any, training_run_id: str) -> An
         "last_committed_boundary",
         "logical_save_root",
         "max_retries",
+        "max_attempts",
         "primary_failure",
         "ray_failure_diagnostics",
         "resume_boundary",

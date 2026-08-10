@@ -116,6 +116,31 @@ SLIME_IMAGE = "slimerl/slime@sha256:269b44b17e3f7136447db4cdaa3bf36ef9e3169f1596
 # actual CPU-/RAM-second usage instead of over-provisioning a static reservation.
 HARBOR_PKG_VERSION = "0.8.0"
 
+
+def _modal_retry_policy(max_retries: int) -> Retries | None:
+    """Represent zero retries with Modal's unambiguous no-policy default."""
+
+    if isinstance(max_retries, bool) or not isinstance(max_retries, int):
+        raise ValueError("max_retries must be an integer")
+    if max_retries < 0:
+        raise ValueError("max_retries must be nonnegative")
+    return (
+        None
+        if max_retries == 0
+        else Retries(max_retries=max_retries, initial_delay=0.0)
+    )
+
+
+def _validate_attempt_limit(attempt_count: int, max_attempts: int | None) -> None:
+    """Fail before Ray/model work when a logical-attempt ceiling was exceeded."""
+
+    if max_attempts is not None and attempt_count > max_attempts:
+        raise RuntimeError(
+            "logical attempt limit exceeded before Ray bootstrap: "
+            f"attempt_count={attempt_count} max_attempts={max_attempts}"
+        )
+
+
 _SLIME_PATCHES = Path(__file__).parent / "modal_helpers" / "patches"
 _PATCH_VALIDATION_B64 = encode_patch("patch_validation", _SLIME_PATCHES)
 _PATCH_MEGATRON_BRIDGE_B64 = encode_patch("patch_megatron_bridge", _SLIME_PATCHES)
@@ -571,6 +596,7 @@ def _scientific_run_contract(
         "retry_policy": {
             "attempt_mode": recipe.attempt_mode,
             "max_retries": int(recipe.max_retries),
+            "max_attempts": recipe.max_attempts,
             "save_interval": int(recipe.save_interval),
         },
         "model": _public_config_snapshot(model),
@@ -1268,7 +1294,11 @@ def build_slime_app(
         # Retry policy is recipe-controlled. In committed attempt mode a retry
         # writes to a fresh namespace and may load only an authenticated boundary;
         # without a boundary it restarts from the recipe's original initialization.
-        retries=Retries(max_retries=slime.max_retries, initial_delay=0.0),
+        # ``Retries(max_retries=0)`` is needlessly ambiguous at the protobuf
+        # boundary because zero-valued scalar fields are elided.  Use Modal's
+        # no-policy default for the zero case; positive values retain the
+        # explicit recipe-controlled policy.
+        retries=_modal_retry_policy(slime.max_retries),
         single_use_containers=True,
         experimental_options=train_experimental_options or None,
         serialized=True,
@@ -1429,6 +1459,7 @@ def build_slime_app(
         logical_save_root: str | None = None
 
         try:  # Wraps all post-setup work so any failure marks the run terminal.
+            _validate_attempt_limit(attempt_count, slime.max_attempts)
             record_training_attempt_cluster_identity(
                 run_record, cluster.identity_snapshot()
             )

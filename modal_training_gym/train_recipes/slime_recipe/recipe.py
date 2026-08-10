@@ -67,6 +67,7 @@ _SLIME_SKIP = {
     "train_function_kwargs",
     "attempt_mode",
     "max_retries",
+    "max_attempts",
     "conversion_pipeline_model_parallel_size",
     "conversion_tensor_model_parallel_size",
     "conversion_expert_model_parallel_size",
@@ -148,6 +149,11 @@ class SlimeRecipe(BaseTrainRecipe):
     # permits resume only from a framework-authenticated boundary manifest.
     attempt_mode: Literal["legacy", "committed"] = "legacy"
     max_retries: int = 3
+    # Independent of Modal's retry policy, cap the number of logical attempt
+    # namespaces that may enter Ray/model initialization.  This is a second,
+    # application-level guard for scientific jobs that must never continue in
+    # a replacement attempt after a platform interruption.
+    max_attempts: int | None = None
 
     # ── Per-sample execution tracing (dashboard timeline) ───────────────────
     # When True, the rollout recorder attaches slime's per-sample trace (the
@@ -313,6 +319,8 @@ class SlimeRecipe(BaseTrainRecipe):
     def _resolve_callable_paths(self) -> "SlimeRecipe":
         if self.max_retries < 0:
             raise ValueError("max_retries must be nonnegative")
+        if self.max_attempts is not None and self.max_attempts < 1:
+            raise ValueError("max_attempts must be positive when provided")
         cfg = dict(self.extra_config) if isinstance(self.extra_config, dict) else {}
         if self.custom_generate_function is not None:
             if not cfg.get("custom_generate_function_path"):
