@@ -116,9 +116,7 @@ def _main_impl() -> None:
     #
     # `Endpoint.launch` provisions a Modal endpoint that mounts the
     # checkpoint volume and serves the weights behind an OpenAI-compatible
-    # API. The endpoint name is derived from the model and checkpoint, so
-    # re-running this cell reuses the same endpoint instead of creating a
-    # second one.
+    # API. The endpoint name is derived from the model and checkpoint.
     #
     # `launch` returns as soon as the endpoint has a URL; loading a 35B MoE
     # checkpoint off the volume takes considerably longer than that, which
