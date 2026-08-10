@@ -161,7 +161,7 @@ def _conversion_gpu_spec(
 def convert_checkpoint_to_hf(
     checkpoint: Checkpoint,
     model: ModelConfig,
-    recipe: VllmRecipe | SglangRecipe,
+    recipe: VllmRecipe | SglangRecipe = SglangRecipe(),
 ) -> Checkpoint:
     import modal
     from modal import App, Volume
