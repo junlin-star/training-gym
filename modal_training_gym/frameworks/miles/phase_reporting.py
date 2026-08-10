@@ -65,11 +65,6 @@ def _hook_path_from_args(args: Any, path_key: str) -> str | None:
     if isinstance(direct, str) and direct.strip():
         return direct
 
-    # Also honor the miles-native key (e.g. `custom_rollout_log_function_path`)
-    # set through the extra_config escape hatch: the CLI flag it used to feed
-    # now always points at the gym wrapper, so dispatch to it from here. Skip
-    # gym-wrapper paths — the CLI flag value itself may leak into the config,
-    # and dispatching to it would recurse.
     native_key = path_key.removeprefix("training_gym_")
     for container_name in ("extra_config", "custom_config"):
         container = getattr(args, container_name, None)

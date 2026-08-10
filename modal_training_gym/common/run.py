@@ -249,9 +249,7 @@ class TrainingRun(BaseModel):
         metadata["framework_progress"] = progress
         self.metadata = metadata
 
-        # Step timing is slime-only: miles never emits step_event markers, and
-        # without a step window even plain phase updates would be misrecorded
-        # as substep entries.
+        # TODO update step timing
         if self.framework is Framework.SLIME:
             current_step = progress.get("current")
             record_step_time_event(

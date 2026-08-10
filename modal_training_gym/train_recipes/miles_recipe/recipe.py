@@ -631,9 +631,6 @@ class MilesRecipe(BaseTrainRecipe):
     @model_validator(mode="after")
     def _resolve_callable_paths(self) -> "MilesRecipe":
         if self.extra_config is not None and not isinstance(self.extra_config, dict):
-            # The four intercepted hooks ride along inside extra_config under
-            # `training_gym_*` keys; with a YAML *path* there is no dict to
-            # stash them in, so they would be silently dropped. Fail loudly.
             set_hooks = [
                 field_name
                 for field_name in _HOOK_PATH_CONFIG_KEYS
@@ -651,10 +648,6 @@ class MilesRecipe(BaseTrainRecipe):
             return self
         cfg = dict(self.extra_config or {})
         for field_name, config_key in _HOOK_PATH_CONFIG_KEYS.items():
-            # Migrate a miles-native key (e.g. custom_rollout_log_function_path)
-            # out of the escape hatch: miles applies custom-config YAML keys
-            # onto args *after* argparse, so leaving it would clobber the CLI
-            # flag that points at the gym wrapper and bypass reporting.
             native_key = config_key.removeprefix("training_gym_")
             native_value = cfg.pop(native_key, None)
             value = getattr(self, field_name)

@@ -20,12 +20,7 @@ _warned_compute_failure = False
 
 
 def _warn_once(exc: Exception) -> None:
-    """Surface the first advantage-math failure instead of dying silently.
-
-    The compute block is deliberately fail-open (reporting must never break
-    training), but a drifted miles API — e.g. a renamed ``cp_utils`` helper —
-    would otherwise just make advantage data vanish from the dashboard.
-    """
+    """Log the first advantage-math failure; the reporter itself stays fail-open."""
     global _warned_compute_failure
     if _warned_compute_failure:
         return
@@ -85,8 +80,6 @@ def report_advantage_distribution(
 
     n = len(advantages)
     try:
-        # These depend only on rollout_data shape / parallel topology, which
-        # are identical across CP ranks — a bail-out here is symmetric.
         device = advantages[0].device
         sums = torch.zeros(n, dtype=torch.float64, device=device)
         counts = torch.zeros(n, dtype=torch.float64, device=device)
@@ -97,11 +90,6 @@ def report_advantage_distribution(
         _warn_once(exc)
         return
 
-    # The per-rank math below (cp_utils call + mask loop) could fail on only
-    # some CP ranks; a plain early return there would strand the peers in the
-    # all-reduce and hang the training step. Instead record the failure in a
-    # tensor that rides along in the collective, so every rank still
-    # participates and then degrades together.
     compute_exc: Exception | None = None
     try:
         if cp_size == 1:
@@ -132,10 +120,7 @@ def report_advantage_distribution(
     try:
         if cp_size > 1:
             # Every CP rank holds a token-shard of the same samples; reduce so
-            # each sample's mean is taken over its full response. Go through
-            # miles' own GeneralPGUtil rather than raw dist.all_reduce — with
-            # torchft fault tolerance the CP group is a raw ProcessGroup that
-            # torch.distributed's module-level collectives can't dispatch to.
+            # each sample's mean is taken over its full response.
             from miles.utils.ft_utils.process_group_utils import GeneralPGUtil
 
             cp_group = parallel_state.cp.group
@@ -150,7 +135,6 @@ def report_advantage_distribution(
     if compute_exc is not None:
         _warn_once(compute_exc)
     if failed.item() > 0:
-        # Some CP rank's shard is missing — the means would be wrong.
         return
 
     if cp_rank != 0:
