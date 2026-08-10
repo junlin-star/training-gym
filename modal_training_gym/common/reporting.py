@@ -17,6 +17,8 @@ from typing import Any
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
+from modal_training_gym.common.sample_extraction import _coerce_float
+
 # Legacy env names kept for backwards compatibility with older images.
 PHASE_REPORT_URL_ENV = "SLIME_PHASE_REPORT_URL"
 PHASE_REPORT_TOKEN_ENV = "SLIME_PHASE_REPORT_TOKEN"
@@ -233,3 +235,38 @@ def _post(item: dict[str, Any]) -> None:
             response.read()
     except (OSError, URLError):
         return
+
+
+def _advantage_samples_payload(
+    sample_sums: list[float],
+    sample_counts: list[float],
+    sample_indices: list[int | None],
+    raw_rewards: list[object],
+    n_samples_per_prompt: int,
+) -> list[dict[str, float | int | None]]:
+    """Build the per-sample advantage rows from masked ``(sum, count)`` pairs.
+
+    Pure (no torch / mpu) so the group-index and divide-by-count logic is
+    unit-testable. ``advantage = sum / count`` is the mask-weighted mean over
+    the sample's response tokens; ``group_index`` is the GRPO prompt group the
+    sample belongs to (``sample_index // n_samples_per_prompt``).
+    """
+    n_per = max(1, int(n_samples_per_prompt or 1))
+    out: list[dict[str, float | int | None]] = []
+    for i in range(len(sample_sums)):
+        count = sample_counts[i] if i < len(sample_counts) else 0.0
+        advantage = (sample_sums[i] / count) if count else 0.0
+        if i < len(sample_indices) and sample_indices[i] is not None:
+            idx = int(sample_indices[i])
+        else:
+            idx = i
+        raw = raw_rewards[i] if i < len(raw_rewards) else None
+        out.append(
+            {
+                "sample_index": idx,
+                "group_index": idx // n_per,
+                "advantage": float(advantage),
+                "raw_reward": _coerce_float(raw) if raw is not None else None,
+            }
+        )
+    return out

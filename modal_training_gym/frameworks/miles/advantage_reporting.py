@@ -1,5 +1,11 @@
-"""Torch / Megatron advantage-distribution math for miles' dashboard
+"""Torch / Megatron advantage-distribution math for miles's dashboard
 reporting.
+
+Split out of :mod:`.phase_reporting` (which re-exports these). The pure payload
+builder (:func:`_advantage_samples_payload`, shared with slime) lives in
+:mod:`modal_training_gym.common.reporting`;
+:func:`report_advantage_distribution` lazily imports torch / miles so this
+module stays importable outside the training container.
 """
 
 from __future__ import annotations
@@ -7,13 +13,11 @@ from __future__ import annotations
 import time
 
 from modal_training_gym.common.reporting import (
+    _advantage_samples_payload as _advantage_samples_payload,
     _arg_value,
     _enqueue_advantage,
     _positive_int,
     _run_context,
-)
-from modal_training_gym.frameworks.slime.advantage_reporting import (
-    _advantage_samples_payload as _advantage_samples_payload,
 )
 
 _warned_compute_failure = False
