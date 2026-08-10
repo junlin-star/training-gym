@@ -230,7 +230,7 @@ class Endpoint:
                 )
         return headers
 
-    def wait_until_ready(self, timeout_sec: float = 15 * 60) -> None:
+    def wait_until_ready(self, timeout_sec: float = 30 * 60) -> None:
         """Block until the endpoint can serve traffic.
 
         Polls ``/v1/models`` and returns as soon as it answers. A fresh
