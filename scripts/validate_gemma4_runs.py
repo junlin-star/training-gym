@@ -59,8 +59,8 @@ _CHART_INSTRUCTION = (
 _GROUNDING_INSTRUCTION = (
     "<image>\n"
     "Point at the described element in the screenshot. Reply with only the "
-    "click position as normalized coordinates \\boxed{{x,y}}, each between 0 "
-    "and 1.\n\nElement: {instruction}"
+    "click position as \\boxed{{x,y}}, on a 0-1000 grid across the width and "
+    "height.\n\nElement: {instruction}"
 )
 
 
@@ -347,6 +347,10 @@ def score_grounding(response: str, label: str) -> float:
         left, top, right, bottom = (float(v) for v in label.split(","))
     except ValueError:
         return -1.0
+    # Gemma answers on a 0-1000 grid, which is its native grounding convention;
+    # accept a 0-1 fraction too rather than fight the model for the format.
+    if max(x, y) > 1.0:
+        x, y = x / 1000.0, y / 1000.0
     if not (0.0 <= x <= 1.0 and 0.0 <= y <= 1.0):
         return -1.0
 

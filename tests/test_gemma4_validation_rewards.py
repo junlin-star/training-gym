@@ -142,9 +142,8 @@ def test_grounding_decays_between_edge_and_margin():
     assert -1.0 < far < near < 1.0
 
 
-def test_grounding_rejects_unparseable_and_out_of_range_points():
+def test_grounding_rejects_unparseable_points():
     assert runs.score_grounding("no idea", BOX) == -1.0
-    assert runs.score_grounding("\\boxed{1.4,0.3}", BOX) == -1.0
 
 
 # ── Spread ───────────────────────────────────────────────────────────────────
@@ -170,3 +169,25 @@ def test_a_mixed_group_is_not_zero_variance(score, label, responses):
     """The failure mode these runs exist to avoid: every sample scoring alike."""
     scores = [score(r, label) for r in responses]
     assert len(set(scores)) > 1
+
+
+# ── Gemma's 0-1000 grounding grid ────────────────────────────────────────────
+
+
+def test_grounding_accepts_gemmas_thousand_grid():
+    """Gemma answers 933,56 rather than 0.933,0.056; both must score alike."""
+    assert runs.score_grounding("\\boxed{300,300}", BOX) == 1.0
+    assert runs.score_grounding("\\boxed{0.3,0.3}", BOX) == 1.0
+
+
+def test_grounding_thousand_grid_still_penalises_a_miss():
+    assert runs.score_grounding("\\boxed{950,950}", BOX) == -1.0
+
+
+def test_grounding_rejects_coordinates_past_the_grid():
+    assert runs.score_grounding("\\boxed{1400,300}", BOX) == -1.0
+
+
+def test_grounding_observed_pixel_answer_is_scored_not_floored():
+    """Regression: this exact response scored the -1.0 floor on the first run."""
+    assert runs.score_grounding("\\boxed{933,56}", "0.90,0.02,0.99,0.10") == 1.0
