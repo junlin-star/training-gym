@@ -20,11 +20,15 @@ deliberate deviations from ``run_inkling.py``, and expected step timings.
 from __future__ import annotations
 
 from dataclasses import field
+from typing import Any
 
 from pydantic import ConfigDict
 from pydantic.dataclasses import dataclass
 
 from modal_training_gym.train_recipes.miles_recipe.recipe import MilesRecipe
+
+# Same function as the text provider with mm_towers=True; see _fields below.
+_MM_MODEL_PROVIDER = "miles_plugins.models.inkling.model.inkling_mm_model_provider"
 
 
 @dataclass(config=ConfigDict(extra="forbid", arbitrary_types_allowed=True))
@@ -154,10 +158,28 @@ class _InklingSmallRecipe(MilesRecipe):
     sglang_context_length: int = 4096
     sglang_disable_custom_all_reduce: bool = True
 
-    # Set to "miles_plugins.models.inkling.model.inkling_mm_model_provider" to train
-    # with the frozen HF vision/audio towers. MODEL_ARGS precede the recipe's flags
-    # on the command line, so this overrides the text provider from the model script.
+    # Resolved from the dataset by ``_fields`` — a MultimodalDataset selects the
+    # multimodal provider. Set it explicitly to pin one regardless of the dataset.
+    # MODEL_ARGS precede the recipe's flags on the command line, so whichever value
+    # lands here overrides the text provider baked into the model script.
     custom_model_provider_path: str | None = None
+
+    def _fields(self, dataset=None, model=None) -> dict[str, Any]:
+        fields = super()._fields(dataset=dataset, model=model)
+        # inkling-small.sh pins the *text* provider. Both providers are the same
+        # function; the multimodal one just passes mm_towers=True, which calls
+        # wire_mm_towers() to build the vision/audio towers and load them straight
+        # from --hf-checkpoint (they never live in the torch_dist checkpoint, so no
+        # re-conversion is needed). The data side needs no switch: miles selects
+        # InklingTrainProcessor off the checkpoint's model_type and forwards its
+        # patch tensors into forward() generically.
+        if (
+            dataset is not None
+            and getattr(dataset, "multimodal_keys", None)
+            and not self.custom_model_provider_path
+        ):
+            fields["custom_model_provider_path"] = _MM_MODEL_PROVIDER
+        return fields
 
 
 @dataclass(config=ConfigDict(extra="forbid", arbitrary_types_allowed=True))
