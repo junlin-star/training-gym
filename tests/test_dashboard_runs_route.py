@@ -207,8 +207,12 @@ def test_timing_read_failure_preserves_cached_lanes(monkeypatch, tmp_path):
     assert stale["0"] == entry.lanes["0"]
     assert stale["metadata"]["timing_stale"] is True
     assert entry.lanes == {"0": {"roles": {"driver": {"phases": {}}}}}
-    assert entry.read_at == 0.0
+    assert entry.read_at > 0.0
     assert entry.final is False
+
+    throttled = asyncio.run(run_timings("preserved-run"))
+    assert throttled["metadata"]["timing_stale"] is True
+    assert throttled["0"] == entry.lanes["0"]
 
     entry.read_at = 0.0
     fresh = asyncio.run(run_timings("preserved-run"))

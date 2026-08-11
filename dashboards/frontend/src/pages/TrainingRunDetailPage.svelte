@@ -26,6 +26,8 @@
   } from "../lib/api.js";
   import { groupByRollout, rolloutIndex, rolloutScores } from "../lib/rolloutGrouping.js";
   import {
+    isLegacyTiming,
+    rolloutIdForTimingKey,
     shouldShowTimingSection,
     timingIsAsync,
     timingRunStart,
@@ -550,6 +552,7 @@
 
   let runTimings = $state({});
   let runTimingsSerialized = $state("{}");
+  let legacyTiming = $derived(isLegacyTiming(runTimings));
   let showTimingSection = $derived(shouldShowTimingSection(runTimings));
   let timelineAsync = $derived(timingIsAsync(runTimings));
   let timelineRunOrigin = $derived(timingRunStart(runTimings));

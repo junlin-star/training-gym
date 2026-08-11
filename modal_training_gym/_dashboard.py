@@ -973,6 +973,7 @@ def fastapi_app():
                 entry.dirty = False
                 timings, had_read_failures = await _read_run_timings(training_run_id)
                 if had_read_failures:
+                    entry.read_at = time.monotonic()
                     entry.final = False
                     entry.stale = True
                 else:

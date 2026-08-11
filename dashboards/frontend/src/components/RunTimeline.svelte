@@ -113,9 +113,14 @@
     }
   }
 
-  function scheduleHide() {
+  function scheduleHide(target = "bar") {
     clearHideTimer();
-    if (!pinned) hideTimer = window.setTimeout(() => (tip = null), 180);
+    if (!pinned) {
+      hideTimer = window.setTimeout(() => {
+        if (target === "lane") laneTip = null;
+        else tip = null;
+      }, 180);
+    }
   }
 
   function showTip(e, bar) {
@@ -149,7 +154,7 @@
   }
 
   function hideLaneTip() {
-    scheduleHide();
+    scheduleHide("lane");
   }
 
   function pinTip(e, bar) {
