@@ -694,11 +694,9 @@ def _sample_to_dict(
                 metadata["eval_report"] = compact
 
     sample_index = optional_int(get("index"))
-    group_index = (
-        None
-        if sample_index is None
-        else sample_index // max(1, int(n_samples_per_prompt or 1))
-    )
+    group_index = optional_int(get("group_index"))
+    if group_index is None and sample_index is not None:
+        group_index = sample_index // max(1, int(n_samples_per_prompt or 1))
 
     if audio_uri := _extract_audio_from_prompt(prompt):
         metadata["_metadata_type"] = "audio"
@@ -729,6 +727,7 @@ def _sample_to_dict(
         out["rollout_index"] = rollout_index
     if sample_index is not None:
         out["sample_index"] = sample_index
+    if group_index is not None:
         out["group_index"] = group_index
     # Store raw + parsed (mirrors eval's EvalRowResult) so the dashboard can show
     # cleaned content without re-parsing. Parsing happens here, in the recorder.
