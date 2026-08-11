@@ -11,7 +11,7 @@ import pytest
 
 from modal_training_gym.common import endpoint as endpoint_module
 from modal_training_gym.common.checkpoint import Checkpoint, CheckpointType
-from modal_training_gym.common.endpoint import Endpoint, _resolve_model_name
+from modal_training_gym.common.endpoint import Endpoint
 from modal_training_gym.common.errors import TrainingGymConfigError
 from modal_training_gym.common.models import ModelConfig
 
@@ -128,11 +128,18 @@ def _endpoint(*, requires_proxy_auth: bool = False) -> Endpoint:
     )
 
 
-def test_resolve_model_name_accepts_strings_and_model_configs() -> None:
-    assert _resolve_model_name("Qwen/Qwen3-4B") == "Qwen/Qwen3-4B"
-    assert (
-        _resolve_model_name(ModelConfig(model_name="Qwen/Qwen3-4B")) == "Qwen/Qwen3-4B"
-    )
+@pytest.mark.parametrize(
+    "model", ["Qwen/Qwen3-4B", ModelConfig(model_name="Qwen/Qwen3-4B")]
+)
+def test_launch_accepts_strings_and_model_configs(
+    fake_modal_cli, model: ModelConfig | str
+) -> None:
+    cli = fake_modal_cli()
+
+    endpoint = Endpoint.launch(model, unauthenticated=True)
+
+    assert cli.flag_value("--model") == "Qwen/Qwen3-4B"
+    assert endpoint.model_name == "Qwen/Qwen3-4B"
 
 
 def test_launch_creates_a_public_endpoint(fake_modal_cli) -> None:
