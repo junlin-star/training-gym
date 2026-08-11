@@ -96,6 +96,34 @@ DRIVERS = [
     ),
 ]
 
+MILES_PACKAGE_TARGETS = [
+    (
+        "miles/ray/rollout/rollout_manager.py",
+        "miles/rollout_manager.py.input",
+        "miles/rollout_manager.py.timing.output",
+    ),
+    (
+        "miles/rollout/rm_hub/__init__.py",
+        "miles/rm_hub_init.py.input",
+        "miles/rm_hub_init.py.timing.output",
+    ),
+    (
+        "miles/rollout/sglang_rollout.py",
+        "miles/sglang_rollout.py.input",
+        "miles/sglang_rollout.py.timing.output",
+    ),
+    (
+        "miles/backends/megatron_utils/actor.py",
+        "miles/actor.py.input",
+        "miles/actor.py.timing.output",
+    ),
+    (
+        "miles/backends/megatron_utils/model.py",
+        "miles/model.py.input",
+        "miles/model.py.timing.output",
+    ),
+]
+
 
 @pytest.fixture(scope="session")
 def patchers() -> dict[str, object]:
@@ -146,6 +174,32 @@ def test_patch_matches_golden(
     for phase in expected_phases:
         assert f"with _tg_rec.phase('{phase}'):" in patched
     compile(patched, entrypoint, "exec")
+
+
+@pytest.mark.parametrize("path, fixture, golden", MILES_PACKAGE_TARGETS)
+def test_miles_package_patch_matches_golden(
+    miles, tmp_path, request, path, fixture, golden
+):
+    target = next(target for target in miles.PACKAGE_TARGETS if target.path == path)
+    work = tmp_path / target.path
+    work.parent.mkdir(parents=True)
+    work.write_text((TESTDATA / fixture).read_text())
+    miles.patch_package_file(tmp_path, target)
+    patched = work.read_text()
+    golden_path = TESTDATA / golden
+
+    if request.config.getoption("--rewrite"):
+        golden_path.write_text(patched)
+        return
+
+    assert patched == golden_path.read_text(), (
+        f"golden mismatch for {golden}; rerun with --rewrite to accept"
+    )
+    for phase, _ in target.blocks:
+        assert f"with _tg_time_phase('{phase}'):" in patched
+    if target.scope is not None:
+        assert "_tg_role('rollout', rollout_id)" in patched or "_tg_mrec(" in patched
+    compile(patched, path, "exec")
 
 
 def test_a_conditional_phase_is_timed_inside_its_branch(patchers, tmp_path):
