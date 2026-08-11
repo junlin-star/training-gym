@@ -3,6 +3,11 @@ from modal_training_gym.train_recipes.stitch_recipe.moonlight_16b import (
     Moonlight_16B_A3B_Stitch_Serve,
     Moonlight_16B_A3B_Stitch_Train,
 )
+from modal_training_gym.train_recipes.stitch_recipe.qwen3_30b_a3b import (
+    Qwen3_30B_A3B_Stitch_Recipe,
+    Qwen3_30B_A3B_Stitch_Serve,
+    Qwen3_30B_A3B_Stitch_Train,
+)
 from modal_training_gym.train_recipes.stitch_recipe.qwen3_4b import (
     Qwen3_4b_Stitch_Recipe,
     Qwen3_4b_Stitch_Serve,
@@ -16,6 +21,9 @@ __all__ = [
     "Moonlight_16B_A3B_Stitch_Recipe",
     "Moonlight_16B_A3B_Stitch_Serve",
     "Moonlight_16B_A3B_Stitch_Train",
+    "Qwen3_30B_A3B_Stitch_Recipe",
+    "Qwen3_30B_A3B_Stitch_Serve",
+    "Qwen3_30B_A3B_Stitch_Train",
     "Qwen3_4b_Stitch_Recipe",
     "Qwen3_4b_Stitch_Serve",
     "Qwen3_4b_Stitch_Train",
