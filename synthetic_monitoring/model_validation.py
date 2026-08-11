@@ -274,24 +274,28 @@ def monitor(
             "slack": False,
         }
 
-    plan = build_validation_plan(selected, step_count=num_steps)
-    signature = f"{SYNMON_SCHEMA}:{validation_config_digest(plan)}"
-    probe_id = secrets.token_hex(8)
-    group_overrides = {
-        "synmon.schema": SYNMON_SCHEMA,
-        "synmon.signature": signature,
-        "synmon.model": selected,
-        "synmon.probe_id": probe_id,
-    }
-    t0 = time.time()
-    result_deadline = t0 + PROBE_TIMEOUT_S
-    watchdog = probe_watchdog.spawn(
-        probe_id=probe_id,
-        signature=signature,
-        deadline=result_deadline + CLEANUP_GRACE_S + WATCHDOG_MARGIN_S,
-    )
+    t0: float | None = None
+    probe_id: str | None = None
+    signature: str | None = None
+    watchdog: modal.FunctionCall | None = None
     try:
         try:
+            plan = build_validation_plan(selected, step_count=num_steps)
+            signature = f"{SYNMON_SCHEMA}:{validation_config_digest(plan)}"
+            probe_id = secrets.token_hex(8)
+            group_overrides = {
+                "synmon.schema": SYNMON_SCHEMA,
+                "synmon.signature": signature,
+                "synmon.model": selected,
+                "synmon.probe_id": probe_id,
+            }
+            t0 = time.time()
+            result_deadline = t0 + PROBE_TIMEOUT_S
+            watchdog = probe_watchdog.spawn(
+                probe_id=probe_id,
+                signature=signature,
+                deadline=result_deadline + CLEANUP_GRACE_S + WATCHDOG_MARGIN_S,
+            )
             result = run_validation_plan(
                 plan,
                 wandb_project=None,
@@ -301,23 +305,24 @@ def monitor(
                 result_deadline=result_deadline,
             )
         except Exception as exc:
-            try:
-                cleanup_synmon_probe_runs(
-                    probe_id=probe_id,
-                    signature=signature,
-                    reason=f"probe error: {type(exc).__name__}: {exc}",
-                )
-            except Exception as cleanup_exc:
-                print(
-                    f"WARNING: immediate probe cleanup failed: "
-                    f"{type(cleanup_exc).__name__}: {cleanup_exc}"
-                )
+            if probe_id is not None and signature is not None:
+                try:
+                    cleanup_synmon_probe_runs(
+                        probe_id=probe_id,
+                        signature=signature,
+                        reason=f"probe error: {type(exc).__name__}: {exc}",
+                    )
+                except Exception as cleanup_exc:
+                    print(
+                        f"WARNING: immediate probe cleanup failed: "
+                        f"{type(cleanup_exc).__name__}: {cleanup_exc}"
+                    )
             failed = TutorialResult(
                 base_model_name=selected,
                 step_count=num_steps,
                 training_run_id="",
                 training_run_status=TrainingRunStatus.FAILED,
-                total_duration_s=float(time.time() - t0),
+                total_duration_s=float(time.time() - t0) if t0 is not None else 0.0,
             )
             try:
                 notify(
@@ -355,13 +360,14 @@ def monitor(
             "signature": signature,
         }
     finally:
-        try:
-            watchdog.cancel(terminate_containers=True)
-        except Exception as cancel_exc:
-            print(
-                f"WARNING: watchdog cancel failed: "
-                f"{type(cancel_exc).__name__}: {cancel_exc}"
-            )
+        if watchdog is not None:
+            try:
+                watchdog.cancel(terminate_containers=True)
+            except Exception as cancel_exc:
+                print(
+                    f"WARNING: watchdog cancel failed: "
+                    f"{type(cancel_exc).__name__}: {cancel_exc}"
+                )
 
 
 @app.function(
