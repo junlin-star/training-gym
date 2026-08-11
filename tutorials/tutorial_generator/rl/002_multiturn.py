@@ -9,8 +9,7 @@ TUTORIAL_METADATA = {
     "order": 30,
     "api_classes": [
         "DatasetConfig",
-        "DeploymentConfig",
-        "ModelDeployment",
+        "AdHocDeployment",
         "Qwen3_4B",
         "SlimeRecipe",
         "TrainConfig",
@@ -72,13 +71,13 @@ def _imports():
 
     from modal_training_gym import (
         DatasetConfig,
-        DeploymentConfig,
-        ModelDeployment,
+        AdHocDeployment,
         Qwen3_4B,
         SlimeRecipe,
         TrainConfig,
         list_checkpoints,
     )
+    from modal_training_gym.deploy_recipes import SglangRecipe
 
 
 @markdown
@@ -306,7 +305,7 @@ def _eval_intro():
 @code
 def _eval_helpers():
     def run_guessing_trajectory(
-        deployment: ModelDeployment,
+        deployment: AdHocDeployment,
         *,
         target: int,
         max_turns: int = _MAX_TURNS,
@@ -343,7 +342,7 @@ def _eval_helpers():
         }
 
     def guessing_eval_fn(
-        deployment: ModelDeployment,
+        deployment: AdHocDeployment,
         example: dict,
     ) -> dict:
         target = int(example["target"])
@@ -405,10 +404,11 @@ def _serve_base_intro():
 
 @code
 def _serve_base():
-    base_deployment = DeploymentConfig(
-        model=Qwen3_4B(),
+    base_deployment = AdHocDeployment.launch(
+        Qwen3_4B(),
+        recipe=SglangRecipe(),
         unauthenticated=True,
-    ).serve()
+    )
     print(f"Base model URL: {base_deployment.url}")
     base_mean, base_rows = run_eval(base_deployment)
     base_summary = summarize_eval(base_rows)
@@ -498,13 +498,14 @@ def _trained_eval_intro():
 @code
 def _trained_eval():
     checkpoint = list_checkpoints(train_result.training_run_id)[-1]
-    trained_deployment = DeploymentConfig(
-        model=Qwen3_4B(),
+    trained_deployment = AdHocDeployment.launch(
+        Qwen3_4B(),
         checkpoint=checkpoint,
+        recipe=SglangRecipe(),
         app_name="qwen3-4b-guessing-multiturn-serve",
         served_model_name="qwen3-4b-guessing-multiturn",
         unauthenticated=True,
-    ).serve()
+    )
     print(f"Trained model URL: {trained_deployment.url}")
 
     trained_mean, trained_rows = run_eval(trained_deployment)

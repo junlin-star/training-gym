@@ -9,7 +9,7 @@ TUTORIAL_METADATA = {
     "order": 20,
     "api_classes": [
         "HarborDataset",
-        "DeploymentConfig",
+        "AdHocDeployment",
         "Qwen3_4B",
         "SlimeRecipe",
         "TrainConfig",
@@ -70,7 +70,7 @@ def _install():
 @code
 def _imports():
     from modal_training_gym import (
-        DeploymentConfig,
+        AdHocDeployment,
         HarborDataset,
         Qwen3_4B,
         SlimeRecipe,
@@ -79,6 +79,7 @@ def _imports():
         list_checkpoints,
         score_in_sandbox,
     )
+    from modal_training_gym.deploy_recipes import SglangRecipe
 
 
 @markdown
@@ -161,10 +162,11 @@ def _harbor_eval_intro():
 @code
 def _serve_eval_base():
     base_model = Qwen3_4B()
-    base_deployment = DeploymentConfig(
-        model=base_model,
+    base_deployment = AdHocDeployment.launch(
+        base_model,
+        recipe=SglangRecipe(),
         unauthenticated=True,
-    ).serve()
+    )
     print(f"Base model URL: {base_deployment.url}")
 
     def run_eval(deployment, *, max_concurrency: int = 2) -> float:
@@ -270,13 +272,14 @@ def _serve_trained_intro():
 @code
 def _serve_trained():
     checkpoint = list_checkpoints(train_result.training_run_id)[-1]
-    trained_deployment = DeploymentConfig(
-        model=Qwen3_4B(),
+    trained_deployment = AdHocDeployment.launch(
+        Qwen3_4B(),
         checkpoint=checkpoint,
+        recipe=SglangRecipe(),
         app_name="qwen3-4b-hello-world-serve",
         served_model_name="qwen3-4b-hello-world",
         unauthenticated=True,
-    ).serve()
+    )
     print(f"Trained model URL: {trained_deployment.url}")
 
     trained_mean = run_eval(trained_deployment)

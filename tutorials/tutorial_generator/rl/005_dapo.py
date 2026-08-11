@@ -9,9 +9,8 @@ TUTORIAL_METADATA = {
     "order": 35,
     "api_classes": [
         "Qwen3_4B",
-        "DeploymentConfig",
+        "AdHocDeployment",
         "HuggingFaceDataset",
-        "ModelDeployment",
         "SlimeRecipe",
         "TrainConfig",
         "list_checkpoints",
@@ -88,14 +87,14 @@ def _imports():
     from typing import Any
 
     from modal_training_gym import (
-        DeploymentConfig,
+        AdHocDeployment,
         HuggingFaceDataset,
-        ModelDeployment,
         Qwen3_4B,
         SlimeRecipe,
         TrainConfig,
         list_checkpoints,
     )
+    from modal_training_gym.deploy_recipes import SglangRecipe
 
 
 @markdown
@@ -177,7 +176,7 @@ def _eval_helpers():
             pass
         return pred == gt
 
-    def math_eval_fn(deployment: ModelDeployment, example: dict) -> dict:
+    def math_eval_fn(deployment: AdHocDeployment, example: dict) -> dict:
         prompt = example["prompt"][0]["content"]
         label = example["label"]
 
@@ -226,10 +225,11 @@ def _eval_base_intro():
 @code
 def _eval_base():
     base_model = Qwen3_4B()
-    base_deployment = DeploymentConfig(
-        model=base_model,
+    base_deployment = AdHocDeployment.launch(
+        base_model,
+        recipe=SglangRecipe(),
         unauthenticated=True,
-    ).serve()
+    )
     print(f"Base model URL: {base_deployment.url}")
 
     print("--- Evaluating base model... ---")
@@ -404,13 +404,14 @@ def _eval_trained():
     checkpoint = list_checkpoints(train_result.training_run_id)[-1]
     print(f"Checkpoint: {checkpoint.path}")
 
-    trained_deployment = DeploymentConfig(
-        model=Qwen3_4B(),
+    trained_deployment = AdHocDeployment.launch(
+        Qwen3_4B(),
         checkpoint=checkpoint,
+        recipe=SglangRecipe(),
         app_name="qwen3-4b-dapo-serve",
         served_model_name="qwen3-4b-dapo",
         unauthenticated=True,
-    ).serve()
+    )
     print(f"Trained model URL: {trained_deployment.url}")
 
     print("--- Evaluating trained model... ---")

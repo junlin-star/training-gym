@@ -8,7 +8,7 @@ TUTORIAL_METADATA = {
     "order": 10,
     "api_classes": [
         "Qwen3_4B",
-        "DeploymentConfig",
+        "AdHocDeployment",
         "TrainConfig",
         "SlimeRecipe",
         "TrainResult",
@@ -72,13 +72,14 @@ def _imports():
     import re
 
     from modal_training_gym import (
-        DeploymentConfig,
+        AdHocDeployment,
         HuggingFaceDataset,
         Qwen3_4B,
         SlimeRecipe,
         TrainConfig,
         list_checkpoints,
     )
+    from modal_training_gym.deploy_recipes import SglangRecipe
 
 
 @markdown
@@ -92,10 +93,10 @@ def _serve_base_intro():
     The training gym has several config classes so you can define deployment, training, and evaluation configurations,
     and reuse them across different runs for parameter sweeps.
 
-    Let's start by initializing a `DeploymentConfig`.
+    Let's start by launching an `AdHocDeployment`.
 
-    Calling `DeploymentConfig.serve()` builds and deploys an SGLang app, then
-    returns a `ModelDeployment` with the endpoint URL. Pass
+    Calling `AdHocDeployment.launch()` builds and deploys an SGLang app, then
+    returns an `AdHocDeployment` with the endpoint URL. Pass
     `unauthenticated=True` so the endpoint is reachable without Modal
     proxy-auth tokens.
     """
@@ -104,10 +105,11 @@ def _serve_base_intro():
 @code
 def _serve_base_model():
     base_model = Qwen3_4B()
-    base_model_deployment = DeploymentConfig(
-        model=base_model,
+    base_model_deployment = AdHocDeployment.launch(
+        base_model,
+        recipe=SglangRecipe(),
         unauthenticated=True,
-    ).serve()
+    )
     print(f"Base model deployed to {base_model_deployment.url}")
 
 @notebook_only
@@ -348,7 +350,7 @@ def _trained_eval_intro():
 
     The returned `TrainResult` has the checkpoint path and volume
     metadata attached. You can pass an explicit `checkpoint=` to
-    `DeploymentConfig` to pin a specific checkpoint, or omit it to use
+    `AdHocDeployment.launch()` to pin a specific checkpoint, or omit it to use
     the model's default path.
     """
 
@@ -358,13 +360,14 @@ def _serve_and_eval_trained():
     checkpoint = list_checkpoints(train_result.training_run_id)[-1]
     print(checkpoint.path)
 
-    trained_model_deployment = DeploymentConfig(
-        model=Qwen3_4B(),
+    trained_model_deployment = AdHocDeployment.launch(
+        Qwen3_4B(),
         checkpoint=checkpoint,
+        recipe=SglangRecipe(),
         app_name="qwen3-4b-haiku-serve",
         served_model_name="qwen3-4b-haiku",
         unauthenticated=True,
-    ).serve()
+    )
     print(f"Trained model deployed to {trained_model_deployment.url}")
 
 
@@ -441,13 +444,14 @@ def _trained_eval_off_of_a_checkpoint_code():
     new_checkpoint = list_checkpoints(new_train_result.training_run_id)[-1]
     print(new_checkpoint.path)
     
-    new_model_deployment = DeploymentConfig(
-        model=Qwen3_4B(),
+    new_model_deployment = AdHocDeployment.launch(
+        Qwen3_4B(),
         checkpoint=new_checkpoint,
+        recipe=SglangRecipe(),
         app_name="qwen3-4b-haiku-serve-new",
         served_model_name="qwen3-4b-haiku",
         unauthenticated=True,
-    ).serve()
+    )
     print(f"Newly trained model deployed to {new_model_deployment.url}")
 
 @markdown

@@ -44,8 +44,7 @@ import modal
 import re
 
 from modal_training_gym import (
-    DeploymentConfig,
-    ModelDeployment,
+    AdHocDeployment,
     MultimodalDataset,
     Qwen3_VL_8B,
     Qwen3_VL_8b_Recipe,
@@ -53,6 +52,7 @@ from modal_training_gym import (
     WandbConfig,
     list_checkpoints,
 )
+from modal_training_gym.deploy_recipes import SglangRecipe
 
 # ## Dataset
 #
@@ -224,7 +224,7 @@ async def grounding_reward(args, sample, **kwargs) -> float:
 # training to see how well it grounds UI elements out of the box.
 
 def grounding_eval_fn(
-    deployment: ModelDeployment, example: dict
+    deployment: AdHocDeployment, example: dict
 ) -> dict:
     # Eval sends the screenshot as a separate image_url, so drop the marker.
     prompt = example["prompt"].replace("<image>", "").strip()
@@ -293,10 +293,11 @@ def _main_impl() -> None:
     train_dataset = ScreenSpotDataset(n_rows=800)
 
     base_model = Qwen3_VL_8B()
-    base_deployment = DeploymentConfig(
-        model=base_model,
+    base_deployment = AdHocDeployment.launch(
+        base_model,
+        recipe=SglangRecipe(),
         unauthenticated=True,
-    ).serve()
+    )
     print(f"Base model URL: {base_deployment.url}")
 
     print("--- Evaluating base model... ---")
@@ -369,13 +370,14 @@ def _main_impl() -> None:
     checkpoint = list_checkpoints(train_result.training_run_id)[-1]
     print(f"Checkpoint: {checkpoint.path}")
 
-    trained_deployment = DeploymentConfig(
-        model=Qwen3_VL_8B(),
+    trained_deployment = AdHocDeployment.launch(
+        Qwen3_VL_8B(),
         checkpoint=checkpoint,
+        recipe=SglangRecipe(),
         app_name="qwen3-vl-8b-grounding-serve",
         served_model_name="qwen3-vl-8b-grounding",
         unauthenticated=True,
-    ).serve()
+    )
     print(f"Trained model URL: {trained_deployment.url}")
 
     print("--- Evaluating trained model... ---")

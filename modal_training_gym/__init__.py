@@ -9,10 +9,13 @@ _EXPORTS = {
         "modal_training_gym.common.checkpoint",
         "convert_checkpoint_to_hf",
     ),
+    "AdHocDeployment": (
+        "modal_training_gym.common.deployment",
+        "AdHocDeployment",
+    ),
     "DatasetConfig": ("modal_training_gym.common.dataset", "DatasetConfig"),
     "Endpoint": ("modal_training_gym.common.endpoint", "Endpoint"),
     "HarborDataset": ("modal_training_gym.common.dataset", "HarborDataset"),
-    "DeploymentConfig": ("modal_training_gym.common.deployment", "DeploymentConfig"),
     "EvalConfig": ("modal_training_gym.common.eval", "EvalConfig"),
     "EvalConfigDurable": ("modal_training_gym.common.eval", "EvalConfigDurable"),
     "EvalResult": ("modal_training_gym.common.eval", "EvalResult"),
@@ -42,7 +45,6 @@ _EXPORTS = {
     ),
     "ModelArchitecture": ("modal_training_gym.common.models", "ModelArchitecture"),
     "ModelConfig": ("modal_training_gym.common.models", "ModelConfig"),
-    "ModelDeployment": ("modal_training_gym.common.deployment", "ModelDeployment"),
     "Kimi_K2_5": ("modal_training_gym.common.models", "Kimi_K2_5"),
     "Kimi_K2_6": ("modal_training_gym.common.models", "Kimi_K2_6"),
     "Kimi_K2_5_LoRA_Recipe": (
@@ -120,6 +122,7 @@ _EXPORTS = {
 }
 
 __all__ = [
+    "AdHocDeployment",
     "Kimi_K2_6_LoRA_Recipe",
     "Kimi_K2_5_LoRA_Recipe",
     "Checkpoint",
@@ -129,7 +132,6 @@ __all__ = [
     "Endpoint",
     "GLM_4_7",
     "HarborDataset",
-    "DeploymentConfig",
     "EvalConfig",
     "EvalConfigDurable",
     "EvalResult",
@@ -151,7 +153,6 @@ __all__ = [
     "ModalCaptureError",
     "ModelArchitecture",
     "ModelConfig",
-    "ModelDeployment",
     "MilesRecipe",
     "parse_qwen3_response",
     "ParsedResponse",

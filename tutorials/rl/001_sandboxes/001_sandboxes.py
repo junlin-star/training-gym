@@ -27,7 +27,7 @@
 import modal
 
 from modal_training_gym import (
-    DeploymentConfig,
+    AdHocDeployment,
     HarborDataset,
     Qwen3_4B,
     SlimeRecipe,
@@ -36,6 +36,7 @@ from modal_training_gym import (
     list_checkpoints,
     score_in_sandbox,
 )
+from modal_training_gym.deploy_recipes import SglangRecipe
 
 # ## Load hello-world from Harbor Hub
 #
@@ -147,10 +148,11 @@ def _main_impl() -> None:
             "https://modal.com/secrets with an HF_TOKEN entry, then re-run."
         ) from e
 
-    base_deployment = DeploymentConfig(
-        model=base_model,
+    base_deployment = AdHocDeployment.launch(
+        base_model,
+        recipe=SglangRecipe(),
         unauthenticated=True,
-    ).serve()
+    )
     print(f"Base model URL: {base_deployment.url}")
 
     print("Running base eval...")
@@ -192,13 +194,14 @@ def _main_impl() -> None:
     # ## Evaluate the trained checkpoint
 
     checkpoint = list_checkpoints(train_result.training_run_id)[-1]
-    trained_deployment = DeploymentConfig(
-        model=Qwen3_4B(),
+    trained_deployment = AdHocDeployment.launch(
+        Qwen3_4B(),
         checkpoint=checkpoint,
+        recipe=SglangRecipe(),
         app_name="qwen3-4b-hello-world-serve",
         served_model_name="qwen3-4b-hello-world",
         unauthenticated=True,
-    ).serve()
+    )
     print(f"Trained model URL: {trained_deployment.url}")
 
     trained_mean = run_eval(trained_deployment)

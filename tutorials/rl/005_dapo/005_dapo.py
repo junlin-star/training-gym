@@ -48,14 +48,14 @@ import re
 from typing import Any
 
 from modal_training_gym import (
-    DeploymentConfig,
+    AdHocDeployment,
     HuggingFaceDataset,
-    ModelDeployment,
     Qwen3_4B,
     SlimeRecipe,
     TrainConfig,
     list_checkpoints,
 )
+from modal_training_gym.deploy_recipes import SglangRecipe
 
 # ## Dataset
 #
@@ -112,7 +112,7 @@ def _check_math(response: str, label: str) -> bool:
         pass
     return pred == gt
 
-def math_eval_fn(deployment: ModelDeployment, example: dict) -> dict:
+def math_eval_fn(deployment: AdHocDeployment, example: dict) -> dict:
     prompt = example["prompt"][0]["content"]
     label = example["label"]
 
@@ -208,10 +208,11 @@ def _main_impl() -> None:
     # Let's run the math eval on our base serving model before training.
 
     base_model = Qwen3_4B()
-    base_deployment = DeploymentConfig(
-        model=base_model,
+    base_deployment = AdHocDeployment.launch(
+        base_model,
+        recipe=SglangRecipe(),
         unauthenticated=True,
-    ).serve()
+    )
     print(f"Base model URL: {base_deployment.url}")
 
     print("--- Evaluating base model... ---")
@@ -313,13 +314,14 @@ def _main_impl() -> None:
     checkpoint = list_checkpoints(train_result.training_run_id)[-1]
     print(f"Checkpoint: {checkpoint.path}")
 
-    trained_deployment = DeploymentConfig(
-        model=Qwen3_4B(),
+    trained_deployment = AdHocDeployment.launch(
+        Qwen3_4B(),
         checkpoint=checkpoint,
+        recipe=SglangRecipe(),
         app_name="qwen3-4b-dapo-serve",
         served_model_name="qwen3-4b-dapo",
         unauthenticated=True,
-    ).serve()
+    )
     print(f"Trained model URL: {trained_deployment.url}")
 
     print("--- Evaluating trained model... ---")

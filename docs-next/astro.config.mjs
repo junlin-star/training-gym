@@ -184,8 +184,7 @@ export default defineConfig({
               label: 'Deployment',
               items: [
                 { label: 'Endpoint', link: '/reference/deployment/endpoint/' },
-                { label: 'DeploymentConfig', link: '/reference/deployment/deploymentconfig/' },
-                { label: 'ModelDeployment', link: '/reference/deployment/modeldeployment/' },
+                { label: 'AdHocDeployment', link: '/reference/deployment/adhocdeployment/' },
                 { label: 'SglangRecipe', link: '/reference/deployment/sglangrecipe/' },
                 { label: 'VllmRecipe', link: '/reference/deployment/vllmrecipe/' },
               ],
