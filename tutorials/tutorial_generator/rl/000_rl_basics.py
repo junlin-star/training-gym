@@ -69,12 +69,14 @@ def _install():
 
 @py_only
 @code
-def _install_python_deps():
+def _ensure_nltk():
     import importlib.util
-    import subprocess
 
     if importlib.util.find_spec("nltk") is None:
-        subprocess.check_call(["uv", "pip", "install", "-q", "nltk"])
+        raise RuntimeError(
+            "This tutorial requires the 'nltk' package. "
+            "Install it before running: uv pip install -q nltk"
+        )
 
 
 @code

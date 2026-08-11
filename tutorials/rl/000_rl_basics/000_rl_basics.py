@@ -32,7 +32,6 @@
 import modal
 
 import importlib.util
-import subprocess
 
 import re
 
@@ -182,7 +181,10 @@ def _main_impl() -> None:
         ) from e
 
     if importlib.util.find_spec("nltk") is None:
-        subprocess.check_call(["uv", "pip", "install", "-q", "nltk"])
+        raise RuntimeError(
+            "This tutorial requires the 'nltk' package. "
+            "Install it before running: uv pip install -q nltk"
+        )
 
     base_model_deployment = DeploymentConfig(
         model=base_model,
