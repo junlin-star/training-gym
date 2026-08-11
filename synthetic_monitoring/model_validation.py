@@ -44,6 +44,7 @@ from synthetic_monitoring.chart import (
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PROBE_TIMEOUT_S = 60 * 60
 CLEANUP_GRACE_S = 5 * 60
+WATCHDOG_MARGIN_S = 3 * 60
 LAUNCH_TIMEOUT_S = (
     len(VALIDATABLE_MODELS) * (PROBE_TIMEOUT_S + CLEANUP_GRACE_S) + 30 * 60
 )
@@ -160,6 +161,28 @@ def notify(
 ) -> None:
     from slack_sdk import WebClient
 
+    token = os.environ.get("SLACK_BOT_TOKEN", "").strip()
+    if not token:
+        raise RuntimeError("SLACK_BOT_TOKEN missing")
+    client = WebClient(token=token)
+    failed = bool(error) or not result.succeeded
+    status = status_override or status_label(result)
+    fail_text = f"`{result.base_model_name}` {status}"
+    if error:
+        fail_text = f"{fail_text}\n```{error[:1500]}```"
+    if failed:
+        response = client.chat_postMessage(
+            channel=SLACK_CHANNEL_ID,
+            text=fail_text,
+            mrkdwn=True,
+            unfurl_links=False,
+            unfurl_media=False,
+        )
+        if not response.get("ok"):
+            raise RuntimeError(
+                f"Slack chat_postMessage failed: {response.get('error')}"
+            )
+
     history = load_history(result.base_model_name, environment_name=MODAL_ENV)
     if result.succeeded:
         timings: dict[str, float] = {}
@@ -180,30 +203,7 @@ def notify(
                 environment_name=MODAL_ENV,
             )
 
-    token = os.environ.get("SLACK_BOT_TOKEN", "").strip()
-    if not token:
-        raise RuntimeError("SLACK_BOT_TOKEN missing")
-    client = WebClient(token=token)
-    failed = bool(error) or not result.succeeded
-    status = status_override or status_label(result)
-    fail_text = f"`{result.base_model_name}` {status}"
-    if error:
-        fail_text = f"{fail_text}\n```{error[:1500]}```"
-
     if not history:
-        if not failed:
-            return
-        response = client.chat_postMessage(
-            channel=SLACK_CHANNEL_ID,
-            text=fail_text,
-            mrkdwn=True,
-            unfurl_links=False,
-            unfurl_media=False,
-        )
-        if not response.get("ok"):
-            raise RuntimeError(
-                f"Slack chat_postMessage failed: {response.get('error')}"
-            )
         return
 
     try:
@@ -213,18 +213,6 @@ def notify(
             f"WARNING: timing chart failed for {result.base_model_name}: "
             f"{type(exc).__name__}: {exc}"
         )
-        if failed:
-            response = client.chat_postMessage(
-                channel=SLACK_CHANNEL_ID,
-                text=fail_text,
-                mrkdwn=True,
-                unfurl_links=False,
-                unfurl_media=False,
-            )
-            if not response.get("ok"):
-                raise RuntimeError(
-                    f"Slack chat_postMessage failed: {response.get('error')}"
-                )
         return
 
     filename = f"timing_history_{result.base_model_name.replace('/', '_')}.png"
@@ -235,8 +223,6 @@ def notify(
         "filename": filename,
         "title": title,
     }
-    if failed:
-        upload_kwargs["initial_comment"] = fail_text
     try:
         upload = client.files_upload_v2(**upload_kwargs)
     except Exception as exc:
@@ -253,7 +239,7 @@ def notify(
 
 @app.function(
     image=probe_image,
-    timeout=PROBE_TIMEOUT_S + CLEANUP_GRACE_S + 10 * 60,
+    timeout=PROBE_TIMEOUT_S + CLEANUP_GRACE_S + WATCHDOG_MARGIN_S + 10 * 60,
     secrets=[modal_creds_secret],
 )
 def probe_watchdog(probe_id: str, signature: str, deadline: float) -> list[str]:
@@ -302,7 +288,7 @@ def monitor(
     watchdog = probe_watchdog.spawn(
         probe_id=probe_id,
         signature=signature,
-        deadline=result_deadline + CLEANUP_GRACE_S,
+        deadline=result_deadline + CLEANUP_GRACE_S + WATCHDOG_MARGIN_S,
     )
     try:
         try:
