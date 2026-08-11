@@ -198,7 +198,7 @@ def math_opd_post_process(args, samples, **kwargs):
 # ## Next steps
 #
 # Some cool ways to extend and improve this example:
-# 1. Use a bigger teacher: Qwen3.5 offers models up to 9B, and Qwen3.6 adds larger MoE variants. 
+# 1. Use a bigger teacher: Qwen3.5 offers larger MoE variants, up to 35B. 
 # A bigger model will fit on a 4xH100 GPU setup and can show measurable improvements
 # on the student model evaluation delta.
 # 2. Tweak the composite reward signal: Try applying a coefficient like *2* to the
