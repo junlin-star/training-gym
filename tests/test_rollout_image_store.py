@@ -117,6 +117,21 @@ def test_key_is_content_derived_not_identity():
     assert _raw_image_key(FakeImage("red")) != _raw_image_key(FakeImage("blue"))
 
 
+def test_shared_object_is_content_keyed_once_per_object(encodes):
+    """Keying is what every sample pays; a shared object must pay it once.
+
+    The content key materialises a PIL image's raw pixels, so recomputing it per
+    sample makes reporting scale with rollout size instead of distinct images.
+    """
+    shared = FakeImage("red")
+    keyed = []
+    shared.tobytes = lambda: (keyed.append(1), b"red")[1]
+
+    annotate_all(RolloutImageStore(limit=4), [shared] * 8)
+
+    assert len(keyed) == 1
+
+
 def test_identity_keyed_candidates_are_pinned():
     """Without a content key, the store must own a reference to keep id() valid."""
 

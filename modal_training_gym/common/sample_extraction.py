@@ -538,6 +538,7 @@ class RolloutImageStore:
         # "" marks a candidate already known to be unusable, so a sample whose
         # first candidate fails doesn't re-attempt it once per sample.
         self._ref_by_raw: dict[Any, str] = {}
+        self._key_by_id: dict[int, Any] = {}
         self._pinned: list[Any] = []
 
     @property
@@ -546,9 +547,23 @@ class RolloutImageStore:
         return len(self._ref_by_uri)
 
     def _key(self, candidate: Any) -> Any:
+        """Key ``candidate``, reusing the key already computed for that object.
+
+        Every sample is annotated, and a prompt group usually shares one image
+        object, so without this the content key -- a full raw-pixel
+        materialisation plus a hash for a PIL image -- is recomputed once per
+        sample and the cost tracks rollout size rather than distinct images.
+        Content keying still decides equality: this only short-circuits the same
+        object, which cannot have different content within one payload.
+        """
+        memo = self._key_by_id.get(id(candidate))
+        if memo is not None:
+            return memo
         key = _raw_image_key(candidate)
-        if key[0] == "o":
-            self._pinned.append(candidate)
+        # Pinning keeps id() from being recycled onto another image while the
+        # memo (or an identity-derived key) is live.
+        self._pinned.append(candidate)
+        self._key_by_id[id(candidate)] = key
         return key
 
     def annotate(self, sample: Any, metadata: dict[str, Any]) -> bool:
