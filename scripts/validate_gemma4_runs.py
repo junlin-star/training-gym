@@ -108,6 +108,13 @@ class Gsm8kHardDataset(HuggingFaceDataset):
     The base model clears short GSM8K problems almost every time. Row selection
     keys on the number of calculator annotations in the reference solution,
     which is the dataset's own proxy for how many steps the answer takes.
+
+    ``min_steps`` is 6 because 5 is not selective enough to matter: measured over
+    96 prompt groups of a 5+ run, the 5-step tier scored 0.906 with only 14% of
+    groups showing any within-group variance, while the 6-step tier scored 0.732
+    with 22%. Since a zero-variance group contributes no GRPO advantage, that
+    difference is most of the usable gradient. 6 also keeps roughly one epoch:
+    453 rows against 15 steps x 32 prompts.
     """
 
     hf_repo = "openai/gsm8k"
@@ -118,7 +125,7 @@ class Gsm8kHardDataset(HuggingFaceDataset):
     output_format = "jsonl"
     apply_chat_template = True
     always_prepare = True
-    min_steps = 5
+    min_steps = 6
 
     def load(self, split: str = "all"):
         from datasets import load_dataset
