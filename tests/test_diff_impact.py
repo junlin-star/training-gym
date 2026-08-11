@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from scripts.diff_impact import analyze_diff
+from scripts.diff_impact import affected_miles_models, analyze_diff
 
 
 def test_model_file_diff_maps_to_related_tutorials() -> None:
@@ -39,3 +39,24 @@ def test_generated_tutorial_diff_maps_back_to_source() -> None:
     assert "rl/003_on_policy_distillation" in {
         slug for slug, _, _ in report.affected_tutorials
     }
+
+
+def test_miles_framework_diff_validates_pr_smoke_models() -> None:
+    diff = (
+        "diff --git a/modal_training_gym/frameworks/miles/launcher.py "
+        "b/modal_training_gym/frameworks/miles/launcher.py\n"
+    )
+
+    assert affected_miles_models(diff) == (
+        "Moonlight-16B-A3B-Instruct",
+        "Qwen3.5-4B",
+    )
+
+
+def test_slime_only_diff_does_not_validate_miles_models() -> None:
+    diff = (
+        "diff --git a/modal_training_gym/frameworks/slime/launcher.py "
+        "b/modal_training_gym/frameworks/slime/launcher.py\n"
+    )
+
+    assert affected_miles_models(diff) == ()

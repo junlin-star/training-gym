@@ -119,7 +119,7 @@ def get_checkpoint_conversion_policy(
     model: Any = None,
     single_rank_mtp: bool = False,
     extended_arch_args: bool = False,
-    arch_args_model_script_attr: str | None = None,
+    external_arch_args_attr: str | None = None,
 ) -> tuple[int, int, list[str]]:
     """Return (num_nodes, nproc_per_node, extra_args) for checkpoint conversion.
 
@@ -127,8 +127,8 @@ def get_checkpoint_conversion_policy(
     checkpoints so the duplicated MTP head embedding/output isn't sharded (which
     corrupts the saved sharded state dict); training reshards on load.
     ``extended_arch_args`` emits the full MoE/attention arch flag set; when
-    ``arch_args_model_script_attr`` is set, arch flags are skipped if that
-    attribute is populated (the model script already sources them).
+    ``external_arch_args_attr`` is set, arch flags are skipped if that
+    attribute is populated because the framework supplies them externally.
     """
     gpus_per_node = getattr(cfg, "actor_num_gpus_per_node", 8)
     actor_nodes = getattr(cfg, "actor_num_nodes", 1)
@@ -170,8 +170,8 @@ def get_checkpoint_conversion_policy(
                 extra_args.append(f"--{flag} {x}")
 
         emit_arch = bool(model and getattr(model, "architecture", None))
-        if emit_arch and arch_args_model_script_attr:
-            emit_arch = not getattr(cfg, arch_args_model_script_attr, "")
+        if emit_arch and external_arch_args_attr:
+            emit_arch = not getattr(cfg, external_arch_args_attr, "")
         if emit_arch:
             arch = model.architecture
             _append_common_arch_args(extra_args, arch)
@@ -376,6 +376,7 @@ def build_train_cmd(
     model: Any = None,
     dataset: Any = None,
     model_script_attr: str,
+    model_args_command: str = "",
 ) -> str:
     """Build the Ray job entrypoint, sourcing model arch args if needed."""
     train_script = f"{root}/{'train_async.py' if cfg.async_mode else 'train.py'}"
@@ -383,6 +384,13 @@ def build_train_cmd(
     if model_script := getattr(cfg, model_script_attr, ""):
         inner = (
             f"source {root}/{model_script} && "
+            f"python3 {train_script} ${{MODEL_ARGS[@]}} {args}"
+        )
+        return f"bash -c {shlex.quote(inner)}"
+    if model_args_command:
+        inner = (
+            f'MODEL_ARGS_LINE="$({model_args_command})" '
+            f'|| exit 1; read -ra MODEL_ARGS <<< "$MODEL_ARGS_LINE"; '
             f"python3 {train_script} ${{MODEL_ARGS[@]}} {args}"
         )
         return f"bash -c {shlex.quote(inner)}"

@@ -572,14 +572,11 @@ class TrainConfig:
             config_path=str(config_path),
         )
 
-    def _resolved_recipe_for_logging(self) -> BaseTrainRecipe:
-        return _resolve_recipe(
-            self.model, self.recipe, merge_model_recipe=self.merge_model_recipe
-        )
-
     def context_plan_line(self) -> str | None:
         """One-line summary of the effective training context length and parallelism plan."""
-        recipe = self._resolved_recipe_for_logging()
+        recipe = _resolve_recipe(
+            self.model, self.recipe, merge_model_recipe=self.merge_model_recipe
+        )
         max_tokens_per_gpu = getattr(recipe, "max_tokens_per_gpu", None)
         if max_tokens_per_gpu is None:
             return None
@@ -687,7 +684,14 @@ class TrainConfig:
                         is_active=is_active,
                     )
 
-                megatron_to_hf_mode = getattr(self.recipe, "megatron_to_hf_mode", "")
+                effective_recipe = _resolve_recipe(
+                    self.model,
+                    self.recipe,
+                    merge_model_recipe=self.merge_model_recipe,
+                )
+                megatron_to_hf_mode = getattr(
+                    effective_recipe, "megatron_to_hf_mode", ""
+                )
                 needs_conversion = megatron_to_hf_mode != "bridge"
                 if prepare_inputs:
                     if isinstance(self.recipe, SlimeRecipe):

@@ -43,6 +43,14 @@ _EXPORTS = {
     "ModelArchitecture": ("modal_training_gym.common.models", "ModelArchitecture"),
     "ModelConfig": ("modal_training_gym.common.models", "ModelConfig"),
     "ModelDeployment": ("modal_training_gym.common.deployment", "ModelDeployment"),
+    "Moonlight_16B_A3B_Instruct": (
+        "modal_training_gym.common.models",
+        "Moonlight_16B_A3B_Instruct",
+    ),
+    "Moonlight_16B_A3B_Recipe": (
+        "modal_training_gym.train_recipes.miles_recipe",
+        "Moonlight_16B_A3B_Recipe",
+    ),
     "Kimi_K2_5": ("modal_training_gym.common.models", "Kimi_K2_5"),
     "Kimi_K2_6": ("modal_training_gym.common.models", "Kimi_K2_6"),
     "Kimi_K2_5_LoRA_Recipe": (
@@ -62,6 +70,11 @@ _EXPORTS = {
     "Qwen3_0_6B": ("modal_training_gym.common.models", "Qwen3_0_6B"),
     "Qwen3_1_7B": ("modal_training_gym.common.models", "Qwen3_1_7B"),
     "Qwen3_4B": ("modal_training_gym.common.models", "Qwen3_4B"),
+    "Qwen3_5_4B": ("modal_training_gym.common.models", "Qwen3_5_4B"),
+    "Qwen3_5_4b_Recipe": (
+        "modal_training_gym.train_recipes.miles_recipe",
+        "Qwen3_5_4b_Recipe",
+    ),
     "Qwen3_4b_Recipe": (
         "modal_training_gym.train_recipes.slime_recipe",
         "Qwen3_4b_Recipe",
@@ -152,12 +165,16 @@ __all__ = [
     "ModelArchitecture",
     "ModelConfig",
     "ModelDeployment",
+    "Moonlight_16B_A3B_Instruct",
+    "Moonlight_16B_A3B_Recipe",
     "MilesRecipe",
     "parse_qwen3_response",
     "ParsedResponse",
     "Qwen3_0_6B",
     "Qwen3_1_7B",
     "Qwen3_4B",
+    "Qwen3_5_4B",
+    "Qwen3_5_4b_Recipe",
     "Qwen3_4b_Recipe",
     "Qwen3_5_0_8B",
     "Qwen3_5_0_8b_Recipe",

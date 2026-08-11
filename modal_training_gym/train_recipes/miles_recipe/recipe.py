@@ -29,6 +29,7 @@ _MILES_SKIP = {
     "environment",
     "async_mode",
     "miles_model_script",
+    "miles_model_name",
     "source_hf_checkpoint",
     "megatron_conversion_hf_checkpoint",
     "docker_image",
@@ -134,6 +135,8 @@ class MilesRecipe(BaseTrainRecipe):
         Modal region to pin the cluster to.
     miles_model_script : str
         Script in the Miles repo sourced for ``MODEL_ARGS`` instead of arch flags.
+    miles_model_name : str
+        Name accepted by Miles' ``model_args_utils.py``.
     source_hf_checkpoint : str | None
         Source checkpoint when it differs from the model's own (Kimi: INT4 + BF16).
     megatron_conversion_hf_checkpoint : str | None
@@ -441,7 +444,7 @@ class MilesRecipe(BaseTrainRecipe):
     recipe_type: RecipeType = RecipeType.MILES
 
     # ── Launcher instructions (not Miles CLI flags) ─────────────────────────
-    docker_image: str = "radixark/miles:dev-202608051303"
+    docker_image: str = "radixark/miles:dev-202608101247"
     gpu_type: str = "H100"
     memory: int | tuple[int, int] | None = None
     cloud: str | None = None
@@ -463,6 +466,7 @@ class MilesRecipe(BaseTrainRecipe):
     )
     async_mode: bool = False
     miles_model_script: str = ""
+    miles_model_name: str = ""
     source_hf_checkpoint: str | None = None
     megatron_conversion_hf_checkpoint: str | None = None
     wandb: WandbConfig | None = None
@@ -739,6 +743,8 @@ class MilesRecipe(BaseTrainRecipe):
                 elif self.miles_model_script:
                     # The model script already sources the arch args.
                     continue
+                elif self.miles_model_name:
+                    continue
                 fields[k] = v
         if dataset is not None:
             fields.update(self._dataset_to_fields(dataset))
@@ -761,11 +767,21 @@ class MilesRecipe(BaseTrainRecipe):
             Kimi_K2_5_LoRA_Recipe,
             Kimi_K2_6_LoRA_Recipe,
         )
+        from modal_training_gym.train_recipes.miles_recipe.qwen3_5_4b import (
+            Qwen3_5_4b_Recipe,
+        )
+        from modal_training_gym.train_recipes.miles_recipe.moonlight_16b_a3b import (
+            Moonlight_16B_A3B_Recipe,
+        )
 
         if model_config.model_name == "moonshotai/Kimi-K2.5":
             return Kimi_K2_5_LoRA_Recipe()
         if model_config.model_name == "moonshotai/Kimi-K2.6":
             return Kimi_K2_6_LoRA_Recipe()
+        if model_config.model_name == "Qwen/Qwen3.5-4B":
+            return Qwen3_5_4b_Recipe()
+        if model_config.model_name == "moonshotai/Moonlight-16B-A3B-Instruct":
+            return Moonlight_16B_A3B_Recipe()
         return None
 
     def download_model(self) -> None:

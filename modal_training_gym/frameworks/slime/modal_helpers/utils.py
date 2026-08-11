@@ -22,7 +22,7 @@ def get_checkpoint_conversion_policy(
         model=model,
         single_rank_mtp=True,
         extended_arch_args=True,
-        arch_args_model_script_attr="slime_model_script",
+        external_arch_args_attr="slime_model_script",
     )
 
 

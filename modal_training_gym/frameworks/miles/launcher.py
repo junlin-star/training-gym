@@ -60,6 +60,7 @@ from modal_training_gym.common.patches import encode_patch
 from modal_training_gym.frameworks.miles.modal_helpers.utils import (
     build_train_cmd,
     get_checkpoint_conversion_policy,
+    model_args_command,
     prepare_miles_config,
     resolve_checkpoint_ref,
 )
@@ -497,6 +498,14 @@ def build_miles_app(
         if miles.miles_model_script:
             cmd = (
                 f"source {MILES_ROOT}/{miles.miles_model_script} && "
+                f"torchrun {' '.join(torchrun_args)} {convert_script} "
+                f"${{MODEL_ARGS[@]}} {' '.join(extra_args)} "
+                f"--hf-checkpoint {shlex.quote(hf_path)} --save {shlex.quote(save_path)}"
+            )
+        elif model_args_cmd := model_args_command(miles, MILES_ROOT):
+            cmd = (
+                f'MODEL_ARGS_LINE="$({model_args_cmd})" || exit 1; '
+                f'read -ra MODEL_ARGS <<< "$MODEL_ARGS_LINE"; '
                 f"torchrun {' '.join(torchrun_args)} {convert_script} "
                 f"${{MODEL_ARGS[@]}} {' '.join(extra_args)} "
                 f"--hf-checkpoint {shlex.quote(hf_path)} --save {shlex.quote(save_path)}"

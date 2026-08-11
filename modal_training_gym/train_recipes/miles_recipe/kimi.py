@@ -61,7 +61,7 @@ class _KimiK2Recipe(MilesRecipe):
             "rm -rf /root/.cache/huggingface 2>/dev/null || true",
         ]
     )
-    miles_model_script: str = "scripts/models/kimi-k2-thinking.sh"
+    miles_model_name: str = "kimi-k2-thinking"
     environment: dict[str, str] = field(
         default_factory=lambda: {
             "PYTHONPATH": "/root/Megatron-LM/",

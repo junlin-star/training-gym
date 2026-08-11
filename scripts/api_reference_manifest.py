@@ -114,6 +114,20 @@ API_REFERENCE_MANIFEST = [
         "sidebar_label": "Qwen3-4B",
     },
     {
+        "class_name": "Qwen3_5_4B",
+        "module": "modal_training_gym.common.models.qwen3_5_4b",
+        "group": "models",
+        "class_type": "config_data",
+        "sidebar_label": "Qwen3.5-4B",
+    },
+    {
+        "class_name": "Moonlight_16B_A3B_Instruct",
+        "module": "modal_training_gym.common.models.moonlight_16b_a3b_instruct",
+        "group": "models",
+        "class_type": "config_data",
+        "sidebar_label": "Moonlight-16B-A3B-Instruct",
+    },
+    {
         "class_name": "Qwen3_8B",
         "module": "modal_training_gym.common.models.qwen3_8b",
         "group": "models",
@@ -176,6 +190,20 @@ API_REFERENCE_MANIFEST = [
         "group": "training",
         "class_type": "config_data",
         "sidebar_label": "MilesRecipe",
+    },
+    {
+        "class_name": "Qwen3_5_4b_Recipe",
+        "module": "modal_training_gym.train_recipes.miles_recipe.qwen3_5_4b",
+        "group": "training",
+        "class_type": "config_data",
+        "sidebar_label": "Qwen3_5_4b_Recipe",
+    },
+    {
+        "class_name": "Moonlight_16B_A3B_Recipe",
+        "module": "modal_training_gym.train_recipes.miles_recipe.moonlight_16b_a3b",
+        "group": "training",
+        "class_type": "config_data",
+        "sidebar_label": "Moonlight_16B_A3B_Recipe",
     },
     {
         "class_name": "Qwen3_6_35b_Recipe",
