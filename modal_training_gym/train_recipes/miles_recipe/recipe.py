@@ -216,6 +216,8 @@ class MilesRecipe(BaseTrainRecipe):
 
     hf_checkpoint : str
         Checkpoint trained from; normally set from the attached ``ModelConfig``.
+    model_name : str
+        Miles model adapter name when the checkpoint needs an explicit loader.
     save : str
         Checkpoint output directory (the mounted ``/checkpoints`` volume).
     save_interval : int
@@ -278,6 +280,8 @@ class MilesRecipe(BaseTrainRecipe):
         Import path of the predicate deciding which sample groups to keep.
     balance_data : bool
         Rebalance kept samples across data-parallel ranks.
+    use_dynamic_global_batch_size : bool
+        Train the variable-size batch left after rollout filtering.
 
     ## Training and Optimizer
 
@@ -482,6 +486,7 @@ class MilesRecipe(BaseTrainRecipe):
 
     # ── Checkpointing ───────────────────────────────────────────────────────
     hf_checkpoint: str = ""
+    model_name: str = ""
     save: str = str(CHECKPOINTS_PATH)
     load: str = ""
     ref_load: str = ""
@@ -564,6 +569,7 @@ class MilesRecipe(BaseTrainRecipe):
     over_sampling_batch_size: int | None = None
     dynamic_sampling_filter_path: str | None = None
     balance_data: bool = False
+    use_dynamic_global_batch_size: bool = False
 
     # ── Memory and precision ────────────────────────────────────────────────
     attention_dropout: float = 0.0

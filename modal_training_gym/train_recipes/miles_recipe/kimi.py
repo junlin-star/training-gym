@@ -76,9 +76,9 @@ class _KimiK2Recipe(MilesRecipe):
     actor_num_nodes: int = 16
     actor_num_gpus_per_node: int = 8
     colocate: bool = True
-    use_miles_router: bool = True
     skip_eval_before_train: bool = True
     update_weight_buffer_size: int = 4 * 512 * 1024 * 1024
+    model_name: str = "kimi_k25"
 
     prompt_data: str = "/data/dapo-math-17k/dapo-math-17k.jsonl"
     input_key: str = "prompt"
@@ -97,6 +97,7 @@ class _KimiK2Recipe(MilesRecipe):
         default_factory=lambda: [1, 2, 4, 8] + list(range(16, 129, 8))
     )
     global_batch_size: int = 256
+    use_dynamic_global_batch_size: bool = True
 
     advantage_estimator: str = "grpo"
     kl_loss_coef: float = 0.0
@@ -151,12 +152,6 @@ class _KimiK2Recipe(MilesRecipe):
 
     rollout_num_gpus_per_engine: int = 8
     sglang_mem_fraction_static: float = 0.7
-    # sglang's 'auto' MoE runner picks the marlin kernel for this INT4
-    # checkpoint, and marlin's LoRA MoE path (lora_moe_runner_marlin.py ->
-    # moe_wna16_marlin.cuh:812) hits an illegal memory access while capturing
-    # decode CUDA graphs, at every batch size. Triton is the backend miles uses
-    # for MoE LoRA elsewhere and captures cleanly.
-    sglang_moe_runner_backend: str | None = "triton"
     sglang_ep_size: int = 8
     sglang_server_concurrency: int = 1024
     use_rollout_routing_replay: bool = True
@@ -165,40 +160,6 @@ class _KimiK2Recipe(MilesRecipe):
         if self.source_hf_checkpoint:
             resolve_checkpoint_ref(self.source_hf_checkpoint, local_files_only=False)
 
-    def _patch_kimi_source(self, model_dir: Path) -> None:
-        model_file = model_dir / "modeling_kimi_k25.py"
-        if not model_file.is_file():
-            return
-        src = model_file.read_text()
-        if "use_deterministic_attn: bool = False" in src:
-            return
-        ctor_old = """    def __init__(
-        hidden_dim: int,
-        num_layers: int,
-        block_cfg: dict,
-        video_attn_type: str = 'spatial_temporal') -> None:
-"""
-        ctor_new = """    def __init__(
-        hidden_dim: int,
-        num_layers: int,
-        block_cfg: dict,
-        video_attn_type: str = 'spatial_temporal',
-        use_deterministic_attn: bool = False,
-) -> None:
-"""
-        layer_old = """            MoonViTEncoderLayer(
-                **block_cfg,
-                use_deterministic_attn=self.use_deterministic_attn)
-"""
-        layer_new = """            MoonViTEncoderLayer(
-                **block_cfg,
-                use_deterministic_attn=use_deterministic_attn)
-"""
-        if ctor_old in src and layer_old in src:
-            src = src.replace(ctor_old, ctor_new, 1)
-            src = src.replace(layer_old, layer_new, 1)
-            model_file.write_text(src)
-
     def post_process_model(self) -> None:
         if not self.source_hf_checkpoint:
             raise TrainingGymConfigError("Kimi recipes require source_hf_checkpoint")
@@ -206,7 +167,6 @@ class _KimiK2Recipe(MilesRecipe):
         source_hf_path = Path(
             resolve_checkpoint_ref(self.source_hf_checkpoint, local_files_only=False)
         )
-        self._patch_kimi_source(source_hf_path)
         int4_path = Path(str(self.hf_checkpoint))
         bf16_path = Path(str(self.ref_load))
         lock_path = int4_path.parent / f".{int4_path.name}.postprocess.lock"
