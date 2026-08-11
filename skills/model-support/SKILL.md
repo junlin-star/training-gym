@@ -1,6 +1,7 @@
 ---
 name: model-support
-description: Use when adding, debugging, validating, or productionizing new model support in modal-training-gym, especially Slime recipes and model configs.
+description: Use when adding, debugging, validating, or productionizing support for a new base model or
+  model-specific recipe in modal-training-gym, especially Slime recipes and model configs.
 ---
 
 ## Adding a new model config to slime
@@ -41,7 +42,10 @@ When thinking about patching:
 2. Is someone trying to fix this bug up stream? Is the fix merged (is this something bumping slime image will just fix)? If not, should we flag to the slime team instead of patching ourselves?
 3. Is the patch going to break any models or recipes outside of our config? If possible, constrain model-specific patches to be applied to just a particular recipe or model (see the Qwen3 ASR patches).
 
-Output a slime config you believe will work, and kick off a run with 1 single step. Check this step works e2e. Output the config in `configs` folder directly, and keep track of progress in `progress_log_[attempt_count].md`.
+Output a slime config you believe will work, then follow the one-step proof in
+[agent-driven-training](../agent-driven-training/SKILL.md). Output the config
+in `configs` directly and track progress in
+`progress_log_[attempt_count].md`.
 
 While tracking the progress, also make sure the timing lines up with your expectations in the `model_setup.md` artifact.
 
@@ -51,7 +55,9 @@ Record how long the step took, and how long each substep took. Make sure the mod
 
 ### Phase 3: Validation
 
-Run it for more than 1 step, and kick off a run for 10 steps. Make sure the training does not fail. If it fails, create a minimal repro of the problem and work to address.
+Follow the smoke-test loop in
+[agent-driven-training](../agent-driven-training/SKILL.md) with about 10
+steps. If it fails, create a minimal reproduction and address the cause.
 
 Record how long the step took, and how long each substep took. Make sure the model parser works and it is not generating gibberish.
 
