@@ -960,12 +960,14 @@ def fastapi_app():
         async with entry.lock:
             if not entry.fresh:
                 entry.dirty = False
-                entry.lanes, had_read_failures = await _read_run_timings(
-                    training_run_id
-                )
-                entry.read_at = time.monotonic()
-                run_ended = await _run_has_ended(training_run_id)
-                entry.final = not had_read_failures and not entry.dirty and run_ended
+                timings, had_read_failures = await _read_run_timings(training_run_id)
+                if had_read_failures:
+                    entry.final = False
+                else:
+                    entry.lanes = timings
+                    entry.read_at = time.monotonic()
+                    run_ended = await _run_has_ended(training_run_id)
+                    entry.final = not entry.dirty and run_ended
             return entry.lanes
 
     @web.get("/api/runs/{training_run_id}/timings")

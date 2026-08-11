@@ -166,6 +166,39 @@ def test_timing_post_during_finalization_does_not_cache_final(monkeypatch, tmp_p
     assert entry.final is False
 
 
+def test_timing_read_failure_preserves_cached_lanes(monkeypatch, tmp_path):
+    static = tmp_path / "static"
+    (static / "assets").mkdir(parents=True)
+    (static / "index.html").write_text("ok")
+    monkeypatch.setattr(_dashboard, "STATIC_DIR", str(static))
+    app = _dashboard.fastapi_app.local()
+    endpoint = next(
+        route.endpoint
+        for route in app.routes
+        if route.path == "/api/runs/{training_run_id}/timings"
+    )
+    run_timings = endpoint.__closure__[
+        endpoint.__code__.co_freevars.index("_run_timings")
+    ].cell_contents
+    cells = dict(zip(run_timings.__code__.co_freevars, run_timings.__closure__))
+    timing_cache = cells["timing_cache"].cell_contents
+    entry = timing_cache.setdefault(
+        "preserved-run", cells["TimingEntry"].cell_contents()
+    )
+    entry.lanes = {"0": {"roles": {"driver": {"phases": {}}}}}
+    entry.read_at = 0.0
+
+    async def read_timings(_training_run_id):
+        return {}, True
+
+    cells["_read_run_timings"].cell_contents = read_timings
+
+    assert asyncio.run(run_timings("preserved-run")) == entry.lanes
+    assert entry.lanes == {"0": {"roles": {"driver": {"phases": {}}}}}
+    assert entry.read_at == 0.0
+    assert entry.final is False
+
+
 def test_rollout_route_preserves_raw_text_and_adds_cleaned_text(
     fake_volume, monkeypatch, tmp_path
 ):
