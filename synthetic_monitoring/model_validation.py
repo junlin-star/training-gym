@@ -37,7 +37,6 @@ from modal_training_gym.utils.metadata import (
 from synthetic_monitoring.chart import (
     RunPoint,
     append_history,
-    load_history,
     render_timing_history_chart,
 )
 
@@ -183,7 +182,7 @@ def notify(
                 f"Slack chat_postMessage failed: {response.get('error')}"
             )
 
-    history = load_history(result.base_model_name, environment_name=MODAL_ENV)
+    history: list[RunPoint] = []
     if result.succeeded:
         timings: dict[str, float] = {}
         for label, duration in phase_timing_rows(result):
