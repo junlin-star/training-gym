@@ -114,12 +114,12 @@ class Gsm8kHardDataset(HuggingFaceDataset):
     keys on the number of calculator annotations in the reference solution,
     which is the dataset's own proxy for how many steps the answer takes.
 
-    ``min_steps`` is 6 because 5 is not selective enough to matter: measured over
-    96 prompt groups of a 5+ run, the 5-step tier scored 0.906 with only 14% of
-    groups showing any within-group variance, while the 6-step tier scored 0.732
-    with 22%. Since a zero-variance group contributes no GRPO advantage, that
-    difference is most of the usable gradient. 6 also keeps roughly one epoch:
-    453 rows against 15 steps x 32 prompts.
+    ``min_steps`` is 6, but do not expect much from it: per-tier stats over one
+    5+ run suggested the 6-step tier would roughly double the share of groups
+    with within-group variance (14% -> 22%), and a full run at 6+ then measured
+    12% against the 5+ run's 17%. The tiers were too small to extrapolate from.
+    GSM8K is simply not hard enough for this model to produce GRPO signal; the
+    run exercises the text path, and AQuA-RAT is where the gradient is.
     """
 
     hf_repo = "openai/gsm8k"
