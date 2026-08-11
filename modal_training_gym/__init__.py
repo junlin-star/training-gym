@@ -3,7 +3,14 @@ from __future__ import annotations
 from importlib import import_module
 
 _EXPORTS = {
+    "Checkpoint": ("modal_training_gym.common.checkpoint", "Checkpoint"),
+    "CheckpointType": ("modal_training_gym.common.checkpoint", "CheckpointType"),
+    "convert_checkpoint_to_hf": (
+        "modal_training_gym.common.checkpoint",
+        "convert_checkpoint_to_hf",
+    ),
     "DatasetConfig": ("modal_training_gym.common.dataset", "DatasetConfig"),
+    "Endpoint": ("modal_training_gym.common.endpoint", "Endpoint"),
     "HarborDataset": ("modal_training_gym.common.dataset", "HarborDataset"),
     "DeploymentConfig": ("modal_training_gym.common.deployment", "DeploymentConfig"),
     "EvalConfig": ("modal_training_gym.common.eval", "EvalConfig"),
@@ -96,6 +103,7 @@ _EXPORTS = {
     ),
     "TrainingGymError": ("modal_training_gym.common.errors", "TrainingGymError"),
     "TrainingGroup": ("modal_training_gym.common.training_group", "TrainingGroup"),
+    "TrainingRun": ("modal_training_gym.common.run", "TrainingRun"),
     "TrainResult": ("modal_training_gym.common.train_result", "TrainResult"),
     "WandbConfig": ("modal_training_gym.common.wandb", "WandbConfig"),
 }
@@ -106,7 +114,11 @@ __all__ = [
     "Inkling_Small_LoRA_Recipe",
     "Kimi_K2_6_LoRA_Recipe",
     "Kimi_K2_5_LoRA_Recipe",
+    "Checkpoint",
+    "CheckpointType",
+    "convert_checkpoint_to_hf",
     "DatasetConfig",
+    "Endpoint",
     "GLM_4_7",
     "HarborDataset",
     "DeploymentConfig",
@@ -153,6 +165,7 @@ __all__ = [
     "TrainingGymConfigError",
     "TrainingGymError",
     "TrainingGroup",
+    "TrainingRun",
     "TrainResult",
     "WandbConfig",
 ]
