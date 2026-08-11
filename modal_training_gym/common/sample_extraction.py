@@ -492,11 +492,9 @@ def _image_candidates(sample: Any) -> list[Any]:
 def _raw_image_key(value: Any) -> Any:
     """Hashable identity for an *unencoded* image candidate.
 
-    Lets the store recognise a repeat before paying for a decode + thumbnail +
-    base64 pass. Content-derived wherever the value exposes its bytes, so samples
-    that decoded the same picture separately still collapse. ``id()`` is the last
-    resort, and the store pins those objects so it cannot be recycled onto a
-    different image.
+    Recognises a repeat before paying for a decode + thumbnail + base64 pass.
+    Content-derived wherever the value exposes its bytes; ``id()`` is the last
+    resort, and the store pins those objects so the id cannot be recycled.
     """
     if isinstance(value, str):
         if len(value) <= 512:
@@ -523,22 +521,28 @@ class RolloutImageStore:
 
     The bytes ride on the first sample that uses them as ``metadata["image"]``; the
     rest of the prompt group carries only ``metadata["image_ref"]`` naming it. Both
-    keys live in free-form sample metadata because a rollout-level ``images`` map would
-    be a new top-level field, and a dashboard one deploy behind the trainer drops
-    fields it doesn't know — which once discarded such a map while keeping its refs.
+    keys live in sample metadata rather than a new rollout-level field, which a
+    dashboard one deploy behind the trainer would drop while keeping the refs.
 
-    ``limit`` bounds distinct images. Once spent, new ones are skipped and their
-    samples left unannotated, while samples sharing an already-captured image still
-    resolve — coverage degrades by prompt group rather than leaving dangling refs.
+    ``limit`` bounds distinct images. Once spent, further images are skipped and
+    their samples left unannotated, while samples sharing an already-captured image
+    still resolve — coverage degrades by prompt group instead of dangling refs.
+
+    Frameworks build a prompt group by copying one prepared sample (miles
+    deep-copies it per ``n_samples_per_prompt``), so members hold equal-content but
+    distinct image objects. ``group_key`` records the outcome once per group; the
+    content hash — the only thing that can collapse those copies — is then paid once
+    per group instead of once per sample.
     """
 
     def __init__(self, limit: int) -> None:
         self._limit = max(0, limit)
         self._ref_by_uri: dict[str, str] = {}
-        # "" marks a candidate already known to be unusable, so a sample whose
-        # first candidate fails doesn't re-attempt it once per sample.
+        # "" marks a candidate already known to be unusable, so it is not retried
+        # once per sample.
         self._ref_by_raw: dict[Any, str] = {}
         self._key_by_id: dict[int, Any] = {}
+        self._ref_by_group: dict[Any, str] = {}
         self._pinned: list[Any] = []
 
     @property
@@ -549,12 +553,12 @@ class RolloutImageStore:
     def _key(self, candidate: Any) -> Any:
         """Key ``candidate``, reusing the key already computed for that object.
 
-        Every sample is annotated, and a prompt group usually shares one image
-        object, so without this the content key -- a full raw-pixel
-        materialisation plus a hash for a PIL image -- is recomputed once per
-        sample and the cost tracks rollout size rather than distinct images.
-        Content keying still decides equality: this only short-circuits the same
-        object, which cannot have different content within one payload.
+        Covers a prompt group that shares one image object; ``annotate``'s
+        ``group_key`` covers one whose members hold copies. Either way the content
+        key -- a full raw-pixel materialisation plus a hash for a PIL image -- is
+        paid per distinct image rather than per sample. Content keying still decides
+        equality: this only short-circuits the same object, which cannot have
+        different content within one payload.
         """
         memo = self._key_by_id.get(id(candidate))
         if memo is not None:
@@ -566,10 +570,30 @@ class RolloutImageStore:
         self._key_by_id[id(candidate)] = key
         return key
 
-    def annotate(self, sample: Any, metadata: dict[str, Any]) -> bool:
-        """Write this sample's image keys onto ``metadata``; True if one resolves."""
+    def annotate(
+        self, sample: Any, metadata: dict[str, Any], group_key: Any = None
+    ) -> bool:
+        """Write this sample's image keys onto ``metadata``; True if one resolves.
+
+        ``group_key`` (the sample's prompt group, when known) reuses the group's
+        first outcome instead of re-hashing an identical copy of its image.
+        """
         if not self._limit:
             return False
+        if group_key is not None:
+            cached = self._ref_by_group.get(group_key)
+            if cached is not None:
+                if not cached:
+                    return False
+                metadata["image_ref"] = cached
+                return True
+        ref = self._resolve(sample, metadata)
+        if group_key is not None:
+            self._ref_by_group[group_key] = ref
+        return bool(ref)
+
+    def _resolve(self, sample: Any, metadata: dict[str, Any]) -> str:
+        """Annotate from ``sample``'s own candidates; the ref written, else ``""``."""
         for candidate in _image_candidates(sample):
             key = self._key(candidate)
             cached = self._ref_by_raw.get(key)
@@ -577,7 +601,7 @@ class RolloutImageStore:
                 if not cached:
                     continue
                 metadata["image_ref"] = cached
-                return True
+                return cached
             if self.count >= self._limit:
                 self._ref_by_raw[key] = ""
                 continue
@@ -592,8 +616,8 @@ class RolloutImageStore:
                 metadata["image"] = uri
             self._ref_by_raw[key] = ref
             metadata["image_ref"] = ref
-            return True
-        return False
+            return ref
+        return ""
 
 
 def _sample_to_dict(
@@ -669,10 +693,19 @@ def _sample_to_dict(
             if compact:
                 metadata["eval_report"] = compact
 
+    sample_index = optional_int(get("index"))
+    group_index = (
+        None
+        if sample_index is None
+        else sample_index // max(1, int(n_samples_per_prompt or 1))
+    )
+
     if audio_uri := _extract_audio_from_prompt(prompt):
         metadata["_metadata_type"] = "audio"
         metadata["audio"] = audio_uri
-    elif image_store is not None and image_store.annotate(sample, metadata):
+    elif image_store is not None and image_store.annotate(
+        sample, metadata, group_key=group_index
+    ):
         metadata["_metadata_type"] = "image"
 
     response_text = _coerce_text(response)
@@ -689,7 +722,6 @@ def _sample_to_dict(
         "response": response_text,
         "metadata": metadata,
     }
-    sample_index = optional_int(get("index"))
     rollout_index = optional_int(get("rollout_id"))
     if rollout_index is None:
         rollout_index = sample_index
@@ -697,7 +729,7 @@ def _sample_to_dict(
         out["rollout_index"] = rollout_index
     if sample_index is not None:
         out["sample_index"] = sample_index
-        out["group_index"] = sample_index // max(1, int(n_samples_per_prompt or 1))
+        out["group_index"] = group_index
     # Store raw + parsed (mirrors eval's EvalRowResult) so the dashboard can show
     # cleaned content without re-parsing. Parsing happens here, in the recorder.
     parsed = _parsed_response_dict(response_text, parser)

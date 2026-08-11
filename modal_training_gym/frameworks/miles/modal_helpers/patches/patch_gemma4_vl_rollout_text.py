@@ -35,9 +35,8 @@ NEW = f"""    # Use existing tokens for multi-turn or tokenize the new prompt
         and len(sample.response) == 0
         and type(getattr(state, "processor", None)).__name__.startswith("Gemma4")
     ):
-        # {MARKER}: Gemma-4 only. Its processor pre-expands <|image|> per patch,
-        # which SGLang rejects against the single raw image; send the text and let
-        # SGLang expand. Other models keep the original path unchanged.
+        # {MARKER}: Gemma-4's processor pre-expands <|image|> per patch, which
+        # SGLang rejects against the single raw image; send text and let it expand.
         payload["text"] = sample.prompt
         if not sample.tokens:  # Initialize sample.tokens for the first turn
             sample.tokens = prompt_ids
@@ -64,14 +63,22 @@ if OLD not in src:
         "payload construction has changed. Re-check it before shipping."
     )
 
-# The injected branch reads `state.processor`. Matching OLD only proves the
-# surrounding lines are unchanged, so check the binding too: a rename would let
-# the patch apply while the branch never fires.
+# Matching OLD says nothing about the `state` binding the injected branch reads.
 if "state = GenerateState(args)" not in src:
     raise SystemExit(
         "Gemma-4 VL rollout text patch expects a local `state = GenerateState(args)` "
         "in miles' sglang_rollout.py; it is gone, so the injected branch would never "
         "fire. Re-check how the processor is reached before shipping."
+    )
+
+# The gate also reads payload["image_data"], which must already be assigned where
+# the replaced block sits.
+image_data_at = src.find('payload["image_data"]')
+if image_data_at == -1 or image_data_at > src.index(OLD):
+    raise SystemExit(
+        'Gemma-4 VL rollout text patch expects payload["image_data"] to be set '
+        "before the token block it replaces in miles' sglang_rollout.py; it is not, "
+        "so the injected branch would never fire. Re-check the payload order."
     )
 
 TARGET.write_text(src.replace(OLD, NEW, 1))
