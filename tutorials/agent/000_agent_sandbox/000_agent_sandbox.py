@@ -153,13 +153,13 @@ def _main_impl() -> None:
     # The server exposes an **OpenAI-compatible** `/v1/chat/completions`
     # endpoint, so we point the standard OpenAI Python SDK at it.
     #
-    # We pass `extra_server_args={"--tool-call-parser": "qwen25"}` to
-    # the `SglangRecipe` so the server parses Qwen3's tool-call
-    # format into structured `tool_calls` in the response. Without
-    # this, the model emits tool calls as raw text.
+    # We pass `extra_server_args={"--tool-call-parser": "qwen"}` to
+    # the `SglangRecipe` so the server parses Qwen3.5's XML-style
+    # tool-call format into structured `tool_calls` in the response.
+    # Without this, the model emits tool calls as raw text.
 
     recipe = SglangRecipe(
-        extra_server_args={"--tool-call-parser": "qwen25"},
+        extra_server_args={"--tool-call-parser": "qwen"},
     )
     deployment = DeploymentConfig(
         model=Qwen3_5_9B(),
