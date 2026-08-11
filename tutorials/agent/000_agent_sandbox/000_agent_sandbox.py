@@ -25,7 +25,8 @@
 # and the sandbox — so you control cost, latency, and data privacy.
 # Run with:
 # ```
-# uv run tutorials/misc/000_agent_sandbox/000_agent_sandbox.py
+# uv run --with openai \
+#   python tutorials/agent/000_agent_sandbox/000_agent_sandbox.py
 # ```
 # ## Prerequisites
 #
