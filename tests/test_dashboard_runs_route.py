@@ -197,7 +197,11 @@ def test_timing_read_failure_preserves_cached_lanes(monkeypatch, tmp_path):
     async def read_timings(_training_run_id):
         return next(reads)
 
+    async def run_has_ended(_training_run_id):
+        return False
+
     cells["_read_run_timings"].cell_contents = read_timings
+    cells["_run_has_ended"].cell_contents = run_has_ended
 
     stale = asyncio.run(run_timings("preserved-run"))
     assert stale["0"] == entry.lanes["0"]
