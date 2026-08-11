@@ -392,6 +392,43 @@ PACKAGE_TARGETS: tuple[PackageTarget, ...] = (
                 "                store_prefix=store_prefix,\n"
                 "            )\n",
             ),
+            (
+                "actor_finalize",
+                "        self.prof.step(rollout_id=rollout_id)\n"
+                "\n"
+                "        train_dump_utils.save_debug_train_data(self.args, rollout_id=rollout_id, rollout_data=rollout_data)\n"
+                "\n"
+                "        for m in all_replay_managers:\n"
+                "            if m.enabled:\n"
+                "                m.clear_all()\n"
+                "\n"
+                "        if train_step_outcome == TrainStepOutcome.NORMAL:\n"
+                "            # update the cpu actor weight to the latest model\n"
+                "            if self._enable_weight_backup:\n"
+                '                self.weights_backuper.backup("actor")\n'
+                "            else:\n"
+                "                torch.cuda.synchronize()\n"
+                "\n"
+                "            # Update ref model if needed\n"
+                "            if (\n"
+                "                self.args.ref_update_interval is not None\n"
+                "                and (rollout_id + 1) % self.args.ref_update_interval == 0\n"
+                '                and "ref" in self.weights_backuper.backup_tags\n'
+                "            ):\n"
+                '                with timer("ref_model_update"):\n'
+                "                    if is_first_replica_megatron_main_rank():\n"
+                '                        logger.info(f"Updating ref model at rollout_id {rollout_id}")\n'
+                '                    self.weights_backuper.backup("ref")\n'
+                "\n"
+                "        if train_step_outcome == TrainStepOutcome.NORMAL and is_multi_lora_enabled(self.args):\n"
+                "            from miles.backends.megatron_utils.multi_lora_utils import commit_trained_batch\n"
+                "\n"
+                "            commit_trained_batch(rollout_data, rollout_id, self._multi_lora_pending_push)\n"
+                "\n"
+                "        log_perf_data(rollout_id, self.args, extra_metrics=self.weight_updater.pop_metrics())\n"
+                "\n"
+                "        self._heartbeat.bump()\n",
+            ),
         ),
     ),
     PackageTarget(
@@ -405,6 +442,39 @@ PACKAGE_TARGETS: tuple[PackageTarget, ...] = (
             (
                 "optimizer_step",
                 "            update_successful, grad_norm, num_zeros_in_grad = optimizer.step()\n",
+            ),
+            (
+                "actor_finalize",
+                "    # release grad (multi-LoRA retains accumulated grads; stepped slots were\n"
+                "    # zeroed selectively inside step_adapter_slots)\n"
+                "    if not multi_lora:\n"
+                "        _zero_grads(model, optimizer, disable_optimizer)\n"
+                "\n"
+                "    log_structured(\n"
+                "        logger.info,\n"
+                '        op="train_step",\n'
+                "        rollout=rollout_id,\n"
+                "        step=step_id,\n"
+                "        attempt=attempt,\n"
+                "        outcome=outcome.name,\n"
+                "        valid_step=valid_step,\n"
+                "    )\n"
+                "\n"
+                "    if outcome == TrainStepOutcome.NORMAL:\n"
+                "        dump_local_weight_checksums(args=args, model=model, optimizer=optimizer)\n"
+                "        if args.enable_witness:\n"
+                "            witness_dump_and_clear_stale(model=model, witness_info=witness_info, optimizer=optimizer)\n"
+                "\n"
+                "        if mpu.is_pipeline_last_stage(ignore_virtual=True):\n"
+                "            metric_num_rollouts = None if args.calculate_per_token_loss else num_rollouts\n"
+                "            loss_reduced = (\n"
+                "                indep_dp_loss_reduced\n"
+                "                if parallel_state.indep_dp.size > 1\n"
+                "                else aggregate_train_losses(losses_reduced, metric_num_rollouts)\n"
+                "            )\n"
+                "            return loss_reduced, grad_norm, outcome\n"
+                "\n"
+                "    return {}, grad_norm, outcome\n",
             ),
         ),
     ),

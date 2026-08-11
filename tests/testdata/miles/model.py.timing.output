@@ -669,36 +669,38 @@ def train_one_step(
             assert update_successful
             opt_param_scheduler.step(increment=num_rollouts)
 
-    # release grad (multi-LoRA retains accumulated grads; stepped slots were
-    # zeroed selectively inside step_adapter_slots)
-    if not multi_lora:
-        _zero_grads(model, optimizer, disable_optimizer)
+    # PATCHED_TRAINING_GYM_TIMING_ACTOR_FINALIZE
+    with _tg_time_phase('actor_finalize'):
+        # release grad (multi-LoRA retains accumulated grads; stepped slots were
+        # zeroed selectively inside step_adapter_slots)
+        if not multi_lora:
+            _zero_grads(model, optimizer, disable_optimizer)
 
-    log_structured(
-        logger.info,
-        op="train_step",
-        rollout=rollout_id,
-        step=step_id,
-        attempt=attempt,
-        outcome=outcome.name,
-        valid_step=valid_step,
-    )
+        log_structured(
+            logger.info,
+            op="train_step",
+            rollout=rollout_id,
+            step=step_id,
+            attempt=attempt,
+            outcome=outcome.name,
+            valid_step=valid_step,
+        )
 
-    if outcome == TrainStepOutcome.NORMAL:
-        dump_local_weight_checksums(args=args, model=model, optimizer=optimizer)
-        if args.enable_witness:
-            witness_dump_and_clear_stale(model=model, witness_info=witness_info, optimizer=optimizer)
+        if outcome == TrainStepOutcome.NORMAL:
+            dump_local_weight_checksums(args=args, model=model, optimizer=optimizer)
+            if args.enable_witness:
+                witness_dump_and_clear_stale(model=model, witness_info=witness_info, optimizer=optimizer)
 
-        if mpu.is_pipeline_last_stage(ignore_virtual=True):
-            metric_num_rollouts = None if args.calculate_per_token_loss else num_rollouts
-            loss_reduced = (
-                indep_dp_loss_reduced
-                if parallel_state.indep_dp.size > 1
-                else aggregate_train_losses(losses_reduced, metric_num_rollouts)
-            )
-            return loss_reduced, grad_norm, outcome
+            if mpu.is_pipeline_last_stage(ignore_virtual=True):
+                metric_num_rollouts = None if args.calculate_per_token_loss else num_rollouts
+                loss_reduced = (
+                    indep_dp_loss_reduced
+                    if parallel_state.indep_dp.size > 1
+                    else aggregate_train_losses(losses_reduced, metric_num_rollouts)
+                )
+                return loss_reduced, grad_norm, outcome
 
-    return {}, grad_norm, outcome
+        return {}, grad_norm, outcome
 
 
 def finalize_model_grads_with_empty_cache(*args, **kwargs):

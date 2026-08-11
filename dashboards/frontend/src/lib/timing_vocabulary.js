@@ -12,6 +12,7 @@ export const CATEGORIES = {
       "compute_log_probs",
       "forward_backward",
       "optimizer_step",
+      "actor_finalize",
     ],
   },
   generate: {
@@ -59,6 +60,7 @@ export const PHASE_COLORS = {
   compute_log_probs: slot("train-large"),
   forward_backward: slot("train-alt-a"),
   optimizer_step: slot("train-alt-b"),
+  actor_finalize: slot("train-alt-c"),
 };
 
 export const TIMING_LABELS = {
@@ -81,6 +83,7 @@ export const TIMING_LABELS = {
   reward_post_process: "Reward post process",
   forward_backward: "Forward/backward",
   optimizer_step: "Optimizer step",
+  actor_finalize: "Actor cleanup & offload",
 };
 
 export const IDLE_PHASES = new Set([
@@ -106,6 +109,7 @@ export const NESTS_IN = {
   compute_log_probs: ["train_models"],
   forward_backward: ["train_models"],
   optimizer_step: ["train_models"],
+  actor_finalize: ["train_models"],
   reward: ["generate_samples"],
   reward_batch: ["generate_samples"],
   reward_post_process: ["generate_samples"],

@@ -163,6 +163,7 @@
   --color-c-dataviz-train-large: #ADEAAB;
   --color-c-dataviz-train-alt-a: #E3F7E8;
   --color-c-dataviz-train-alt-b: #357D69;
+  --color-c-dataviz-train-alt-c: #B8D8C0;
   --color-surface-primary: var(--color-c-gray-0);
   --color-surface-primary-hover: rgba(255, 255, 255, 0.05);
   --color-surface-primary-active: rgba(255, 255, 255, 0.1);

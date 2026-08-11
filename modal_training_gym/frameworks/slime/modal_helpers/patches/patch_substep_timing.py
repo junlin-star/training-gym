@@ -440,6 +440,37 @@ ACTOR_TARGET = PackageTarget(
             "                use_rollout_top_p_replay=True,\n"
             "            )\n",
         ),
+        (
+            "actor_finalize",
+            "        self.prof.step(rollout_id=rollout_id)\n"
+            "\n"
+            "        train_dump_utils.save_debug_train_data(self.args, rollout_id=rollout_id, rollout_data=rollout_data)\n"
+            "\n"
+            "        if self.args.use_routing_replay:\n"
+            "            RoutingReplay.clear_all()\n"
+            "\n"
+            "        # update the cpu actor weight to the latest model\n"
+            '        self.weights_backuper.backup("actor")\n'
+            "\n"
+            "        # Update ref model if needed\n"
+            "        if (\n"
+            "            self.args.ref_update_interval is not None\n"
+            "            and (rollout_id + 1) % self.args.ref_update_interval == 0\n"
+            '            and "ref" in self.weights_backuper.backup_tags\n'
+            "        ):\n"
+            '            with timer("ref_model_update"):\n'
+            "                if is_megatron_main_rank():\n"
+            '                    logger.info(f"Updating ref model at rollout_id {rollout_id}")\n'
+            '                self.weights_backuper.backup("ref")\n'
+            "\n"
+            "        log_perf_data(rollout_id, self.args, extra_metrics=self.weight_updater.pop_metrics())\n",
+        ),
+        (
+            "actor_finalize",
+            "        if self.args.offload_train:\n"
+            "            del rollout_data\n"
+            "            self.sleep()\n",
+        ),
     ),
 )
 
@@ -473,6 +504,24 @@ TRAIN_STEP_TARGET = PackageTarget(
             "        # batching is on so the scheduler's samples-seen counter tracks reality.\n"
             "        assert update_successful\n"
             "        opt_param_scheduler.step(increment=step_global_batch_size)\n",
+        ),
+        (
+            "actor_finalize",
+            "    # release grad\n"
+            "    for model_chunk in model:\n"
+            "        model_chunk.zero_grad_buffer()\n"
+            "    optimizer.zero_grad()\n"
+            "\n"
+            "    if mpu.is_pipeline_last_stage(ignore_virtual=True):\n"
+            "        loss_reduced = reduce_train_step_metrics(\n"
+            "            losses_reduced,\n"
+            "            calculate_per_token_loss=args.calculate_per_token_loss,\n"
+            "            step_global_batch_size=step_global_batch_size,\n"
+            "            cp_size=mpu.get_context_parallel_world_size(),\n"
+            "            dp_with_cp_group=mpu.get_data_parallel_group(with_context_parallel=True),\n"
+            "        )\n"
+            "        return loss_reduced, grad_norm\n"
+            "    return {}, grad_norm\n",
         ),
     ),
 )

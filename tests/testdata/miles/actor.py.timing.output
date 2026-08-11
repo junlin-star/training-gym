@@ -615,40 +615,42 @@ class MegatronTrainRayActor(TrainRayActor):
                     ft_test_action_executor=self._ft_test_action_executor,
                 )
 
+            # PATCHED_TRAINING_GYM_TIMING_ACTOR_FINALIZE
+        with _tg_time_phase('actor_finalize'):
             self.prof.step(rollout_id=rollout_id)
 
-        train_dump_utils.save_debug_train_data(self.args, rollout_id=rollout_id, rollout_data=rollout_data)
+            train_dump_utils.save_debug_train_data(self.args, rollout_id=rollout_id, rollout_data=rollout_data)
 
-        for m in all_replay_managers:
-            if m.enabled:
-                m.clear_all()
+            for m in all_replay_managers:
+                if m.enabled:
+                    m.clear_all()
 
-        if train_step_outcome == TrainStepOutcome.NORMAL:
-            # update the cpu actor weight to the latest model
-            if self._enable_weight_backup:
-                self.weights_backuper.backup("actor")
-            else:
-                torch.cuda.synchronize()
+            if train_step_outcome == TrainStepOutcome.NORMAL:
+                # update the cpu actor weight to the latest model
+                if self._enable_weight_backup:
+                    self.weights_backuper.backup("actor")
+                else:
+                    torch.cuda.synchronize()
 
-            # Update ref model if needed
-            if (
-                self.args.ref_update_interval is not None
-                and (rollout_id + 1) % self.args.ref_update_interval == 0
-                and "ref" in self.weights_backuper.backup_tags
-            ):
-                with timer("ref_model_update"):
-                    if is_first_replica_megatron_main_rank():
-                        logger.info(f"Updating ref model at rollout_id {rollout_id}")
-                    self.weights_backuper.backup("ref")
+                # Update ref model if needed
+                if (
+                    self.args.ref_update_interval is not None
+                    and (rollout_id + 1) % self.args.ref_update_interval == 0
+                    and "ref" in self.weights_backuper.backup_tags
+                ):
+                    with timer("ref_model_update"):
+                        if is_first_replica_megatron_main_rank():
+                            logger.info(f"Updating ref model at rollout_id {rollout_id}")
+                        self.weights_backuper.backup("ref")
 
-        if train_step_outcome == TrainStepOutcome.NORMAL and is_multi_lora_enabled(self.args):
-            from miles.backends.megatron_utils.multi_lora_utils import commit_trained_batch
+            if train_step_outcome == TrainStepOutcome.NORMAL and is_multi_lora_enabled(self.args):
+                from miles.backends.megatron_utils.multi_lora_utils import commit_trained_batch
 
-            commit_trained_batch(rollout_data, rollout_id, self._multi_lora_pending_push)
+                commit_trained_batch(rollout_data, rollout_id, self._multi_lora_pending_push)
 
-        log_perf_data(rollout_id, self.args, extra_metrics=self.weight_updater.pop_metrics())
+            log_perf_data(rollout_id, self.args, extra_metrics=self.weight_updater.pop_metrics())
 
-        self._heartbeat.bump()
+            self._heartbeat.bump()
         return train_step_outcome
 
     @with_logs
