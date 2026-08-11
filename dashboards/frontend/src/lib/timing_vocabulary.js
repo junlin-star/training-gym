@@ -145,6 +145,16 @@ export function rolloutIdForTimingKey(id) {
   return Number.isInteger(parsedId) && parsedId >= 0 ? parsedId : null;
 }
 
+export function shouldShowTimingSection(timings) {
+  if (isLegacyTiming(timings)) return false;
+  return (
+    timings?.metadata?.timing_stale === true ||
+    Object.keys(timings || {}).some(
+      (id) => rolloutIdForTimingKey(id) !== null,
+    )
+  );
+}
+
 export function categoryOf(name) {
   return PHASE_CATEGORY[name] || "idle";
 }

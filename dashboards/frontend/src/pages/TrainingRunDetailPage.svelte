@@ -26,8 +26,7 @@
   } from "../lib/api.js";
   import { groupByRollout, rolloutIndex, rolloutScores } from "../lib/rolloutGrouping.js";
   import {
-    isLegacyTiming,
-    rolloutIdForTimingKey,
+    shouldShowTimingSection,
     timingIsAsync,
     timingRunStart,
   } from "../lib/timing.js";
@@ -551,7 +550,7 @@
 
   let runTimings = $state({});
   let runTimingsSerialized = $state("{}");
-  let legacyTiming = $derived(isLegacyTiming(runTimings));
+  let showTimingSection = $derived(shouldShowTimingSection(runTimings));
   let timelineAsync = $derived(timingIsAsync(runTimings));
   let timelineRunOrigin = $derived(timingRunStart(runTimings));
   let stepTimingIds = $derived(
@@ -1408,11 +1407,11 @@
               <pre class="[border:1px_solid_color-mix(in_srgb,var(--red,#f87171)_45%,transparent)] rounded-[8px] bg-[color-mix(in_srgb,var(--red,#f87171)_12%,transparent)] text-(--red,#f87171) [font-family:var(--font-mono)] text-[12px] leading-[17px] m-0 max-h-[320px] overflow-auto p-[12px_14px] whitespace-pre-wrap [word-break:break-word]">{run.error_message}</pre>
             </div>
           {/if}
-          {#if !legacyTiming && stepTimingIds.length}
+          {#if showTimingSection}
             <div class="rollout-chart">
               <div class="rollout-chart-title">
-                Substep Timing ({stepTimingIds.length}
-                {stepTimingIds.length === 1 ? "step" : "steps"})
+                Substep Timing{#if stepTimingIds.length} ({stepTimingIds.length}
+                  {stepTimingIds.length === 1 ? "step" : "steps"}){/if}
               </div>
               <RunTimeline
                 timings={runTimings}

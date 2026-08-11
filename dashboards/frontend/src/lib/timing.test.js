@@ -7,6 +7,7 @@ import {
   groupTooltipChildren,
   nest,
   runTimeline,
+  shouldShowTimingSection,
 } from "./timing.js";
 
 const work = (start, end) => ({
@@ -25,6 +26,18 @@ const idle = (start, end) => ({
   end,
   name: "wait_for_rollout",
   rolloutId: 1,
+});
+
+test("shouldShowTimingSection includes stale timing without lanes", () => {
+  assert.equal(
+    shouldShowTimingSection({ metadata: { timing_stale: true } }),
+    true,
+  );
+  assert.equal(shouldShowTimingSection({ metadata: { timing_stale: false } }), false);
+  assert.equal(
+    shouldShowTimingSection({ metadata: { legacy_derived: true, timing_stale: true } }),
+    false,
+  );
 });
 
 test("groupTooltipChildren preserves order and aggregates repeated phases", () => {

@@ -8,6 +8,7 @@ export {
   labelFor,
   PHASE_COLORS,
   rolloutIdForTimingKey,
+  shouldShowTimingSection,
   TIMING_LABELS,
   TOOLTIP_HIDDEN_PHASES,
   TRAIN_OUTLINE_COLOR,
