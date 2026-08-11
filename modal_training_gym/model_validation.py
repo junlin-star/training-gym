@@ -6,6 +6,7 @@ import io
 import json
 import time
 from dataclasses import asdict, dataclass
+from pathlib import Path
 from typing import Any
 
 from datasets import load_dataset
@@ -191,7 +192,7 @@ class LibriSpeechASRDataset(MultimodalDataset):
             data = (
                 audio["bytes"]
                 if audio.get("bytes")
-                else open(audio["path"], "rb").read()
+                else Path(audio["path"]).read_bytes()
             )
             arr, sr = sf.read(io.BytesIO(data))
             buf = io.BytesIO()
