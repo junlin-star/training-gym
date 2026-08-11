@@ -1,19 +1,20 @@
 """Trainer-side stitch hooks: publish a version, claim the pool, gate requests.
 
-Vendored from the stitch cookbook (``cookbook/common/hooks.py``). slime resolves
+Vendored from the stitch cookbook (``cookbook/common/hooks.py``). miles resolves
 these by dotted path off the recipe:
 
-- :func:`commit_and_wake` — ``StitchRecipe.custom_delta_pre_push_path``: make the
+- :func:`commit_and_wake` — ``custom_update_weight_post_write_path``: make the
   written version durable, advance ``latest``, wake the Flash pool.
 - :func:`gated_rollout_request_hook` — ``StitchRecipe.custom_rollout_request_hook_path``:
   pin each rollout request to a bounded-staleness version.
 - :func:`claim_pool` — called by the launcher before training publishes, to reset
   every replica to base for this run.
 
-Each hook reads the run's coordinates off the trainer's ``args`` namespace (slime
-``setattr``\\ s every ``--custom-config-path`` key onto it), with ``DELTA_*`` env
-vars as the fallback, and drives the stitch core against a ``ModalVolumeStore`` +
-``ModalFlashPool``.
+Each hook reads the run's coordinates off the trainer's ``args`` namespace (miles
+``setattr``\\ s every ``--custom-config-path`` key onto it) and drives the stitch
+core against a ``ModalVolumeStore`` + ``ModalFlashPool``. The store is scoped to
+the run: ``run_id`` is the run's fence token, so a stale trainer can't advance a
+pointer another run owns.
 """
 
 from __future__ import annotations
@@ -52,9 +53,9 @@ def sample_affinity_key(sample: Any) -> str | None:
 
 
 def commit_and_wake(args: Any, published_dir: str, rollout_engines: Any = None) -> None:
-    """Bridge slime's disk-delta publish to the stitch store.
+    """Bridge miles' disk-delta publish to the stitch store.
 
-    slime fires this at each durability boundary: a version dir (``weight_vNNNNNN``,
+    miles fires this at each durability boundary: a version dir (``weight_vNNNNNN``,
     holding the HF index) and — at baseline/pointer commit — the run dir. Every rank
     flushes its writes, then version-dir calls rendezvous before rank 0 advances the
     pointer, so no index naming another rank's shard is ever exposed early. Keying on
@@ -140,8 +141,14 @@ class _CachedPointer:
     async def get(self, args: Any, ttl: float = 2.0) -> int:
         store = self._store
         root = Path(_transport_root(args))
+        run_id = _run_id(args)
         volume = _volume_name(args)
-        if store is None or store.root != root or store.volume_name != (volume or None):
+        if (
+            store is None
+            or store.root != root
+            or store.run_id != run_id
+            or store.volume_name != (volume or None)
+        ):
             store = self._store = _store(args)
             self._version = 0
             self._at = -1e9
@@ -170,7 +177,11 @@ _latest = _CachedPointer()
 
 def _store(args: Any) -> ModalVolumeStore:
     volume = _volume_name(args)
-    return ModalVolumeStore(_transport_root(args), volume_name=volume or None)
+    return ModalVolumeStore(
+        _transport_root(args),
+        volume_name=volume or None,
+        run_id=_run_id(args),
+    )
 
 
 def _pool(args: Any) -> ModalFlashPool:
@@ -190,11 +201,17 @@ def _volume_name(args: Any) -> str | None:
 
 
 def _transport_root(args: Any) -> str:
-    # The trainer writes version dirs under <root>/<run_id>; the Store is rooted at <root>.
-    write_dir = getattr(args, "update_weight_disk_dir", None) or os.environ.get(
-        "DELTA_BULLETIN_ROOT", "/delta-bulletin"
-    )
-    return str(Path(write_dir).parent)
+    # miles owns <run>/updates (it may recreate the dir); stitch owns <run>/latest,
+    # so the Store is rooted one level up from the trainer's write dir.
+    write_dir = getattr(args, "update_weight_disk_dir", None)
+    if not write_dir:
+        raise ValueError("update_weight_disk_dir is required")
+    write_dir = Path(write_dir)
+    if write_dir.name != "updates":
+        raise ValueError(
+            f"update_weight_disk_dir must end in /updates: path={str(write_dir)!r}"
+        )
+    return str(write_dir.parent)
 
 
 def _run_id(args: Any) -> str:

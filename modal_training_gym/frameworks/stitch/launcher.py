@@ -1,8 +1,9 @@
-"""Factory that builds a Modal app for a disaggregated slime run via stitch.
+"""Factory that builds a Modal app for a disaggregated miles run via stitch.
 
 Same shape as the colocated launchers (``build_slime_app`` / ``build_miles_app``):
 :func:`build_stitch_app` returns a ``modal.App`` with ``download``,
-``prepare_dataset``, and ``train``, so a run is one call::
+``prepare_dataset``, ``prepare_checkpoints``, and ``train``, so a run is one
+call::
 
     TrainConfig(model=..., dataset=..., recipe=StitchRecipe(...)).train()
 
@@ -17,7 +18,7 @@ The app is still deployable (``modal deploy``) when a pool should outlive a sing
 run; only then can the publish hook wake replicas by app name — otherwise they
 pick the new pointer up on their next reconcile poll.
 
-This packages the stitch ``slime_disagg`` cookbook (``cookbook/slime_disagg``)
+This packages the stitch ``miles_disagg`` cookbook (``cookbook/miles_disagg``)
 around a training-gym ``StitchRecipe`` + ``ModelConfig`` + ``DatasetConfig``.
 """
 
@@ -28,7 +29,7 @@ import subprocess
 import tempfile
 import time
 import uuid
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 
 import cloudpickle
@@ -52,7 +53,9 @@ from modal_training_gym.common.train_result import TrainResult
 from modal_training_gym.common.wandb import preflight_wandb
 from modal_training_gym.frameworks.stitch import serving_image
 from modal_training_gym.train_recipes.stitch_recipe.pins import (
-    SLIME_ROOT,
+    MEGATRON_PATCH_DIR,
+    MEGATRON_PATH,
+    MILES_ROOT,
     STITCH_REPO_REF,
     STITCH_REPO_URL,
 )
@@ -65,7 +68,7 @@ from modal_training_gym.train_recipes.stitch_recipe.recipe import (
     StitchRecipe,
     fields_to_argv,
 )
-from modal_training_gym.train_recipes.stitch_recipe.train import SlimeStitchTrainRecipe
+from modal_training_gym.train_recipes.stitch_recipe.train import StitchTrainConfig
 
 MINUTES = 60
 SIDECAR_PORT = 8000
@@ -76,10 +79,13 @@ SERVER_STARTUP_TIMEOUT = 35 * MINUTES
 LOCAL_CHECKPOINT_PATH = "/local-checkpoint"
 # Where each replica tees its sidecar log (its own volume — see below).
 ROLLOUT_LOG_PATH = "/rollout-logs"
+# The vendored Megatron patches, mounted into the trainer image at the path the
+# recipe's ``megatron_runtime_patches`` name.
+_PATCH_SOURCE_DIR = str(Path(__file__).resolve().parent / "patches")
 
 
-class _SlimeArgs:
-    """Runtime carrier for the slime args the trainer runs with.
+class _MilesArgs:
+    """Runtime carrier for the miles args the trainer runs with.
 
     The recipe + model + dataset resolve to a plain field dict
     (:meth:`StitchRecipe.to_payload`); ``train`` rebuilds this carrier, injects
@@ -88,70 +94,71 @@ class _SlimeArgs:
     :meth:`cli_args`.
     """
 
-    _CONTROL = {"async_mode", "slime_model_script"}
+    _CONTROL = {"async_mode", "miles_model_script"}
 
     # Per-run fields the trainer injects (the rest come from the field dict).
     rollout_endpoint_url: str
     update_weight_disk_dir: str
     custom_config_path: dict | str
+    te_precision_config_file: dict | str | None
 
     def __init__(
-        self, fields: dict, *, async_mode: bool, slime_model_script: str
+        self, fields: dict, *, async_mode: bool, miles_model_script: str
     ) -> None:
         for key, val in fields.items():
             setattr(self, key, val)
         self.async_mode = async_mode
-        self.slime_model_script = slime_model_script
+        self.miles_model_script = miles_model_script
 
     def cli_args(self) -> list[str]:
         fields = {k: v for k, v in vars(self).items() if k not in self._CONTROL}
         return fields_to_argv(fields)
 
 
-def _stitch_trainer_image(
-    train: SlimeStitchTrainRecipe, *, bulletin_root: str
-) -> modal.Image:
-    """The slime-fork trainer image. The rollout pool serves on a different image
+def _stitch_trainer_image(train: StitchTrainConfig) -> modal.Image:
+    """The miles trainer image. The rollout pool serves on a different image
     (:func:`serving_image.build_serving_image`): it installs no trainer package, and
-    it needs the SGLang fork that exposes ``/stage_weight_update``."""
+    it needs the SGLang fork that exposes ``/stage_weight_update``.
+
+    The base image bakes Megatron-LM (native ``--fp4-format`` NVFP4) plus
+    TransformerEngine; the pinned miles fork — which speaks the bulletin protocol
+    — is cloned over it.
+    """
     image = (
-        modal.Image.from_registry(train.slime_image_tag)
+        modal.Image.from_registry(train.docker_image)
         .entrypoint([])
+        # TransformerEngine 2.17 declares this, but the dated miles image installs
+        # its TE wheels with --no-deps.
+        .pip_install("onnxscript==0.7.1")
+        # RDMA/EFA userspace, so a multi-node NCCL binds EFA rather than TCP.
+        .apt_install(
+            "libibverbs-dev", "libibverbs1", "libhwloc-dev", "libnl-route-3-200"
+        )
         # The base image bakes an HF cache; drop it so the mounted cache volume
         # at the same path isn't shadowed.
         .run_commands(f"rm -rf {HF_CACHE_PATH}")
-        # Replace the bundled slime with the pinned fork (generic HTTP rollout
-        # endpoint + publish-only disk-delta hooks).
         .run_commands(
-            f"rm -rf {SLIME_ROOT}"
-            f" && git clone --depth 1 {train.slime_repo_url} {SLIME_ROOT}"
-            f" && cd {SLIME_ROOT}"
-            f" && git fetch --depth 1 origin {train.slime_repo_ref}"
-            f" && git checkout FETCH_HEAD"
-            f" && python3 -m pip install --no-deps -e {SLIME_ROOT}"
-        )
-        # Reinstall megatron-core in compat editable mode so `megatron.training`
-        # (which slime's megatron backend imports) is importable.
-        .run_commands(
-            "cd /root/Megatron-LM"
-            " && python3 -m pip install --no-deps -e . --config-settings editable_mode=compat"
+            f"rm -rf {MILES_ROOT}"
+            f" && git clone {train.miles_repo_url} {MILES_ROOT}"
+            f" && cd {MILES_ROOT}"
+            f" && git fetch origin {train.miles_repo_ref} && git checkout FETCH_HEAD"
+            f" && python3 -m pip install --no-deps -e {MILES_ROOT}"
         )
         .pip_install(
             "httpx",  # stitch's pool client (wake fan-out)
-            # slime is installed --no-deps, but the trainer-side delta ENCODER needs
+            # miles is installed --no-deps, but the trainer-side delta ENCODER needs
             # these (zstd compress + xxh3/blake3 checksums).
             "zstandard",
             "xxhash",
             "blake3",
         )
         .pip_install(f"stitch @ git+{STITCH_REPO_URL}@{STITCH_REPO_REF}")
+        # Applied to the Megatron checkout at container start, not at build time.
+        .add_local_dir(_PATCH_SOURCE_DIR, MEGATRON_PATCH_DIR, copy=True)
         .env(
             {
                 "HF_XET_HIGH_PERFORMANCE": "1",
                 "HF_HUB_ENABLE_HF_TRANSFER": "1",
-                # Fallbacks for the bulletin hooks when a value isn't threaded
-                # through the slime args namespace.
-                "DELTA_BULLETIN_ROOT": bulletin_root,
             }
         )
     )
@@ -192,7 +199,7 @@ def _record_run_started(
 ) -> TrainingRun | None:
     """Write a ``RUNNING`` :class:`TrainingRun` to the ``training-gym-metadata``
     Volume so the disagg run shows up in the dashboard (the deployed app is
-    already tagged for auto-discovery; this adds the run record slime writes for
+    already tagged for auto-discovery; this adds the run record miles writes for
     itself in the colocated flow). Best-effort: a metadata hiccup must never take
     down the training run, so failures are logged and swallowed."""
     try:
@@ -224,8 +231,8 @@ def _record_run_started(
             ),
             "recipe": config_fields,
             "wandb": wandb_block,
-            "lr": recipe.slime_train.lr,
-            "global_batch_size": recipe.slime_train.global_batch_size,
+            "lr": recipe.train.lr,
+            "global_batch_size": recipe.train.global_batch_size,
         }
         created_at = int(time.time())
         run_record = TrainingRun(
@@ -283,13 +290,14 @@ def build_stitch_app(
     name: str | None = None,
     group_id: str | None = None,
 ) -> modal.App:
-    """Build the Modal App for disaggregated slime training.
+    """Build the Modal App for disaggregated miles training.
 
-    Returns an app with ``download``, ``prepare_dataset``, and ``train`` (same
-    surface as ``build_slime_app``), plus the ``Server`` Flash-pool class that
-    serves rollouts. ``train`` brings the pool's gateway up, claims it for the
-    run, and drives slime; :class:`~modal_training_gym.common.train.TrainConfig`
-    calls it for :class:`StitchRecipe` recipes.
+    Returns an app with ``download``, ``prepare_dataset``,
+    ``prepare_checkpoints``, and ``train`` (``build_miles_app``'s surface plus the
+    served-baseline step), and the ``Server`` Flash-pool class that serves
+    rollouts. ``train`` brings the pool's gateway up, claims it for the run, and
+    drives miles; :class:`~modal_training_gym.common.train.TrainConfig` calls it
+    for :class:`StitchRecipe` recipes.
     """
     StitchRecipe._resolve_data_paths(dataset)  # validate dataset paths resolve
 
@@ -301,11 +309,6 @@ def build_stitch_app(
     register_modal_cloudpickle_reducers()
 
     train_recipe, serve_recipe = recipe.train, recipe.serve
-    if not isinstance(train_recipe, SlimeStitchTrainRecipe):
-        raise NotImplementedError(
-            "build_stitch_app launches the slime trainer only; "
-            f"got {type(train_recipe).__name__}"
-        )
     app_name = recipe.name or name or f"stitch-{modal_tag_value(model.model_name)}"
     # Volumes are keyed by recipe (not by run) so runs of the same recipe reuse
     # the same dataset / checkpoints / bulletin board.
@@ -314,7 +317,20 @@ def build_stitch_app(
         serve_recipe.delta_volume_name or f"{volume_prefix}-delta-bulletin"
     )
     delta_bulletin_root = serve_recipe.bulletin_root
-    model_name = model.model_path or model.model_name
+    # Fresh run id per app: the trainer writes this run's chain under
+    # <bulletin_root>/<run_id>/ and both halves are scoped to it, so a new run
+    # never picks up a finished one's pointer — no manual bulletin reset needed.
+    # Fixed at build time (not inside ``train``) because it is the sidecar's fence
+    # token too, and the pool comes up with the app.
+    run_id = uuid.uuid4().hex[:12]
+    run_bulletin_root = f"{delta_bulletin_root}/{run_id}"
+    # miles owns <run>/updates; stitch owns the pointer beside it.
+    update_weight_disk_dir = f"{run_bulletin_root}/updates"
+    # What the pool serves: the prepared baseline for a quantized run, else the
+    # model's own checkpoint.
+    served_model = serve_recipe.served_checkpoint_path or (
+        model.model_path or model.model_name
+    )
     rollout_concurrency = serve_recipe.concurrency
     n_train_nodes = train_recipe.actor_num_nodes
 
@@ -330,14 +346,15 @@ def build_stitch_app(
         if recipe.wandb.group:
             tags["wandb_group"] = modal_tag_value(recipe.wandb.group)
 
-    image = _stitch_trainer_image(train_recipe, bulletin_root=delta_bulletin_root)
+    image = _stitch_trainer_image(train_recipe)
     server_image = serving_image.build_serving_image(
         hf_cache_path=str(HF_CACHE_PATH),
         delta_volume_name=delta_volume_name,
         bulletin_root=delta_bulletin_root,
         runtime=serve_recipe.runtime,
+        extra_env=serve_recipe.env,
     )
-    sglang_server_args = serve_recipe.engine_args(model_name=model_name)
+    sglang_server_args = serve_recipe.engine_args(model_name=served_model)
 
     hf_cache_volume = modal.Volume.from_name(
         "huggingface-cache", create_if_missing=True
@@ -383,10 +400,15 @@ def build_stitch_app(
         volumes={
             str(HF_CACHE_PATH): hf_cache_volume,
             serving_image.SGLANG_CACHE_PATH: sglang_cache_volume,
+            # A prepared (quantized) baseline lives on the checkpoints Volume,
+            # so the replicas mount it read-only alongside the bulletin board.
+            str(CHECKPOINTS_PATH): checkpoints_volume,
             delta_bulletin_root: delta_volume,
             ROLLOUT_LOG_PATH: rollout_log_volume,
         },
         secrets=[hf_secret],
+        memory=serve_recipe.memory,
+        ephemeral_disk=serve_recipe.ephemeral_disk,
         min_containers=serve_recipe.min_containers,
         max_containers=serve_recipe.max_containers,
         timeout=40 * MINUTES,
@@ -409,17 +431,18 @@ def build_stitch_app(
 
             server.serve_startup(
                 self,
-                model_name=model_name,
+                model_name=served_model,
                 sglang_args=sglang_server_args,
                 disk_load_format=serve_recipe.disk_load_format,
                 tp=serve_recipe.gpus_per_replica,
                 concurrency=rollout_concurrency,
                 sidecar_port=SIDECAR_PORT,
                 sglang_port=SGLANG_PORT,
-                bulletin_root=delta_bulletin_root,
+                bulletin_root=run_bulletin_root,
                 local_checkpoint_dir=LOCAL_CHECKPOINT_PATH,
                 delta_update_mode=serve_recipe.delta_update_mode,
                 volume_name=delta_volume_name,
+                run_id=run_id,
                 commit_mode=serve_recipe.commit_mode,
                 flush_cache_on_commit=serve_recipe.flush_cache_on_commit,
                 debug_requests=serve_recipe.debug_requests,
@@ -441,6 +464,7 @@ def build_stitch_app(
         region=train_recipe.region,
         volumes=train_volumes,
         secrets=train_secrets,
+        ephemeral_disk=train_recipe.ephemeral_disk,
         timeout=24 * 60 * MINUTES,
         startup_timeout=20 * MINUTES,
         experimental_options={"efa_enabled": True},
@@ -455,7 +479,7 @@ def build_stitch_app(
         framework_status_token: str = "",
         rollout_endpoint_url: str = "",
     ) -> dict:
-        """Bring up Ray, claim the rollout pool for this run, and drive slime."""
+        """Bring up Ray, claim the rollout pool for this run, and drive miles."""
         del modal_app_url  # derived from modal_app_id in the run record
         from modal_training_gym.frameworks.stitch import (
             bulletin_hooks,
@@ -467,17 +491,14 @@ def build_stitch_app(
         rank, master_addr, my_ip = ray_cluster.get_modal_cluster_context(n_train_nodes)
         os.environ.update(
             {
-                "SLIME_HOST_IP": my_ip,
+                "MILES_HOST_IP": my_ip,
                 "SGLANG_HOST_IP": my_ip,
                 "HOST_IP": my_ip,
                 "MASTER_ADDR": master_addr,
                 "RAY_ADDRESS": f"{master_addr}:{RAY_PORT}",
                 "no_proxy": f"127.0.0.1,{master_addr},{my_ip}",
                 "NO_PROXY": f"127.0.0.1,{master_addr},{my_ip}",
-                "DELTA_VOLUME_NAME": delta_volume_name,
-                "DELTA_APP_NAME": app_name,
-                "DELTA_SERVER_CLS_NAME": "Server",
-                "DELTA_BULLETIN_ROOT": delta_bulletin_root,
+                "PYTHONPATH": train_recipe.megatron_pythonpath,
                 **{str(k): str(v) for k, v in train_recipe.environment.items()},
             }
         )
@@ -486,6 +507,23 @@ def build_stitch_app(
         if framework_status_token:
             os.environ["TRAINING_GYM_FRAMEWORK_STATUS_TOKEN"] = framework_status_token
         sidecar_process.start_host_mem_monitor()  # per-node host-RAM trace
+        # Megatron is a source checkout in the image, so R3 dispatch + the
+        # reshardable optimizer step arrive as patches. Applied on every node,
+        # before the rank gate: each node's Ray actors import their own copy.
+        if train_recipe.megatron_runtime_patches:
+            trainer_helpers.apply_git_patches(
+                train_recipe.megatron_runtime_patches, MEGATRON_PATH, "megatron-patch"
+            )
+        # Same reason: a Ray actor on another node re-reads this file by path, so
+        # it can't live in rank 0's per-launch tmpdir.
+        cfg_yaml_owner = _MilesArgs(
+            {"te_precision_config_file": train_recipe.te_precision_config_file},
+            async_mode=train_recipe.async_mode,
+            miles_model_script=train_recipe.miles_model_script,
+        )
+        trainer_helpers.materialize_node_local_yaml(
+            cfg_yaml_owner, "te_precision_config_file"
+        )
 
         # Rank 0 drives the run; the other ranks only host Ray workers, and stay
         # alive until Modal tears the cluster down with rank 0's input.
@@ -498,29 +536,25 @@ def build_stitch_app(
             volume.reload()
 
         payload = recipe.to_payload(model=model, dataset=dataset)
-        cfg = _SlimeArgs(
+        cfg = _MilesArgs(
             payload["fields"],
             async_mode=payload["async_mode"],
-            slime_model_script=payload["slime_model_script"],
+            miles_model_script=payload["miles_model_script"],
         )
+        cfg.te_precision_config_file = cfg_yaml_owner.te_precision_config_file
         # The pool's Flash gateway, resolved by whoever launched this call (see
         # _PoolAwareTrain). Falls back to a lookup by app name, which only works
         # against a deployed pool.
         cfg.rollout_endpoint_url = (
             rollout_endpoint_url or trainer_helpers.deployed_gateway_url(app_name)
         )
-        # Flash holds requests through a cold-starting pool, but slime's first
-        # rollout would otherwise meet engines that are still loading.
+        # Flash holds requests through a cold-starting pool, but the trainer's
+        # first rollout would otherwise meet engines that are still loading.
         trainer_helpers.await_gateway_ready(
             cfg.rollout_endpoint_url, timeout_seconds=SERVER_STARTUP_TIMEOUT
         )
-        # Fresh run id per launch: slime writes this run's chain under
-        # <bulletin_root>/<run_id>/weight_v{N}/ and the canonical `latest`
-        # pointer is self-identifying, so a new run never collides with a
-        # finished one — no manual bulletin reset needed.
-        run_id = uuid.uuid4().hex[:12]
-        cfg.update_weight_disk_dir = f"{delta_bulletin_root}/{run_id}"
-        # stitch's publish + request hooks read these off the slime args
+        cfg.update_weight_disk_dir = update_weight_disk_dir
+        # stitch's publish + request hooks read these off the miles args
         # namespace; merge over any user extra_config already on
         # custom_config_path.
         custom_config = dict(getattr(cfg, "custom_config_path", None) or {})
@@ -542,10 +576,10 @@ def build_stitch_app(
 
         trainer_helpers.prepare_config(cfg, tempfile.mkdtemp(), YAML_CONFIG_FIELDS)
         cmd = trainer_helpers.build_train_cmd(
-            cfg, SLIME_ROOT, model_script_attr="slime_model_script"
+            cfg, MILES_ROOT, model_script_attr="miles_model_script"
         )
 
-        # Claim the pool for this run before slime publishes: write the empty
+        # Claim the pool for this run before miles publishes: write the empty
         # pointer and wake the pool so every replica resets to base now.
         bulletin_hooks.claim_pool(
             SimpleNamespace(
@@ -571,17 +605,17 @@ def build_stitch_app(
         )
         wandb_run_id = ""
         if recipe.wandb is not None:
-            # Force slime's W&B run to use the same id recorded in the
-            # dashboard deep-link (slime/wandb honor these env vars). Without
+            # Force miles' W&B run to use the same id recorded in the
+            # dashboard deep-link (miles/wandb honor these env vars). Without
             # this, wandb autogenerates a run id and the dashboard link 404s.
             wandb_run_id = wandb_run_id_for_attempt(record_id, 1)
             os.environ["WANDB_RUN_ID"] = wandb_run_id
             os.environ["WANDB_RESUME"] = "allow"
             if recipe.wandb.entity:
                 os.environ["WANDB_ENTITY"] = recipe.wandb.entity
-        # Tee slime's output to the checkpoints volume: a container's log window
-        # only keeps the tail, so a failure whose traceback scrolled past (slime
-        # retries rollout requests loudly) is otherwise unreadable afterwards.
+        # Tee the trainer's output to the checkpoints volume: a container's log
+        # window only keeps the tail, so a failure whose traceback scrolled past
+        # (rollout retries are loud) is otherwise unreadable afterwards.
         trainer_log = CHECKPOINTS_PATH / "logs" / f"{record_id}-trainer.log"
         trainer_log.parent.mkdir(parents=True, exist_ok=True)
         status = TrainingRunStatus.COMPLETED
@@ -629,6 +663,39 @@ def build_stitch_app(
     )
     def download() -> None:
         model.download()
+        train_recipe.download_model()
+        hf_cache_volume.commit()
+
+    @app.function(
+        image=image,
+        # The NVFP4 conversion runs miles' TE-direct quantizer, which needs a GPU;
+        # a BF16 baseline is only a download.
+        gpu=(
+            f"{train_recipe.gpu_type}:1"
+            if train_recipe.served_checkpoint_format != "bf16"
+            else None
+        ),
+        memory=memory,
+        volumes={
+            str(HF_CACHE_PATH): hf_cache_volume,
+            str(CHECKPOINTS_PATH): checkpoints_volume,
+        },
+        timeout=6 * 60 * MINUTES,
+        secrets=[hf_secret],
+        ephemeral_disk=train_recipe.ephemeral_disk,
+        serialized=True,
+        name="prepare_checkpoints",
+    )
+    def prepare_checkpoints() -> None:
+        """Build the trainer's BF16 masters and the pool's served baseline.
+
+        A quantized run can't serve the HF repo directly: every replica boots from
+        the baseline each sparse delta is applied against, so it must be the
+        byte-exact output of the same quantizer the trainer exports with.
+        """
+        from modal_training_gym.frameworks.stitch import prep
+
+        prep.prepare_checkpoints(train_recipe, checkpoints_volume)
         hf_cache_volume.commit()
 
     @app.function(
@@ -649,7 +716,7 @@ def build_stitch_app(
     # other launchers do, so callers address them without the registry.
     for tag, fn in app.registered_functions.items():
         setattr(app, tag, fn)
-    app.train = _PoolAwareTrain(train, Server)  # pyright: ignore[reportAttributeAccessIssue]
+    app.train = _PoolAwareTrain(train, Server)  # pyright: ignore[reportAttributeAccessIssue, reportArgumentType]
 
     return app
 

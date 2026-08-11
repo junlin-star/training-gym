@@ -30,7 +30,14 @@ _CHECKPOINT_PATTERNS = [
 
 
 def base_checkpoint_dir(model_name: str) -> str:
-    """The local snapshot directory the SGLang server loaded, from cache only."""
+    """The local checkpoint directory the SGLang server loaded.
+
+    A prepared baseline (the NVFP4 conversion on the checkpoints Volume) is
+    already a path and is used as-is; a repo id is resolved to the snapshot the
+    engine booted from.
+    """
+    if str(model_name).startswith("/"):
+        return str(model_name)
     return snapshot_download(
         model_name, local_files_only=True, allow_patterns=_CHECKPOINT_PATTERNS
     )
@@ -50,6 +57,7 @@ def serve_startup(
     local_checkpoint_dir: str | None,
     delta_update_mode: str,
     volume_name: str,
+    run_id: str,
     commit_mode: str,
     flush_cache_on_commit: bool,
     debug_requests: bool,
@@ -111,6 +119,7 @@ def serve_startup(
         disk_load_format=disk_load_format
         or str(sglang_args.get("--load-format", "auto")),
         volume_name=volume_name,
+        run_id=run_id,
         commit_mode=commit_mode,
         flush_cache_on_commit=flush_cache_on_commit,
         debug_requests=debug_requests,

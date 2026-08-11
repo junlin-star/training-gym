@@ -1,9 +1,10 @@
-"""Launch-side helpers for the disaggregated slime flow.
+"""Launch-side helpers for the disaggregated miles flow.
 
 Vendored from the stitch cookbook (``cookbook/common/launch.py`` +
-``cookbook/common/smoke.py``): resolve HF repo ids and materialize inline YAML
-configs, build the ``train.py`` command, reach the rollout pool's Flash gateway,
-and smoke a deployed Flash pool.
+``cookbook/common/process.py`` + ``cookbook/common/smoke.py``): resolve HF repo
+ids and materialize inline YAML configs, patch the runtime Megatron checkout,
+build the ``train.py`` command, reach the rollout pool's Flash gateway, and smoke
+a deployed Flash pool.
 """
 
 from __future__ import annotations
@@ -11,6 +12,7 @@ from __future__ import annotations
 import json
 import os
 import shlex
+import subprocess
 import time
 import urllib.request
 from collections.abc import Iterable
@@ -37,6 +39,56 @@ def prepare_config(cfg: Any, tmpdir: str, yaml_config_fields: Iterable[str]) -> 
             with open(path, "w") as f:
                 yaml.dump(val, f)
             setattr(cfg, field, path)
+
+
+def materialize_node_local_yaml(
+    cfg: Any, field: str, dest_dir: str = "/root/.node_yaml"
+) -> None:
+    """Write an inline-dict config field to a deterministic node-local path.
+
+    Unlike :func:`prepare_config`'s per-launch tmpdir, every node writes the same
+    content at the same path, so Ray actors on other nodes can read a field the
+    trainer only passes as a filename (miles' ``te_precision_config_file``). Call
+    on every node, before the rank gate.
+    """
+    import yaml
+
+    if isinstance(val := getattr(cfg, field, None), dict):
+        os.makedirs(dest_dir, exist_ok=True)
+        path = os.path.join(dest_dir, f"{field}.yaml")
+        with open(path, "w") as f:
+            yaml.dump(val, f)
+        setattr(cfg, field, path)
+
+
+def apply_git_patches(patch_paths: Iterable[str], repo_dir: str, label: str) -> None:
+    """Apply git patches to a runtime checkout, tolerating an already-applied
+    patch so a container restart (or a second run in the same container) is a
+    no-op rather than a failure."""
+    for patch_path in patch_paths:
+        if not os.path.exists(patch_path):
+            raise FileNotFoundError(f"{label} not found: {patch_path}")
+        check = subprocess.run(
+            ["git", "-C", repo_dir, "apply", "--check", patch_path],
+            capture_output=True,
+            text=True,
+        )
+        if check.returncode == 0:
+            subprocess.run(["git", "-C", repo_dir, "apply", patch_path], check=True)
+            print(f"[{label}] applied {patch_path}", flush=True)
+            continue
+        reverse = subprocess.run(
+            ["git", "-C", repo_dir, "apply", "--reverse", "--check", patch_path],
+            capture_output=True,
+            text=True,
+        )
+        if reverse.returncode == 0:
+            print(f"[{label}] already applied {patch_path}", flush=True)
+            continue
+        raise RuntimeError(
+            f"cannot apply {label} {patch_path}\n"
+            f"check: {check.stderr}\nreverse: {reverse.stderr}"
+        )
 
 
 def build_train_cmd(cfg: Any, trainer_root: str, *, model_script_attr: str) -> str:

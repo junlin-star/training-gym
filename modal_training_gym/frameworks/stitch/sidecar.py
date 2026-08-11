@@ -43,7 +43,9 @@ def main() -> None:
         "--commit-mode", choices=["in_place", "quiesce"], default="in_place"
     )
     parser.add_argument("--flush-cache-on-commit", action="store_true")
-    parser.add_argument("--run-id", default=None)
+    # The run's fence token: the Store is scoped to it, so a replica never applies
+    # (or serves) a pointer that belongs to a different run.
+    parser.add_argument("--run-id", required=True)
     parser.add_argument("--debug-requests", action="store_true")
     # 0 disables the periodic re-check (the pool wake still drives reconciles).
     parser.add_argument("--reconcile-interval", type=float, default=5.0)
@@ -51,7 +53,11 @@ def main() -> None:
     if args.delta_update_mode == "disk" and not args.local_checkpoint_dir:
         parser.error("--local-checkpoint-dir is required in disk mode")
 
-    store = ModalVolumeStore(args.bulletin_root, volume_name=args.volume_name or None)
+    store = ModalVolumeStore(
+        args.bulletin_root,
+        volume_name=args.volume_name or None,
+        run_id=args.run_id,
+    )
     engine = SGLangEngine(
         args.upstream,
         args.base_checkpoint_dir,

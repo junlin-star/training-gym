@@ -26,11 +26,11 @@ from modal_training_gym.train_recipes.stitch_recipe.pins import (
     SGLangRuntime,
 )
 
-__all__ = ["StitchServeRecipe"]
+__all__ = ["StitchServeConfig"]
 
 
 @dataclass(config=ConfigDict(extra="forbid", arbitrary_types_allowed=True))
-class StitchServeRecipe:
+class StitchServeConfig:
     """Configuration for the Flash rollout pool a stitch run trains against.
 
     ## Fields
@@ -56,8 +56,8 @@ class StitchServeRecipe:
     min_containers : int
         Replicas kept warm. Worth setting to a full rollout step's worth of
         concurrency for a large model: Flash holds requests while a replica cold
-        starts, but a big MoE can take minutes to load — longer than slime's own
-        HTTP retry budget for a rollout request.
+        starts, but a big MoE can take minutes to load — longer than the
+        trainer's own HTTP retry budget for a rollout request.
     max_containers : int | None
         Upper bound on replicas. Default ``None`` (Flash scales freely).
     proxy_regions : list[str]
@@ -88,6 +88,20 @@ class StitchServeRecipe:
         recipe name at build time.
     bulletin_root : str
         Mount path of the bulletin volume, in both halves.
+    served_checkpoint_path : str
+        Local checkpoint the replicas serve, and the baseline every sparse delta
+        is applied against. Empty → the trainer half's ``hf_checkpoint`` (which
+        is what the checkpoint-prep step builds), so the two halves can't
+        disagree on the byte-exact baseline.
+    env : dict[str, str]
+        Extra environment for the serving image — the sampler side of a
+        quantization contract (e.g. the ``FLASHINFER_NVFP4_*`` mirror of the
+        trainer's ``NVTE_NVFP4_*`` settings) lives here.
+    memory : tuple[int, int] | None
+        Host-RAM (request, limit) MiB for a replica. A CPU weight cache needs
+        roughly twice the checkpoint resident, plus staging headroom.
+    ephemeral_disk : int | None
+        Container disk MiB, for a disk-mode replica's local checkpoint copy.
     """
 
     sglang: SglangRecipe = field(default_factory=lambda: SglangRecipe(gpu="H200"))
@@ -110,6 +124,12 @@ class StitchServeRecipe:
     delta_volume_name: str = ""
     bulletin_root: str = "/delta-bulletin"
 
+    # ── Served baseline + runtime env ────────────────────────────────────────
+    served_checkpoint_path: str = ""
+    env: dict[str, str] = field(default_factory=dict)
+    memory: tuple[int, int] | None = None
+    ephemeral_disk: int | None = None
+
     def __post_init__(self) -> None:
         defaults = SglangRecipe()
         for name in ("sglang_image", "deploy_strategy", "environment_name"):
@@ -117,7 +137,7 @@ class StitchServeRecipe:
                 raise ValueError(
                     f"SglangRecipe.{name} is a deployment field the stitch rollout "
                     "pool does not use; it serves on the forked runtime from "
-                    "StitchServeRecipe.runtime, brought up with the training app."
+                    "StitchServeConfig.runtime, brought up with the training app."
                 )
         if self.commit_mode not in ("in_place", "quiesce"):
             raise ValueError(
@@ -148,9 +168,11 @@ class StitchServeRecipe:
         (context length, KV fraction, prefill budget, ``extra_server_args``) over
         the top. Nothing delta-specific is passed: the engine applies deltas
         behind ``/stage_weight_update``, driven by the sidecar.
+        Precision is deliberately not passed: it comes from the served
+        checkpoint's own quant config, so a quantized baseline (NVFP4) loads as
+        exported rather than being coerced by a ``--dtype`` flag.
         """
         args = {
-            "--dtype": "bfloat16",
             "--cuda-graph-max-bs-decode": str(self.concurrency),
             "--max-running-requests": str(self.concurrency),
             "--trust-remote-code": "",

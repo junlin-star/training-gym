@@ -1,14 +1,14 @@
-"""Disaggregated Qwen3-30B-A3B GRPO on DAPO-math via stitch.
+"""Disaggregated Qwen3-30B-A3B NVFP4 GRPO on DAPO-math via stitch.
 
-The BF16 port of stitch's ``miles_disagg/configs/qwen3_30b_a3b_nvfp4_46``
-cookbook config, on the slime path this launcher wires: a 1×8×H200 TP4/EP8
-trainer publishing sparse MoE deltas to the bulletin board, rollouts served by a
-Flash pool of single-H200 SGLang replicas that apply those deltas in place. Same
-one-call shape as the other stitch examples.
+The port of stitch's ``miles_disagg/configs/qwen3_30b_a3b_nvfp4_46`` cookbook
+config: a 1×8 B200 miles trainer doing NVFP4 QAT on the routed experts and
+publishing sparse deltas to the bulletin board, with rollouts served by a Flash
+pool of single-B200 SGLang replicas that apply those deltas in place.
 
-NVFP4 — the subject of the upstream config — is not ported: it needs the miles
-trainer plus a separately quantized served base, and ``build_stitch_app``
-launches the slime trainer only.
+One call brings up everything, including the served baseline: ``train()`` runs the
+model download, the dataset prep, and ``prepare_checkpoints`` — which materializes
+the trainer's BF16 masters and converts the pool's NVFP4 baseline with the same
+quantizer the trainer exports with — before starting the run.
 
 Run from the repo root::
 
@@ -27,7 +27,7 @@ from modal_training_gym.train_recipes.stitch_recipe import (
 
 
 class DAPOMath(HuggingFaceDataset):
-    """DAPO-math-17k pre-formatted for slime's math reward."""
+    """DAPO-math-17k, pre-formatted for the deepscaler math reward."""
 
     hf_repo = "zhuzilin/dapo-math-17k"
     input_column = "prompt"
@@ -40,7 +40,7 @@ training_run = TrainConfig(
     model=Qwen3_30B(),
     dataset=DAPOMath(),
     recipe=Qwen3_30B_A3B_Stitch_Recipe(
-        wandb=WandbConfig(project="training-gym", group="stitch-qwen3-30b-a3b-dapo"),
+        wandb=WandbConfig(project="training-gym", group="stitch-qwen3-30b-a3b-nvfp4"),
     ),
 )
 

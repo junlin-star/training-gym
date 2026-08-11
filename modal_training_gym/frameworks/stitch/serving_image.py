@@ -2,8 +2,8 @@
 
 Vendored from the stitch cookbook (``cookbook/common/serving_image.py``). The pool
 runs a forked SGLang whose ``/stage_weight_update`` prepares and checksums the next
-version while the engine keeps serving, so it is a *different* image from the slime
-trainer's: no trainer package is installed, and precision comes from the served
+version while the engine keeps serving, so it is a *different* image from the miles
+trainer image: no trainer package is installed, and precision comes from the served
 checkpoint rather than a ``--quantization`` flag.
 """
 

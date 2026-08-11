@@ -454,12 +454,12 @@ class TrainConfig:
         )
 
     def _initializing_status(self) -> FrameworkStatus:
-        if isinstance(self.recipe, MilesConfig):
-            return MilesStatus.INITIALIZING
-        # stitch runs slime in the trainer, so it reports slime's phases too.
-        if isinstance(self.recipe, SlimeRecipe) or (
+        # stitch runs miles in the trainer, so it reports miles' phases too.
+        if isinstance(self.recipe, MilesConfig) or (
             self.recipe.recipe_type == RecipeType.STITCH
         ):
+            return MilesStatus.INITIALIZING
+        if isinstance(self.recipe, SlimeRecipe):
             return SlimeStatus.INITIALIZING
         raise TrainingGymConfigError(
             f"Unknown recipe type: {type(self.recipe).__name__}"
@@ -517,7 +517,18 @@ class TrainConfig:
             )
 
             stitch = cast(StitchRecipe, recipe)
-            summary["recipe"] = stitch.slime_fields(model=model, dataset=dataset)
+            summary["lr"] = stitch.train.lr
+            summary["global_batch_size"] = stitch.train.global_batch_size
+            summary["recipe"] = {
+                "gpu_type": stitch.train.gpu_type,
+                "actor_num_nodes": stitch.train.actor_num_nodes,
+                "actor_num_gpus_per_node": stitch.train.actor_num_gpus_per_node,
+                "served_checkpoint_format": stitch.train.served_checkpoint_format,
+                "rollout_gpu": stitch.serve.gpu,
+                "rollout_gpus_per_replica": stitch.serve.gpus_per_replica,
+                "rollout_min_containers": stitch.serve.min_containers,
+                "rollout_max_containers": stitch.serve.max_containers,
+            }
 
         return summary
 
@@ -692,12 +703,16 @@ class TrainConfig:
                                 framework_status_token=framework_status_token,
                             )
                     elif self.recipe.recipe_type == RecipeType.STITCH:
-                        # No checkpoint conversion: the stitch trainer's slime
-                        # loads the HF checkpoint through megatron-bridge.
-                        _set_status(SlimeStatus.DOWNLOAD_MODEL, is_active=False)
+                        # No torch_dist conversion: the stitch trainer loads the
+                        # HF masters through megatron-bridge. It does need its
+                        # served baseline built, which is what a delta applies
+                        # against, so that replaces the conversion step.
+                        _set_status(MilesStatus.DOWNLOAD_MODEL, is_active=False)
                         app.download.remote()
-                        _set_status(SlimeStatus.PREPARE_DATASET, is_active=False)
+                        _set_status(MilesStatus.PREPARE_DATASET, is_active=False)
                         app.prepare_dataset.remote()
+                        _set_status(MilesStatus.CONVERT_MODEL, is_active=False)
+                        app.prepare_checkpoints.remote()
                     elif isinstance(self.recipe, MilesConfig) and needs_conversion:
                         _set_status(MilesStatus.DOWNLOAD_MODEL, is_active=False)
                         app.download.remote(

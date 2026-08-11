@@ -1,25 +1,19 @@
-"""The trainer half of a stitch run: slime in publish-only disaggregated mode.
+"""The trainer half of a stitch run: miles in publish-only disaggregated mode.
 
-This is a :class:`SlimeRecipe` — same flags, same model/dataset/wandb
-converters, same GPU-allocation validation — with the slime_disagg deltas on
-top: no local rollout engines, sparse weight deltas published to a bulletin
-board instead of an NCCL broadcast, and stitch's request/publish hooks wired in.
+This is a :class:`MilesConfig` — same flags, same model/dataset/wandb converters
+— with the ``miles_disagg`` deltas on top: no local rollout engines, sparse
+weight deltas published to a bulletin board instead of an NCCL broadcast, and
+stitch's request/publish hooks wired in.
 
-Deriving from ``SlimeRecipe`` is the point: a stitch run's trainer *is* a slime
-trainer, so its ~100 flags should be maintained in one place. Stitch itself is
-trainer-agnostic (its cookbook has a ``miles_disagg`` path too), which is why
+Deriving from ``MilesConfig`` is the point: a stitch run's trainer *is* a miles
+trainer, so its ~100 flags are maintained in one place, and
 :class:`~modal_training_gym.train_recipes.stitch_recipe.recipe.StitchRecipe`
 takes the trainer as a field rather than being one.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from dataclasses import field
 from typing import Any
-
-from pydantic import ConfigDict, model_validator
-from pydantic.dataclasses import dataclass
 
 from modal_training_gym.common.dataset import DatasetConfig
 from modal_training_gym.common.models import ModelConfig
@@ -27,20 +21,21 @@ from modal_training_gym.train_recipes.gpu_allocation import (
     GpuAllocation,
     validate_megatron_actor_parallelism,
 )
-from modal_training_gym.train_recipes.slime_recipe.recipe import SlimeRecipe
+from modal_training_gym.train_recipes.miles_recipe.recipe import MilesConfig
 from modal_training_gym.train_recipes.stitch_recipe.pins import (
-    SLIME_IMAGE_TAG,
-    SLIME_REPO_REF,
-    SLIME_REPO_URL,
+    MEGATRON_PATH,
+    MILES_IMAGE_TAG,
+    MILES_REPO_REF,
+    MILES_REPO_URL,
 )
 
-__all__ = ["HOOK_CONFIG_FIELDS", "SlimeStitchTrainRecipe"]
+__all__ = ["HOOK_CONFIG_FIELDS", "StitchTrainConfig"]
 
-# Fields only stitch's own hooks read, off the slime args namespace. slime defines
-# no such CLI flags, and its parser is parse_known_args — passing them as flags
-# drops them silently (the hooks then see their fallbacks, e.g. 60 request
-# retries instead of the configured budget). The launcher merges these into
-# ``custom_config_path`` instead, which slime setattrs onto args.
+# Fields only stitch's own hooks read, off the trainer's args namespace. miles
+# defines no such CLI flags, and its parser is Megatron's parse_known_args —
+# passing them as flags drops them silently (the hooks then see their fallbacks,
+# e.g. 60 request retries instead of the configured budget). The launcher merges
+# these into ``custom_config_path`` instead, which miles setattrs onto args.
 HOOK_CONFIG_FIELDS = frozenset(
     {
         "rollout_request_weight_version_mode",
@@ -51,101 +46,80 @@ HOOK_CONFIG_FIELDS = frozenset(
     }
 )
 
-# Inherited SlimeRecipe fields that must NOT reach this trainer's command line.
-# Either the pinned slime fork doesn't define the flag (its parser would drop it
-# silently, so emitting it only misleads), or it configures a local rollout
-# engine, which a disaggregated run does not have.
+# Inherited MilesConfig fields that must NOT reach this trainer's command line:
+# they configure a local rollout engine, which a disaggregated run does not have
+# (the Flash pool's engines are configured by the serving half instead).
 _TRAINER_DROP = frozenset(
     {
-        # Local-engine settings: rollouts come from the Flash pool
-        # (StitchServeRecipe configures those engines instead).
         "sglang_mem_fraction_static",
-        "sglang_enable_dp_attention",
-        "sglang_dp_size",
-        "sglang_ep_size",
-        "sglang_enable_dp_lm_head",
-        "sglang_disable_custom_all_reduce",
-        "sglang_cuda_graph_bs",
-        "sglang_max_running_requests",
-        "sglang_tool_call_parser",
-        "sglang_reasoning_parser",
-        # Full-broadcast weight sync; the delta flags below replace it.
-        "update_weight_encoding",
-        # Not defined by the pinned fork.
-        "qkv_format",
-        # Modal infra, not slime flags.
-        "gpu_type",
-        # Image/repo pins: build instructions, not slime flags.
-        "slime_image_tag",
-        "slime_repo_url",
-        "slime_repo_ref",
-        # Phase reporting hooks: colocated-slime wrappers that assume slime owns
-        # the rollout engines.
-        "custom_rollout_log_function_path",
-        "custom_eval_rollout_log_function_path",
-        "custom_megatron_before_log_prob_hook_path",
-        "custom_megatron_before_train_step_hook_path",
+        "sglang_config",
+        "sglang_lora_backend",
+        "sglang_lora_use_virtual_experts",
+        # Build / preparation instructions, not miles flags.
+        "miles_repo_url",
+        "miles_repo_ref",
+        "megatron_runtime_patches",
+        "served_checkpoint_format",
+        "bf16_checkpoint_path",
+        "prep_env",
+        "ephemeral_disk",
     }
     | HOOK_CONFIG_FIELDS
 )
 
 
-@dataclass(config=ConfigDict(extra="forbid", arbitrary_types_allowed=True))
-class SlimeStitchTrainRecipe(SlimeRecipe):
-    """slime trainer for a disaggregated stitch run.
+class StitchTrainConfig(MilesConfig):
+    """miles trainer for a disaggregated stitch run.
 
-    Don't see the flag you need? Every :class:`SlimeRecipe` field applies here,
-    and ``extra_config`` remains the escape hatch for the rest.
+    Don't see the flag you need? Every :class:`MilesConfig` field applies here,
+    and any additional class attribute becomes a miles CLI flag.
     """
 
-    # ── SlimeRecipe's required fields, defaulted for a disagg run ───────────
-    gpu_type: str = "H200"
-    # Rollouts are served by the Flash pool, so the actor cluster allocates no
-    # rollout GPUs and never shares its own with an engine.
+    # ── The miles fork + image that speak the bulletin protocol ─────────────
+    docker_image: str = MILES_IMAGE_TAG
+    miles_repo_url: str = MILES_REPO_URL
+    miles_repo_ref: str = MILES_REPO_REF
+    # git patches applied to the Megatron source tree at container start, by
+    # absolute in-image path (the trainer image mounts this package's patches).
+    megatron_runtime_patches: list[str] = []
+
+    gpu_type: str = "B200"
+    ephemeral_disk: int | None = None
+
+    # ── Checkpoint preparation (the served baseline) ──────────────────────
+    # ``hf_checkpoint`` is what the pool serves and what deltas apply against, so
+    # for a quantized run it is a *prepared local dir*, not a repo id: the app's
+    # prepare_checkpoints step materializes BF16 masters at
+    # ``bf16_checkpoint_path`` from ``source_hf_checkpoint`` and, when
+    # ``served_checkpoint_format`` is nvfp4, converts them with miles' TE-direct
+    # quantizer under ``prep_env``. Both sides of the export/serve pair must use
+    # the same quantizer contract or the first delta apply fails on a checksum.
+    served_checkpoint_format: str = "bf16"
+    bf16_checkpoint_path: str = ""
+    prep_env: dict[str, str] = {}
+
+    # Inline dict → a node-local YAML file every Ray actor re-reads at the same
+    # path (per-launch tmpdirs differ across nodes).
+    te_precision_config_file: dict | str | None = None
+
+    # ── Disaggregation: the pool owns every rollout GPU ─────────────────────
     colocate: bool = False
-    tensor_model_parallel_size: int = 1
-    sequence_parallel: bool = False
-    rollout_num_gpus_per_engine: int = 1
-    # No rollout GPUs in this cluster — the Flash pool owns them.
     rollout_num_gpus: int | None = 0
-    num_rollout: int = 3
-    rollout_batch_size: int = 64
-    rollout_max_response_len: int = 4096
-    rollout_temperature: float = 1.0
-    save_interval: int = 20
+    rollout_num_gpus_per_engine: int = 1
+    # Rollouts go out over HTTP to the pool's Flash gateway (the launcher fills
+    # in the URL per run) rather than to in-process engines.
+    use_miles_router: bool = True
+    rollout_endpoint_url: str | None = None
 
-    # ── Defaults that differ from colocated slime ───────────────────────────
-    # No local Megatron rollout engine to put on the path.
-    environment: dict = field(
-        default_factory=lambda: {
-            "CUDA_DEVICE_MAX_CONNECTIONS": "1",
-            "NCCL_NVLS_ENABLE": "1",
-        }
-    )
-    n_samples_per_prompt: int = 8
-    global_batch_size: int = 128
-    use_kl_loss: bool = True
-    eval_max_response_len: int = 8192
     megatron_to_hf_mode: str = "bridge"
-    # A disagg run's rollout traffic is HTTP against the pool, so a mid-run
-    # restart would have to re-claim it; fail the run instead.
-    use_fault_tolerance: bool = False
-    rollout_function: Callable | str | None = (
-        "slime.rollout.sglang_rollout.generate_rollout"
-    )
+    save_interval: int | None = None
 
-    # ── The slime fork that speaks the bulletin protocol ────────────────────
-    slime_image_tag: str = SLIME_IMAGE_TAG
-    slime_repo_url: str = SLIME_REPO_URL
-    slime_repo_ref: str = SLIME_REPO_REF
-
-    # ── Weight sync: publish sparse deltas to the bulletin board ───────────
-    update_weight_mode: str = "delta"
-    update_weight_transport: str = "disk"
+    # ── Weight sync: publish sparse deltas to the bulletin board ────────────
+    update_weight_transfer_mode: str = "disk-delta"
     update_weight_delta_encoding: str = "xor"
     update_weight_delta_checksum: str = "xxh3-128"
     # rank-0 publish hook: advance the pointer, commit the Volume, wake the pool.
-    custom_delta_pre_push_path: str = (
+    custom_update_weight_post_write_path: str = (
         "modal_training_gym.frameworks.stitch.bulletin_hooks.commit_and_wake"
     )
 
@@ -163,16 +137,39 @@ class SlimeStitchTrainRecipe(SlimeRecipe):
     # on Modal-Session-ID; emit that so GRPO siblings co-locate.
     rollout_session_affinity_header: str = "Modal-Session-ID"
 
-    @model_validator(mode="after")
-    def _validate_gpu_allocation(self) -> SlimeStitchTrainRecipe:
-        """Actor-cluster checks only, replacing SlimeRecipe's.
+    # Synchronous publish by default: async bounded-lag rollouts need the trainer
+    # to wake the pool the moment it publishes, and Flash wake is a lookup by
+    # deployed app name — which a single-call ephemeral run does not have, so
+    # replicas would only self-sync on their poll and fall outside the lag bound.
+    async_mode: bool = False
 
-        Its allocator reads ``colocate=False`` as "slime also owns rollout GPUs",
-        and so requires a positive ``rollout_num_gpus``; here the rollout engines
-        are a separate Modal Flash pool, sized by the serving half.
-        """
+    environment: dict = {
+        "CUDA_DEVICE_MAX_CONNECTIONS": "1",
+        "NCCL_NVLS_ENABLE": "1",
+        "NVSHMEM_DISABLE_NCCL": "1",
+        "NCCL_TIMEOUT_MS": "360000000",
+    }
+
+    def __init__(self, **kwargs: Any) -> None:
+        self.environment = dict(type(self).environment)
+        self.app_tags = dict(type(self).app_tags)
+        self.image_run_commands = list(type(self).image_run_commands)
+        self.image_env = dict(type(self).image_env)
+        self.patch_files = list(type(self).patch_files)
+        self.megatron_runtime_patches = list(type(self).megatron_runtime_patches)
+        self.prep_env = dict(type(self).prep_env)
+        for key, value in kwargs.items():
+            setattr(self, key, value)
+        if self.served_checkpoint_format not in ("bf16", "nvfp4"):
+            raise ValueError(
+                "served_checkpoint_format must be 'bf16' or 'nvfp4', got "
+                f"{self.served_checkpoint_format!r}"
+            )
+        # Deliberately not MilesConfig's resolve_gpu_allocation: its allocator
+        # reads colocate=False as "the trainer also owns rollout GPUs" and so
+        # rejects rollout_num_gpus=0. Here the engines are a separate Flash pool,
+        # sized by the serving half, so only the actor cluster is checked.
         validate_megatron_actor_parallelism(self)
-        return self
 
     @property
     def gpu_allocation(self) -> GpuAllocation:
@@ -191,6 +188,11 @@ class SlimeStitchTrainRecipe(SlimeRecipe):
             colocate=False,
         )
 
+    @property
+    def megatron_pythonpath(self) -> str:
+        """Where the trainer's Ray actors find source-only ``megatron.training``."""
+        return MEGATRON_PATH
+
     def _fields(
         self,
         dataset: DatasetConfig | None = None,
@@ -199,10 +201,13 @@ class SlimeStitchTrainRecipe(SlimeRecipe):
         fields = super()._fields(dataset=dataset, model=model)
         for name in _TRAINER_DROP:
             fields.pop(name, None)
-        # bridge mode loads HF weights directly as the reference; default
-        # ref_load to the base checkpoint when the recipe didn't set one.
+        # bridge mode loads HF weights directly as the reference. The reference
+        # is the BF16 masters, never the served base: for a quantized run those
+        # differ, and loading a quantized checkpoint as the trainer's weights
+        # would train the packed bytes.
         if self.megatron_to_hf_mode == "bridge" and not fields.get("ref_load"):
-            hf_checkpoint = fields.get("hf_checkpoint")
-            if isinstance(hf_checkpoint, str) and hf_checkpoint:
-                fields["ref_load"] = hf_checkpoint
+            for candidate in (self.bf16_checkpoint_path, fields.get("hf_checkpoint")):
+                if isinstance(candidate, str) and candidate:
+                    fields["ref_load"] = candidate
+                    break
         return fields
