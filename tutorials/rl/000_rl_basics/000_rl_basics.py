@@ -31,6 +31,9 @@
 
 import modal
 
+import importlib.util
+import subprocess
+
 import re
 
 from modal_training_gym import (
@@ -177,6 +180,9 @@ def _main_impl() -> None:
             "Missing Modal Secret 'huggingface-secret'. Create one at "
             "https://modal.com/secrets with an HF_TOKEN entry, then re-run."
         ) from e
+
+    if importlib.util.find_spec("nltk") is None:
+        subprocess.check_call(["uv", "pip", "install", "-q", "nltk"])
 
     base_model_deployment = DeploymentConfig(
         model=base_model,

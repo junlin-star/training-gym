@@ -156,7 +156,7 @@ modal volume ls <volume-name> / --env <env>
 
 ## SGLang Qwen3.5 served endpoint tool-call parser
 
-When serving Qwen3.5 models (`Qwen3_5_9B`, `Qwen3_6_35B`, etc.) behind an SGLang endpoint that will be used for tool calling, set the parser to `qwen3_coder` and add the reasoning parser:
+When serving Qwen3.5 models (`Qwen3_5_9B`, `Qwen3_5_4B`, etc.) behind an SGLang endpoint that will be used for tool calling, set the parser to `qwen3_coder` and add the reasoning parser:
 
 ```python
 SglangRecipe(
@@ -178,6 +178,8 @@ Do **not** use `--tool-call-parser qwen` or `qwen25` for Qwen3.5. Those parsers 
 ```
 
 With `qwen`/`qwen25`, SGLang logs `Failed to parse JSON part: ...` and the OpenAI response contains an empty `tool_calls` list, causing agent loops to hit `Reached max iterations without a final response.`. The `qwen3_coder` parser (and the `qwen3` reasoning parser for any inline thinking) handles the XML format correctly on the default `lmsysorg/sglang:v0.5.12` image.
+
+(Qwen3.6-35B is a separate case: its shipped `SglangRecipe` uses `--tool-call-parser qwen`, so don't apply this Qwen3.5 guidance to it.)
 
 ## Updating This Runbook
 

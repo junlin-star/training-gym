@@ -67,6 +67,16 @@ def run_instructions():
 def _install():
     pass
 
+@py_only
+@code
+def _install_python_deps():
+    import importlib.util
+    import subprocess
+
+    if importlib.util.find_spec("nltk") is None:
+        subprocess.check_call(["uv", "pip", "install", "-q", "nltk"])
+
+
 @code
 def _imports():
     import re

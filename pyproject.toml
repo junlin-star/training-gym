@@ -10,7 +10,6 @@ dependencies = [
     "datasets",
     "httpx",
     "msgspec",
-    "nltk>=3.8.0",
     "openai",
     "pydantic",
     "fastapi",
