@@ -41,6 +41,7 @@ MODEL_VALIDATION_HARNESS_PATHS = frozenset(
     {
         REPO_ROOT / "scripts" / "validate_model_configs.py",
         REPO_ROOT / "scripts" / "diff_impact.py",
+        REPO_ROOT / "modal_training_gym" / "model_validation.py",
         REPO_ROOT / "modal_training_gym" / "common" / "models" / "validation.py",
         REPO_ROOT / "modal_training_gym" / "frameworks" / "slime" / "launcher.py",
         REPO_ROOT / "modal_training_gym" / "common" / "train.py",

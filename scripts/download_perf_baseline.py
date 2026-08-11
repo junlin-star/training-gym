@@ -25,7 +25,7 @@ from github import Auth, Github
 from github.Artifact import Artifact
 from github.Repository import Repository
 
-from validate_model_configs import available_model_names
+from modal_training_gym.model_validation import available_model_names
 
 ARTIFACT_PREFIX = "validate-result-"
 # Artifacts are inspected newest-first; stop after this many per model so a
