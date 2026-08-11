@@ -7,7 +7,7 @@ TUTORIAL_METADATA = {
     "difficulty": "Beginner",
     "order": 10,
     "api_classes": [
-        "Qwen3_4B",
+        "Qwen3_5_4B",
         "DeploymentConfig",
         "TrainConfig",
         "SlimeRecipe",
@@ -24,7 +24,7 @@ def _intro():
     """
     # RL basics: verifiable rewards, haiku edition
 
-    This tutorial uses Qwen3-4B and haiku poems to introduce the
+    This tutorial uses Qwen3.5-4B and haiku poems to introduce the
     **verifiable reward** pattern that underpins RL post-training:
 
     1. Serve the base model.
@@ -74,7 +74,7 @@ def _imports():
     from modal_training_gym import (
         DeploymentConfig,
         HuggingFaceDataset,
-        Qwen3_4B,
+        Qwen3_5_4B,
         SlimeRecipe,
         TrainConfig,
         list_checkpoints,
@@ -86,7 +86,7 @@ def _serve_base_intro():
     """
     ## Serve the base model
 
-    So, how does Qwen3-4B currently fare at writing haikus? We can
+    So, how does Qwen3.5-4B currently fare at writing haikus? We can
     serve the base model and find out.
 
     The training gym has several config classes so you can define deployment, training, and evaluation configurations,
@@ -103,7 +103,7 @@ def _serve_base_intro():
 
 @code
 def _serve_base_model():
-    base_model = Qwen3_4B()
+    base_model = Qwen3_5_4B()
     base_model_deployment = DeploymentConfig(
         model=base_model,
         unauthenticated=True,
@@ -359,10 +359,10 @@ def _serve_and_eval_trained():
     print(checkpoint.path)
 
     trained_model_deployment = DeploymentConfig(
-        model=Qwen3_4B(),
+        model=Qwen3_5_4B(),
         checkpoint=checkpoint,
-        app_name="qwen3-4b-haiku-serve",
-        served_model_name="qwen3-4b-haiku",
+        app_name="qwen3-5-4b-haiku-serve",
+        served_model_name="qwen3-5-4b-haiku",
         unauthenticated=True,
     ).serve()
     print(f"Trained model deployed to {trained_model_deployment.url}")
@@ -398,7 +398,7 @@ def _continue_to_train_off_of_a_checkpoint():
 @code
 def _continue_to_train_off_of_a_checkpoint_code():
     new_training_run = TrainConfig(
-        model=Qwen3_4B(),
+        model=Qwen3_5_4B(),
         dataset=train_dataset,
         checkpoint=checkpoint,
         recipe=SlimeRecipe(
@@ -442,10 +442,10 @@ def _trained_eval_off_of_a_checkpoint_code():
     print(new_checkpoint.path)
     
     new_model_deployment = DeploymentConfig(
-        model=Qwen3_4B(),
+        model=Qwen3_5_4B(),
         checkpoint=new_checkpoint,
-        app_name="qwen3-4b-haiku-serve-new",
-        served_model_name="qwen3-4b-haiku",
+        app_name="qwen3-5-4b-haiku-serve-new",
+        served_model_name="qwen3-5-4b-haiku",
         unauthenticated=True,
     ).serve()
     print(f"Newly trained model deployed to {new_model_deployment.url}")

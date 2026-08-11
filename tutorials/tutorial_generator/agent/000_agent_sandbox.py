@@ -10,7 +10,7 @@ TUTORIAL_METADATA = {
     "api_classes": [
         "DeploymentConfig",
         "ModelDeployment",
-        "Qwen3_8B",
+        "Qwen3_5_9B",
         "SglangRecipe",
     ],
 }
@@ -80,7 +80,7 @@ def _imports():
 
     from modal_training_gym import (
         DeploymentConfig,
-        Qwen3_8B,
+        Qwen3_5_9B,
     )
     from modal_training_gym.deploy_recipes import SglangRecipe
 
@@ -184,7 +184,7 @@ def _deploy_model():
         extra_server_args={"--tool-call-parser": "qwen25"},
     )
     deployment = DeploymentConfig(
-        model=Qwen3_8B(),
+        model=Qwen3_5_9B(),
         recipe=recipe,
         unauthenticated=True,
     ).serve()
@@ -368,8 +368,8 @@ def _next_steps():
     - **Add a `write_file` tool** using
       `sandbox.filesystem.write_text` so the agent can modify
       code.
-    - **Swap models** — try `Qwen3_8B` for harder tasks, or
-      `Qwen3_4B` for lower cost.
+    - **Swap models** — try `Qwen3_5_9B` for harder tasks, or
+      `Qwen3_5_4B` for lower cost.
     - **Snapshot the filesystem** with
       `sandbox.snapshot_filesystem()` to create a reusable
       `modal.Image` from the sandbox state.

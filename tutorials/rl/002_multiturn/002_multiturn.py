@@ -35,7 +35,7 @@ from modal_training_gym import (
     DatasetConfig,
     DeploymentConfig,
     ModelDeployment,
-    Qwen3_4B,
+    Qwen3_5_4B,
     SlimeRecipe,
     TrainConfig,
     list_checkpoints,
@@ -349,7 +349,7 @@ def _main_impl() -> None:
     # ## Serve and evaluate the base model
 
     base_deployment = DeploymentConfig(
-        model=Qwen3_4B(),
+        model=Qwen3_5_4B(),
         unauthenticated=True,
     ).serve()
     print(f"Base model URL: {base_deployment.url}")
@@ -391,7 +391,7 @@ def _main_impl() -> None:
     #   short and parseable.
 
     training_run = TrainConfig(
-        model=Qwen3_4B(),
+        model=Qwen3_5_4B(),
         dataset=train_dataset,
         recipe=SlimeRecipe(
             custom_generate_function=number_guess_generate,
@@ -426,10 +426,10 @@ def _main_impl() -> None:
 
     checkpoint = list_checkpoints(train_result.training_run_id)[-1]
     trained_deployment = DeploymentConfig(
-        model=Qwen3_4B(),
+        model=Qwen3_5_4B(),
         checkpoint=checkpoint,
-        app_name="qwen3-4b-guessing-multiturn-serve",
-        served_model_name="qwen3-4b-guessing-multiturn",
+        app_name="qwen3-5-4b-guessing-multiturn-serve",
+        served_model_name="qwen3-5-4b-guessing-multiturn",
         unauthenticated=True,
     ).serve()
     print(f"Trained model URL: {trained_deployment.url}")

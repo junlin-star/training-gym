@@ -42,7 +42,7 @@ import openai
 
 from modal_training_gym import (
     DeploymentConfig,
-    Qwen3_8B,
+    Qwen3_5_9B,
 )
 from modal_training_gym.deploy_recipes import SglangRecipe
 
@@ -77,8 +77,8 @@ def dispatch_tool(sb, name: str, arguments: str) -> str:
 # - **Add a `write_file` tool** using
 #   `sandbox.filesystem.write_text` so the agent can modify
 #   code.
-# - **Swap models** — try `Qwen3_8B` for harder tasks, or
-#   `Qwen3_4B` for lower cost.
+# - **Swap models** — try `Qwen3_5_9B` for harder tasks, or
+#   `Qwen3_5_4B` for lower cost.
 # - **Snapshot the filesystem** with
 #   `sandbox.snapshot_filesystem()` to create a reusable
 #   `modal.Image` from the sandbox state.
@@ -162,7 +162,7 @@ def _main_impl() -> None:
         extra_server_args={"--tool-call-parser": "qwen25"},
     )
     deployment = DeploymentConfig(
-        model=Qwen3_8B(),
+        model=Qwen3_5_9B(),
         recipe=recipe,
         unauthenticated=True,
     ).serve()
