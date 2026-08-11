@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from types import SimpleNamespace
 
@@ -99,6 +100,70 @@ def test_get_run_route_returns_404_for_unknown_run(fake_volume, monkeypatch, tmp
 
     assert response.status_code == 404
     assert response.json()["detail"] == "Training run 'missing' not found"
+
+
+def test_timings_route_returns_empty_for_unknown_run(
+    fake_volume, monkeypatch, tmp_path
+):
+    with _client(monkeypatch, tmp_path) as client:
+        response = client.get("/api/runs/missing/timings")
+
+    assert response.status_code == 200
+    assert response.json() == {}
+
+
+def test_timings_route_derives_legacy_substeps(fake_volume, monkeypatch, tmp_path):
+    run = TrainingRun(
+        training_run_id="legacy-timing-run",
+        modal_app_id="ap-legacy",
+        framework=Framework.SLIME,
+        config={},
+        substep_times={
+            "0": {
+                "train": {"start": 100.0, "duration_s": 2.0},
+            }
+        },
+    )
+    run.save()
+
+    with _client(monkeypatch, tmp_path) as client:
+        response = client.get("/api/runs/legacy-timing-run/timings")
+
+    assert response.status_code == 200
+    assert response.json()["metadata"]["legacy_derived"] is True
+
+
+def test_timing_post_during_finalization_does_not_cache_final(monkeypatch, tmp_path):
+    static = tmp_path / "static"
+    (static / "assets").mkdir(parents=True)
+    (static / "index.html").write_text("ok")
+    monkeypatch.setattr(_dashboard, "STATIC_DIR", str(static))
+    app = _dashboard.fastapi_app.local()
+    endpoint = next(
+        route.endpoint
+        for route in app.routes
+        if route.path == "/api/runs/{training_run_id}/timings"
+    )
+    run_timings = endpoint.__closure__[
+        endpoint.__code__.co_freevars.index("_run_timings")
+    ].cell_contents
+    cells = dict(zip(run_timings.__code__.co_freevars, run_timings.__closure__))
+    timing_cache = cells["timing_cache"].cell_contents
+    entry = timing_cache.setdefault("race-run", cells["TimingEntry"].cell_contents())
+
+    async def read_timings(_training_run_id):
+        return {}, False
+
+    async def run_has_ended(_training_run_id):
+        entry.dirty = True
+        return True
+
+    cells["_read_run_timings"].cell_contents = read_timings
+    cells["_run_has_ended"].cell_contents = run_has_ended
+
+    asyncio.run(run_timings("race-run"))
+
+    assert entry.final is False
 
 
 def test_rollout_route_preserves_raw_text_and_adds_cleaned_text(

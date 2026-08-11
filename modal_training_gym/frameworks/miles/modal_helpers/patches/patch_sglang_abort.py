@@ -43,4 +43,5 @@ elif old in src:
     path.write_text(src.replace(old, new, 1))
     print("Patched Miles SGLang abort cleanup")
 else:
-    raise RuntimeError("Could not find Miles SGLang abort block to patch")
+    message = "Could not find Miles SGLang abort block to patch"
+    raise RuntimeError(message)

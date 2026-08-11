@@ -21,6 +21,12 @@ import time
 from typing import Any
 
 from modal_training_gym.common.status import SlimeStatus
+from modal_training_gym.common.timing_recorder import (
+    RoleRecorder as RoleRecorder,
+    recording_lane as recording_lane,
+    recording_lane_on_reporting_rank as recording_lane_on_reporting_rank,
+    time_phase as time_phase,
+)
 
 from .advantage_reporting import (
     _advantage_samples_payload as _advantage_samples_payload,
@@ -318,4 +324,8 @@ __all__ = [
     "report_step_event",
     "log_eval_rollout_data",
     "log_rollout_data",
+    "RoleRecorder",
+    "recording_lane",
+    "recording_lane_on_reporting_rank",
+    "time_phase",
 ]

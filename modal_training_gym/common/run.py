@@ -7,18 +7,16 @@ from __future__ import annotations
 
 import os
 import time
-from collections.abc import Awaitable, Callable, MutableMapping
+from collections.abc import Awaitable, Callable
 from enum import Enum
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, PrivateAttr, computed_field, field_validator
 
 from modal_training_gym.common.framework import Framework
 from modal_training_gym.common.status import FrameworkStatus, resolve_framework_status
-from modal_training_gym.common.step_timing import record_step_time_event
 from modal_training_gym.utils.metadata import (
     MetadataStore,
-    _step_times_dict,
     vol_get,
     vol_put_with_summary,
 )
@@ -249,17 +247,6 @@ class TrainingRun(BaseModel):
         metadata["framework_progress"] = progress
         self.metadata = metadata
 
-        # TODO update step timing
-        if self.framework is Framework.SLIME:
-            current_step = progress.get("current")
-            record_step_time_event(
-                cast(MutableMapping[str, Any], _step_times_dict()),
-                self.training_run_id,
-                current_step,
-                status.value,
-                update.step_event.strip(),
-                update.event_ts or time.time(),
-            )
         return status
 
     def record_latest_rollout(self, rollout: TrainingRolloutResult) -> None:

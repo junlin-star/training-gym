@@ -1,6 +1,6 @@
 from collections.abc import Callable
 from dataclasses import field
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Literal
 
 import modal
 from pydantic import ConfigDict, model_validator
@@ -45,6 +45,7 @@ _MILES_SKIP = {
     "model_setup_gpu",
     "local_miles",
     "patch_files",
+    "substep_timing",
     "wandb",
     # Callables shipped by value into the containers; the launcher writes the
     # resolved import path into `extra_config` (rm/generate) or back onto the
@@ -464,6 +465,7 @@ class MilesRecipe(BaseTrainRecipe):
     model_setup_gpu: str | None = None
     local_miles: str | None = None
     patch_files: list[str] = field(default_factory=list)
+    substep_timing: Literal["auto", "require", "off"] = "auto"
 
     environment: dict = field(
         default_factory=lambda: {

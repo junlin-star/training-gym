@@ -142,6 +142,7 @@ _PATCH_ROLLOUT_STATUS_B64 = encode_patch(
     "patch_rollout_status_reporting", _MILES_PATCHES
 )
 _PATCH_ADVANTAGE_DIST_B64 = encode_patch("patch_advantage_distribution", _MILES_PATCHES)
+_PATCH_SUBSTEP_TIMING_B64 = encode_patch("patch_substep_timing", _MILES_PATCHES)
 
 _REPORTING_PATCH_COMMANDS = (
     f"echo {_PATCH_ROLLOUT_STATUS_B64} | base64 -d | python3",
@@ -150,6 +151,9 @@ _REPORTING_PATCH_COMMANDS = (
 
 
 def _build_miles_base_image(miles: MilesRecipe) -> Image:
+    timing_prefix = f"TRAINING_GYM_SUBSTEP_TIMING={miles.substep_timing} "
+    if miles.substep_timing != "require":
+        timing_prefix += "TG_BEST_EFFORT_ENTRYPOINTS=1 "
     image = (
         Image.from_registry(miles.docker_image)
         .entrypoint([])
@@ -157,6 +161,7 @@ def _build_miles_base_image(miles: MilesRecipe) -> Image:
             f"rm -rf {HF_CACHE_PATH} 2>/dev/null || true",
             f"echo {_PATCH_SGLANG_ABORT_B64} | base64 -d | python3",
             *_REPORTING_PATCH_COMMANDS,
+            f"echo {_PATCH_SUBSTEP_TIMING_B64} | base64 -d | {timing_prefix}python3",
         )
     )
     if miles.image_env:
@@ -192,6 +197,7 @@ def build_ray_runtime_env(
     environment: dict,
     extra_env: dict[str, str] | None = None,
     framework_status_token: str = "",
+    substep_timing: str = "auto",
 ) -> dict:
     """Runtime env for the Ray job that runs miles.
 
@@ -211,6 +217,7 @@ def build_ray_runtime_env(
         "no_proxy": f"127.0.0.1,{head_addr}",
         "MASTER_ADDR": head_addr,
         "LD_LIBRARY_PATH": _compose_ld_library_path(),
+         "TRAINING_GYM_SUBSTEP_TIMING": substep_timing,
     }
     env_vars.update(extra_env or {})
     env_vars.update(wandb_env)
@@ -260,7 +267,10 @@ def build_miles_app(
             " || echo 'WARNING: sglang abort patch did not apply to the"
             " local_miles checkout; transient router failures during rollout"
             " cleanup may crash the run'",
-            *_REPORTING_PATCH_COMMANDS,
+            f"echo {_PATCH_ROLLOUT_STATUS_B64} | base64 -d | python3",
+            f"echo {_PATCH_ADVANTAGE_DIST_B64} | base64 -d | python3",
+            f"echo {_PATCH_SUBSTEP_TIMING_B64} | base64 -d | "
+            "TG_BEST_EFFORT_ENTRYPOINTS=1 python3",
         )
 
     if miles.image_overlay is not None:
@@ -897,6 +907,7 @@ def build_miles_app(
                 head_addr=cluster.head_addr,
                 wandb_env=wandb_env,
                 environment=miles.environment,
+                substep_timing=miles.substep_timing,
                 extra_env={
                     "TRAINING_GYM_TRAINING_RUN_ID": training_run_id,
                     "TRAINING_GYM_APP_NAME": app_name,

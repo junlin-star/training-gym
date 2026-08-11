@@ -16,6 +16,7 @@ Usage:
 import argparse
 import json
 import sys
+import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -33,6 +34,7 @@ from modal_training_gym.common.models.validation import (
     _ValidationConfig,
 )
 from modal_training_gym.common.run import TrainingRun, TrainingRunStatus
+from modal_training_gym.common.step_timing import measured_run_times
 from modal_training_gym.common.wandb import WandbConfig
 from modal_training_gym.train import TrainConfig
 
@@ -253,6 +255,15 @@ def run_base_training(
 
     train_result = train_config.train()
     training_run = TrainingRun.from_id(train_result.training_run_id)
+    previous = None
+    step_times, substep_times = {}, {}
+    for _ in range(6):
+        step_times, substep_times = measured_run_times(train_result.training_run_id)
+        current = (step_times, substep_times)
+        if current == previous and current != ({}, {}):
+            break
+        previous = current
+        time.sleep(0.5)
 
     return ValidationResult(
         base_model_name=config.name,
@@ -260,8 +271,8 @@ def run_base_training(
         training_run_id=train_result.training_run_id,
         training_run_status=training_run.status,
         total_duration_s=float(training_run.duration_seconds or 0.0),
-        step_times=training_run.step_times,
-        substep_times=training_run.substep_times,
+        step_times=step_times,
+        substep_times=substep_times,
         framework=config.framework.value,
         recipe_name=type(train_recipe).__name__,
         # Only frameworks that pin an image have the field to report.

@@ -49,6 +49,13 @@ from modal_training_gym.common.run_summary import (
     build_run_summary,
     build_run_summaries,
 )
+from modal_training_gym.common.step_timing import (
+    RoleTimingRecord,
+    is_safe_run_id,
+    legacy_run_to_records,
+    load_run_async,
+    rollout_lanes,
+)
 from modal_training_gym.common.time import parse_time as _parse_log_time
 from modal_training_gym.common.training_rollout import (
     TrainingRolloutResult,
@@ -131,7 +138,7 @@ MODAL_CREDS_SECRET_NAME = "_training-gym-modal-creds"
 # Set a real value via ``training-gym set-password``.
 DASHBOARD_PASSWORD_SECRET_NAME = "_training-gym-dashboard-password"
 
-# Routes that must bypass Basic Auth. Write endpoints authenticate with their
+# Routes that must bypass Basic Auth. These endpoints authenticate with their
 # own per-run bearer token; the proxy-auth status route must report only the
 # Modal-layer setting, independent of dashboard password protection.
 PASSWORD_EXEMPT_PATHS = frozenset(
@@ -140,6 +147,7 @@ PASSWORD_EXEMPT_PATHS = frozenset(
         "/api/framework-status",
         "/api/training-rollouts",
         "/api/advantage-distributions",
+        "/api/timing-events",
     }
 )
 
@@ -388,6 +396,7 @@ def fastapi_app():
         FastAPI,
         Header,
         HTTPException,
+        Path as FastAPIPath,
     )  # Request imported at module scope
     from fastapi.concurrency import run_in_threadpool
     from fastapi.responses import (
@@ -447,6 +456,27 @@ def fastapi_app():
     cache_entries: dict[str, tuple[float, list[JsonDict], float]] = {
         key: (0.0, [], 0.0) for key in cache_keys
     }
+
+    TIMING_CACHE_MAX_RUNS = 64
+    TIMING_CACHE_TTL_S = 15.0
+    TIMING_CACHE_FINAL_TTL_S = 60.0
+
+    class TimingEntry:
+        def __init__(self) -> None:
+            self.lanes: JsonDict = {}
+            self.read_at: float | None = None
+            self.final = False
+            self.dirty = False
+            self.lock = asyncio.Lock()
+
+        @property
+        def fresh(self) -> bool:
+            if self.read_at is None:
+                return False
+            ttl = TIMING_CACHE_FINAL_TTL_S if self.final else TIMING_CACHE_TTL_S
+            return time.monotonic() - self.read_at < ttl
+
+    timing_cache: dict[str, TimingEntry] = {}
     cache_locks = {key: asyncio.Lock() for key in cache_keys}
     # Hold strong refs to background refresh tasks so they aren't GC'd mid-flight.
     refresh_tasks: set[asyncio.Task[list[JsonDict]]] = set()
@@ -653,7 +683,8 @@ def fastapi_app():
         return token.strip()
 
     async def _require_framework_status_token(
-        training_run_id: str, authorization: str | None
+        training_run_id: str,
+        authorization: str | None,
     ) -> None:
         """403 unless ``authorization`` carries the run's status token.
 
@@ -675,8 +706,6 @@ def fastapi_app():
             expected_token = ""
         supplied = _bearer_token(authorization)
         if not expected_token:
-            # Spend the same comparison an existing token would, then refuse
-            # regardless of its outcome.
             _secrets.compare_digest(supplied, _MISSING_TOKEN_DUMMY)
             raise HTTPException(status_code=403, detail="Invalid status token")
         if not _secrets.compare_digest(supplied, expected_token):
@@ -847,6 +876,105 @@ def fastapi_app():
                 ),
             )
         return JSONResponse(merged)
+
+    @web.post("/api/timing-events")
+    async def timing_event(
+        record: RoleTimingRecord,
+        authorization: str | None = Header(default=None),
+    ):
+        await _require_framework_status_token(record.training_run_id, authorization)
+
+        await record.save(is_async=True)
+        entry = timing_cache.get(record.training_run_id)
+        if entry is not None:
+            entry.dirty = True
+            entry.final = False
+            if not entry.lock.locked():
+                rollout_key = (
+                    "pre-loop" if record.rollout_id is None else str(record.rollout_id)
+                )
+                async with entry.lock:
+                    lanes = entry.lanes.setdefault(rollout_key, {"roles": {}})
+                    lanes["roles"].update(
+                        rollout_lanes([record.model_dump(mode="json")])["roles"]
+                    )
+        return JSONResponse({"status": "ok"})
+
+    async def _run_has_ended(training_run_id: str) -> bool:
+        ended_statuses = frozenset({"completed", "failed", "stopped", "cancelled"})
+        _expires_at, runs_cached, loaded_at = cache_entries["runs"]
+        if loaded_at != 0.0:
+            for run in runs_cached:
+                if isinstance(run, dict) and run.get("training_run_id") == (
+                    training_run_id
+                ):
+                    return run.get("status") in ended_statuses
+        try:
+            run_record = await TrainingRun.from_id(training_run_id, is_async=True)
+        except KeyError:
+            return False
+        return run_record.status.value in ended_statuses
+
+    async def _read_run_timings(
+        training_run_id: str,
+    ) -> tuple[JsonDict, bool]:
+        found, had_read_failures = await load_run_async(training_run_id)
+        legacy_derived = False
+        if not found and not had_read_failures:
+            try:
+                run = await _get_run_or_404(training_run_id)
+            except HTTPException as exc:
+                if exc.status_code != 404:
+                    raise
+            else:
+                legacy_records = legacy_run_to_records(run.substep_times)
+                legacy_derived = bool(legacy_records)
+                for record in legacy_records:
+                    found.setdefault(int(record["rollout_id"]), []).append(record)
+        timings = {
+            ("pre-loop" if rollout_id is None else str(rollout_id)): rollout_lanes(
+                records
+            )
+            for rollout_id, records in sorted(
+                found.items(), key=lambda item: (item[0] is None, item[0] or 0)
+            )
+        }
+        if legacy_derived:
+            timings["metadata"] = {"legacy_derived": True}
+        return timings, had_read_failures
+
+    async def _run_timings(training_run_id: str) -> JsonDict:
+        entry = timing_cache.get(training_run_id)
+        if entry is None:
+            if len(timing_cache) >= TIMING_CACHE_MAX_RUNS:
+                evictable = [
+                    (other.read_at or 0.0, run_id)
+                    for run_id, other in timing_cache.items()
+                    if not other.lock.locked()
+                ]
+                if evictable:
+                    del timing_cache[min(evictable)[1]]
+            entry = timing_cache.setdefault(training_run_id, TimingEntry())
+        if entry.fresh:
+            return entry.lanes
+        async with entry.lock:
+            if not entry.fresh:
+                entry.dirty = False
+                entry.lanes, had_read_failures = await _read_run_timings(
+                    training_run_id
+                )
+                entry.read_at = time.monotonic()
+                run_ended = await _run_has_ended(training_run_id)
+                entry.final = not had_read_failures and not entry.dirty and run_ended
+            return entry.lanes
+
+    @web.get("/api/runs/{training_run_id}/timings")
+    async def get_run_timings(
+        training_run_id: str = FastAPIPath(),
+    ):
+        if not is_safe_run_id(training_run_id):
+            raise HTTPException(status_code=422, detail="unsafe training run id")
+        return JSONResponse(await _run_timings(training_run_id))
 
     # ── Live Modal log stream (SSE, pure pass-through) ───────────────────
 

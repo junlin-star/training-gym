@@ -16,6 +16,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 TESTDATA_DIR = REPO_ROOT / "tests" / "testdata" / "slime"
 SLIME_SOURCE_PATHS = {
     "train.py": "/root/slime/train.py",
+    "train_async.py": "/root/slime/train_async.py",
 }
 
 app = modal.App("fetch-slime-snapshots")

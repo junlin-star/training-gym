@@ -23,8 +23,9 @@ import json
 import os
 import threading
 from queue import Queue
+from enum import Enum
 from typing import Any
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 
@@ -35,6 +36,14 @@ _STARTED = False
 _LOCK = threading.Lock()
 _DEFAULT_TIMEOUT_SECONDS = 2.0
 _STATUS_TOKEN_ENV = "TRAINING_GYM_FRAMEWORK_STATUS_TOKEN"
+
+
+class PostResult(str, Enum):
+    OK = "ok"
+    NOT_FOUND = "not_found"
+    AUTH_FAILED = "auth_failed"
+    FAILED = "failed"
+    PERMANENT = "permanent"
 
 
 def _resolve_url() -> str:
@@ -78,7 +87,7 @@ def _worker() -> None:
             _QUEUE.task_done()
 
 
-def _post(item: dict[str, Any]) -> None:
+def _post(item: dict[str, Any]) -> PostResult:
     url = item.pop("_url", "")
     timeout = float(
         item.pop("_timeout", _DEFAULT_TIMEOUT_SECONDS) or _DEFAULT_TIMEOUT_SECONDS
@@ -87,7 +96,7 @@ def _post(item: dict[str, Any]) -> None:
     # enqueue_item callers); don't re-resolve it here.
     token = str(item.pop("_token", "") or "").strip()
     if not url:
-        return
+        return PostResult.FAILED
     body = json.dumps(item, default=str).encode("utf-8")
 
     from modal_training_gym.common.config import modal_proxy_auth_headers
@@ -108,8 +117,19 @@ def _post(item: dict[str, Any]) -> None:
     try:
         with urlopen(request, timeout=timeout) as response:
             response.read()
+    except HTTPError as exc:
+        if exc.code in {404, 405}:
+            return PostResult.NOT_FOUND
+        if 400 <= exc.code < 500:
+            if exc.code in {401, 403}:
+                return PostResult.AUTH_FAILED
+            if exc.code in {408, 425, 429}:
+                return PostResult.FAILED
+            return PostResult.PERMANENT
+        return PostResult.FAILED
     except (OSError, URLError):
-        return
+        return PostResult.FAILED
+    return PostResult.OK
 
 
 def enqueue_item(item: dict[str, Any]) -> None:
@@ -125,10 +145,12 @@ def enqueue_item(item: dict[str, Any]) -> None:
         pass
 
 
-def post_item(item: dict[str, Any]) -> None:
-    """Synchronously POST a pre-resolved item (same shape as ``enqueue_item``),
-    blocking up to the item's ``_timeout``. Failures are swallowed."""
-    _post(item)
+def post_item(item: dict[str, Any]) -> bool:
+    return _post(item) == PostResult.OK
+
+
+def post_item_result(item: dict[str, Any]) -> PostResult:
+    return _post(item)
 
 
 def enqueue_framework_status(
