@@ -3,7 +3,14 @@ from __future__ import annotations
 from importlib import import_module
 
 _EXPORTS = {
+    "Checkpoint": ("modal_training_gym.common.checkpoint", "Checkpoint"),
+    "CheckpointType": ("modal_training_gym.common.checkpoint", "CheckpointType"),
+    "convert_checkpoint_to_hf": (
+        "modal_training_gym.common.checkpoint",
+        "convert_checkpoint_to_hf",
+    ),
     "DatasetConfig": ("modal_training_gym.common.dataset", "DatasetConfig"),
+    "Endpoint": ("modal_training_gym.common.endpoint", "Endpoint"),
     "HarborDataset": ("modal_training_gym.common.dataset", "HarborDataset"),
     "DeploymentConfig": ("modal_training_gym.common.deployment", "DeploymentConfig"),
     "EvalConfig": ("modal_training_gym.common.eval", "EvalConfig"),
@@ -100,7 +107,11 @@ _EXPORTS = {
 __all__ = [
     "Kimi_K2_6_LoRA_Recipe",
     "Kimi_K2_5_LoRA_Recipe",
+    "Checkpoint",
+    "CheckpointType",
+    "convert_checkpoint_to_hf",
     "DatasetConfig",
+    "Endpoint",
     "Gemma4_26B_A4B",
     "Gemma4_26B_A4B_Recipe",
     "GLM_4_7",
