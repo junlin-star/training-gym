@@ -1,20 +1,22 @@
 ---
-name: modal-training
+name: modal-infrastructure
 description: >-
-  Runbook for launching, monitoring, and debugging training jobs on Modal:
-  entrypoint discovery, detached app workflow, log filtering, container
-  inspection, volume state, image build behavior, and debugging strategy.
-  Use when running modal run, checking app status, reading logs, or
-  troubleshooting a Modal training job.
+  Operates raw Modal infrastructure: runs, apps, containers, volumes,
+  scheduling, image builds, caches, and endpoint authentication.
 when_to_use: >-
-  User runs modal run/deploy, asks about Modal app state, checks logs with
-  modal app logs, debugs a stuck or failed training job, inspects containers
-  or volumes, or asks how to launch/monitor a training run on Modal.
+  Use for explicit raw Modal operations or when the Training Gym CLI cannot
+  explain an infrastructure failure. Use agent-driven-training for normal
+  Training Gym lifecycle work.
 ---
 
-# Running Training Jobs On Modal
+# Modal infrastructure operations
 
 This document captures durable repo-specific workflow for agents launching and debugging training jobs on Modal in this repository.
+
+For routine Training Gym lifecycle work, use
+[agent-driven-training](../agent-driven-training/SKILL.md). Use this runbook
+when the request explicitly concerns Modal infrastructure or the Training Gym
+CLI cannot explain the underlying failure.
 
 ## Scope
 
@@ -75,6 +77,8 @@ modal app list --json
 modal app logs <app-id>
 modal app stop <app-id>
 ```
+
+Do not stop an app during a status or diagnosis-only request.
 
 ## Reading App State
 
