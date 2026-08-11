@@ -193,6 +193,13 @@ API_REFERENCE_MANIFEST = [
     },
     # --- Deployment ---
     {
+        "class_name": "Endpoint",
+        "module": "modal_training_gym.common.endpoint",
+        "group": "deployment",
+        "class_type": "behavior",
+        "sidebar_label": "Endpoint",
+    },
+    {
         "class_name": "DeploymentConfig",
         "module": "modal_training_gym.common.deployment",
         "group": "deployment",

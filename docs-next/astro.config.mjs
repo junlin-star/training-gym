@@ -183,6 +183,7 @@ export default defineConfig({
             {
               label: 'Deployment',
               items: [
+                { label: 'Endpoint', link: '/reference/deployment/endpoint/' },
                 { label: 'DeploymentConfig', link: '/reference/deployment/deploymentconfig/' },
                 { label: 'ModelDeployment', link: '/reference/deployment/modeldeployment/' },
                 { label: 'SglangRecipe', link: '/reference/deployment/sglangrecipe/' },
