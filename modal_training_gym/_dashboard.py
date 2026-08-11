@@ -467,6 +467,7 @@ def fastapi_app():
             self.read_at: float | None = None
             self.final = False
             self.dirty = False
+            self.stale = False
             self.lock = asyncio.Lock()
 
         @property
@@ -955,20 +956,32 @@ def fastapi_app():
                 if evictable:
                     del timing_cache[min(evictable)[1]]
             entry = timing_cache.setdefault(training_run_id, TimingEntry())
+
+        def response() -> JsonDict:
+            if not entry.stale:
+                return entry.lanes
+            metadata = entry.lanes.get("metadata", {})
+            return {
+                **entry.lanes,
+                "metadata": {**metadata, "timing_stale": True},
+            }
+
         if entry.fresh:
-            return entry.lanes
+            return response()
         async with entry.lock:
             if not entry.fresh:
                 entry.dirty = False
                 timings, had_read_failures = await _read_run_timings(training_run_id)
                 if had_read_failures:
                     entry.final = False
+                    entry.stale = True
                 else:
                     entry.lanes = timings
                     entry.read_at = time.monotonic()
                     run_ended = await _run_has_ended(training_run_id)
                     entry.final = not entry.dirty and run_ended
-            return entry.lanes
+                    entry.stale = False
+            return response()
 
     @web.get("/api/runs/{training_run_id}/timings")
     async def get_run_timings(

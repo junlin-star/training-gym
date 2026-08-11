@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { anchorLanes, clipIdleSpans, nest, runTimeline } from "./timing.js";
+import {
+  anchorLanes,
+  clipIdleSpans,
+  groupTooltipChildren,
+  nest,
+  runTimeline,
+} from "./timing.js";
 
 const work = (start, end) => ({
   kind: "work",
@@ -19,6 +25,81 @@ const idle = (start, end) => ({
   end,
   name: "wait_for_rollout",
   rolloutId: 1,
+});
+
+test("groupTooltipChildren preserves order and aggregates repeated phases", () => {
+  const children = [
+    {
+      name: "forward_backward",
+      duration: 1.5,
+      count: 1,
+      start: 0,
+      end: 1.5,
+    },
+    {
+      name: "optimizer_step",
+      duration: 0.25,
+      count: 1,
+      start: 1.5,
+      end: 1.75,
+    },
+    {
+      name: "forward_backward",
+      duration: 1.25,
+      count: 1,
+      start: 2,
+      end: 3.25,
+    },
+    {
+      name: "hidden",
+      duration: 4,
+      count: 1,
+      mergedGeneration: true,
+    },
+    {
+      name: "wait_for_rollout",
+      rolloutId: 3,
+      duration: 0.5,
+      count: 1,
+      start: 3.25,
+      end: 3.75,
+    },
+  ];
+
+  assert.deepEqual(
+    groupTooltipChildren(children).map(
+      ({ name, label, duration, count, representative }) => ({
+        name,
+        label,
+        duration,
+        count,
+        representative,
+      }),
+    ),
+    [
+      {
+        name: "forward_backward",
+        label: "Forward/backward",
+        duration: 2.75,
+        count: 2,
+        representative: children[0],
+      },
+      {
+        name: "optimizer_step",
+        label: "Optimizer step",
+        duration: 0.25,
+        count: 1,
+        representative: children[1],
+      },
+      {
+        name: "wait_for_rollout",
+        label: "Waiting for rollout generation (step 3)",
+        duration: 0.5,
+        count: 1,
+        representative: children[4],
+      },
+    ],
+  );
 });
 
 test("clipIdleSpans merges work ranges before clipping", () => {

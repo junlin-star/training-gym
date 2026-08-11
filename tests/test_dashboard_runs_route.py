@@ -187,16 +187,30 @@ def test_timing_read_failure_preserves_cached_lanes(monkeypatch, tmp_path):
     )
     entry.lanes = {"0": {"roles": {"driver": {"phases": {}}}}}
     entry.read_at = 0.0
+    reads = iter(
+        [
+            ({"0": {"roles": {"driver": {"phases": {}}}}}, True),
+            ({"1": {"roles": {"driver": {"phases": {}}}}}, False),
+        ]
+    )
 
     async def read_timings(_training_run_id):
-        return {}, True
+        return next(reads)
 
     cells["_read_run_timings"].cell_contents = read_timings
 
-    assert asyncio.run(run_timings("preserved-run")) == entry.lanes
+    stale = asyncio.run(run_timings("preserved-run"))
+    assert stale["0"] == entry.lanes["0"]
+    assert stale["metadata"]["timing_stale"] is True
     assert entry.lanes == {"0": {"roles": {"driver": {"phases": {}}}}}
     assert entry.read_at == 0.0
     assert entry.final is False
+
+    entry.read_at = 0.0
+    fresh = asyncio.run(run_timings("preserved-run"))
+    assert fresh == {"1": {"roles": {"driver": {"phases": {}}}}}
+    assert "metadata" not in fresh
+    assert entry.stale is False
 
 
 def test_rollout_route_preserves_raw_text_and_adds_cleaned_text(

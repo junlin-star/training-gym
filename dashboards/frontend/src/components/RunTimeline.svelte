@@ -5,7 +5,7 @@
     colorFor,
     fmtSecs,
     HIDDEN_PHASES,
-    TOOLTIP_HIDDEN_PHASES,
+    groupTooltipChildren,
     labelFor,
     PHASE_COLORS,
     TRAIN_OUTLINE_COLOR,
@@ -37,6 +37,7 @@
   const BAR_GAP_PX = 1;
   let showDetails = $state(false);
   let timeline = $derived(runTimeline(timings, asyncOverride));
+  let timingStale = $derived(timings?.metadata?.timing_stale === true);
   let intervalOrigin = $derived(runOrigin ?? timeline.runStart);
   let rowHeight = $derived(showDetails ? DETAIL_ROW_HEIGHT_PX : ROW_HEIGHT_PX);
   let groups = $derived(
@@ -97,6 +98,9 @@
 
   let tip = $state(null);
   let laneTip = $state(null);
+  let groupedTipChildren = $derived(
+    tip?.bar.children ? groupTooltipChildren(tip.bar.children) : [],
+  );
   let pinned = $state(false);
   let hideTimer = null;
 
@@ -260,6 +264,9 @@
 <svelte:window onclick={clearPin} />
 
 <div class="run-timeline">
+  {#if timingStale}
+    <div class="timing-stale">Timing data may be out of date.</div>
+  {/if}
   {#if !groups.length}
     <div class="empty">No substep timing recorded for these rollouts yet.</div>
   {:else}
@@ -477,15 +484,18 @@
     {/if}
     {#if tip.bar.children?.length}
       <div class="tg-tip-children">
-        {#each tip.bar.children.filter((child) => !child.mergedGeneration && !TOOLTIP_HIDDEN_PHASES.has(child.name)) as child (child.key)}
+        {#each groupedTipChildren as child (child.name)}
           <span class="tg-tip-child">
             <span class="tg-tip-child-line">
-              {labelFor(child.name, child.rolloutId)}
+              {child.label}
+              {#if child.count > 1}
+                {" "}×{child.count}
+              {/if}
               <span class="tg-tip-child-duration"> · {fmtSecs(child.duration)}</span>
             </span>
             {#if showDetails && child.count === 1}
               <span class="tg-tip-when">
-                {fmtSecs(child.start - intervalOrigin)} → {fmtSecs(child.end - intervalOrigin)}
+                {fmtSecs(child.representative.start - intervalOrigin)} → {fmtSecs(child.representative.end - intervalOrigin)}
               </span>
             {/if}
           </span>
@@ -868,6 +878,11 @@
     color: var(--muted);
     font-size: 9px;
     line-height: 12px;
+  }
+
+  .timing-stale {
+    color: var(--muted);
+    font-size: 12px;
   }
 
   .tg-tip-when {

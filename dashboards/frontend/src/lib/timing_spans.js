@@ -5,7 +5,9 @@ import {
   NESTS_IN,
   NEGLIGIBLE_WORK_S,
   SAMPLED,
+  TOOLTIP_HIDDEN_PHASES,
   categoryOf,
+  labelFor,
   rolloutIdForTimingKey,
 } from "./timing_vocabulary.js";
 
@@ -161,6 +163,30 @@ export function timingIsAsync(timings) {
       ),
     )
   );
+}
+
+export function groupTooltipChildren(children) {
+  const groups = new Map();
+  for (const child of children || []) {
+    if (child.mergedGeneration || TOOLTIP_HIDDEN_PHASES.has(child.name)) {
+      continue;
+    }
+    const count = child.count || 1;
+    const group = groups.get(child.name);
+    if (group) {
+      group.duration += child.duration;
+      group.count += count;
+      continue;
+    }
+    groups.set(child.name, {
+      name: child.name,
+      label: labelFor(child.name, child.rolloutId),
+      duration: child.duration,
+      count,
+      representative: child,
+    });
+  }
+  return [...groups.values()];
 }
 
 export function stepsOf(spans) {
