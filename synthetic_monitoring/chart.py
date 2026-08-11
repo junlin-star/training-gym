@@ -202,7 +202,7 @@ def render_timing_history_chart(
         else datetime.fromtimestamp(i + 1, tz=timezone.utc)
         for i, p in enumerate(history)
     ]
-    use_run_index = all(p.ts <= 0 for p in history)
+    use_run_index = any(p.ts <= 0 for p in history)
     xs_num = list(range(1, len(history) + 1)) if use_run_index else None
     x_plot = xs_num if use_run_index else xs
     xlabel = "run" if use_run_index else "time (UTC)"
