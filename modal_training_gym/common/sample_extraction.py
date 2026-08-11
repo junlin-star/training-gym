@@ -530,9 +530,11 @@ class RolloutImageStore:
 
     Frameworks build a prompt group by copying one prepared sample (miles
     deep-copies it per ``n_samples_per_prompt``), so members hold equal-content but
-    distinct image objects. ``group_key`` records the outcome once per group; the
-    content hash — the only thing that can collapse those copies — is then paid once
-    per group instead of once per sample.
+    distinct image objects. ``group_key`` records the outcome for one such set of
+    copies, paying the content hash — the only thing that can collapse them — once
+    for the set rather than once per sample. It has to identify the prepared sample
+    and not merely its group: a multi-turn episode reports every turn under one
+    group index, and each turn carries its own screenshot.
     """
 
     def __init__(self, limit: int) -> None:
@@ -575,8 +577,8 @@ class RolloutImageStore:
     ) -> bool:
         """Write this sample's image keys onto ``metadata``; True if one resolves.
 
-        ``group_key`` (the sample's prompt group, when known) reuses the group's
-        first outcome instead of re-hashing an identical copy of its image.
+        ``group_key`` (the sample's group and prompt, when known) reuses the first
+        outcome recorded for it instead of re-hashing an identical copy of its image.
         """
         if not self._limit:
             return False
@@ -698,11 +700,14 @@ def _sample_to_dict(
     if group_index is None and sample_index is not None:
         group_index = sample_index // max(1, int(n_samples_per_prompt or 1))
 
+    prompt_text = _coerce_text(prompt)
     if audio_uri := _extract_audio_from_prompt(prompt):
         metadata["_metadata_type"] = "audio"
         metadata["audio"] = audio_uri
     elif image_store is not None and image_store.annotate(
-        sample, metadata, group_key=group_index
+        sample,
+        metadata,
+        group_key=None if group_index is None else (group_index, prompt_text),
     ):
         metadata["_metadata_type"] = "image"
 
@@ -716,7 +721,7 @@ def _sample_to_dict(
     score = _sample_score(Sample(metadata=metadata), numeric_reward)
     out: dict[str, Any] = {
         "score": score,
-        "prompt": _coerce_text(prompt),
+        "prompt": prompt_text,
         "response": response_text,
         "metadata": metadata,
     }
