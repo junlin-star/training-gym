@@ -116,10 +116,11 @@ def cleanup_synmon_probe_runs(
             ValidationError,
             modal.exception.Error,
         ) as exc:
-            raise RuntimeError(
-                f"load {summary_run.training_run_id} for cleanup: "
+            print(
+                f"WARNING: load {summary_run.training_run_id} for cleanup failed: "
                 f"{type(exc).__name__}: {exc}"
-            ) from exc
+            )
+            continue
         meta = run.metadata or {}
         tags = meta.get("group_tags")
         overrides = (
