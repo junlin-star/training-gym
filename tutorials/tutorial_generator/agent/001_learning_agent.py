@@ -1,0 +1,810 @@
+# pyright: reportUndefinedVariable=false, reportMissingImports=false
+"""Tutorial source for `001_learning_agent` — parsed by generate_tutorial.py."""
+
+TUTORIAL_METADATA = {
+    "framework": "`slime`",
+    "cluster_shape": "1 × 8×H100 (+ 1×H100 teacher)",
+    "summary": "A learning-agent loop: acquire a corpus, manufacture your own reward, train, and measure the margin — all observed from the gym dashboard",
+    "difficulty": "Advanced",
+    "order": 20,
+    "api_classes": [
+        "DatasetConfig",
+        "DeploymentConfig",
+        "EvalConfig",
+        "EvalRowResult",
+        "ModelDeployment",
+        "Qwen3_4B",
+        "Qwen3_8B",
+        "SlimeRecipe",
+        "TrainConfig",
+    ],
+}
+
+
+from tutorial_generator import code, markdown, notebook_only, py_only, shell
+
+
+@markdown
+def _intro():
+    """
+    # A learning agent on the gym
+
+    [LAB](https://github.com/modal-projects/learning-agent) (Learning Agent
+    Bench) asks a different question than most agent benchmarks: not *can an
+    agent use tools*, but **can an agent make a model learn**. An agent is
+    dropped into a domain it has never seen and must come back with a student
+    model that answers expert questions better than the untrained one. Nothing
+    is delegated — the agent acquires the corpus, manufactures its own training
+    signal, trains the student, and invents the evaluation it steers by. There
+    is no verifiable reward and no human in the loop. The only number that
+    counts is the **margin**: trained student minus base student on held-out
+    questions.
+
+    This tutorial runs a compact variant of that loop end to end on Modal, with
+    the Training Gym as the instrument you watch it through:
+
+    1. **Acquire a corpus** the student was never trained on — the DSPy docs at
+       a pinned tag, fetched here rather than handed over (LAB's `hard` track
+       posture).
+    2. **Manufacture a signal**: a teacher model reads the corpus and writes
+       grounded questions, gold answers, and weighted-claim rubrics — LAB's
+       label shape, generated instead of given.
+    3. **Measure the base student** with a rubric judge, and record the eval on
+       the dashboard.
+    4. **Train** the student with GRPO (slime), where the reward is a
+       deterministic claim-coverage scorer — cheap enough to run at rollout
+       throughput.
+    5. **Measure the trained student** with the same judge and report the
+       margin.
+
+    Throughout, the gym dashboard is the observatory: live reward curves, the
+    rollout inspector, per-substep timings, and both evals side by side.
+
+    **Why the split between reward and judge?** LAB's rule of thumb is that an
+    LLM judge belongs in the dev-signal path (a handful of calls, seconds each)
+    and a deterministic scorer belongs in the reward path (thousands of calls
+    per step). We follow it exactly: the teacher judges evals, arithmetic
+    scores rollouts. The two disagree — that gap, dev-vs-test calibration, is
+    itself part of what LAB measures.
+    """
+
+
+@py_only
+@markdown
+def _run_instructions():
+    """
+    Run with:
+    ```
+    uv run tutorials/agent/001_learning_agent/001_learning_agent.py
+    ```
+    """
+
+
+@notebook_only
+@shell(
+    "import importlib.util\n"
+    "\n"
+    "# Skip if modal_training_gym is already importable (e.g. a local editable\n"
+    "# checkout) so your edits keep taking effect and the env stays synced.\n"
+    "if importlib.util.find_spec('modal_training_gym') is None:\n"
+    "    %uv pip install -q git+https://github.com/modal-projects/training-gym.git@main"
+)
+def _install():
+    pass
+
+
+@code
+def _imports():
+    import json
+    import re
+    import shutil
+    import subprocess
+    from concurrent.futures import ThreadPoolExecutor
+    from pathlib import Path
+
+    from modal_training_gym import (
+        DatasetConfig,
+        DeploymentConfig,
+        EvalConfig,
+        EvalRowResult,
+        ModelDeployment,
+        Qwen3_4B,
+        Qwen3_8B,
+        SlimeRecipe,
+        TrainConfig,
+        list_checkpoints,
+    )
+
+
+# ── 1. Acquire the corpus ────────────────────────────────────────────────
+
+
+@markdown
+def _corpus_intro():
+    """
+    ## Acquire the corpus
+
+    A learning task needs a domain the student does not already know. We use
+    the [DSPy](https://github.com/stanfordnlp/dspy) documentation at a pinned
+    tag: recent enough that a 4B model has no reliable knowledge of it, small
+    enough to fetch in seconds.
+
+    Pinning matters. The corpus is the *content* of everything downstream —
+    questions, rubrics, reward — so a moving corpus makes two runs
+    incomparable. LAB hashes each corpus into `bench/pins.json` for exactly
+    this reason; here the git tag plays that role.
+
+    We chunk each markdown file on its headings and keep passages long enough
+    to support a real question.
+    """
+
+
+@code
+def _acquire_corpus():
+    CORPUS_REPO = "https://github.com/stanfordnlp/dspy"
+    CORPUS_TAG = "3.0.3"
+    CORPUS_SUBDIR = "docs/docs"
+    CORPUS_DIR = Path("/tmp/learning_agent_corpus")
+
+    def fetch_corpus() -> Path:
+        """Sparse-clone just the docs tree at the pinned tag."""
+        if CORPUS_DIR.exists():
+            shutil.rmtree(CORPUS_DIR)
+        subprocess.run(
+            [
+                "git", "clone", "--depth", "1", "--filter=blob:none", "--sparse",
+                "--branch", CORPUS_TAG, CORPUS_REPO, str(CORPUS_DIR),
+            ],
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "sparse-checkout", "set", CORPUS_SUBDIR],
+            cwd=CORPUS_DIR,
+            check=True,
+            capture_output=True,
+        )
+        return CORPUS_DIR / CORPUS_SUBDIR
+
+    def chunk_document(text: str, *, max_chars: int = 1400) -> list[str]:
+        """Split on markdown headings, then pack sections up to `max_chars`."""
+        text = re.sub(r"^---\n.*?\n---\n", "", text, flags=re.DOTALL)  # frontmatter
+        sections = re.split(r"\n(?=#{1,3} )", text)
+        chunks, buffer = [], ""
+        for section in sections:
+            if len(buffer) + len(section) <= max_chars:
+                buffer += section
+            else:
+                if buffer.strip():
+                    chunks.append(buffer.strip())
+                buffer = section[:max_chars]
+        if buffer.strip():
+            chunks.append(buffer.strip())
+        return chunks
+
+    def load_chunks(root: Path, *, min_chars: int = 600, limit: int = 64) -> list[dict]:
+        chunks = []
+        for path in sorted(root.rglob("*.md")):
+            for i, chunk in enumerate(chunk_document(path.read_text(errors="ignore"))):
+                if len(chunk) >= min_chars:
+                    chunks.append({"source": f"{path.relative_to(root)}#{i}", "text": chunk})
+        # Stride instead of slice so the sample spans the whole doc tree.
+        stride = max(1, len(chunks) // limit)
+        return chunks[::stride][:limit]
+
+    corpus_root = fetch_corpus()
+    chunks = load_chunks(corpus_root)
+    print(f"Corpus: {CORPUS_REPO}@{CORPUS_TAG} — {len(chunks)} chunks")
+    print(f"First chunk from {chunks[0]['source']}:\n{chunks[0]['text'][:300]}...")
+
+
+# ── 2. Manufacture the training signal ───────────────────────────────────
+
+
+@markdown
+def _teacher_intro():
+    """
+    ## Deploy the teacher
+
+    One model does two jobs in this loop: it writes the questions and rubrics
+    (once, up front) and it judges answers (twice, base and trained). It never
+    touches the reward path and never appears in the student's answer path —
+    LAB forbids external models there, and so do we.
+
+    `DeploymentConfig.serve()` gives us an OpenAI-compatible endpoint and
+    registers the deployment on the dashboard's *Deployments* tab.
+    """
+
+
+@code
+def _serve_teacher():
+    teacher_deployment = DeploymentConfig(
+        model=Qwen3_8B(),
+        app_name="learning-agent-teacher",
+        served_model_name="qwen3-8b-teacher",
+        unauthenticated=True,
+    ).serve()
+    teacher_deployment.wait_until_ready(timeout=3000)
+    print(f"Teacher URL: {teacher_deployment.url}")
+
+
+@markdown
+def _qa_intro():
+    """
+    ## Write the questions, gold answers, and rubrics
+
+    This is the step LAB's `medium` and `hard` tracks force on the agent: with
+    no graded dev set in the workspace, it must build its own compass.
+
+    We ask the teacher, for each corpus chunk, for one question answerable
+    *only* from that chunk, a gold answer, and 2–4 weighted claims a correct
+    answer must contain. That triple is LAB's label shape:
+
+    ```json
+    {"question": "...",
+     "label": {"gold_answer": "...",
+               "rubric": [{"claim_id": "c1", "weight": 2, "statement": "..."}]}}
+    ```
+
+    The rubric is what makes an unverifiable domain scorable: prose can't be
+    string-matched, but *claims present in the prose* can be counted. The
+    reward function and the judge both read this same field, from opposite
+    ends of the cost spectrum.
+
+    Generation is best-effort — malformed JSON rows are dropped rather than
+    repaired, since a bad row silently poisons both the reward and the eval.
+    """
+
+
+@code
+def _generate_qa():
+    QA_PROMPT = (
+        "You are writing an exam about a documentation corpus.\n\n"
+        "Read the passage and write ONE question that can be answered only by "
+        "someone who has read it. Then write the gold answer, and 2-4 rubric "
+        "claims: short, independently checkable statements that a correct "
+        "answer must contain. Weight each claim 1-3 by importance.\n\n"
+        "Return ONLY a JSON object, no prose, no code fences:\n"
+        '{{"question": "...", "gold_answer": "...", "rubric": '
+        '[{{"claim_id": "c1", "weight": 2, "statement": "..."}}]}}\n\n'
+        "Passage (from {source}):\n---\n{text}\n---"
+    )
+
+    def parse_json_object(text: str) -> dict | None:
+        """Pull the first JSON object out of a model response."""
+        match = re.search(r"\{.*\}", text, re.DOTALL)
+        if match is None:
+            return None
+        try:
+            return json.loads(match.group(0))
+        except json.JSONDecodeError:
+            return None
+
+    def is_well_formed(row: dict | None) -> bool:
+        if not isinstance(row, dict):
+            return False
+        if not (row.get("question") and row.get("gold_answer")):
+            return False
+        rubric = row.get("rubric")
+        return isinstance(rubric, list) and all(
+            isinstance(claim, dict) and claim.get("statement") for claim in rubric
+        )
+
+    def write_exam_item(chunk: dict) -> dict | None:
+        response = teacher_deployment.generate(
+            QA_PROMPT.format(source=chunk["source"], text=chunk["text"]),
+            ensure_ready=False,
+            temperature=0.7,
+            max_tokens=1024,
+            chat_template_kwargs={"enable_thinking": False},
+        )
+        row = parse_json_object(response)
+        if not is_well_formed(row):
+            return None
+        return {
+            "question": row["question"].strip(),
+            "gold_answer": row["gold_answer"].strip(),
+            "rubric": [
+                {
+                    "claim_id": str(claim.get("claim_id") or f"c{i}"),
+                    "weight": float(claim.get("weight") or 1),
+                    "statement": str(claim["statement"]).strip(),
+                }
+                for i, claim in enumerate(row["rubric"], start=1)
+            ],
+            "source": chunk["source"],
+        }
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        generated = list(executor.map(write_exam_item, chunks))
+
+    # Dedup on the question text: near-identical prompts collapse a GRPO group
+    # into one gradient and leak the dev split into training.
+    exam, seen = [], set()
+    for item in generated:
+        if item is None:
+            continue
+        key = re.sub(r"\W+", " ", item["question"].lower()).strip()
+        if key not in seen:
+            seen.add(key)
+            exam.append(item)
+
+    dev_items, train_items = exam[:16], exam[16:]
+    print(f"{len(exam)} exam items kept from {len(chunks)} chunks "
+          f"({len(train_items)} train / {len(dev_items)} dev)")
+
+
+@notebook_only
+@code
+def _peek_exam():
+    item = dev_items[0]
+    print(item["question"])
+    print(f"\ngold: {item['gold_answer'][:200]}")
+    for claim in item["rubric"]:
+        print(f"  [w={claim['weight']}] {claim['statement']}")
+
+
+# ── 3. The two scorers ───────────────────────────────────────────────────
+
+
+@markdown
+def _scorers_intro():
+    """
+    ## Two scorers: one for the reward, one for the judgment
+
+    **Claim coverage (reward).** For each rubric claim, take its content words
+    and measure what fraction appear in the answer; count the claim as covered
+    past a threshold, and average with the claim weights. It is crude, but it
+    is free, deterministic, and returns in microseconds — which is what a
+    reward called thousands of times per step has to be. Shaping (a length
+    penalty for the model that answers by reciting the corpus) rides *on top
+    of* correctness, never inside it.
+
+    **Rubric judge (dev signal).** The teacher sees the question, the gold
+    answer, and the claims, and votes on each claim independently at
+    temperature 0. Slower and better; used only on the 16 dev questions.
+
+    Keeping both lets you watch them diverge. A reward that climbs while the
+    judge stays flat is the classic reward-hacking signature — the student
+    learned to spray rubric keywords. The gym's rollout inspector is where you
+    catch it: read the samples that scored 1.0.
+    """
+
+
+@code
+def _claim_coverage():
+    _STOPWORDS = {
+        "a", "an", "and", "are", "as", "at", "be", "by", "can", "for", "from",
+        "in", "is", "it", "its", "of", "on", "or", "that", "the", "this", "to",
+        "when", "which", "with", "you", "your",
+    }
+
+    def content_words(text: str) -> set[str]:
+        words = re.findall(r"[a-z0-9_.]{3,}", text.lower())
+        return {word for word in words if word not in _STOPWORDS}
+
+    def claim_coverage(answer: str, rubric: list[dict], *, threshold: float = 0.6) -> float:
+        """Weighted fraction of rubric claims whose content words appear."""
+        answer_words = content_words(answer)
+        total_weight, hit_weight = 0.0, 0.0
+        for claim in rubric:
+            claim_words = content_words(claim["statement"])
+            if not claim_words:
+                continue
+            weight = float(claim.get("weight", 1))
+            overlap = len(claim_words & answer_words) / len(claim_words)
+            total_weight += weight
+            if overlap >= threshold:
+                hit_weight += weight
+        return hit_weight / total_weight if total_weight else 0.0
+
+    def length_penalty(answer: str, *, budget_words: int = 220) -> float:
+        """Discourage answering by reciting the corpus back."""
+        overflow = max(0, len(answer.split()) - budget_words)
+        return min(0.3, 0.002 * overflow)
+
+
+@code
+def _rubric_judge():
+    JUDGE_PROMPT = (
+        "You are grading an answer against a rubric. For each claim, decide "
+        "whether the answer actually contains it. Ignore style, wording, and "
+        "extra detail; judge only whether the claim is present and correct.\n\n"
+        "Return ONLY a JSON object, no prose:\n"
+        '{{"verdicts": [{{"claim_id": "c1", "present": true}}]}}\n\n'
+        "Question: {question}\n\n"
+        "Reference answer: {gold_answer}\n\n"
+        "Claims:\n{claims}\n\n"
+        "Answer to grade:\n{answer}"
+    )
+
+    def judge_claims(deployment: ModelDeployment, item: dict, answer: str) -> float:
+        """Weighted fraction of rubric claims the judge finds in `answer`."""
+        claims = "\n".join(
+            f"- {claim['claim_id']} (weight {claim['weight']}): {claim['statement']}"
+            for claim in item["rubric"]
+        )
+        response = deployment.generate(
+            JUDGE_PROMPT.format(
+                question=item["question"],
+                gold_answer=item["gold_answer"],
+                claims=claims,
+                answer=answer or "(empty)",
+            ),
+            ensure_ready=False,
+            temperature=0.0,
+            max_tokens=512,
+            chat_template_kwargs={"enable_thinking": False},
+        )
+        verdicts = (parse_json_object(response) or {}).get("verdicts") or []
+        present = {
+            str(verdict.get("claim_id")): bool(verdict.get("present"))
+            for verdict in verdicts
+            if isinstance(verdict, dict)
+        }
+        total_weight = sum(float(claim["weight"]) for claim in item["rubric"])
+        hit_weight = sum(
+            float(claim["weight"])
+            for claim in item["rubric"]
+            if present.get(claim["claim_id"])
+        )
+        return hit_weight / total_weight if total_weight else 0.0
+
+
+# ── 4. Dataset + reward ──────────────────────────────────────────────────
+
+
+@markdown
+def _dataset_intro():
+    """
+    ## Turn the exam into a training set
+
+    The questions the teacher wrote are now a `DatasetConfig`. Each row carries
+    the prompt the student sees and a `label` holding the gold answer and
+    rubric — the label never enters the prompt, it only reaches the reward
+    function as `sample.label`.
+
+    The rows were generated locally, so we hand them to the config as
+    constructor kwargs; the gym cloudpickles the instance out to the container
+    that materializes the dataset.
+    """
+
+
+@code
+def _dataset():
+    SYSTEM_PROMPT = (
+        "You are an expert on the DSPy framework. Answer the question directly "
+        "and completely in at most 200 words. State the specific names, "
+        "arguments, and behaviors involved. Do not speculate."
+    )
+
+    class ExamDataset(DatasetConfig):
+        input_key = "messages"
+        label_key = "label"
+        apply_chat_template = True
+        always_prepare = True
+        rows: list[dict] = []
+        eval_rows: list[dict] = []
+
+        def load(self, split="all"):
+            if split == "eval":
+                return self.eval_rows
+            if split == "train":
+                return self.rows
+            return self.rows + self.eval_rows
+
+        def prepare(self, path: str, eval_paths: dict[str, str] | None = None):
+            import os
+
+            from datasets import Dataset
+
+            def to_example(item: dict) -> dict:
+                return {
+                    "messages": [
+                        {"role": "system", "content": SYSTEM_PROMPT},
+                        {"role": "user", "content": item["question"]},
+                    ],
+                    "label": json.dumps(
+                        {"gold_answer": item["gold_answer"], "rubric": item["rubric"]}
+                    ),
+                }
+
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            Dataset.from_list([to_example(i) for i in self.rows]).to_parquet(path)
+            for eval_path in (eval_paths or {}).values():
+                os.makedirs(os.path.dirname(eval_path), exist_ok=True)
+                Dataset.from_list(
+                    [to_example(i) for i in self.eval_rows]
+                ).to_parquet(eval_path)
+
+    train_dataset = ExamDataset(rows=train_items, eval_rows=dev_items)
+    dev_dataset = ExamDataset(rows=train_items, eval_rows=dev_items)
+
+
+@markdown
+def _reward_intro():
+    """
+    ## The reward function
+
+    `custom_rm_function` runs inside the training container on every rollout
+    sample. It parses the label, strips the model's thinking block, scores
+    claim coverage, and subtracts the length penalty.
+
+    Note what it does *not* do: call the teacher. LAB is explicit that the
+    student must never grade itself (reward hacking by construction) and that
+    a judge in the reward path costs seconds per sample — at
+    `rollout_batch_size × n_samples_per_prompt` samples a step, that is the
+    whole step budget.
+    """
+
+
+@code
+def _reward():
+    student_model = Qwen3_4B()
+
+    async def claim_coverage_rm(args, sample, **kwargs) -> float:
+        label = getattr(sample, "label", None)
+        if isinstance(label, str):
+            label = json.loads(label)
+        rubric = label.get("rubric", []) if isinstance(label, dict) else []
+
+        answer = student_model.parse_response(sample.response).content or ""
+        score = claim_coverage(answer, rubric) - length_penalty(answer)
+
+        metadata = getattr(sample, "metadata", None)
+        if not isinstance(metadata, dict):
+            metadata = {}
+        metadata["claim_coverage"] = score
+        sample.metadata = metadata
+        return float(score)
+
+
+# ── 5. Baseline eval ─────────────────────────────────────────────────────
+
+
+@markdown
+def _base_eval_intro():
+    """
+    ## Measure the base student
+
+    `EvalConfig.evaluate()` runs the dev questions through the student, scores
+    each row, and writes the result to the metadata volume — so the run shows
+    up on the dashboard's *Evals* tab with per-row prompts, responses, and
+    scores, live as it goes.
+
+    We record both numbers per row: the judge's score (the headline) and claim
+    coverage (what training will actually optimize). Their gap on the base
+    model is the calibration baseline; if it widens after training, the reward
+    is being gamed.
+    """
+
+
+@code
+def _base_eval():
+    base_deployment = DeploymentConfig(
+        model=student_model,
+        app_name="learning-agent-student-base",
+        served_model_name="qwen3-4b-base",
+        unauthenticated=True,
+    ).serve()
+    print(f"Base student URL: {base_deployment.url}")
+
+    def exam_eval_fn(deployment: ModelDeployment, example: dict) -> EvalRowResult:
+        answer = deployment.generate(
+            example["question"],
+            ensure_ready=False,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": example["question"]},
+            ],
+            temperature=0.0,
+            max_tokens=1024,
+            chat_template_kwargs={"enable_thinking": False},
+        )
+        judged = judge_claims(teacher_deployment, example, answer)
+        return EvalRowResult(
+            score=judged,
+            prompt=example["question"],
+            response=answer,
+            metadata={
+                "claim_coverage": claim_coverage(answer, example["rubric"]),
+                "source": example["source"],
+            },
+        )
+
+    exam_eval = EvalConfig(
+        dataset=dev_dataset,
+        eval_fn=exam_eval_fn,
+        prompt_column="question",
+    )
+
+    base_result = exam_eval.evaluate(base_deployment, max_concurrency=4)
+    print(f"Base student — judge: {base_result.mean:.1%}")
+
+
+# ── 6. Train ─────────────────────────────────────────────────────────────
+
+
+@markdown
+def _train_intro():
+    """
+    ## Train the student
+
+    GRPO with slime: for each question the student samples
+    `n_samples_per_prompt` answers, the reward ranks them within the group, and
+    the advantage pushes toward the better-covered ones. No gold answer is ever
+    shown to the model — it only ever sees its own attempts, ranked.
+
+    Once the run starts, open the dashboard with `training-gym open` and watch
+    it live.
+    """
+
+
+@code
+def _train():
+    training_run = TrainConfig(
+        model=student_model,
+        dataset=train_dataset,
+        recipe=SlimeRecipe(
+            custom_rm_function=claim_coverage_rm,
+
+            gpu_type="H100",
+            colocate=True,
+            tensor_model_parallel_size=1,
+            sequence_parallel=False,
+            rollout_num_gpus_per_engine=1,
+
+            num_rollout=16,
+            rollout_batch_size=8,
+            n_samples_per_prompt=8,
+            rollout_max_response_len=1024,
+            rollout_temperature=1.0,
+
+            lr=5e-7,
+            save_interval=8,
+            apply_chat_template_kwargs='{"enable_thinking": false}',
+        ),
+    )
+
+    print("——— Training ———")
+    train_result = training_run.train()
+    print(f"Training run id: {train_result.training_run_id}")
+
+
+# ── 7. Measure the margin ────────────────────────────────────────────────
+
+
+@markdown
+def _trained_eval_intro():
+    """
+    ## Measure the trained student
+
+    Same questions, same judge, same prompt — only the weights changed. The
+    second eval lands next to the first on the *Evals* tab.
+    """
+
+
+@code
+def _trained_eval():
+    checkpoint = list_checkpoints(train_result.training_run_id)[-1]
+    print(f"Checkpoint: {checkpoint.path}")
+
+    trained_deployment = DeploymentConfig(
+        model=Qwen3_4B(),
+        checkpoint=checkpoint,
+        app_name="learning-agent-student-trained",
+        served_model_name="qwen3-4b-learned",
+        unauthenticated=True,
+    ).serve()
+    print(f"Trained student URL: {trained_deployment.url}")
+
+    trained_result = exam_eval.evaluate(trained_deployment, max_concurrency=4)
+    print(f"Trained student — judge: {trained_result.mean:.1%}")
+
+
+@code
+def _margin():
+    def mean_coverage(result) -> float:
+        scores = [row.metadata.get("claim_coverage", 0.0) for row in result.rows]
+        return sum(scores) / len(scores) if scores else float("nan")
+
+    print(f"Base    — judge {base_result.mean:.1%} | coverage {mean_coverage(base_result):.1%}")
+    print(f"Trained — judge {trained_result.mean:.1%} | coverage {mean_coverage(trained_result):.1%}")
+    print(f"Margin  — judge {trained_result.mean - base_result.mean:+.1%} "
+          f"| coverage {mean_coverage(trained_result) - mean_coverage(base_result):+.1%}")
+
+
+# ── 8. Observability ─────────────────────────────────────────────────────
+
+
+@markdown
+def _observability():
+    """
+    ## Reading the run on the dashboard
+
+    A learning loop fails quietly. The reward can climb while the model learns
+    nothing, the exam can be trivial, the rubric can be unhittable — none of
+    that shows up in a final number, which is why LAB's own runs ship with an
+    observatory. Here the gym dashboard plays that role, and every artifact
+    above already reports to it. What to look at, in order:
+
+    **Reward chart (Summary tab).** The first question is whether there is a
+    signal at all. A flat line at 0 means the rubric is unhittable — the
+    teacher wrote claims the student cannot produce from the prompt. A flat
+    line near the top means the exam is trivial. You want a curve that starts
+    low and moves.
+
+    **Score distribution and advantage charts.** GRPO learns from *spread
+    within a group*. If every sample for a question earns the same reward, the
+    advantage is zero and the step teaches nothing, however good the mean
+    looks. Watch for the distribution collapsing to a spike — reward collapse
+    is visible here several steps before the mean flatlines.
+
+    **Rollouts tab.** The reward is a proxy, so read what it actually rewarded:
+    click a bar in the reward histogram and page through its samples. This is
+    where keyword-spraying answers with high claim coverage and no content give
+    themselves away, and the reason we also carry the judge's score into every
+    eval row.
+
+    **Step & substep timeline.** Where the wall clock goes. For this loop the
+    step should be dominated by *Generate rollouts* and *Train model*; a
+    growing *Generate rollouts* usually means answers are hitting
+    `rollout_max_response_len`.
+
+    **Evals tab.** Both evals, base and trained, with every dev question, the
+    student's answer, and the judge's score. The margin is the difference of
+    the two means; per-row, it shows *which* questions moved.
+
+    **Deployments tab.** The teacher and both students, with their URLs and
+    status — the LAB run record equivalent of "what was serving when this
+    number was produced".
+    """
+
+
+@markdown
+def _lab_mapping():
+    """
+    ## How this maps back to LAB
+
+    | LAB | this tutorial |
+    |---|---|
+    | corpus at a pinned hash (`bench/pins.json`) | DSPy docs at a pinned git tag |
+    | agent authors its own dev set (`medium`/`hard`) | teacher writes questions + rubrics |
+    | reward function the agent writes | `claim_coverage_rm` |
+    | rubric judge on held-out questions | `judge_claims` on the dev split |
+    | margin over the untrained base | judge delta, trained − base |
+    | `runs/LEARNING_LOG.jsonl` | the dashboard's runs and evals records |
+    | observatory viewer | the gym dashboard |
+    | `toolbox/training_tool/slime` | `SlimeRecipe` + `TrainConfig.train()` |
+
+    The pieces LAB keeps that this tutorial drops: held-out test questions the
+    agent never sees (we score on the dev split it authored, which flatters the
+    result), the integrity pins, and the agentic tasks where an environment
+    verifier — not a judge — sets the reward.
+    """
+
+
+@markdown
+def _next_steps():
+    """
+    ## Next steps
+
+    1. **Hold out a real test split.** Score on questions generated from
+       corpus chunks that produced no training rows. The gap between that and
+       the dev number is the honest measure of how good the agent's self-made
+       compass was.
+    2. **Give the student a search harness.** LAB's `qa` tasks let the student
+       answer with grep/read tools over the corpus, not from memory. Build that
+       loop with [`000_agent_sandbox`](/tutorials/agent/000_agent_sandbox/) and
+       train it multi-turn as in
+       [`002_multiturn`](/tutorials/rl/002_multiturn/).
+    3. **Iterate the exam, not just the weights.** Regenerate questions from
+       the chunks the trained student still fails, and train a second round
+       from the checkpoint — the agent-driven version of curriculum design.
+    4. **Sweep the loop.** `TrainingGroup` runs several reward shapes
+       (threshold, length budget, coverage vs. judge) as one group, and the
+       dashboard filters them together.
+    5. **Try a harder domain.** Swap the corpus for anything the base model has
+       not memorized — internal docs, a private codebase, a legal corpus — and
+       the loop is unchanged.
+    """
