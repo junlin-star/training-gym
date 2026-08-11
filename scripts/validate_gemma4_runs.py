@@ -7,6 +7,12 @@ the run proved the plumbing and taught the model nothing. The rewards here aim
 for a mean nearer 0.5 by combining harder rows with an answer format the model
 does not satisfy for free.
 
+W&B is opt-in (``--wandb``): the miles launcher puts ``WANDB_RUN_ID`` in the Ray
+runtime env, so every actor inherits it and the driver and RolloutManager both
+``wandb.init()`` under the same id — the second one dies with "run ID ... is in
+use", taking the RolloutManager actor with it. The dashboard is what these runs
+are validating, and it does not go through W&B.
+
 Usage:
 
     uv run modal run scripts/validate_gemma4_runs.py --task gsm8k
@@ -397,7 +403,7 @@ TASKS = {
 cli_app = modal.App()
 
 
-def _build(task: str, steps: int) -> TrainConfig:
+def _build(task: str, steps: int, wandb: bool = False) -> TrainConfig:
     spec = TASKS[task]
     return TrainConfig(
         model=Gemma4_26B_A4B(),
@@ -411,26 +417,31 @@ def _build(task: str, steps: int) -> TrainConfig:
             rollout_max_response_len=spec["max_response_len"],
             save_interval=max(steps, 1),
             no_save_optim=True,
-            wandb=WandbConfig(project=WANDB_PROJECT, group=task),
+            **(
+                {"wandb": WandbConfig(project=WANDB_PROJECT, group=task)}
+                if wandb
+                else {}
+            ),
         ),
     )
 
 
-def _run(task: str, steps: int) -> None:
-    result = _build(task, steps).train()
+def _run(task: str, steps: int, wandb: bool = False) -> None:
+    result = _build(task, steps, wandb).train()
     print(f"task={task} training_run_id={result.training_run_id}")
 
 
 @cli_app.local_entrypoint()
-def main(task: str = "gsm8k", steps: int = 15) -> None:
+def main(task: str = "gsm8k", steps: int = 15, wandb: bool = False) -> None:
     if task not in TASKS:
         raise SystemExit(f"unknown task {task!r}; pick one of {sorted(TASKS)}")
-    _run(task, steps)
+    _run(task, steps, wandb)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--task", default="gsm8k", choices=sorted(TASKS))
     parser.add_argument("--steps", type=int, default=15)
+    parser.add_argument("--wandb", action="store_true")
     parsed = parser.parse_args()
-    _run(parsed.task, parsed.steps)
+    _run(parsed.task, parsed.steps, parsed.wandb)
