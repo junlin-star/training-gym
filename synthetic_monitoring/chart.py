@@ -51,13 +51,15 @@ class RunPoint:
 
 def _history(environment_name: str) -> modal.Dict:
     global _history_store
-    if _history_store is None:
-        _history_store = modal.Dict.from_name(
+    cached = _history_store.get(environment_name)
+    if cached is None:
+        cached = modal.Dict.from_name(
             HISTORY_DICT_NAME,
             create_if_missing=True,
             environment_name=environment_name,
         )
-    return _history_store
+        _history_store[environment_name] = cached
+    return cached
 
 
 def load_history(model_name: str, *, environment_name: str) -> list[RunPoint]:
