@@ -34,6 +34,9 @@ FRAMEWORKS: dict[str, str] = {
     "miles": "modal_training_gym.train_recipes.miles_recipe",
 }
 
+# Base recipe classes each registry exports alongside its model recipes.
+BASE_RECIPES = {"SlimeRecipe", "MilesRecipe"}
+
 # Model configs keyed by lowercased class name, for recipe name lookup.
 MODEL_CONFIGS = {name.lower(): getattr(models, name) for name in models.__all__}
 
@@ -41,10 +44,10 @@ MODEL_CONFIGS = {name.lower(): getattr(models, name) for name in models.__all__}
 def _model_key(recipe_name: str) -> str:
     """`Kimi_K2_5_LoRA_Recipe` → `kimi_k2_5`, a ModelConfig class name.
 
-    `_LoRA` qualifies how a model is trained rather than naming a different
-    model, so it is dropped along with the `_Recipe` suffix.
+    Everything from `_Recipe` onwards is dropped, as is a `_LoRA` qualifier —
+    both describe how a model is trained rather than naming a different model.
     """
-    return recipe_name.removesuffix("_Recipe").removesuffix("_LoRA").lower()
+    return recipe_name.split("_Recipe")[0].removesuffix("_LoRA").lower()
 
 
 def collect_models() -> dict[str, list[str]]:
@@ -55,7 +58,7 @@ def collect_models() -> dict[str, list[str]]:
     for framework, module_path in FRAMEWORKS.items():
         registry = importlib.import_module(module_path)
         for recipe_name in registry.__all__:
-            if not recipe_name.endswith("_Recipe"):
+            if recipe_name in BASE_RECIPES:
                 continue
             config = MODEL_CONFIGS.get(_model_key(recipe_name))
             model_name = getattr(config, "model_name", None)
