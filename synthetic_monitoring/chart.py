@@ -37,7 +37,7 @@ _PHASE_COLORS = (
     "#c4a27a",
 )
 
-_history_store: modal.Dict | None = None
+_history_store: dict[str, modal.Dict] = {}
 
 
 @dataclass(frozen=True)
@@ -50,7 +50,6 @@ class RunPoint:
 
 
 def _history(environment_name: str) -> modal.Dict:
-    global _history_store
     cached = _history_store.get(environment_name)
     if cached is None:
         cached = modal.Dict.from_name(
