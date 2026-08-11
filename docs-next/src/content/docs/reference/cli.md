@@ -90,12 +90,10 @@ Options:
 - `--dataset DATASET`: filter by dataset.
 - `--recipe RECIPE`: filter by training recipe.
 - `--group GROUP`: filter by run group.
-- `--since TIME`: include only runs created or updated since this time.
+- `--since TIME`: include only runs created or updated since epoch seconds, an
+  ISO 8601 timestamp, or a relative time such as `30m`, `2h`, or `7d`.
 - `--limit N`: set the maximum number of runs returned (default: 50).
 - `-j`, `--json`: emit machine-readable JSON.
-
-`--since` accepts epoch seconds, ISO 8601 timestamps, or relative values such
-as `30m`, `2h`, and `7d`.
 
 ### `training-gym run get`
 
@@ -160,13 +158,11 @@ training-gym run trace RUN_ID --out ./traces --step 4-100:2 --dry-run
 Options:
 
 - `--out DIR`: set the parent output directory (required).
-- `--step STEP`: select steps using comma-separated values or ranges.
+- `--step STEP`: select steps using comma-separated values or start-inclusive,
+  end-exclusive ranges with an optional stride, such as `4-100:2`.
 - `--dry-run`: report the expected sample count and size without downloading.
 - `-y`, `--yes`, `--force`: skip the confirmation prompt.
 - `-j`, `--json`: emit machine-readable JSON.
-
-`--step` ranges are start-inclusive and end-exclusive and may include a stride,
-such as `4-100:2`.
 
 ## Cleanup
 
