@@ -47,12 +47,17 @@ _CHOICE_INSTRUCTION = (
     "letter of the correct option as \\boxed{letter} on the last line."
 )
 
+# The leading <image> is load-bearing: without it the processor never inserts a
+# placeholder, the screenshot never reaches the model, and it answers "I cannot
+# see the image" for every sample -- a whole run at a constant reward.
 _CHART_INSTRUCTION = (
+    "<image>\n"
     "Answer the question about the chart. Reply with only the answer, as "
     "\\boxed{answer}."
 )
 
 _GROUNDING_INSTRUCTION = (
+    "<image>\n"
     "Point at the described element in the screenshot. Reply with only the "
     "click position as normalized coordinates \\boxed{{x,y}}, each between 0 "
     "and 1.\n\nElement: {instruction}"

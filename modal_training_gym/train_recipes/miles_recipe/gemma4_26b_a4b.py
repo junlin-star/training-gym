@@ -68,8 +68,11 @@ class Gemma4_26B_A4B_Recipe(MilesRecipe):
     One checkpoint, two modes: these fields train on text, and an image dataset
     (``MultimodalDataset(modality="image")``) swaps in ``_VISION_MODE`` for every
     field the caller left unset. Vision runs need ``apply_chat_template=True`` so
-    the prompt reaches the processor as a string, plus their own reward: the text
-    path's ``gemma_math`` scores maths, not images, so vision mode clears it.
+    the prompt reaches the processor as a string, a leading ``<image>`` in each
+    prompt so the processor inserts a placeholder for it — without one the image
+    never reaches the model and it answers "I cannot see the image" at a constant
+    reward — plus their own reward: the text path's ``gemma_math`` scores maths,
+    not images, so vision mode clears it.
 
     Based on upstream ``scripts/run_gemma_4_26b_a4b.py``, with the deviations
     noted inline.
