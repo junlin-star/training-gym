@@ -20,7 +20,7 @@ repos:
         files: ^tutorials/(generate_tutorial\.py|tutorial_generator/.*\.py)$
 
       - id: regenerate-models-table
-        name: Regenerate README Models table (scripts/generate_models_table.py)
+        name: Regenerate Models table (scripts/generate_models_table.py)
         entry: uv run scripts/generate_models_table.py
         language: system
         pass_filenames: false

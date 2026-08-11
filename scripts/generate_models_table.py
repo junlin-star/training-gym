@@ -1,12 +1,12 @@
-"""Generate the README.md Models table from the train recipe registries.
+"""Generate the Models table in README.md from the train recipe registries.
 
-The table is derived from ``__all__`` of
-``modal_training_gym.train_recipes.slime_recipe`` and
-``...miles_recipe``, so adding a recipe there is the only step needed to get a
-model listed.
+Each recipe is matched to its `ModelConfig` by class name to recover the
+canonical HuggingFace model name, which the class name alone does not encode
+(`Qwen3_5_0_8b_Recipe` -> `Qwen3_5_0_8B.model_name` -> `Qwen/Qwen3.5-0.8B`).
+Adding a recipe to a registry is therefore the only step needed to list a model.
 
 uv run scripts/generate_models_table.py            # rewrite README.md
-uv run scripts/generate_models_table.py --check    # fail if README.md is stale
+uv run scripts/generate_models_table.py --check    # fail if the table is stale
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ import argparse
 import importlib
 from pathlib import Path
 
-from modal_training_gym.common.models import base as models_base
+from modal_training_gym.common import models
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_README = ROOT / "README.md"
@@ -34,46 +34,35 @@ FRAMEWORKS: dict[str, str] = {
     "miles": "modal_training_gym.train_recipes.miles_recipe",
 }
 
-# Recipe class name suffixes that qualify *how* a model is trained rather than
-# naming a different model, stripped before matching a recipe to a ModelConfig.
-_QUALIFIER_SUFFIXES = ("LoRA",)
-
-
-def _model_configs() -> dict[str, type[models_base.ModelConfig]]:
-    """Every exported ModelConfig subclass, keyed by lowercased class name."""
-    models = importlib.import_module("modal_training_gym.common.models")
-    configs: dict[str, type[models_base.ModelConfig]] = {}
-    for name in models.__all__:
-        obj = getattr(models, name)
-        if isinstance(obj, type) and issubclass(obj, models_base.ModelConfig):
-            configs[name.lower()] = obj
-    return configs
+# Model configs keyed by lowercased class name, for recipe name lookup.
+MODEL_CONFIGS = {name.lower(): getattr(models, name) for name in models.__all__}
 
 
 def _model_key(recipe_name: str) -> str:
-    """`Kimi_K2_5_LoRA_Recipe` → `kimi_k2_5`, matching a ModelConfig class."""
-    stem = recipe_name.removesuffix("_Recipe")
-    for qualifier in _QUALIFIER_SUFFIXES:
-        stem = stem.removesuffix(f"_{qualifier}")
-    return stem.lower()
+    """`Kimi_K2_5_LoRA_Recipe` → `kimi_k2_5`, a ModelConfig class name.
+
+    `_LoRA` qualifies how a model is trained rather than naming a different
+    model, so it is dropped along with the `_Recipe` suffix.
+    """
+    return recipe_name.removesuffix("_Recipe").removesuffix("_LoRA").lower()
 
 
 def collect_models() -> dict[str, list[str]]:
     """Map HuggingFace model name → framework labels that have a recipe for it."""
-    configs = _model_configs()
-    models: dict[str, list[str]] = {}
+    table: dict[str, list[str]] = {}
     unmatched: list[str] = []
 
     for framework, module_path in FRAMEWORKS.items():
-        module = importlib.import_module(module_path)
-        for recipe_name in module.__all__:
+        registry = importlib.import_module(module_path)
+        for recipe_name in registry.__all__:
             if not recipe_name.endswith("_Recipe"):
                 continue
-            config = configs.get(_model_key(recipe_name))
-            if config is None:
+            config = MODEL_CONFIGS.get(_model_key(recipe_name))
+            model_name = getattr(config, "model_name", None)
+            if not model_name:
                 unmatched.append(f"{module_path}.{recipe_name}")
                 continue
-            frameworks = models.setdefault(config.model_name, [])
+            frameworks = table.setdefault(model_name, [])
             if framework not in frameworks:
                 frameworks.append(framework)
 
@@ -84,23 +73,22 @@ def collect_models() -> dict[str, list[str]]:
             + "\nExport a matching ModelConfig from modal_training_gym.common.models "
             "(class name = recipe name without the _Recipe suffix)."
         )
-    return models
+    return table
 
 
-def render_table(models: dict[str, list[str]]) -> str:
-    lines = ["| Model | Framework |", "|---|---|"]
-    for model_name in sorted(models):
-        frameworks = ", ".join(f"`{f}`" for f in models[model_name])
-        lines.append(f"| `{model_name}` | {frameworks} |")
-    return "\n".join(lines)
+def render_section(table: dict[str, list[str]]) -> str:
+    rows = [
+        f"| `{model_name}` | {', '.join(f'`{f}`' for f in table[model_name])} |"
+        for model_name in sorted(table)
+    ]
+    return "\n".join(
+        [BEGIN_MARKER, BANNER, "", "| Model | Framework |", "|---|---|", *rows]
+        + [END_MARKER]
+    )
 
 
-def render_section(models: dict[str, list[str]]) -> str:
-    return f"{BEGIN_MARKER}\n{BANNER}\n\n{render_table(models)}\n{END_MARKER}"
-
-
-def update_readme(readme_path: Path, models: dict[str, list[str]]) -> tuple[str, str]:
-    """Return (current content, content with a freshly rendered table)."""
+def rendered_readme(readme_path: Path, table: dict[str, list[str]]) -> tuple[str, str]:
+    """Return (current README content, content with a freshly rendered table)."""
     content = readme_path.read_text()
     if BEGIN_MARKER not in content or END_MARKER not in content:
         raise SystemExit(
@@ -108,12 +96,12 @@ def update_readme(readme_path: Path, models: dict[str, list[str]]) -> tuple[str,
         )
     before, rest = content.split(BEGIN_MARKER, 1)
     _, after = rest.split(END_MARKER, 1)
-    return content, f"{before}{render_section(models)}{after}"
+    return content, f"{before}{render_section(table)}{after}"
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Generate the README.md Models table from the recipe registries."
+        description="Generate the Models table in README.md from the recipe registries."
     )
     parser.add_argument("--readme", type=Path, default=DEFAULT_README)
     parser.add_argument(
@@ -123,25 +111,23 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    models = collect_models()
-    if not models:
+    table = collect_models()
+    if not table:
         raise SystemExit("No recipes found in the recipe registries")
 
-    current, updated = update_readme(args.readme, models)
+    current, updated = rendered_readme(args.readme, table)
     if args.check:
         if current != updated:
             raise SystemExit(
                 f"{args.readme} Models table is out of date. Run: "
                 "uv run scripts/generate_models_table.py"
             )
-        print(f"{args.readme.name} Models table is up to date ({len(models)} models)")
+        print(f"Models table is up to date ({len(table)} models)")
         return
 
-    if current == updated:
-        print(f"{args.readme.name} Models table already up to date")
-        return
-    args.readme.write_text(updated)
-    print(f"Wrote {args.readme.name} Models table ({len(models)} models)")
+    if current != updated:
+        args.readme.write_text(updated)
+    print(f"Wrote Models table ({len(table)} models)")
 
 
 if __name__ == "__main__":
