@@ -53,7 +53,8 @@ def _run_instructions():
     """
     Run with:
     ```
-    uv run tutorials/misc/000_agent_sandbox/000_agent_sandbox.py
+    uv run --with openai \\
+      python tutorials/agent/000_agent_sandbox/000_agent_sandbox.py
     ```
     """
 
@@ -65,7 +66,9 @@ def _run_instructions():
     "# Skip if modal_training_gym is already importable (e.g. a local editable\n"
     "# checkout) so your edits keep taking effect and the env stays synced.\n"
     "if importlib.util.find_spec('modal_training_gym') is None:\n"
-    "    %uv pip install -q git+https://github.com/modal-projects/training-gym.git@main"
+    "    %uv pip install -q git+https://github.com/modal-projects/training-gym.git@main\n"
+    "if importlib.util.find_spec('openai') is None:\n"
+    "    %uv pip install -q openai"
 )
 def _install():
     pass
