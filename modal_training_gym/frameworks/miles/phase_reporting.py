@@ -129,7 +129,7 @@ def report_rollout_samples(
     parser = _response_parser()
     # Trace/trajectory only the first N samples (traces also gated by an enable flag)
     # so the payload stays small — the caps keep volume growth well under 1%. Images
-    # are capped by distinct content instead, so every sample can resolve one.
+    # are capped by distinct content instead.
     trace_limit = _trace_sample_limit() if _trace_enabled() else 0
     trajectory_limit = _trajectory_sample_limit()
     image_store = RolloutImageStore(_image_limit())

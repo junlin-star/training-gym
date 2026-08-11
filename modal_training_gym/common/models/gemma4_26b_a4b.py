@@ -9,23 +9,18 @@ class Gemma4_26B_A4B(HFModelConfiguration):
     """Gemma-4-26B-A4B-it (25.2B total, ~3.8B active) MoE model from Google.
 
     Mixture-of-Experts with 128 experts, 8 active per token plus 1 shared.
+    The checkpoint is a ``Gemma4ForConditionalGeneration``: the MoE decoder
+    described by ``architecture`` plus a 27-layer vision tower.
     Downloads from ``google/gemma-4-26B-A4B-it`` on HuggingFace.
-
-    The checkpoint is a ``Gemma4ForConditionalGeneration``: the MoE decoder described
-    below plus a 27-layer vision tower. ``Gemma4_26B_A4B_Recipe`` trains it through
-    the HF<->Megatron bridge on either text or image data; the architecture here
-    describes the decoder either way.
     """
 
     model_name = "google/gemma-4-26B-A4B-it"
     response_parser = staticmethod(parse_gemma4_response)
 
     architecture = ModelArchitecture(
-        # text_config from config.json. Informational: the recipe sets
-        # ``miles_model_script``, so miles takes the real values from
-        # ``scripts/models/gemma-4-26b-a4b-it.sh`` and none of these are emitted as
-        # flags. They still drive the num_experts/expert-parallel validator and
-        # FLOPs accounting, so keep them in step with that script.
+        # text_config from config.json. The recipe sets ``miles_model_script``, so
+        # these are not emitted as flags, but they drive the expert-parallel
+        # validator and FLOPs accounting; keep them in step with that script.
         num_layers=30,
         hidden_size=2816,
         ffn_hidden_size=2112,
@@ -36,7 +31,7 @@ class Gemma4_26B_A4B(HFModelConfiguration):
         vocab_size=262144,
         normalization="RMSNorm",
         norm_epsilon=1e-6,
-        swiglu=False,  # GeGLU, set by the layer spec; see ModelArchitecture.swiglu
+        swiglu=False,  # GeGLU: set by the layer spec, not a Megatron flag
         disable_bias_linear=True,
         qk_layernorm=True,
         untie_embeddings_and_output_weights=False,
@@ -48,8 +43,7 @@ class Gemma4_26B_A4B(HFModelConfiguration):
         moe_router_dtype="fp32",
         moe_aux_loss_coeff=0.0,
         use_rotary_position_embeddings=True,
-        # Gemma-4 nests rope_theta per attention type; the miles model script takes
-        # the global-attention value.
+        # rope_theta is nested per attention type; this is the global-attention one.
         rotary_base=1000000,
         rotary_percent=1.0,
     )

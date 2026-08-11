@@ -46,8 +46,7 @@ class ModelArchitecture:
     swiglu : bool
         Emit Megatron's ``--swiglu`` (gated FFN with SiLU). Default ``True``.
         Megatron has no flag for other gated activations, so a GeGLU model like
-        Gemma leaves this ``False`` and sets its activation through its layer
-        spec (``megatron_spec``, a slime model script, or bridge mode) instead.
+        Gemma leaves this ``False`` and sets its activation via its layer spec.
     disable_bias_linear : bool
         Disable bias in linear layers. Default ``True``.
     qk_layernorm : bool
@@ -533,8 +532,7 @@ def _quote_bare_keys(raw: str) -> str:
 
 
 def _parse_gemma4_tool_block(name: str, body: str) -> ToolCall:
-    """Gemma wire format: the ``call:NAME`` body is JSON with bare keys and ``<|"|>``
-    in place of string quotes."""
+    """Parse a ``call:NAME`` body: JSON with bare keys and ``<|"|>`` for quotes."""
     try:
         args = json.loads(_quote_bare_keys(body.replace(_GEMMA4_STR_DELIM, '"')))
     except json.JSONDecodeError:

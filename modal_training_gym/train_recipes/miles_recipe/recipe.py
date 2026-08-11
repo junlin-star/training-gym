@@ -146,6 +146,9 @@ class MilesRecipe(BaseTrainRecipe):
         Extra shell commands run while building the image.
     image_env : dict[str, str]
         Extra env vars baked into the image.
+    train_function_kwargs : dict[str, Any]
+        Extra Modal Function kwargs for the train function; supports
+        ``ephemeral_disk`` (MiB), ``secrets`` and ``experimental_options``.
     capture_trace : bool
         Attach miles' per-sample execution trace (generate/reward/tool-call
         timeline) to recorded rollouts for the dashboard.
@@ -477,8 +480,6 @@ class MilesRecipe(BaseTrainRecipe):
     image_env: dict[str, str] = field(default_factory=dict)
     local_miles: str | None = None
     patch_files: list[str] = field(default_factory=list)
-    # Extra kwargs for the train Modal Function. Supports "ephemeral_disk" (MiB),
-    # "secrets", and "experimental_options"; see the miles launcher.
     train_function_kwargs: dict[str, Any] = field(default_factory=dict)
 
     environment: dict = field(
@@ -515,12 +516,12 @@ class MilesRecipe(BaseTrainRecipe):
     # ── Fault tolerance and health checks ───────────────────────────────────
     # Miles' own argparse default; slime defaults this on instead.
     use_fault_tolerance: bool = False
+    # Miles' own argparse defaults.
     rollout_health_check_interval: int = 30
     rollout_health_check_timeout: int = 30
-    # Miles' own argparse default is 0, so the monitor probes /health_generate
-    # during rollout-0's cold Triton/deepgemm JIT compile; the busy scheduler
-    # returns 503 and the engine is killed before it ever serves. Mirrors the
-    # slime defaults (see "Default rollout_health_check_first_wait to 300s").
+    # 300 like slime, not miles' own 0: at 0 the monitor probes /health_generate
+    # during rollout-0's cold Triton/deepgemm JIT compile, and the busy scheduler
+    # returns 503 so the engine is killed before it ever serves.
     rollout_health_check_first_wait: int = 300
 
     # ── Weight sync ─────────────────────────────────────────────────────────
@@ -699,7 +700,7 @@ class MilesRecipe(BaseTrainRecipe):
     def _capture_explicit_fields(cls, data: Any, handler: Any) -> "MilesRecipe":
         """Record which fields the caller passed, for ``_for_dataset``.
 
-        Mirrors ``SlimeRecipe``; see ``BaseTrainRecipe.explicit_fields``.
+        See ``BaseTrainRecipe.explicit_fields``.
         """
         names = explicit_fields_from(cls, data)
         recipe = handler(data)

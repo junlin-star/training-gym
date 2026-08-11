@@ -86,8 +86,7 @@ def _try_validate_model_parallelism(
 
 
 def _try_for_dataset(recipe: _RecipeT, dataset: DatasetConfig | None) -> _RecipeT:
-    # Only frameworks whose presets vary by data modality (slime's Gemma-4
-    # text-only vs vision-language split) implement this second resolution pass.
+    # Not every framework recipe implements this second resolution pass.
     if for_dataset := getattr(recipe, "_for_dataset", None):
         return cast(_RecipeT, for_dataset(dataset))
     return recipe
@@ -103,9 +102,8 @@ def _resolve_recipe(
     base_recipe = type(recipe).get_base_recipe(model) if merge_model_recipe else None
     if base_recipe is not None:
         recipe = cast(_RecipeT, _merge_recipe(base_recipe, recipe))
-    # Presets whose config depends on the data's modality (Gemma-4's text-only vs
-    # vision-language mode) finish resolving here, once the dataset is known.
-    # This runs even without the preset merge: such a recipe is unusable unresolved.
+    # Presets whose config depends on the data's modality (Gemma-4's vision mode)
+    # finish here, merge or no merge: such a recipe is unusable unresolved.
     resolved = _try_for_dataset(recipe, dataset)
     _try_validate_model_parallelism(resolved, model)
     return resolved
@@ -381,9 +379,9 @@ class TrainConfig:
     merge_model_recipe : bool
         When ``True``, merges the known-model preset recipe (e.g.
         ``Qwen3_4b_Recipe``) onto recipe fields you left unset. Set
-        ``False`` to skip that merge. Either way a recipe whose config depends
-        on the data's modality (Gemma-4's vision mode) still resolves against
-        the dataset, since it is unusable otherwise. Default ``True``.
+        ``False`` to skip that merge; a recipe whose config depends on the
+        data's modality (Gemma-4's vision mode) still resolves against the
+        dataset either way. Default ``True``.
     detach : bool
         Whether the training app should outlive the local client. The Modal
         app is always started detached so a dropped connection can't kill a

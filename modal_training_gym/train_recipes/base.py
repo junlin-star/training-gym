@@ -45,8 +45,7 @@ def explicit_fields_from(cls: type, data: Any) -> frozenset[str]:
 
     A ``Recipe(...)`` call arrives as ``ArgsKwargs``; ``model_validate`` and
     ``TypeAdapter`` pass a mapping, whose keys are the supplied fields. Anything
-    else carries no record of what was chosen, so it yields the empty set and
-    ``carry_explicit_fields`` has to restore it.
+    else yields the empty set, which ``carry_explicit_fields`` restores.
     """
     if isinstance(data, Mapping):
         return frozenset(str(key) for key in data)
@@ -176,7 +175,7 @@ class BaseTrainRecipe(ABC):
         return self
 
     def validate_model_parallelism(self, model: "ModelConfig") -> None:
-        """Preflight the parallelism plan against the model. Overridden per framework."""
+        """Preflight the parallelism plan. Overridden per framework."""
         return None
 
     # ── Container → framework flag converters ────────────────────────────────

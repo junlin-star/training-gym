@@ -9,9 +9,8 @@ from .qwen3_8b import Qwen3_8B
 from .qwen3_asr_1_7b import Qwen3_ASR_1_7B
 from .qwen3_vl_8b import Qwen3_VL_8B
 
-# Only models with a base *slime* recipe belong here: validate_model_configs.py
-# runs base training through SlimeRecipe.get_base_recipe. Gemma-4-26B-A4B trains
-# on miles now, so it is excluded for the same reason Kimi is.
+# Only models with a base slime recipe belong here: validate_model_configs.py runs
+# base training through SlimeRecipe.get_base_recipe, so miles-only models are out.
 VALIDATABLE_MODELS: tuple[tuple[str, type[ModelConfig]], ...] = (
     ("Qwen3-0.6B", Qwen3_0_6B),
     ("Qwen3-1.7B", Qwen3_1_7B),

@@ -321,8 +321,8 @@
     activeSamplePos = Math.max(0, Math.min(list.length - 1, activeSamplePos + delta));
   }
 
-  // Samples in a prompt group share one screenshot: its bytes sit on the first of
-  // them as `image` and the rest carry only `image_ref`.
+  // A prompt group shares one screenshot: bytes on the first sample as `image`, the
+  // rest carry only `image_ref`.
   let rolloutImages = $derived.by(() => {
     const byRef = {};
     for (const s of expandedRollout?.samples ?? []) {
@@ -372,9 +372,8 @@
   function sampleToPayload(s, { inlineImage = false, refOnly = false } = {}) {
     let metadata = s.metadata || null;
     if (inlineImage && metadata?.image_ref && !metadata.image) {
-      // Only trade the ref for bytes if the lookup resolved; the carrier sample
-      // may not be loaded, and dropping the ref too would leave the download with
-      // no way to identify the screenshot at all.
+      // Only trade the ref for bytes if the lookup resolved — the carrier sample may
+      // not be loaded, and the download still needs some way to name the screenshot.
       const resolved = sampleImage(s);
       if (resolved) {
         const { image_ref, ...rest } = metadata;

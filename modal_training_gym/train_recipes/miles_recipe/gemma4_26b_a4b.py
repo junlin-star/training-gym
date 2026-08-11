@@ -45,7 +45,7 @@ _EPHEMERAL_DISK_MIB = 1_048_576
 
 
 # Applied over the text defaults on an image dataset, for fields the caller left
-# alone: smaller rollouts, since images are expensive.
+# unset: smaller rollouts, since images are expensive.
 _VISION_MODE: dict[str, Any] = {
     "num_rollout": 15,
     "rollout_batch_size": 8,
@@ -66,14 +66,13 @@ class Gemma4_26B_A4B_Recipe(MilesRecipe):
     """Gemma-4-26B-A4B MoE GRPO on 1×8×H200 with TP4/PP1/EP8, colocated.
 
     One checkpoint, two modes: these fields train on text, and an image dataset
-    (``MultimodalDataset(modality="image")``) makes ``_for_dataset`` swap in
-    ``_VISION_MODE`` for every field the caller left alone. Vision datasets need
-    ``apply_chat_template=True`` so the prompt reaches the processor as a string,
-    and a ``custom_rm_function``: the text path's ``gemma_math`` reward is
-    cleared in vision mode, since no built-in scores an image task.
+    (``MultimodalDataset(modality="image")``) swaps in ``_VISION_MODE`` for every
+    field the caller left unset. Vision runs need ``apply_chat_template=True`` so
+    the prompt reaches the processor as a string, plus their own reward: the text
+    path's ``gemma_math`` scores maths, not images, so vision mode clears it.
 
-    Follows upstream ``scripts/run_gemma_4_26b_a4b.py``; the comments below mark
-    where it does not, since three of its flags fail on any image with Gemma-4.
+    Based on upstream ``scripts/run_gemma_4_26b_a4b.py``, with the deviations
+    noted inline.
     """
 
     gpu_type: str = "H200"
@@ -92,7 +91,6 @@ class Gemma4_26B_A4B_Recipe(MilesRecipe):
     actor_num_nodes: int = 1
     actor_num_gpus_per_node: int = 8
 
-    # ── Parallelism ──────────────────────────────────────────────────────────
     train_backend: str = "megatron"
     tensor_model_parallel_size: int = 4
     sequence_parallel: bool = True
@@ -101,20 +99,18 @@ class Gemma4_26B_A4B_Recipe(MilesRecipe):
     expert_model_parallel_size: int = 8
     expert_tensor_parallel_size: int = 1
 
-    # Off, unlike upstream: Gemma-4's decoder layer returns a tuple and Megatron's
-    # checkpointed forward fails on it ("save_for_backward can only save
-    # variables"). Revisit first if activation memory bites.
+    # Off, unlike upstream: Gemma-4's decoder layer returns a tuple, which
+    # Megatron's checkpointed forward rejects ("save_for_backward can only save
+    # variables").
     recompute_granularity: str | None = None
     recompute_method: str | None = None
     recompute_num_layers: int | None = None
-    # bshd (below) rules out dynamic batching; miles asserts on the pair, so use an
-    # explicit micro batch. Upstream passes both and trips that assertion.
-    # max_tokens_per_gpu is inert while dynamic batching is off.
+    # bshd rules out dynamic batching and miles asserts on the pair (upstream passes
+    # both and trips it), so use an explicit micro batch; max_tokens_per_gpu is inert.
     use_dynamic_batch_size: bool = False
     micro_batch_size: int = 1
     max_tokens_per_gpu: int = 1024
 
-    # ── Rollout ──────────────────────────────────────────────────────────────
     rm_type: str | None = "gemma_math"
     rollout_shuffle: bool = True
     balance_data: bool = True
@@ -123,8 +119,7 @@ class Gemma4_26B_A4B_Recipe(MilesRecipe):
     n_samples_per_prompt: int = 8
     rollout_max_response_len: int = 256
     rollout_temperature: float = 1.0
-    # Widened to None so text mode omits the flag and Miles keeps its default;
-    # vision mode sets both.
+    # None so text mode omits the flag and miles keeps its default; vision mode sets it.
     rollout_top_p: float | None = None
     # generation_config.json's eos_token_id: <eos>, <turn|>, <|tool_response>.
     rollout_stop_token_ids: list[int] | None = field(
@@ -149,12 +144,11 @@ class Gemma4_26B_A4B_Recipe(MilesRecipe):
     # access in SGLang's memory-saver path during the training step.
     no_offload_train: bool = True
     no_offload_rollout: bool = True
-    # Off, unlike upstream: it enables sglang's routed-experts capturer, which
-    # reads num_experts_per_tok — Gemma-4 calls it top_k_experts, so every
-    # scheduler dies with AttributeError. Costs MoE routing replay.
+    # Off, unlike upstream: sglang's routed-experts capturer reads
+    # num_experts_per_tok, which Gemma-4 calls top_k_experts, so every scheduler
+    # dies with AttributeError.
     use_rollout_routing_replay: bool = False
 
-    # ── Objective / optimizer ────────────────────────────────────────────────
     advantage_estimator: str = "grpo"
     use_kl_loss: bool = True
     kl_loss_coef: float = 0.0
@@ -170,7 +164,6 @@ class Gemma4_26B_A4B_Recipe(MilesRecipe):
     adam_beta1: float = 0.9
     adam_beta2: float = 0.98
 
-    # ── Numerics ─────────────────────────────────────────────────────────────
     attention_backend: str = "unfused"
     qkv_format: str = "bshd"
     attention_dropout: float = 0.0
@@ -184,9 +177,9 @@ class Gemma4_26B_A4B_Recipe(MilesRecipe):
     def _keep_image_patches(self) -> "Gemma4_26B_A4B_Recipe":
         """Keep the build-time patches at the head of ``image_run_commands``.
 
-        Prepending rather than defaulting makes the field additive: a caller
-        adding their own command would otherwise drop the patches, and losing the
-        VL one shows up as a blind model rather than an error.
+        The field is replaced wholesale, so a caller adding their own command
+        would otherwise drop the patches — and losing the VL one shows up as a
+        blind model rather than an error.
         """
         patches = _image_patches()
         current = list(self.image_run_commands or [])
@@ -202,10 +195,9 @@ class Gemma4_26B_A4B_Recipe(MilesRecipe):
     def _keep_disk_reservation(self) -> "Gemma4_26B_A4B_Recipe":
         """Keep the disk reservation when a caller supplies their own kwargs.
 
-        Same additive reasoning as ``_keep_image_patches``: the dict is replaced
-        wholesale, so passing ``{"secrets": [...]}`` would drop the reservation
-        and the run would die part-way through the checkpoint download. A caller
-        who names ``ephemeral_disk`` still wins.
+        Same reasoning as ``_keep_image_patches``: passing ``{"secrets": [...]}``
+        would otherwise drop the reservation and the run would die part-way through
+        the checkpoint download. A caller who names ``ephemeral_disk`` still wins.
         """
         kwargs = self.train_function_kwargs or {}
         if "ephemeral_disk" not in kwargs:
@@ -236,8 +228,8 @@ class Gemma4_26B_A4B_Recipe(MilesRecipe):
                 "images, so vision mode clears it. Pass custom_rm_function=..., "
                 "or rm_type=... to choose a built-in deliberately."
             )
-        # Keyed on what the caller passed, not on how the value compares: an
-        # explicit value equal to the text default must still win.
+        # Keyed on what the caller passed, not on how it compares: an explicit
+        # value equal to the text default must still win.
         explicit = self.explicit_fields
         vision = {
             name: value for name, value in _VISION_MODE.items() if name not in explicit
