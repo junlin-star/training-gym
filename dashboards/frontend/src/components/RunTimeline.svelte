@@ -96,6 +96,7 @@
   }
 
   let tip = $state(null);
+  let laneTip = $state(null);
   let pinned = $state(false);
   let hideTimer = null;
 
@@ -116,6 +117,7 @@
   function showTip(e, bar) {
     clearHideTimer();
     if (pinned) return;
+    laneTip = null;
     tip = { x: e.clientX, y: e.clientY, bar };
   }
 
@@ -126,6 +128,23 @@
   }
 
   function hideTip() {
+    scheduleHide();
+  }
+
+  function showLaneTip(e, row) {
+    clearHideTimer();
+    if (pinned || !roleDescriptions[row.role]) return;
+    tip = null;
+    laneTip = { x: e.clientX, y: e.clientY, role: row.role };
+  }
+
+  function moveLaneTip(e) {
+    clearHideTimer();
+    if (pinned || !laneTip) return;
+    laneTip = { ...laneTip, x: e.clientX, y: e.clientY };
+  }
+
+  function hideLaneTip() {
     scheduleHide();
   }
 
@@ -311,7 +330,11 @@
                 class:lane={true}
                 style:height={`${rowHeight}px`}
                 style:margin-bottom={`${ROW_GAP_PX}px`}
-                title={`${row.label} — ${row.hint || group.hint}`}
+                role="button"
+                tabindex="0"
+                onmouseenter={(e) => showLaneTip(e, row)}
+                onmousemove={moveLaneTip}
+                onmouseleave={hideLaneTip}
               >
                 {row.label}
               </div>
@@ -437,9 +460,6 @@
       </span>
     </div>
     <span class="tg-tip-name">{tipTitle(tip.bar)}</span>
-    {#if roleDescriptions[tip.bar.role]}
-      <span class="tg-tip-stat">{roleDescriptions[tip.bar.role]}</span>
-    {/if}
     {#if tip.bar.clockShifted}
       <span class="tg-tip-stat">
         node clocks may differ; aligned to the driver's clock.
@@ -483,6 +503,19 @@
         Open in Rollouts →
       </button>
     {/if}
+  </div>
+{/if}
+
+{#if laneTip}
+  <div
+    class="tg-tip"
+    role="tooltip"
+    style:left={`${laneTip.x}px`}
+    style:top={`${laneTip.y}px`}
+    onmouseenter={clearHideTimer}
+    onmouseleave={hideLaneTip}
+  >
+    <span class="tg-tip-stat">{roleDescriptions[laneTip.role]}</span>
   </div>
 {/if}
 

@@ -171,6 +171,7 @@ function rowsOf(spans, async) {
       {
         key: "driver",
         label: "Train",
+        role: "driver",
         hint: "Driver and trainer phases on the shared wall clock.",
         spans: driverSpans,
       },
@@ -181,6 +182,7 @@ function rowsOf(spans, async) {
     prepareRow({
       key: "driver",
       label: "Train",
+      role: "driver",
       hint: "Driver and trainer phases on the shared wall clock.",
       spans: driverSpans,
     }),
@@ -204,6 +206,7 @@ function rowsOf(spans, async) {
     rows.push(prepareRow({
       key: `rollout-${index}`,
       label: "Rollouts",
+      role: "rollout",
       hint: "Rollout engine phases packed by their actual wall-clock overlap.",
       spans: rolloutSpans.filter((span) => {
         let root = span;
