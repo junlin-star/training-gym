@@ -355,50 +355,6 @@ def build_slime_app(
             copy=True,
             ignore=["**/__pycache__", "**/*.pyc", "**/.git", "**/.venv"],
         )
-        image = image.run_commands(
-            f"echo {_PATCH_MEGATRON_BRIDGE_B64} | base64 -d | "
-            "python3 || "
-            "echo 'WARNING: patch_megatron_bridge did not apply to the local_slime checkout'",
-            f"echo {_PATCH_ADVANTAGES_B64} | base64 -d | "
-            "python3 || "
-            "echo 'WARNING: patch_advantages did not apply to the local_slime checkout'",
-            f"echo {_PATCH_BRIDGE_NONE_TASK_B64} | base64 -d | "
-            "python3 || "
-            "echo 'WARNING: patch_bridge_none_task did not apply to the local_slime checkout'",
-            f"echo {_PATCH_STOP_TOKEN_DIAG_B64} | base64 -d | "
-            "python3 || "
-            "echo 'WARNING: patch_stop_token_diag did not apply to the local_slime checkout'",
-            f"echo {_PATCH_QWEN3_ASR_EXPORT_B64} | base64 -d | "
-            "python3 || "
-            "echo 'WARNING: patch_qwen3_asr_export did not apply to the local_slime checkout'",
-            f"echo {_PATCH_QWEN3_VL_EXPORT_B64} | base64 -d | "
-            "python3 || "
-            "echo 'WARNING: patch_qwen3_vl_export did not apply to the local_slime checkout'",
-            f"echo {_PATCH_QWEN3_VL_TORCH_DIST_B64} | base64 -d | "
-            "python3 || "
-            "echo 'WARNING: patch_qwen3_vl_torch_dist did not apply to the local_slime checkout'",
-            f"echo {_PATCH_ROLLOUT_STATUS_B64} | base64 -d | "
-            "python3 || "
-            "echo 'WARNING: patch_rollout_status_reporting did not apply to the local_slime checkout'",
-            f"echo {_PATCH_ADVANTAGE_DIST_B64} | base64 -d | "
-            "python3 || "
-            "echo 'WARNING: patch_advantage_distribution did not apply to the local_slime checkout'",
-            f"echo {_PATCH_LOG_ELIDE_B64} | base64 -d | "
-            "python3 || "
-            "echo 'WARNING: patch_log_elide did not apply to the local_slime checkout'",
-            f"echo {_PATCH_DIST_CKPT_QUANTIZED_B64} | base64 -d | "
-            "python3 || "
-            "echo 'WARNING: patch_dist_ckpt_quantized did not apply to the local_slime checkout'",
-            f"echo {_PATCH_ZERO_STD_METRICS_B64} | base64 -d | "
-            "python3 || "
-            "echo 'WARNING: patch_zero_std_metrics did not apply to the local_slime checkout'",
-            f"echo {_PATCH_SGLANG_PARALLEL_ALIASES_B64} | base64 -d | "
-            "python3 || "
-            "echo 'WARNING: patch_sglang_parallel_aliases did not apply to the local_slime checkout'",
-            f"echo {_PATCH_SUBSTEP_TIMING_B64} | base64 -d | "
-            "TG_BEST_EFFORT_ENTRYPOINTS=1 python3 || "
-            "echo 'WARNING: patch_substep_timing did not apply to the local_slime checkout'",
-        )
 
     if slime.image_run_commands:
         image = image.run_commands(*slime.image_run_commands)

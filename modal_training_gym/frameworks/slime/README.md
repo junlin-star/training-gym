@@ -100,7 +100,9 @@ recipe = SlimeRecipe(
 
 ## Dev overlay
 
-To test local slime changes without rebuilding the image, set `local_slime`:
+To test a local slime checkout without rebuilding the base image, set
+`local_slime`. The overlay is used as-is; build-time patches are not reapplied,
+so include any required changes in the checkout:
 
 ```python
 recipe = SlimeRecipe(
