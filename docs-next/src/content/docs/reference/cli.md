@@ -83,10 +83,19 @@ training-gym run list --status failed --since 24h
 training-gym run list --model Qwen/Qwen3-4B --group nightly -j
 ```
 
-Available filters are `--status`, `--model`, `--dataset`, `--recipe`, and
-`--group`. Use `--since TIME` to filter by recency and `--limit N` to change
-the default limit of 50. Times may be epoch seconds, ISO 8601 timestamps, or
-relative values such as `30m`, `2h`, and `7d`.
+Options:
+
+- `--status STATUS`: filter by run status.
+- `--model MODEL`: filter by model.
+- `--dataset DATASET`: filter by dataset.
+- `--recipe RECIPE`: filter by training recipe.
+- `--group GROUP`: filter by run group.
+- `--since TIME`: include only runs created or updated since this time.
+- `--limit N`: set the maximum number of runs returned (default: 50).
+- `-j`, `--json`: emit machine-readable JSON.
+
+`--since` accepts epoch seconds, ISO 8601 timestamps, or relative values such
+as `30m`, `2h`, and `7d`.
 
 ### `training-gym run get`
 
@@ -98,7 +107,10 @@ training-gym run get RUN_ID --verbose
 training-gym run get RUN_ID --json
 ```
 
-`--verbose` includes reward history and rollout data.
+Options:
+
+- `--verbose`: include reward history and rollout data.
+- `-j`, `--json`: emit machine-readable JSON.
 
 ### `training-gym run params`
 
@@ -108,6 +120,10 @@ Show the framework training recipe recorded for one run:
 training-gym run params RUN_ID
 training-gym run params RUN_ID --json
 ```
+
+Options:
+
+- `-j`, `--json`: emit machine-readable JSON.
 
 ### `training-gym run logs`
 
@@ -141,10 +157,16 @@ training-gym run trace RUN_ID --out ./traces --step 1,4,9
 training-gym run trace RUN_ID --out ./traces --step 4-100:2 --dry-run
 ```
 
-`--step` accepts comma-separated steps and start-inclusive, end-exclusive
-ranges with an optional stride. Use `--dry-run` to inspect the expected sample
-count and size without downloading. Use `-y` / `--yes` / `--force` to skip the
-confirmation prompt, and `-j` / `--json` for machine-readable output.
+Options:
+
+- `--out DIR`: set the parent output directory (required).
+- `--step STEP`: select steps using comma-separated values or ranges.
+- `--dry-run`: report the expected sample count and size without downloading.
+- `-y`, `--yes`, `--force`: skip the confirmation prompt.
+- `-j`, `--json`: emit machine-readable JSON.
+
+`--step` ranges are start-inclusive and end-exclusive and may include a stride,
+such as `4-100:2`.
 
 ## Cleanup
 
