@@ -215,9 +215,10 @@ export function timingIsAsync(timings) {
   );
 }
 
-export function groupTooltipChildren(children) {
+export function groupTooltipChildren(children, aggregateStats = {}) {
   const groups = new Map();
-  for (const child of children || []) {
+  const allChildren = [...(children || []), ...Object.values(aggregateStats)];
+  for (const child of allChildren) {
     if (child.mergedGeneration || TOOLTIP_HIDDEN_PHASES.has(child.name)) {
       continue;
     }

@@ -206,7 +206,9 @@
   let tip = $state(null);
   let laneTip = $state(null);
   let groupedTipChildren = $derived(
-    tip?.bar.children ? groupTooltipChildren(tip.bar.children) : [],
+    tip?.bar.children
+      ? groupTooltipChildren(tip.bar.children, tip.bar.aggregateStats)
+      : [],
   );
   let pinned = $state(false);
   let hideTimer = null;

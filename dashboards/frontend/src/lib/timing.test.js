@@ -5,6 +5,7 @@ import {
   anchorLanes,
   clipIdleSpans,
   groupTooltipChildren,
+  HIDDEN_PHASES,
   nest,
   runTimeline,
   shouldShowTimingSection,
@@ -220,6 +221,69 @@ test("runTimeline keeps adjacent generation outside the train parent", () => {
   assert.equal(train.parent, undefined);
   assert.equal(generation.parent, undefined);
   assert.ok(generation.end <= train.start);
+});
+
+const generationPayload = (sync) => {
+  const phase = (total, start, end) => ({
+    count: 1,
+    total_duration_s: total,
+    first_start_s: start,
+    last_end_s: end,
+    invocations: [[start, end]],
+  });
+  const rollout = {
+    lane_start_unix_s: 100,
+    phases: {
+      generate_samples: phase(10, 0, 10),
+      sample_generation: phase(2, 1, 3),
+      reward: phase(1, 3, 4),
+      reward_post_process: phase(1, 4, 5),
+    },
+  };
+  return {
+    0: {
+      roles: {
+        driver: {
+          lane_start_unix_s: 100,
+          phases: sync
+            ? { generate_rollouts: phase(10, 0, 10) }
+            : { train_models: phase(10, 10, 20) },
+        },
+        rollout,
+      },
+    },
+  };
+};
+
+test("sync generation tooltips preserve the async phase breakdown", () => {
+  const syncTimeline = runTimeline(generationPayload(true));
+  const asyncTimeline = runTimeline(generationPayload(false));
+  const barFor = (timeline, name) =>
+    timeline.groups
+      .flatMap((group) => group.rows.flatMap((row) => row.spans))
+      .find((span) => span.name === name);
+  const tooltipNames = (bar) =>
+    groupTooltipChildren(bar.children, bar.aggregateStats).map(
+      (child) => child.name,
+    );
+
+  assert.deepEqual(
+    tooltipNames(barFor(syncTimeline, "generate_rollouts")),
+    tooltipNames(barFor(asyncTimeline, "generate_samples")),
+  );
+  assert.deepEqual(tooltipNames(barFor(syncTimeline, "generate_rollouts")), [
+    "reward_post_process",
+  ]);
+
+  const drawnSyncBars = syncTimeline.groups
+    .flatMap((group) => group.rows.flatMap((row) => row.spans))
+    .filter(
+      (span) =>
+        span.depth === 0 &&
+        !span.mergedGeneration &&
+        !HIDDEN_PHASES.has(span.name),
+    );
+  assert.equal(drawnSyncBars.length, 1);
 });
 
 const anchoredLane = (parentStart, parentEnd, laneStart, laneEnd) => [

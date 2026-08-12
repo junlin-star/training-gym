@@ -2,6 +2,7 @@ import {
   CATEGORIES,
   GROUPS,
   NEGLIGIBLE_WORK_S,
+  TOOLTIP_HIDDEN_PHASES,
 } from "./timing_vocabulary.js";
 import { collect, nest, stepsOf } from "./timing_spans.js";
 
@@ -21,14 +22,28 @@ function mergeSyncGenerationSpans(spans) {
     const driver = drivers.get(span.rolloutId);
     if (!driver) continue;
     const sampleGeneration = nestedChild(span, "sample_generation");
+    const aggregateStats = { ...(driver.aggregateStats || {}) };
+    const descendants = [...(span.children || [])];
+    for (let index = 0; index < descendants.length; index += 1) {
+      for (const child of descendants[index].children || []) {
+        descendants.push(child);
+      }
+    }
     if (sampleGeneration) {
-      driver.aggregateStats = {
-        ...(driver.aggregateStats || {}),
-        sample_generation: sampleGeneration,
-      };
+      aggregateStats.sample_generation = sampleGeneration;
+    }
+    for (const descendant of descendants) {
+      if (!TOOLTIP_HIDDEN_PHASES.has(descendant.name)) {
+        aggregateStats[descendant.name] = {
+          ...descendant,
+          mergedGeneration: false,
+        };
+      }
+    }
+    if (Object.keys(aggregateStats).length) {
+      driver.aggregateStats = aggregateStats;
     }
     span.mergedGeneration = true;
-    const descendants = [...(span.children || [])];
     while (descendants.length) {
       const descendant = descendants.pop();
       descendant.mergedGeneration = true;

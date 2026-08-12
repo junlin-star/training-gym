@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+import time
 from urllib.error import HTTPError
 
 import pytest
@@ -221,6 +222,79 @@ def test_failed_snapshot_retries_without_close_duplicate(monkeypatch):
     if recorder._poster is not None:
         recorder._poster.join(timeout=1)
     assert len(posted) == 2
+
+
+def test_closing_lane_retries_final_snapshot_after_exhaustion(monkeypatch):
+    monkeypatch.setattr(timing_recorder, "MAX_POST_RETRIES", 2)
+    monkeypatch.setattr(timing_recorder, "MAX_RETRY_BACKOFF_S", 0.0)
+    monkeypatch.setattr(timing_recorder, "MIN_PUBLISH_INTERVAL_S", 0.0)
+    monkeypatch.setenv("TRAINING_GYM_FRAMEWORK_STATUS_URL", "https://dashboard.test")
+    monkeypatch.setenv("TRAINING_GYM_TRAINING_RUN_ID", "closing-run")
+
+    posted = []
+    first_post = threading.Event()
+    release_first_post = threading.Event()
+    delivered = threading.Event()
+    attempts = iter(["failed", "failed", "ok"])
+
+    def post_item_result(item):
+        posted.append(item)
+        if len(posted) == 1:
+            first_post.set()
+            release_first_post.wait(timeout=1)
+        result = next(attempts)
+        if result == "ok":
+            delivered.set()
+        return result
+
+    monkeypatch.setattr(status_reporter, "post_item_result", post_item_result)
+
+    recorder = RoleRecorder("rollout", 0)
+    with recorder.phase("generate_samples"):
+        pass
+    recorder.__exit__(None, None, None)
+    assert first_post.wait(timeout=1)
+    release_first_post.set()
+
+    assert delivered.wait(timeout=1)
+    if recorder._poster is not None:
+        recorder._poster.join(timeout=1)
+    assert len(posted) == 3
+    assert posted[-1]["phases"]["generate_samples"]["count"] == 1
+
+
+def test_closing_lane_retry_deadline_bounds_shutdown(monkeypatch):
+    monkeypatch.setattr(timing_recorder, "MAX_POST_RETRIES", 1)
+    monkeypatch.setattr(timing_recorder, "MAX_RETRY_BACKOFF_S", 0.01)
+    monkeypatch.setattr(timing_recorder, "MIN_PUBLISH_INTERVAL_S", 0.0)
+    monkeypatch.setattr(timing_recorder, "TIMING_TIMEOUT_SECONDS", 0.05)
+    monkeypatch.setenv("TRAINING_GYM_FRAMEWORK_STATUS_URL", "https://dashboard.test")
+    monkeypatch.setenv("TRAINING_GYM_TRAINING_RUN_ID", "closing-timeout-run")
+
+    first_post = threading.Event()
+    release_first_post = threading.Event()
+
+    def post_item_result(item):
+        first_post.set()
+        release_first_post.wait(timeout=1)
+        return "failed"
+
+    monkeypatch.setattr(status_reporter, "post_item_result", post_item_result)
+
+    recorder = RoleRecorder("rollout", 0)
+    with recorder.phase("generate_samples"):
+        pass
+    recorder.__exit__(None, None, None)
+    assert first_post.wait(timeout=1)
+    release_first_post.set()
+
+    started = time.monotonic()
+    timing_recorder._drain_closed_posters()
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 0.5
+    assert recorder._poster is not None
+    assert not recorder._poster.is_alive()
 
 
 def test_preloop_lanes_accumulate_on_one_recorder(monkeypatch):

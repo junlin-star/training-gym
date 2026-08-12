@@ -19,6 +19,7 @@ MIN_PUBLISH_INTERVAL_S = 3.0
 MAX_PHASE_INVOCATIONS = 10_000
 MAX_TIMING_PHASES = 64
 MAX_POST_RETRIES = 5
+MAX_RETRY_BACKOFF_S = 1.0
 AUTH_REJECTION_LATCH_THRESHOLD = 3
 NOT_FOUND_LATCH_THRESHOLD = 3
 
@@ -102,6 +103,8 @@ class RoleRecorder:
         self._snapshot_ready = threading.Event()
         self._poster: threading.Thread | None = None
         self._closed = False
+        self._closing = False
+        self._closing_deadline: float | None = None
         self._post_retries = 0
         self._auth_rejections = 0
         self._auth_rejected = False
@@ -127,6 +130,8 @@ class RoleRecorder:
     def _close(self) -> None:
         if self._closed:
             return
+        self._closing = True
+        self._closing_deadline = time.monotonic() + TIMING_TIMEOUT_SECONDS
         self._publish_on_exit()
         if self._poster is not None and self._poster not in _CLOSED_POSTERS:
             _CLOSED_POSTERS.append(self._poster)
@@ -262,18 +267,45 @@ class RoleRecorder:
                                     "authentication or connectivity.",
                                     flush=True,
                                 )
+                            if self._closing:
+                                deadline = self._closing_deadline
+                                remaining = (
+                                    deadline - time.monotonic()
+                                    if deadline is not None
+                                    else 0.0
+                                )
+                                if remaining > 0:
+                                    with self._lock:
+                                        if self._snapshot is None:
+                                            self._snapshot = snapshot
+                                    time.sleep(min(MAX_RETRY_BACKOFF_S, remaining))
+                                    self._snapshot_ready.set()
                         else:
                             with self._lock:
                                 if self._snapshot is None:
                                     self._snapshot = snapshot
-                            time.sleep(0.1 * 2 ** (self._post_retries - 1))
+                            time.sleep(
+                                min(
+                                    MAX_RETRY_BACKOFF_S,
+                                    0.1 * 2 ** (self._post_retries - 1),
+                                )
+                            )
                             self._snapshot_ready.set()
                 if self._closed and self._snapshot is None:
                     if self._poster in _CLOSED_POSTERS:
                         _CLOSED_POSTERS.remove(self._poster)
                     return
             except Exception:
-                time.sleep(0.05)
+                if self._closing:
+                    deadline = self._closing_deadline
+                    remaining = (
+                        deadline - time.monotonic() if deadline is not None else 0.0
+                    )
+                    if remaining <= 0:
+                        return
+                    time.sleep(min(0.05, remaining))
+                else:
+                    time.sleep(0.05)
 
     def _publish(self, force: bool = False) -> None:
         with self._lock:
