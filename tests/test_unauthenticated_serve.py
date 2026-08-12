@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import inspect
-import warnings
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -24,13 +23,43 @@ def test_sglang_builder_accepts_unauthenticated() -> None:
     assert "unauthenticated" in inspect.signature(build_sglang_serve_app).parameters
 
 
-def test_vllm_builder_rejects_unauthenticated_param() -> None:
-    assert "unauthenticated" not in inspect.signature(build_vllm_serve_app).parameters
+def test_vllm_builder_accepts_unauthenticated() -> None:
+    parameters = inspect.signature(build_vllm_serve_app).parameters
+    assert parameters["unauthenticated"].default is True
+
+
+def test_vllm_builder_forwards_unauthenticated_to_app_server() -> None:
+    captured: dict = {}
+
+    class FakeApp:
+        def __init__(self, *_args, **_kwargs):
+            self.registered_functions = {}
+            self.registered_classes = {}
+
+        def server(self, **kwargs):
+            captured.update(kwargs)
+            return lambda cls: cls
+
+    with (
+        patch("modal.App", FakeApp),
+        patch("modal.Image"),
+        patch("modal.Volume"),
+        patch("modal_training_gym.common.hf_secrets", return_value=[]),
+    ):
+        build_vllm_serve_app(
+            recipe=VllmRecipe(),
+            app_name="test-serve",
+            model_path="test/model",
+            served_model_name="model",
+            unauthenticated=False,
+        )
+
+    assert captured["unauthenticated"] is False
 
 
 def test_default_unauthenticated_is_true() -> None:
     parameters = inspect.signature(AdHocDeployment.launch).parameters
-    assert parameters["recipe"].default is inspect.Parameter.empty
+    assert parameters["recipe"].default is None
     assert parameters["unauthenticated"].default is True
     assert {
         "endpoint_name",
@@ -114,42 +143,19 @@ def _serve_vllm(*, unauthenticated: bool = True) -> tuple[object, MagicMock]:
     return deployment, mock_build
 
 
-def test_vllm_serve_ignores_unauthenticated_true() -> None:
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
-        deployment, mock_build = _serve_vllm(unauthenticated=True)
+@pytest.mark.parametrize("unauthenticated", [True, False])
+def test_vllm_serve_forwards_unauthenticated(unauthenticated: bool) -> None:
+    deployment, mock_build = _serve_vllm(unauthenticated=unauthenticated)
     assert deployment.url == "https://example.modal.run"
     mock_build.assert_called_once()
-    assert "unauthenticated" not in mock_build.call_args.kwargs
-    assert not [
-        w
-        for w in caught
-        if issubclass(w.category, UserWarning)
-        and "unauthenticated=False" in str(w.message)
-    ]
+    assert mock_build.call_args.kwargs["unauthenticated"] is unauthenticated
 
 
-def test_vllm_serve_ignores_default_unauthenticated() -> None:
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
-        deployment, mock_build = _serve_vllm()
+def test_vllm_serve_forwards_default_unauthenticated() -> None:
+    deployment, mock_build = _serve_vllm()
     assert deployment.url == "https://example.modal.run"
     mock_build.assert_called_once()
-    assert "unauthenticated" not in mock_build.call_args.kwargs
-    assert not [
-        w
-        for w in caught
-        if issubclass(w.category, UserWarning)
-        and "unauthenticated=False" in str(w.message)
-    ]
-
-
-def test_vllm_serve_warns_on_unauthenticated_false() -> None:
-    with pytest.warns(UserWarning, match="unauthenticated=False"):
-        deployment, mock_build = _serve_vllm(unauthenticated=False)
-    assert deployment.url == "https://example.modal.run"
-    mock_build.assert_called_once()
-    assert "unauthenticated" not in mock_build.call_args.kwargs
+    assert mock_build.call_args.kwargs["unauthenticated"] is True
 
 
 def test_from_config_missing_unauthenticated_defaults_true() -> None:

@@ -6,7 +6,6 @@ import asyncio
 import inspect
 import json
 import threading
-import warnings
 from enum import Enum
 from typing import Any
 
@@ -339,15 +338,6 @@ class AdHocDeployment(BaseModel):
                 unauthenticated=unauthenticated,
             )
         elif isinstance(recipe, VllmRecipe):
-            if unauthenticated is False:
-                warnings.warn(
-                    "AdHocDeployment.launch(..., unauthenticated=False) is not "
-                    "supported for VllmRecipe: "
-                    "modal.experimental.http_server has no proxy-auth, so the "
-                    "endpoint remains publicly reachable. Use SglangRecipe if "
-                    "you need Modal proxy auth.",
-                    stacklevel=2,
-                )
             from modal_training_gym.deploy_recipes.vllm_recipe.serve_vllm import (
                 build_vllm_serve_app,
             )
@@ -360,6 +350,7 @@ class AdHocDeployment(BaseModel):
                 checkpoints_volume=checkpoints_volume,
                 checkpoints_mount_path=checkpoints_mount_path,
                 deployment_id=deployment_id,
+                unauthenticated=unauthenticated,
             )
         else:
             raise TrainingGymConfigError(
