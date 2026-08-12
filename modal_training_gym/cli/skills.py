@@ -66,29 +66,6 @@ def _directory_contents(path: Path) -> dict[Path, bytes]:
     }
 
 
-def _claude_link_state(link: Path, *, force: bool) -> tuple[bool, bool]:
-    """Return whether the Claude link is installed and whether to replace it."""
-    if link.is_symlink():
-        if link.readlink() == CLAUDE_SKILL_TARGET:
-            return True, False
-        if force:
-            return False, True
-        raise CLIError(
-            f"{link} points to {link.readlink()}, not {CLAUDE_SKILL_TARGET}.",
-            error="skill_destination_exists",
-            hint="Move it aside or rerun with --force.",
-        )
-    if link.exists():
-        if force:
-            return False, True
-        raise CLIError(
-            f"{link} already exists and is not the managed symbolic link.",
-            error="skill_destination_exists",
-            hint="Move it aside or rerun with --force.",
-        )
-    return False, False
-
-
 def _install_claude_link(link: Path, *, replace_existing: bool) -> None:
     """Link Claude's skill directory to the canonical skill."""
     staging_root: Path | None = None
@@ -134,14 +111,6 @@ def install_skills(*, project_dir: Path | None, force: bool) -> Path:
     source = _bundled_skill_path()
     destination = project_root / SKILLS_DIRECTORY / SKILL_NAME
     claude_link = project_root / CLAUDE_SKILLS_DIRECTORY / SKILL_NAME
-    if symlinked_claude_parent is None:
-        claude_link_installed, replace_claude_link = _claude_link_state(
-            claude_link,
-            force=force,
-        )
-    else:
-        claude_link_installed = False
-        replace_claude_link = False
     skill_installed = False
     replace_existing = False
 
@@ -207,22 +176,31 @@ def install_skills(*, project_dir: Path | None, force: bool) -> Path:
             if staging_root is not None:
                 shutil.rmtree(staging_root, ignore_errors=True)
 
-    if symlinked_claude_parent is None and not claude_link_installed:
-        _install_claude_link(claude_link, replace_existing=replace_claude_link)
-
     if skill_installed:
         click.echo(f"{SKILL_NAME} is already installed at {destination}")
     else:
         click.echo(f"Installed {SKILL_NAME} at {destination}")
+
     if symlinked_claude_parent is not None:
         click.echo(
             "Skipped Claude skill link because "
             f"{symlinked_claude_parent} is a symbolic link.",
             err=True,
         )
-    elif claude_link_installed:
+    elif claude_link.is_symlink() and claude_link.readlink() == CLAUDE_SKILL_TARGET:
         click.echo(f"Claude skill already linked at {claude_link}")
+    elif (claude_link.is_symlink() or claude_link.exists()) and not force:
+        click.echo(
+            f"Skipped Claude skill link because {claude_link} already exists; "
+            "rerun with --force to replace it.",
+            err=True,
+        )
     else:
+        replace_claude_link = claude_link.is_symlink() or claude_link.exists()
+        _install_claude_link(
+            claude_link,
+            replace_existing=replace_claude_link,
+        )
         click.echo(f"Linked Claude skill at {claude_link}")
     return destination
 

@@ -127,10 +127,27 @@ def test_skills_install_preserves_existing_claude_skill_without_force(
 
     result = CliRunner().invoke(cli_module.entrypoint_cli, ["skills", "install"])
 
-    assert result.exit_code == 1
-    assert "managed symbolic link" in result.stderr
+    destination = tmp_path / ".agents" / "skills" / SKILL_NAME
+    assert result.exit_code == 0
+    assert "Skipped Claude skill link" in result.stderr
     assert (existing / "SKILL.md").read_text() == "customized\n"
-    assert not (tmp_path / ".agents" / "skills" / SKILL_NAME).exists()
+    assert _contents(destination) == _contents(_bundled_skill_path())
+
+
+def test_skills_install_skips_wrong_claude_link_without_force(monkeypatch, tmp_path):
+    (tmp_path / ".git").mkdir()
+    existing = _claude_link(tmp_path)
+    existing.parent.mkdir(parents=True)
+    existing.symlink_to(Path("somewhere-else"), target_is_directory=True)
+    monkeypatch.chdir(tmp_path)
+
+    result = CliRunner().invoke(cli_module.entrypoint_cli, ["skills", "install"])
+
+    destination = tmp_path / ".agents" / "skills" / SKILL_NAME
+    assert result.exit_code == 0
+    assert "Skipped Claude skill link" in result.stderr
+    assert existing.readlink() == Path("somewhere-else")
+    assert _contents(destination) == _contents(_bundled_skill_path())
 
 
 def test_skills_install_force_replaces_existing_claude_skill(monkeypatch, tmp_path):
