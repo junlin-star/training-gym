@@ -24,8 +24,6 @@ Phase 2's single step and Phase 3's smoke test both have to show:
 
 If reward doesn't climb, isolate which layer is at fault: data (`DatasetConfig` — check rendered prompts read correctly and labels match source rows), the run setup (reward function shape, too few steps / too small batches / too low lr), the recipe (sampling, stop tokens, response budget, masking, optimizer, parallelism), or framework plumbing (weight sync, stale weights, checkpoint conversion).
 
-Then train 2 steps on a less standard dataset, with a less standard eval function and slightly different parallelism args.
-
 ### Common gotchas (both frameworks)
 
 Naming convention: For the model name in artifacts, it should be `_` separated by model family identifiers and replacing `.` for versioning (e.g. `Qwen3_4b`, `Qwen3_6_35b`, `Kimi_K2_6`).
