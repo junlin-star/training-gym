@@ -261,6 +261,8 @@ class SlimeRecipe(BaseTrainRecipe):
         HF weights.
     no_save_optim : bool
         Omit optim state from checkpoints (smaller, but no exact resume).
+    no_load_optim : bool
+        Omit optim state when loading a checkpoint (weights-only resume).
     megatron_to_hf_mode : str
         Mode used to export saved Megatron checkpoints back to HF format;
         empty disables the export step.
@@ -453,6 +455,9 @@ class SlimeRecipe(BaseTrainRecipe):
         Fall back to NCCL all-reduce instead of sglang's custom kernel.
     sglang_cuda_graph_bs : list[int] | None
         Batch sizes to capture CUDA graphs for.
+    sglang_cuda_graph_backend_prefill : str | None
+        Prefill CUDA graph backend; when ``None`` under ``colocate``,
+        defaults to ``"disabled"`` unless set via ``extra_config``.
     sglang_max_running_requests : int | None
         Cap on concurrent in-flight requests per engine.
     sglang_tool_call_parser : str | None
