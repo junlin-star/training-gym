@@ -95,9 +95,17 @@ def replace_once(source: str, old: str, new: str, path: Path) -> str:
     ``actor_model.update_weights()`` appear more than once, and patching the
     wrong one is worse than failing the build.
     """
-    count = source.count(old)
-    if count != 1:
-        raise RuntimeError(f"{path}: expected 1 occurrence of {old!r}, found {count}")
+    positions = []
+    start = 0
+    while (index := source.find(old, start)) != -1:
+        positions.append(index)
+        start = index + 1
+    if any(index and source[index - 1] != "\n" for index in positions):
+        raise RuntimeError(f"{path}: anchor {old!r} does not start at a line boundary")
+    if len(positions) != 1:
+        raise RuntimeError(
+            f"{path}: expected 1 occurrence of {old!r}, found {len(positions)}"
+        )
     return source.replace(old, new, 1)
 
 
@@ -442,8 +450,6 @@ ACTOR_TARGET = PackageTarget(
         ),
         (
             "actor_finalize",
-            "        self.prof.step(rollout_id=rollout_id)\n"
-            "\n"
             "        train_dump_utils.save_debug_train_data(self.args, rollout_id=rollout_id, rollout_data=rollout_data)\n"
             "\n"
             "        if self.args.use_routing_replay:\n"

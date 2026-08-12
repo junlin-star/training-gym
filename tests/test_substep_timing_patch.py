@@ -176,6 +176,17 @@ def test_patch_matches_golden(
     compile(patched, entrypoint, "exec")
 
 
+@pytest.mark.parametrize("framework", ("slime", "miles"))
+def test_replace_once_rejects_mid_line_anchor(patchers, tmp_path, framework):
+    with pytest.raises(RuntimeError, match="line boundary"):
+        patchers[framework].replace_once(
+            "prefix    anchor\n",
+            "    anchor",
+            "replacement",
+            tmp_path / "source.py",
+        )
+
+
 @pytest.mark.parametrize("path, fixture, golden", MILES_PACKAGE_TARGETS)
 def test_miles_package_patch_matches_golden(
     miles, tmp_path, request, path, fixture, golden
