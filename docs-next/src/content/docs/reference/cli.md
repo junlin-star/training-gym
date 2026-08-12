@@ -32,14 +32,6 @@ Options:
 - `--force`: replace an existing skill or Claude link. Without this option,
   locally modified files are preserved.
 
-## `training-gym --help`
-
-```bash
-training-gym --help
-training-gym skills --help
-training-gym skills install --help
-```
-
 ## Dashboard configuration
 
 The dashboard commands require a Modal account with `modal token set` already
