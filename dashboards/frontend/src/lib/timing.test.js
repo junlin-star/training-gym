@@ -496,3 +496,37 @@ test("runTimeline keeps a single worker role layout unchanged", () => {
   );
   assert.equal(train.children[0].role, "actor");
 });
+
+test("runTimeline keeps rows available when details are collapsed", () => {
+  const timeline = runTimeline({
+    0: {
+      roles: {
+        driver: {
+          lane_start_unix_s: 100,
+          phases: {
+            train_models: {
+              count: 1,
+              total_duration_s: 20,
+              first_start_s: 0,
+              last_end_s: 20,
+            },
+            checkpoint_save: {
+              count: 1,
+              total_duration_s: 2,
+              first_start_s: 20,
+              last_end_s: 22,
+            },
+          },
+        },
+      },
+    },
+  });
+  const [group] = timeline.groups;
+
+  assert.ok(group.rows.length > 0);
+  assert.ok(
+    group.rows.some((row) =>
+      row.spans.some((span) => span.depth === 0),
+    ),
+  );
+});

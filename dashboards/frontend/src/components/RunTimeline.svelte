@@ -41,16 +41,10 @@
   let intervalOrigin = $derived(runOrigin ?? timeline.runStart);
   let rowHeight = $derived(showDetails ? DETAIL_ROW_HEIGHT_PX : ROW_HEIGHT_PX);
   let groups = $derived(
-    timeline.groups.map((group) => {
-      const rows = showDetails
-        ? group.rows
-        : group.rows.filter((row) => row.rootDepth === 0);
-      return {
-        ...group,
-        rows,
-        height: HEADER_PX + rows.length * (rowHeight + ROW_GAP_PX),
-      };
-    }),
+    timeline.groups.map((group) => ({
+      ...group,
+      height: HEADER_PX + group.rows.length * (rowHeight + ROW_GAP_PX),
+    })),
   );
   $effect(() => {
     timelineKey;
