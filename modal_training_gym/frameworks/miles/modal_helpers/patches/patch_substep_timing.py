@@ -444,7 +444,7 @@ PACKAGE_TARGETS: tuple[PackageTarget, ...] = (
                 "            update_successful, grad_norm, num_zeros_in_grad = optimizer.step()\n",
             ),
             (
-                "actor_finalize",
+                "train_step_finalize",
                 "    # release grad (multi-LoRA retains accumulated grads; stepped slots were\n"
                 "    # zeroed selectively inside step_adapter_slots)\n"
                 "    if not multi_lora:\n"

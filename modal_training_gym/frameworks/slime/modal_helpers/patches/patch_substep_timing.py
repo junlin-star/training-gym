@@ -506,7 +506,7 @@ TRAIN_STEP_TARGET = PackageTarget(
             "        opt_param_scheduler.step(increment=step_global_batch_size)\n",
         ),
         (
-            "actor_finalize",
+            "train_step_finalize",
             "    # release grad\n"
             "    for model_chunk in model:\n"
             "        model_chunk.zero_grad_buffer()\n"

@@ -669,8 +669,8 @@ def train_one_step(
             assert update_successful
             opt_param_scheduler.step(increment=num_rollouts)
 
-    # PATCHED_TRAINING_GYM_TIMING_ACTOR_FINALIZE
-    with _tg_time_phase('actor_finalize'):
+    # PATCHED_TRAINING_GYM_TIMING_TRAIN_STEP_FINALIZE
+    with _tg_time_phase('train_step_finalize'):
         # release grad (multi-LoRA retains accumulated grads; stepped slots were
         # zeroed selectively inside step_adapter_slots)
         if not multi_lora:
