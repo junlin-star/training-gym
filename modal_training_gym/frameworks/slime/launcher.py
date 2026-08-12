@@ -172,6 +172,25 @@ def _build_slime_base_image() -> "Image":
     )
 
 
+def _slime_git_overlay_command(repository: str, revision: str) -> str:
+    """Build the reproducible image command for a fork source overlay."""
+    repo = shlex.quote(repository)
+    sha = shlex.quote(revision)
+    checkout = "/tmp/training-gym-slime"
+    return (
+        "set -eux; "
+        "command -v git >/dev/null; "
+        f"rm -rf {checkout}; "
+        f"git init {checkout}; "
+        f"git -C {checkout} remote add origin {repo}; "
+        f"git -C {checkout} fetch --depth=1 origin {sha}; "
+        f"git -C {checkout} checkout --detach FETCH_HEAD; "
+        f'test "$(git -C {checkout} rev-parse HEAD)" = {sha}; '
+        f"rm -rf {checkout}/.git {SLIME_ROOT}; "
+        f"mv {checkout} {SLIME_ROOT}"
+    )
+
+
 def _build_conversion_config(slime_cfg: Any, model: Any = None) -> dict[str, Any]:
     """Build a dict of parameters that affect the torch_dist checkpoint layout.
 
@@ -463,6 +482,12 @@ def build_slime_app(
             copy=True,
             ignore=["**/__pycache__", "**/*.pyc", "**/.git", "**/.venv"],
         )
+    elif slime.slime_git_repository and slime.slime_git_revision:
+        image = image.run_commands(
+            _slime_git_overlay_command(
+                slime.slime_git_repository, slime.slime_git_revision
+            )
+        )
 
     if slime.image_run_commands:
         image = image.run_commands(*slime.image_run_commands)
@@ -624,7 +649,10 @@ def build_slime_app(
 
     # ── Volumes ──────────────────────────────────────────────────────────────
     hf_cache_volume = Volume.from_name("huggingface-cache", create_if_missing=True)
-    data_volume = Volume.from_name(f"{volume_prefix}-data", create_if_missing=True)
+    data_volume = Volume.from_name(
+        slime.data_volume_name or f"{volume_prefix}-data",
+        create_if_missing=True,
+    )
     checkpoints_volume_name, checkpoints_mount_path, checkpoints_volume = (
         resolve_checkpoint_volumes(
             checkpoint,
@@ -649,6 +677,8 @@ def build_slime_app(
         recipe_app_tags=slime.app_tags,
         wandb=slime.wandb,
     )
+    if slime.slime_git_revision:
+        tags["slime_git_revision"] = slime.slime_git_revision
     app = App(app_name, tags=tags)
     gpu_spec = f"{slime.gpu_type}:{slime.actor_num_gpus_per_node}"
 
