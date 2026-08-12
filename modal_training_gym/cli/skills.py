@@ -73,37 +73,33 @@ def _install_claude_link(
     replace_existing: bool,
 ) -> None:
     """Link Claude's skill directory to the canonical skill."""
-    staging_root: Path | None = None
-    backup: Path | None = None
     try:
         link.parent.mkdir(parents=True, exist_ok=True)
-        staging_root = Path(
-            tempfile.mkdtemp(
-                prefix=f".{SKILL_NAME}-",
-                dir=link.parent,
-            )
-        )
-        staged_link = staging_root / SKILL_NAME
-        target = Path(os.path.relpath(destination, start=link.parent))
-        staged_link.symlink_to(target, target_is_directory=True)
+        with tempfile.TemporaryDirectory(
+            prefix=f".{SKILL_NAME}-",
+            dir=link.parent,
+            ignore_cleanup_errors=True,
+        ) as staging:
+            staging_root = Path(staging)
+            staged_link = staging_root / SKILL_NAME
+            target = Path(os.path.relpath(destination, start=link.parent))
+            staged_link.symlink_to(target, target_is_directory=True)
 
-        if replace_existing:
-            backup = staging_root / "previous"
-            link.rename(backup)
-        try:
-            staged_link.rename(link)
-        except OSError:
-            if backup is not None:
-                backup.rename(link)
-            raise
+            backup: Path | None = None
+            if replace_existing:
+                backup = staging_root / "previous"
+                link.rename(backup)
+            try:
+                staged_link.rename(link)
+            except OSError:
+                if backup is not None:
+                    backup.rename(link)
+                raise
     except OSError as exc:
         raise CLIError(
             f"Could not link {SKILL_NAME} at {link}: {exc}",
             error="skill_install_failed",
         ) from exc
-    finally:
-        if staging_root is not None:
-            shutil.rmtree(staging_root, ignore_errors=True)
 
 
 def _install_canonical_skill(
@@ -113,64 +109,44 @@ def _install_canonical_skill(
     force: bool,
 ) -> bool:
     """Install the canonical skill and return whether it was already installed."""
-    replace_existing = False
-    if destination.is_symlink():
-        if not force:
-            raise CLIError(
-                f"{destination} is a symbolic link.",
-                error="skill_destination_exists",
-                hint="Move it aside or rerun with --force.",
-            )
-        replace_existing = True
-    elif destination.exists() and not destination.is_dir():
-        if not force:
-            raise CLIError(
-                f"{destination} exists and is not a directory.",
-                error="skill_destination_exists",
-                hint="Move it aside or rerun with --force.",
-            )
-        replace_existing = True
-    elif destination.is_dir():
+    destination_is_symlink = destination.is_symlink()
+    destination_exists = destination_is_symlink or destination.exists()
+    if not destination_is_symlink and destination.is_dir():
         if _directory_contents(source) == _directory_contents(destination):
             return True
-        if not force:
-            raise CLIError(
-                f"{SKILL_NAME} already exists at {destination}.",
-                error="skill_destination_exists",
-                hint="Rerun with --force to replace it.",
-            )
-        replace_existing = True
+    if destination_exists and not force:
+        raise CLIError(
+            f"{SKILL_NAME} already exists at {destination}.",
+            error="skill_destination_exists",
+            hint="Rerun with --force to replace it.",
+        )
 
-    staging_root: Path | None = None
-    backup: Path | None = None
     try:
         destination.parent.mkdir(parents=True, exist_ok=True)
-        staging_root = Path(
-            tempfile.mkdtemp(
-                prefix=f".{SKILL_NAME}-",
-                dir=destination.parent,
-            )
-        )
-        staged_skill = staging_root / SKILL_NAME
-        shutil.copytree(source, staged_skill)
+        with tempfile.TemporaryDirectory(
+            prefix=f".{SKILL_NAME}-",
+            dir=destination.parent,
+            ignore_cleanup_errors=True,
+        ) as staging:
+            staging_root = Path(staging)
+            staged_skill = staging_root / SKILL_NAME
+            shutil.copytree(source, staged_skill)
 
-        if replace_existing:
-            backup = staging_root / "previous"
-            destination.rename(backup)
-        try:
-            staged_skill.rename(destination)
-        except OSError:
-            if backup is not None:
-                backup.rename(destination)
-            raise
+            backup: Path | None = None
+            if destination_exists:
+                backup = staging_root / "previous"
+                destination.rename(backup)
+            try:
+                staged_skill.rename(destination)
+            except OSError:
+                if backup is not None:
+                    backup.rename(destination)
+                raise
     except OSError as exc:
         raise CLIError(
             f"Could not install {SKILL_NAME} at {destination}: {exc}",
             error="skill_install_failed",
         ) from exc
-    finally:
-        if staging_root is not None:
-            shutil.rmtree(staging_root, ignore_errors=True)
     return False
 
 
@@ -186,20 +162,11 @@ def _ensure_claude_compatibility(
     symlinked_parent = _symlinked_claude_link_parent(project_root)
 
     if symlinked_parent is not None:
-        try:
-            parent_exposes_canonical = (
-                skills_directory.resolve() == destination.parent.resolve()
-            )
-        except (OSError, RuntimeError):
-            parent_exposes_canonical = False
-        if parent_exposes_canonical:
-            click.echo(f"Claude skills already linked through {skills_directory}")
-        else:
-            click.echo(
-                "Skipped Claude skill link because "
-                f"{symlinked_parent} is a symbolic link.",
-                err=True,
-            )
+        click.echo(
+            "Skipped Claude skill link because "
+            f"{symlinked_parent} is a symbolic link.",
+            err=True,
+        )
         return
 
     link_is_symlink = link.is_symlink()

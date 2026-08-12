@@ -32,9 +32,8 @@ before the command configures Claude compatibility.
 When `.claude/skills` is safe to manage, the command creates
 `.claude/skills/agent-driven-training` as a relative symbolic link to the
 canonical copy. Existing Claude paths are preserved without `--force`. If
-`.claude` or `.claude/skills` is itself a symbolic link, the command either
-recognizes that it already exposes `.agents/skills` or skips the Claude link
-with a warning; the canonical installation still succeeds.
+`.claude` or `.claude/skills` is itself a symbolic link, the command skips the
+Claude link with a warning; the canonical installation still succeeds.
 
 Options:
 

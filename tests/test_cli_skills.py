@@ -235,24 +235,6 @@ def test_force_skips_symlinked_claude_parent(
     assert parent.is_symlink()
 
 
-def test_skills_install_accepts_parent_link_to_canonical_skills(monkeypatch, tmp_path):
-    (tmp_path / ".git").mkdir()
-    (tmp_path / ".claude").mkdir()
-    (tmp_path / ".claude" / "skills").symlink_to(
-        Path("..") / ".agents" / "skills",
-        target_is_directory=True,
-    )
-    monkeypatch.chdir(tmp_path)
-
-    result = CliRunner().invoke(cli_module.entrypoint_cli, ["skills", "install"])
-
-    destination = tmp_path / ".agents" / "skills" / SKILL_NAME
-    assert result.exit_code == 0
-    assert _contents(destination) == _contents(_bundled_skill_path())
-    assert "Claude skills already linked through" in result.stdout
-    assert "Skipped Claude skill link" not in result.stderr
-
-
 def test_skills_install_keeps_canonical_copy_when_claude_linking_fails(
     monkeypatch, tmp_path
 ):
