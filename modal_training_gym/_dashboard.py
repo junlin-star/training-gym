@@ -12,7 +12,7 @@ import os
 import secrets as _secrets
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Awaitable, Callable, Iterable, TypedDict
+from typing import TYPE_CHECKING, Awaitable, Callable, Iterable, TypedDict
 
 import modal
 
@@ -55,13 +55,16 @@ from modal_training_gym.common.step_timing import (
     legacy_run_to_records,
     rollout_lanes,
 )
-from modal_training_gym.utils.metadata import vol_get as _metadata_vol_get
-from modal_training_gym.utils.metadata import vol_list_metadata
 from modal_training_gym.common.time import parse_time as _parse_log_time
 from modal_training_gym.common.training_rollout import (
     TrainingRolloutResult,
     TrainingRolloutSummary,
     _apply_parsed,
+)
+from modal_training_gym.utils.metadata import (
+    _bounded_gather_with_retries,
+    vol_get as _metadata_vol_get,
+    vol_list_metadata,
 )
 
 SummaryLoader = Callable[[], Awaitable[list[JsonDict]]]
@@ -74,6 +77,12 @@ class LogEntry(TypedDict):
     fd: int
     ts: float | None
     ts_ns: int | None
+
+
+class TimingFileCache(TypedDict):
+    mtime: int
+    size: int
+    record: JsonDict
 
 
 REPO_URL = "https://github.com/modal-projects/training-gym.git"
@@ -465,7 +474,7 @@ def fastapi_app():
     class TimingEntry:
         def __init__(self) -> None:
             self.lanes: JsonDict = {}
-            self.file_records: dict[str, dict[str, Any]] = {}
+            self.file_records: dict[str, TimingFileCache] = {}
             self.read_at: float | None = None
             self.final = False
             self.dirty = False
@@ -936,18 +945,17 @@ def fastapi_app():
             if current.get(path) == (cached["mtime"], cached["size"])
         }
         changed = [item for item in listed if item["path"] not in unchanged]
-        read_results = await asyncio.gather(
-            *(
-                _metadata_vol_get(
+        read_results = await _bounded_gather_with_retries(
+            [
+                lambda item=item: _metadata_vol_get(
                     RoleTimingRecord.store(training_run_id),
                     item["path"].rsplit("/", 1)[-1][:-5],
                     is_async=True,
                 )
                 for item in changed
-            ),
-            return_exceptions=True,
+            ]
         )
-        updated: dict[str, dict[str, Any]] = {}
+        updated: dict[str, TimingFileCache] = {}
         for item, result in zip(changed, read_results, strict=True):
             if isinstance(result, (KeyError, FileNotFoundError)):
                 continue

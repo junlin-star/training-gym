@@ -5,10 +5,12 @@ from __future__ import annotations
 import asyncio
 import io
 import json
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable
 from enum import Enum
 from functools import partial
-from typing import Any
+from typing import Any, TypeVar
+
+T = TypeVar("T")
 
 METADATA_VOLUME_NAME = "training-gym-metadata"
 
@@ -148,6 +150,28 @@ def _store_path(store: MetadataStore | str) -> str:
     return store
 
 
+async def _bounded_gather_with_retries(
+    readers: Iterable[Callable[[], Awaitable[T]]],
+) -> list[T | BaseException]:
+    semaphore = asyncio.Semaphore(16)
+
+    async def _read(reader: Callable[[], Awaitable[T]]) -> T:
+        async with semaphore:
+            for attempt in range(3):
+                try:
+                    return await reader()
+                except Exception as exc:
+                    if "rate limit" not in str(exc).lower() or attempt == 2:
+                        raise
+                    await asyncio.sleep(2**attempt)
+        raise AssertionError("unreachable")
+
+    return await asyncio.gather(
+        *(_read(reader) for reader in readers),
+        return_exceptions=True,
+    )
+
+
 def vol_remove(store: MetadataStore | str, key: str) -> bool:
     """Delete a single item from a store. Returns True if removed."""
     from modal.exception import InvalidError, NotFoundError
@@ -237,20 +261,13 @@ def vol_list(
 
         async def _run() -> list[dict[str, Any]]:
             await _safe_reload(vol, is_async=True)
-            semaphore = asyncio.Semaphore(16)
 
             async def _read(path: str) -> dict[str, Any] | None:
-                async with semaphore:
-                    for attempt in range(3):
-                        try:
-                            chunks = [c async for c in vol.read_file.aio(path)]
-                            return json.loads(b"".join(chunks))
-                        except (FileNotFoundError, NotFoundError):
-                            return None
-                        except Exception as exc:
-                            if "rate limit" not in str(exc).lower() or attempt == 2:
-                                raise
-                            await asyncio.sleep(2**attempt)
+                try:
+                    chunks = [c async for c in vol.read_file.aio(path)]
+                    return json.loads(b"".join(chunks))
+                except (FileNotFoundError, NotFoundError):
+                    return None
 
             for attempt in range(3):
                 try:
@@ -272,23 +289,16 @@ def vol_list(
                     await asyncio.sleep(2**attempt)
             else:
                 paths = []
-            try:
-                results = await asyncio.gather(
-                    *(_read(path) for path in paths), return_exceptions=True
-                )
-                failures = [
-                    result for result in results if isinstance(result, Exception)
-                ]
-                records = [result for result in results if isinstance(result, dict)]
-                if return_failures:
-                    return records, bool(failures)
-                if failures:
-                    raise failures[0]
-                return records
-            except (FileNotFoundError, NotFoundError):
-                if return_failures:
-                    return [], False
-                return []
+            results = await _bounded_gather_with_retries(
+                [lambda path=path: _read(path) for path in paths]
+            )
+            failures = [result for result in results if isinstance(result, Exception)]
+            records = [result for result in results if isinstance(result, dict)]
+            if return_failures:
+                return records, bool(failures)
+            if failures:
+                raise failures[0]
+            return records
 
         return _run()
 
