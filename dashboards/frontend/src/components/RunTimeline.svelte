@@ -264,6 +264,56 @@
       : 0;
     return `${Math.max(0, end - start) * 100}%`;
   }
+
+  function nestedZIndex(row, bar) {
+    const nestedBars = row.sortedSpans
+      .filter((candidate) => candidate.depth > 0)
+      .sort(
+        (a, b) =>
+          a.duration - b.duration ||
+          a.start - b.start ||
+          String(a.key).localeCompare(String(b.key)),
+      );
+    const index = nestedBars.findIndex((candidate) => candidate.key === bar.key);
+    return index < 0 ? 3 : nestedBars.length - index + 3;
+  }
+
+  function nestedHitExpansion(row, bar, side) {
+    const pixelsPerSecond = viewport
+      ? (viewport.clientWidth * zoom) / timeline.span
+      : 0;
+    if (!pixelsPerSecond) return "0px";
+    const minimumDuration = 2 / pixelsPerSecond;
+    const effectiveEnd = (candidate) =>
+      candidate.start +
+      Math.max(candidate.end - candidate.start, minimumDuration);
+    const effectiveStart = bar.start;
+    const effectiveBarEnd = effectiveEnd(bar);
+    const center = (effectiveStart + effectiveBarEnd) / 2;
+    const centers = row.sortedSpans
+      .filter((candidate) => candidate.depth > 0 && candidate.key !== bar.key)
+      .map((candidate) => (candidate.start + effectiveEnd(candidate)) / 2);
+    const previous = Math.max(
+      ...centers.filter((candidate) => candidate < center),
+      Number.NEGATIVE_INFINITY,
+    );
+    const next = Math.min(
+      ...centers.filter((candidate) => candidate > center),
+      Number.POSITIVE_INFINITY,
+    );
+    const boundary =
+      side === "left"
+        ? previous === Number.NEGATIVE_INFINITY
+          ? null
+          : (previous + center) / 2
+        : next === Number.POSITIVE_INFINITY
+          ? null
+          : (center + next) / 2;
+    if (boundary == null) return "6px";
+    const expansion =
+      side === "left" ? effectiveStart - boundary : boundary - bar.end;
+    return `${Math.max(-6, Math.min(6, expansion * pixelsPerSecond))}px`;
+  }
 </script>
 
 <svelte:window onclick={clearPin} />
@@ -398,6 +448,7 @@
                       >
                         <button
                           class="bar"
+                          data-bar-key={bar.key}
                           class:idle={bar.kind === "idle"}
                           class:detail-idle={showDetails && bar.kind === "idle"}
                           class:sampled={bar.kind === "sampled"}
@@ -418,7 +469,24 @@
                               ? TRAIN_OUTLINE_COLOR
                               : colorFor(bar.name)
                           }
-                          style:background={bar.kind === "work" && !isExpandedParent(bar) ? colorFor(bar.name) : undefined}
+                          style:background={
+                            bar.kind === "work" && !isExpandedParent(bar)
+                              ? colorFor(bar.name)
+                              : undefined
+                          }
+                          style:z-index={
+                            bar.depth > 0 ? nestedZIndex(row, bar) : undefined
+                          }
+                          style:--hit-left={
+                            bar.depth > 0
+                              ? nestedHitExpansion(row, bar, "left")
+                              : undefined
+                          }
+                          style:--hit-right={
+                            bar.depth > 0
+                              ? nestedHitExpansion(row, bar, "right")
+                              : undefined
+                          }
                           style:border-color={
                             isExpandedParent(bar)
                               ? bar.name === "train_models"
@@ -432,6 +500,21 @@
                           onclick={(e) => pinTip(e, bar)}
                         >
                         </button>
+                        {#if bar.depth > 0}
+                          <button
+                            type="button"
+                            class="bar-hit-target"
+                            data-bar-key={bar.key}
+                            aria-label={`${labelFor(bar.name, bar.rolloutId)} ${fmtSecs(bar.duration)}`}
+                            style:z-index={nestedZIndex(row, bar)}
+                            style:--hit-left={nestedHitExpansion(row, bar, "left")}
+                            style:--hit-right={nestedHitExpansion(row, bar, "right")}
+                            onmouseenter={(e) => showTip(e, bar)}
+                            onmousemove={moveTip}
+                            onmouseleave={hideTip}
+                            onclick={(e) => pinTip(e, bar)}
+                          ></button>
+                        {/if}
                         {#if visibleChildren(bar).length}
                           <div class="bar-children">
                             {#each visibleChildren(bar) as child (child.key)}
@@ -802,6 +885,21 @@
     z-index: 3;
     outline: none;
     border-radius: 0;
+    overflow: visible;
+    pointer-events: none;
+  }
+
+  .bar-hit-target {
+    position: absolute;
+    top: 4px;
+    bottom: 4px;
+    left: calc(-1 * var(--hit-left, 0px));
+    right: calc(-1 * var(--hit-right, 0px));
+    padding: 0;
+    border: none;
+    background: transparent;
+    pointer-events: auto;
+    cursor: pointer;
   }
 
   .bar.idle {
