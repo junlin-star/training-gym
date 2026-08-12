@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import importlib
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from modal_training_gym.common import models
@@ -50,9 +51,18 @@ def _model_key(recipe_name: str) -> str:
     return recipe_name.split("_Recipe")[0].removesuffix("_LoRA").lower()
 
 
-def collect_models() -> dict[str, list[str]]:
-    """Map HuggingFace model name → framework labels that have a recipe for it."""
-    table: dict[str, list[str]] = {}
+@dataclass
+class ModelRow:
+    """One table row: a model and every recipe that trains it."""
+
+    config_name: str
+    frameworks: list[str] = field(default_factory=list)
+    recipe_names: list[str] = field(default_factory=list)
+
+
+def collect_models() -> dict[str, ModelRow]:
+    """Map HuggingFace model name → the row describing its recipes."""
+    table: dict[str, ModelRow] = {}
     unmatched: list[str] = []
 
     for framework, module_path in FRAMEWORKS.items():
@@ -65,9 +75,10 @@ def collect_models() -> dict[str, list[str]]:
             if not model_name:
                 unmatched.append(f"{module_path}.{recipe_name}")
                 continue
-            frameworks = table.setdefault(model_name, [])
-            if framework not in frameworks:
-                frameworks.append(framework)
+            row = table.setdefault(model_name, ModelRow(config.__name__))
+            if framework not in row.frameworks:
+                row.frameworks.append(framework)
+            row.recipe_names.append(recipe_name)
 
     if unmatched:
         raise SystemExit(
@@ -79,18 +90,32 @@ def collect_models() -> dict[str, list[str]]:
     return table
 
 
-def render_section(table: dict[str, list[str]]) -> str:
-    rows = [
-        f"| `{model_name}` | {', '.join(f'`{f}`' for f in table[model_name])} |"
-        for model_name in sorted(table)
-    ]
+def _code_list(names: list[str]) -> str:
+    return ", ".join(f"`{name}`" for name in names)
+
+
+def render_section(table: dict[str, ModelRow]) -> str:
+    rows = []
+    for model_name in sorted(table):
+        row = table[model_name]
+        rows.append(
+            f"| `{model_name}` | {_code_list(row.frameworks)} | "
+            f"`{row.config_name}` | {_code_list(row.recipe_names)} |"
+        )
     return "\n".join(
-        [BEGIN_MARKER, BANNER, "", "| Model | Framework |", "|---|---|", *rows]
-        + [END_MARKER]
+        [
+            BEGIN_MARKER,
+            BANNER,
+            "",
+            "| Model | Framework | ModelConfig | Recipe |",
+            "|---|---|---|---|",
+            *rows,
+            END_MARKER,
+        ]
     )
 
 
-def rendered_readme(readme_path: Path, table: dict[str, list[str]]) -> tuple[str, str]:
+def rendered_readme(readme_path: Path, table: dict[str, ModelRow]) -> tuple[str, str]:
     """Return (current README content, content with a freshly rendered table)."""
     content = readme_path.read_text()
     if BEGIN_MARKER not in content or END_MARKER not in content:
