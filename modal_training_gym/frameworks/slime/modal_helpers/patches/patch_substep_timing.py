@@ -14,7 +14,6 @@ they open a lane at their entry point and the phases below use the module-level
 from __future__ import annotations
 
 import ast
-import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -606,8 +605,6 @@ def patch_package_file(root: Path, target: PackageTarget) -> None:
     try:
         _patch_package_file(root, target)
     except Exception as exc:
-        if os.environ.get("TRAINING_GYM_SUBSTEP_TIMING", "auto") == "require":
-            raise
         print(f"WARNING: {target.path} substep timing patch skipped: {exc}")
 
 
@@ -640,8 +637,6 @@ def _patch_entrypoint(path: Path, wraps: list[tuple[str, str]]) -> None:
     try:
         _patch_file(path, wraps)
     except Exception as exc:
-        if os.environ.get("TG_BEST_EFFORT_ENTRYPOINTS") != "1":
-            raise
         print(f"WARNING: {path} substep timing patch skipped: {exc}")
 
 

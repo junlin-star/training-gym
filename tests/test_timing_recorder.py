@@ -3,9 +3,18 @@ from __future__ import annotations
 import threading
 from urllib.error import HTTPError
 
+import pytest
+
 from modal_training_gym.common import status_reporter
 from modal_training_gym.common import timing_recorder
 from modal_training_gym.common.timing_recorder import RoleRecorder
+
+
+@pytest.fixture(autouse=True)
+def _reset_timing_mode_cache():
+    timing_recorder.reset_timing_mode_cache()
+    yield
+    timing_recorder.reset_timing_mode_cache()
 
 
 def test_status_reporter_retries_throttled_errors(monkeypatch):
@@ -126,12 +135,12 @@ def test_success_resets_auth_rejections(monkeypatch):
     assert not recorder._auth_rejected
 
 
-def test_missing_timing_route_latches_off_and_warns_for_require(monkeypatch, capsys):
+def test_missing_timing_route_latches_off_and_warns(monkeypatch, capsys):
     monkeypatch.setattr(timing_recorder, "_UNSUPPORTED", False)
     monkeypatch.setattr(timing_recorder, "_NOT_FOUND_COUNT", 0)
-    monkeypatch.setattr(timing_recorder, "_REQUIRE_FAILURE_REPORTED", False)
+    monkeypatch.setattr(timing_recorder, "_FAILURE_REPORTED", False)
     monkeypatch.setattr(timing_recorder, "MIN_PUBLISH_INTERVAL_S", 0.0)
-    monkeypatch.setenv("TRAINING_GYM_SUBSTEP_TIMING", "require")
+    monkeypatch.setenv("TRAINING_GYM_SUBSTEP_TIMING", "auto")
     monkeypatch.setenv("TRAINING_GYM_FRAMEWORK_STATUS_URL", "https://dashboard.test")
     monkeypatch.setenv("TRAINING_GYM_TRAINING_RUN_ID", "run-1")
 
@@ -162,13 +171,31 @@ def test_missing_timing_route_latches_off_and_warns_for_require(monkeypatch, cap
     assert len(posted) == timing_recorder.NOT_FOUND_LATCH_THRESHOLD
     assert timing_recorder._UNSUPPORTED
     output = capsys.readouterr().out
-    assert output.count("substep_timing='require' was rejected with HTTP 404") == 1
+    assert output.count("WARNING: this dashboard is too old for substep timing") == 1
+
+
+def test_off_skips_lane_creation_and_phase_timing(monkeypatch):
+    def fail_if_called(*args):
+        raise AssertionError("off must not create a RoleRecorder")
+
+    def fail_timestamp():
+        raise AssertionError("off must not timestamp")
+
+    monkeypatch.setenv("TRAINING_GYM_SUBSTEP_TIMING", "off")
+    monkeypatch.setattr(timing_recorder, "RoleRecorder", fail_if_called)
+    monkeypatch.setattr(timing_recorder.time, "monotonic", fail_timestamp)
+
+    with timing_recorder.recording_lane("driver", 0) as recorder:
+        with recorder.phase("train"):
+            pass
+    with timing_recorder.time_phase("forward_backward"):
+        pass
 
 
 def test_failed_snapshot_retries_without_close_duplicate(monkeypatch):
     monkeypatch.setattr(timing_recorder, "_UNSUPPORTED", False)
     monkeypatch.setattr(timing_recorder, "_NOT_FOUND_COUNT", 0)
-    monkeypatch.setattr(timing_recorder, "_REQUIRE_FAILURE_REPORTED", False)
+    monkeypatch.setattr(timing_recorder, "_FAILURE_REPORTED", False)
     monkeypatch.setattr(timing_recorder, "MIN_PUBLISH_INTERVAL_S", 0.0)
     monkeypatch.setenv("TRAINING_GYM_FRAMEWORK_STATUS_URL", "https://dashboard.test")
     monkeypatch.setenv("TRAINING_GYM_TRAINING_RUN_ID", "run-1")
@@ -239,7 +266,7 @@ def test_preloop_lanes_accumulate_on_one_recorder(monkeypatch):
 def test_permanent_rejection_latches_recorder(monkeypatch, capsys):
     monkeypatch.setattr(timing_recorder, "_UNSUPPORTED", False)
     monkeypatch.setattr(timing_recorder, "_NOT_FOUND_COUNT", 0)
-    monkeypatch.setattr(timing_recorder, "_REQUIRE_FAILURE_REPORTED", False)
+    monkeypatch.setattr(timing_recorder, "_FAILURE_REPORTED", False)
     monkeypatch.setattr(timing_recorder, "MIN_PUBLISH_INTERVAL_S", 0.0)
     monkeypatch.setenv("TRAINING_GYM_FRAMEWORK_STATUS_URL", "https://dashboard.test")
     monkeypatch.setenv("TRAINING_GYM_TRAINING_RUN_ID", "rejected-run")

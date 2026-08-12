@@ -150,9 +150,6 @@ _PATCH_SGLANG_PARALLEL_ALIASES_B64 = encode_patch(
 
 
 def _build_slime_base_image(substep_timing: str = "auto") -> "Image":
-    timing_prefix = f"TRAINING_GYM_SUBSTEP_TIMING={substep_timing} "
-    if substep_timing != "require":
-        timing_prefix += "TG_BEST_EFFORT_ENTRYPOINTS=1 "
     return (
         Image.from_registry(SLIME_IMAGE)
         .entrypoint([])
@@ -171,7 +168,7 @@ def _build_slime_base_image(substep_timing: str = "auto") -> "Image":
             f"echo {_PATCH_DIST_CKPT_QUANTIZED_B64} | base64 -d | python3",
             f"echo {_PATCH_ZERO_STD_METRICS_B64} | base64 -d | python3",
             f"echo {_PATCH_SGLANG_PARALLEL_ALIASES_B64} | base64 -d | python3",
-            f"echo {_PATCH_SUBSTEP_TIMING_B64} | base64 -d | {timing_prefix}python3",
+            f"echo {_PATCH_SUBSTEP_TIMING_B64} | base64 -d | python3",
         )
     )
 

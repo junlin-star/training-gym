@@ -76,7 +76,7 @@ def test_wandb_env_is_preserved(monkeypatch):
 
 def test_substep_timing_is_forwarded_from_recipe(monkeypatch):
     monkeypatch.delenv("LD_LIBRARY_PATH", raising=False)
-    recipe = MilesRecipe(substep_timing="require")
+    recipe = MilesRecipe(substep_timing="off")
 
     env_vars = build_ray_runtime_env(
         head_addr="10.0.0.1",
@@ -85,36 +85,10 @@ def test_substep_timing_is_forwarded_from_recipe(monkeypatch):
         substep_timing=recipe.substep_timing,
     )["env_vars"]
 
-    assert env_vars["TRAINING_GYM_SUBSTEP_TIMING"] == "require"
+    assert env_vars["TRAINING_GYM_SUBSTEP_TIMING"] == "off"
 
 
-def test_pinned_image_patch_commands_keep_non_timing_patches_strict(monkeypatch):
-    commands = []
-
-    class FakeImage:
-        @classmethod
-        def from_registry(cls, image):
-            return cls()
-
-        def entrypoint(self, command):
-            return self
-
-        def run_commands(self, *values):
-            commands.extend(values)
-            return self
-
-    monkeypatch.setattr(launcher, "Image", FakeImage)
-    launcher._build_miles_base_image(MilesRecipe(substep_timing="require"))
-
-    assert "TG_BEST_EFFORT_ENTRYPOINTS=1" not in commands[1]
-    assert all(
-        "TG_BEST_EFFORT_ENTRYPOINTS=1" not in command for command in commands[2:4]
-    )
-    assert "TRAINING_GYM_SUBSTEP_TIMING=require" in commands[4]
-    assert "TG_BEST_EFFORT_ENTRYPOINTS=1" not in commands[4]
-
-
-def test_pinned_image_timing_patch_is_best_effort_in_auto(monkeypatch):
+def test_pinned_image_patch_commands_are_mode_independent(monkeypatch):
     commands = []
 
     class FakeImage:
@@ -131,6 +105,10 @@ def test_pinned_image_timing_patch_is_best_effort_in_auto(monkeypatch):
 
     monkeypatch.setattr(launcher, "Image", FakeImage)
     launcher._build_miles_base_image(MilesRecipe(substep_timing="auto"))
+    auto_commands = commands[:]
+    commands.clear()
+    launcher._build_miles_base_image(MilesRecipe(substep_timing="off"))
 
-    assert "TG_BEST_EFFORT_ENTRYPOINTS=1" in commands[4]
-    assert "TRAINING_GYM_SUBSTEP_TIMING=auto" in commands[4]
+    assert commands == auto_commands
+    assert "TRAINING_GYM_SUBSTEP_TIMING=" not in commands[4]
+    assert "TG_BEST_EFFORT_ENTRYPOINTS=1" not in commands[4]

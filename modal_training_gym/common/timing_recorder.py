@@ -29,8 +29,32 @@ _PRELOOP_RECORDERS: dict[str, RoleRecorder] = {}
 _PRELOOP_LOCK = threading.Lock()
 _UNSUPPORTED = False
 _NOT_FOUND_COUNT = 0
-_REQUIRE_FAILURE_REPORTED = False
+_FAILURE_REPORTED = False
 _UNSUPPORTED_LOCK = threading.Lock()
+_TIMING_MODE_CACHE: str | None = None
+
+
+def timing_mode() -> str:
+    """Return the process timing mode, read once before worker hot paths run."""
+    global _TIMING_MODE_CACHE
+    if _TIMING_MODE_CACHE is None:
+        _TIMING_MODE_CACHE = os.environ.get(TIMING_MODE_ENV, "auto")
+    return _TIMING_MODE_CACHE
+
+
+def reset_timing_mode_cache() -> None:
+    """Reset the cached mode for tests that change the worker environment."""
+    global _TIMING_MODE_CACHE
+    _TIMING_MODE_CACHE = None
+
+
+class _NoopRecorder:
+    @contextmanager
+    def phase(self, name: str) -> Iterator[None]:
+        yield
+
+
+_NOOP_RECORDER = _NoopRecorder()
 
 
 def _drain_closed_posters() -> None:
@@ -111,6 +135,9 @@ class RoleRecorder:
 
     @contextmanager
     def phase(self, name: str) -> Iterator[None]:
+        if timing_mode() == "off":
+            yield
+            return
         start = time.monotonic()
         try:
             yield
@@ -157,7 +184,7 @@ class RoleRecorder:
                 pass
 
     def _post_snapshots(self) -> None:
-        global _NOT_FOUND_COUNT, _REQUIRE_FAILURE_REPORTED
+        global _NOT_FOUND_COUNT, _FAILURE_REPORTED
         global _UNSUPPORTED
         while True:
             try:
@@ -181,23 +208,15 @@ class RoleRecorder:
                             _NOT_FOUND_COUNT += 1
                             if _NOT_FOUND_COUNT >= NOT_FOUND_LATCH_THRESHOLD:
                                 _UNSUPPORTED = True
-                                if not _REQUIRE_FAILURE_REPORTED:
-                                    _REQUIRE_FAILURE_REPORTED = True
+                                if not _FAILURE_REPORTED:
+                                    _FAILURE_REPORTED = True
                                     should_report = True
                         if should_report:
-                            if os.environ.get(TIMING_MODE_ENV, "auto") == "require":
-                                message = (
-                                    "ERROR: substep_timing='require' was rejected "
-                                    "with HTTP 404/405 from the dashboard timing "
-                                    "endpoint; this dashboard is too old for "
-                                    "substep timing, redeploy it."
-                                )
-                            else:
-                                message = (
-                                    "WARNING: this dashboard is too old for substep "
-                                    "timing (HTTP 404/405 from its timing "
-                                    "endpoint); redeploy the dashboard to record it."
-                                )
+                            message = (
+                                "WARNING: this dashboard is too old for substep "
+                                "timing (HTTP 404/405 from its timing endpoint); "
+                                "redeploy the dashboard to record it."
+                            )
                             print(message, flush=True)
                     elif result == status_reporter.PostResult.AUTH_FAILED:
                         self._auth_rejections += 1
@@ -233,17 +252,16 @@ class RoleRecorder:
                         self._post_retries += 1
                         if self._post_retries >= MAX_POST_RETRIES:
                             self._post_retries = 0
-                            if os.environ.get(TIMING_MODE_ENV, "auto") == "require":
-                                with _UNSUPPORTED_LOCK:
-                                    should_report = not _REQUIRE_FAILURE_REPORTED
-                                    _REQUIRE_FAILURE_REPORTED = True
-                                if should_report:
-                                    print(
-                                        "ERROR: substep_timing='require' timing upload "
-                                        f"failed after {MAX_POST_RETRIES} attempts; "
-                                        "check dashboard authentication or connectivity.",
-                                        flush=True,
-                                    )
+                            with _UNSUPPORTED_LOCK:
+                                should_report = not _FAILURE_REPORTED
+                                _FAILURE_REPORTED = True
+                            if should_report:
+                                print(
+                                    "WARNING: substep timing upload failed after "
+                                    f"{MAX_POST_RETRIES} attempts; check dashboard "
+                                    "authentication or connectivity.",
+                                    flush=True,
+                                )
                         else:
                             with self._lock:
                                 if self._snapshot is None:
@@ -261,7 +279,7 @@ class RoleRecorder:
         with self._lock:
             if self._permanent_rejected or self._auth_rejected or not self.phases:
                 return
-        if os.environ.get(TIMING_MODE_ENV, "auto") == "off":
+        if timing_mode() == "off":
             return
         url = timing_url()
         training_run_id = os.environ.get("TRAINING_GYM_TRAINING_RUN_ID", "")
@@ -337,6 +355,9 @@ _ACTIVE_LANE: ContextVar[RoleRecorder | None] = ContextVar(
 
 @contextmanager
 def time_phase(name: str) -> Iterator[None]:
+    if timing_mode() == "off":
+        yield
+        return
     rec = _ACTIVE_LANE.get()
     if rec is None:
         yield
@@ -350,7 +371,14 @@ def recording_lane(
     role: str,
     rollout_id: int | None,
     publish_gate: Callable[[], bool | None] | None = None,
-) -> Iterator[RoleRecorder]:
+) -> Iterator[RoleRecorder | _NoopRecorder]:
+    if timing_mode() == "off":
+        token = _ACTIVE_LANE.set(None)
+        try:
+            yield _NOOP_RECORDER
+        finally:
+            _ACTIVE_LANE.reset(token)
+        return
     if rollout_id is None:
         with _PRELOOP_LOCK:
             rec = _PRELOOP_RECORDERS.get(role)
@@ -383,7 +411,7 @@ def _lowest_rank_publishes() -> bool | None:
 @contextmanager
 def recording_lane_on_reporting_rank(
     rollout_id: int, role: str = "actor"
-) -> Iterator[RoleRecorder]:
+) -> Iterator[RoleRecorder | _NoopRecorder]:
     with recording_lane(role, rollout_id, _lowest_rank_publishes) as rec:
         yield rec
 

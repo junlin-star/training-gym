@@ -124,6 +124,34 @@ MILES_PACKAGE_TARGETS = [
     ),
 ]
 
+SLIME_PACKAGE_TARGETS = [
+    (
+        "slime/ray/rollout.py",
+        "slime/rollout.py.input",
+        "slime/rollout.py.timing.output",
+    ),
+    (
+        "slime/rollout/rm_hub/__init__.py",
+        "slime/rm_hub_init.py.input",
+        "slime/rm_hub_init.py.timing.output",
+    ),
+    (
+        "slime/rollout/sglang_rollout.py",
+        "slime/sglang_rollout.py.input",
+        "slime/sglang_rollout.py.timing.output",
+    ),
+    (
+        "slime/backends/megatron_utils/actor.py",
+        "slime/actor.py.input",
+        "slime/actor.py.timing.output",
+    ),
+    (
+        "slime/backends/megatron_utils/model.py",
+        "slime/model.py.input",
+        "slime/model.py.timing.output",
+    ),
+]
+
 
 @pytest.fixture(scope="session")
 def patchers() -> dict[str, object]:
@@ -213,6 +241,33 @@ def test_miles_package_patch_matches_golden(
     compile(patched, path, "exec")
 
 
+@pytest.mark.parametrize("path, fixture, golden", SLIME_PACKAGE_TARGETS)
+def test_slime_package_patch_matches_golden(
+    patchers, tmp_path, request, path, fixture, golden
+):
+    patcher = patchers["slime"]
+    target = next(target for target in patcher.PACKAGE_TARGETS if target.path == path)
+    work = tmp_path / target.path
+    work.parent.mkdir(parents=True)
+    work.write_text((TESTDATA / fixture).read_text())
+    patcher.patch_package_file(tmp_path, target)
+    patched = work.read_text()
+    golden_path = TESTDATA / golden
+
+    if request.config.getoption("--rewrite"):
+        golden_path.write_text(patched)
+        return
+
+    assert patched == golden_path.read_text(), (
+        f"golden mismatch for {golden}; rerun with --rewrite to accept"
+    )
+    for phase, _ in target.blocks:
+        assert f"with _tg_time_phase('{phase}'):" in patched
+    if target.scope is not None:
+        assert "_tg_role('rollout', rollout_id)" in patched or "_tg_mrec(" in patched
+    compile(patched, path, "exec")
+
+
 def test_a_conditional_phase_is_timed_inside_its_branch(patchers, tmp_path):
     """A skipped save must record nothing, not a 0s bar on every rollout.
 
@@ -268,21 +323,18 @@ def test_a_duplicate_anchor_fails_the_build(miles, tmp_path):
         miles._patch_file(work, miles.ENTRYPOINTS["train_async.py"])
 
 
-def test_package_patch_failure_depends_on_timing_mode(
-    miles, tmp_path, monkeypatch, capsys
+@pytest.mark.parametrize("mode", ("auto", "off"))
+def test_package_patch_failure_is_best_effort(
+    miles, tmp_path, monkeypatch, capsys, mode
 ):
     target = miles.PackageTarget(
         path="missing.py",
         scope=None,
         blocks=(("missing", "missing\n"),),
     )
-    monkeypatch.setenv("TRAINING_GYM_SUBSTEP_TIMING", "auto")
+    monkeypatch.setenv("TRAINING_GYM_SUBSTEP_TIMING", mode)
     miles.patch_package_file(tmp_path, target)
     assert "substep timing patch skipped" in capsys.readouterr().out
-
-    monkeypatch.setenv("TRAINING_GYM_SUBSTEP_TIMING", "require")
-    with pytest.raises(RuntimeError, match="not found"):
-        miles.patch_package_file(tmp_path, target)
 
 
 def test_async_training_offloads_are_separate_from_train(miles, tmp_path):

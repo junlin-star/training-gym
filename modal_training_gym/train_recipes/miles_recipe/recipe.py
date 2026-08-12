@@ -465,7 +465,7 @@ class MilesRecipe(BaseTrainRecipe):
     model_setup_gpu: str | None = None
     local_miles: str | None = None
     patch_files: list[str] = field(default_factory=list)
-    substep_timing: Literal["auto", "require", "off"] = "auto"
+    substep_timing: Literal["auto", "off"] = "auto"
 
     environment: dict = field(
         default_factory=lambda: {

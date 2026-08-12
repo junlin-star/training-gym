@@ -23,23 +23,11 @@ def _build_commands(monkeypatch, mode):
     return commands
 
 
-def test_pinned_image_timing_patch_is_strict_in_require(monkeypatch):
-    commands = _build_commands(monkeypatch, "require")
+def test_pinned_image_timing_patch_command_is_mode_independent(monkeypatch):
+    auto_commands = _build_commands(monkeypatch, "auto")
+    off_commands = _build_commands(monkeypatch, "off")
 
-    assert commands[-1].startswith("echo ")
-    assert "TRAINING_GYM_SUBSTEP_TIMING=require" in commands[-1]
-    assert "TG_BEST_EFFORT_ENTRYPOINTS=1" not in commands[-1]
-    assert all(
-        "TG_BEST_EFFORT_ENTRYPOINTS=1" not in command for command in commands[:-1]
-    )
-
-
-def test_pinned_image_timing_patch_is_best_effort_otherwise(monkeypatch):
-    for mode in ("auto", "off"):
-        commands = _build_commands(monkeypatch, mode)
-        assert commands[-1].startswith("echo ")
-        assert f"TRAINING_GYM_SUBSTEP_TIMING={mode}" in commands[-1]
-        assert "TG_BEST_EFFORT_ENTRYPOINTS=1" in commands[-1]
-        assert all(
-            "TG_BEST_EFFORT_ENTRYPOINTS=1" not in command for command in commands[:-1]
-        )
+    assert auto_commands == off_commands
+    assert auto_commands[-1].startswith("echo ")
+    assert "TRAINING_GYM_SUBSTEP_TIMING=" not in auto_commands[-1]
+    assert "TG_BEST_EFFORT_ENTRYPOINTS=1" not in auto_commands[-1]

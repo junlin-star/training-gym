@@ -151,9 +151,6 @@ _REPORTING_PATCH_COMMANDS = (
 
 
 def _build_miles_base_image(miles: MilesRecipe) -> Image:
-    timing_prefix = f"TRAINING_GYM_SUBSTEP_TIMING={miles.substep_timing} "
-    if miles.substep_timing != "require":
-        timing_prefix += "TG_BEST_EFFORT_ENTRYPOINTS=1 "
     image = (
         Image.from_registry(miles.docker_image)
         .entrypoint([])
@@ -161,7 +158,7 @@ def _build_miles_base_image(miles: MilesRecipe) -> Image:
             f"rm -rf {HF_CACHE_PATH} 2>/dev/null || true",
             f"echo {_PATCH_SGLANG_ABORT_B64} | base64 -d | python3",
             *_REPORTING_PATCH_COMMANDS,
-            f"echo {_PATCH_SUBSTEP_TIMING_B64} | base64 -d | {timing_prefix}python3",
+            f"echo {_PATCH_SUBSTEP_TIMING_B64} | base64 -d | python3",
         )
     )
     if miles.image_env:

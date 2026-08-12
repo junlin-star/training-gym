@@ -15,7 +15,11 @@ TESTDATA = Path(__file__).parent / "testdata" / "slime"
 
 @pytest.fixture(scope="session")
 def slime_inputs() -> dict[str, str]:
-    inputs = sorted(TESTDATA.glob("*.input"))
+    inputs = sorted(
+        path
+        for path in TESTDATA.glob("*.input")
+        if path.name in {"train.py.input", "train_async.py.input"}
+    )
     assert inputs
     return {path.name.removesuffix(".input"): path.read_text() for path in inputs}
 
