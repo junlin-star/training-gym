@@ -12,7 +12,7 @@ import os
 import secrets as _secrets
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Awaitable, Callable, Iterable, TypedDict
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Iterable, TypedDict
 
 import modal
 
@@ -53,9 +53,10 @@ from modal_training_gym.common.step_timing import (
     RoleTimingRecord,
     is_safe_run_id,
     legacy_run_to_records,
-    load_run_async,
     rollout_lanes,
 )
+from modal_training_gym.utils.metadata import vol_get as _metadata_vol_get
+from modal_training_gym.utils.metadata import vol_list_metadata
 from modal_training_gym.common.time import parse_time as _parse_log_time
 from modal_training_gym.common.training_rollout import (
     TrainingRolloutResult,
@@ -464,6 +465,7 @@ def fastapi_app():
     class TimingEntry:
         def __init__(self) -> None:
             self.lanes: JsonDict = {}
+            self.file_records: dict[str, dict[str, Any]] = {}
             self.read_at: float | None = None
             self.final = False
             self.dirty = False
@@ -919,7 +921,47 @@ def fastapi_app():
     async def _read_run_timings(
         training_run_id: str,
     ) -> tuple[JsonDict, bool]:
-        found, had_read_failures = await load_run_async(training_run_id)
+        entry = timing_cache[training_run_id]
+        listed, had_read_failures = await vol_list_metadata(
+            RoleTimingRecord.store(training_run_id),
+            is_async=True,
+            return_failures=True,
+        )
+        if had_read_failures:
+            return {}, True
+        current = {item["path"]: (item["mtime"], item["size"]) for item in listed}
+        unchanged = {
+            path: cached
+            for path, cached in entry.file_records.items()
+            if current.get(path) == (cached["mtime"], cached["size"])
+        }
+        changed = [item for item in listed if item["path"] not in unchanged]
+        read_results = await asyncio.gather(
+            *(
+                _metadata_vol_get(
+                    RoleTimingRecord.store(training_run_id),
+                    item["path"].rsplit("/", 1)[-1][:-5],
+                    is_async=True,
+                )
+                for item in changed
+            ),
+            return_exceptions=True,
+        )
+        if any(isinstance(result, Exception) for result in read_results):
+            return {}, True
+        entry.file_records = {
+            item["path"]: {
+                "mtime": current[item["path"]][0],
+                "size": current[item["path"]][1],
+                "record": record,
+            }
+            for item, record in zip(changed, read_results, strict=True)
+        }
+        entry.file_records.update(unchanged)
+        found: dict[int | None, list[JsonDict]] = {}
+        for cached in entry.file_records.values():
+            parsed = cached["record"]
+            found.setdefault(parsed["rollout_id"], []).append(parsed)
         legacy_derived = False
         if not found and not had_read_failures:
             try:

@@ -318,6 +318,63 @@ def vol_list(
     return (results, False) if return_failures else results
 
 
+def vol_list_metadata(
+    store: MetadataStore | str,
+    *,
+    is_async: bool = False,
+    return_failures: bool = False,
+) -> (
+    list[dict[str, Any]]
+    | tuple[list[dict[str, Any]], bool]
+    | Awaitable[list[dict[str, Any]] | tuple[list[dict[str, Any]], bool]]
+):
+    from modal.exception import NotFoundError
+
+    vol = _metadata_volume()
+    if is_async:
+
+        async def _run() -> list[dict[str, Any]] | tuple[list[dict[str, Any]], bool]:
+            await _safe_reload(vol, is_async=True)
+            for attempt in range(3):
+                try:
+                    entries = [
+                        {
+                            "path": entry.path,
+                            "mtime": entry.mtime,
+                            "size": entry.size,
+                        }
+                        async for entry in vol.iterdir.aio(_store_path(store))
+                        if entry.path.endswith(".json")
+                    ]
+                    return (entries, False) if return_failures else entries
+                except (FileNotFoundError, NotFoundError):
+                    return ([], False) if return_failures else []
+                except Exception as exc:
+                    if "rate limit" not in str(exc).lower() or attempt == 2:
+                        if return_failures:
+                            return [], True
+                        raise
+                    await asyncio.sleep(2**attempt)
+            raise AssertionError("unreachable")
+
+        return _run()
+
+    _safe_reload(vol)
+    try:
+        entries = [
+            {"path": entry.path, "mtime": entry.mtime, "size": entry.size}
+            for entry in vol.iterdir(_store_path(store))
+            if entry.path.endswith(".json")
+        ]
+        return (entries, False) if return_failures else entries
+    except (FileNotFoundError, NotFoundError):
+        return ([], False) if return_failures else []
+    except Exception as exc:
+        if return_failures:
+            return [], True
+        raise exc
+
+
 def vol_list_prefix(store: MetadataStore | str, prefix: str) -> list[dict[str, Any]]:
     """Read only the items whose key (file basename) starts with ``prefix``.
 

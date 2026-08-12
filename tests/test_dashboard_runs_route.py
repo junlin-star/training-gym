@@ -221,6 +221,200 @@ def test_timing_read_failure_preserves_cached_lanes(monkeypatch, tmp_path):
     assert entry.stale is False
 
 
+def _timing_reader_context(monkeypatch, tmp_path):
+    static = tmp_path / "static"
+    (static / "assets").mkdir(parents=True)
+    (static / "index.html").write_text("ok")
+    monkeypatch.setattr(_dashboard, "STATIC_DIR", str(static))
+    app = _dashboard.fastapi_app.local()
+    endpoint = next(
+        route.endpoint
+        for route in app.routes
+        if route.path == "/api/runs/{training_run_id}/timings"
+    )
+    run_timings = endpoint.__closure__[
+        endpoint.__code__.co_freevars.index("_run_timings")
+    ].cell_contents
+    cells = dict(zip(run_timings.__code__.co_freevars, run_timings.__closure__))
+    read_timings = cells["_read_run_timings"].cell_contents
+    return (
+        run_timings,
+        read_timings,
+        cells["timing_cache"].cell_contents,
+        cells["TimingEntry"].cell_contents,
+    )
+
+
+def _incremental_record(rollout_id: int) -> dict:
+    return {
+        "training_run_id": "incremental-run",
+        "rollout_id": rollout_id,
+        "role": "rollout",
+        "lane_start_unix_s": 100.0,
+        "phases": {
+            "generate_samples": {
+                "count": 1,
+                "total_duration_s": 1.0,
+                "longest_duration_s": 1.0,
+                "first_start_s": 0.0,
+                "last_end_s": 1.0,
+            }
+        },
+    }
+
+
+def test_incremental_timing_read_cold_start_reads_all_lanes(monkeypatch, tmp_path):
+    _run_timings, read_timings, timing_cache, entry_factory = _timing_reader_context(
+        monkeypatch, tmp_path
+    )
+    entries = [
+        {
+            "path": "substep-timing/incremental-cold/00000000__rollout.json",
+            "mtime": 1,
+            "size": 10,
+        },
+        {
+            "path": "substep-timing/incremental-cold/00000001__rollout.json",
+            "mtime": 1,
+            "size": 10,
+        },
+    ]
+    records = {
+        path.rsplit("/", 1)[-1][:-5]: _incremental_record(index)
+        for index, path in enumerate(item["path"] for item in entries)
+    }
+    reads = []
+
+    async def list_metadata(*_args, **_kwargs):
+        return entries, False
+
+    async def get_record(_store, key, **_kwargs):
+        reads.append(key)
+        return records[key]
+
+    monkeypatch.setattr(_dashboard, "vol_list_metadata", list_metadata)
+    monkeypatch.setattr(_dashboard, "_metadata_vol_get", get_record)
+    timing_cache["incremental-cold"] = entry_factory()
+
+    timings, failed = asyncio.run(read_timings("incremental-cold"))
+
+    assert not failed
+    assert set(reads) == set(records)
+    assert set(timings) == {"0", "1"}
+
+
+def test_incremental_timing_read_reuses_unchanged_lanes(monkeypatch, tmp_path):
+    _run_timings, read_timings, timing_cache, entry_factory = _timing_reader_context(
+        monkeypatch, tmp_path
+    )
+    entries = [
+        {
+            "path": "substep-timing/incremental-unchanged/00000000__rollout.json",
+            "mtime": 1,
+            "size": 10,
+        }
+    ]
+    reads = 0
+
+    async def list_metadata(*_args, **_kwargs):
+        return entries, False
+
+    async def get_record(*_args, **_kwargs):
+        nonlocal reads
+        reads += 1
+        return _incremental_record(0)
+
+    monkeypatch.setattr(_dashboard, "vol_list_metadata", list_metadata)
+    monkeypatch.setattr(_dashboard, "_metadata_vol_get", get_record)
+    timing_cache["incremental-unchanged"] = entry_factory()
+
+    asyncio.run(read_timings("incremental-unchanged"))
+    asyncio.run(read_timings("incremental-unchanged"))
+
+    assert reads == 1
+
+
+def test_incremental_timing_read_only_reads_updated_lane(monkeypatch, tmp_path):
+    _run_timings, read_timings, timing_cache, entry_factory = _timing_reader_context(
+        monkeypatch, tmp_path
+    )
+    entries = [
+        {
+            "path": "substep-timing/incremental-update/00000000__rollout.json",
+            "mtime": 1,
+            "size": 10,
+        },
+        {
+            "path": "substep-timing/incremental-update/00000001__rollout.json",
+            "mtime": 1,
+            "size": 10,
+        },
+    ]
+    listings = iter([entries, [entries[0], {**entries[1], "mtime": 2}]])
+    reads = []
+
+    async def list_metadata(*_args, **_kwargs):
+        return next(listings), False
+
+    async def get_record(_store, key, **_kwargs):
+        reads.append(key)
+        return _incremental_record(int(key[:8]))
+
+    monkeypatch.setattr(_dashboard, "vol_list_metadata", list_metadata)
+    monkeypatch.setattr(_dashboard, "_metadata_vol_get", get_record)
+    timing_cache["incremental-update"] = entry_factory()
+
+    asyncio.run(read_timings("incremental-update"))
+    asyncio.run(read_timings("incremental-update"))
+
+    assert reads == [
+        "00000000__rollout",
+        "00000001__rollout",
+        "00000001__rollout",
+    ]
+
+
+def test_incremental_timing_read_failure_preserves_complete_cache(
+    monkeypatch, tmp_path
+):
+    run_timings, read_timings, timing_cache, entry_factory = _timing_reader_context(
+        monkeypatch, tmp_path
+    )
+    entries = [
+        {
+            "path": "substep-timing/incremental-failure/00000000__rollout.json",
+            "mtime": 1,
+            "size": 10,
+        }
+    ]
+    listings = iter([entries, [{**entries[0], "mtime": 2}]])
+    reads = 0
+
+    async def list_metadata(*_args, **_kwargs):
+        return next(listings), False
+
+    async def get_record(*_args, **_kwargs):
+        nonlocal reads
+        reads += 1
+        if reads == 1:
+            return _incremental_record(0)
+        raise RuntimeError("read failed")
+
+    monkeypatch.setattr(_dashboard, "vol_list_metadata", list_metadata)
+    monkeypatch.setattr(_dashboard, "_metadata_vol_get", get_record)
+    timing_cache["incremental-failure"] = entry_factory()
+    initial, failed = asyncio.run(read_timings("incremental-failure"))
+    assert not failed
+    entry = timing_cache["incremental-failure"]
+    entry.lanes = initial
+    entry.read_at = 0.0
+
+    stale = asyncio.run(run_timings("incremental-failure"))
+
+    assert stale["0"]["roles"]["rollout"]["phases"]["generate_samples"]["count"] == 1
+    assert stale["metadata"]["timing_stale"] is True
+
+
 def test_rollout_route_preserves_raw_text_and_adds_cleaned_text(
     fake_volume, monkeypatch, tmp_path
 ):
