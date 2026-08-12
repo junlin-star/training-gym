@@ -493,7 +493,7 @@ def _eval_function():
             return bfcl_eval_fn(deployment, example)
 
         with ThreadPoolExecutor(max_workers=max_concurrency) as executor:
-            rows = list(executor.map(_score_one, eval_dataset.load()))
+            rows = list(executor.map(_score_one, eval_dataset.rows()))
         mean = sum(r["score"] for r in rows) / len(rows) if rows else float("nan")
         return mean, rows
 
@@ -1106,6 +1106,7 @@ def _train():
     training_run = TrainConfig(
         model=base_model,
         dataset=dataset,
+        eval_dataset=eval_dataset,
         recipe=Qwen3_6_35b_Recipe(
             custom_rm_function=cross_tokenizer_reward,
             custom_generate_function=tool_step_generate,

@@ -184,7 +184,7 @@ def _dataset():
         input_column = "prompt"
         output_column = "label"
         output_format = "jsonl"
-        apply_chat_template = False
+        needs_chat_template = False
 
     train_dataset = MathDataset(n_rows=100)
     eval_dataset = MathDataset(n_rows=20)
@@ -384,6 +384,7 @@ def _train():
     training_run = TrainConfig(
         model=base_model,
         dataset=train_dataset,
+        eval_dataset=eval_dataset,
         recipe=SlimeRecipe(
             custom_rm_function=math_opd_rm,
 

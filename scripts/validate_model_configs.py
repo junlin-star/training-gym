@@ -14,6 +14,7 @@ Usage:
 """
 
 import argparse
+import copy
 import json
 import sys
 from dataclasses import asdict, dataclass
@@ -248,6 +249,7 @@ def run_base_training(
     train_config = TrainConfig(
         model=model_config,
         dataset=dataset,
+        eval_dataset=copy.deepcopy(dataset),
         recipe=train_recipe,
     )
 

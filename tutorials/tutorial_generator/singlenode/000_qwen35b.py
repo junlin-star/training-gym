@@ -99,7 +99,7 @@ def _dataset():
         input_column = "prompt"
         output_column = "label"
         output_format = "jsonl"
-        apply_chat_template = True
+        needs_chat_template = True
 
     dataset = MathDataset(n_rows=120)
 

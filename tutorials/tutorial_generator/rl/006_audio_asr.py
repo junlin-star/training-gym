@@ -101,7 +101,7 @@ def _dataset_intro():
     audio column to the rollout — the same passthrough images and video use.
 
     We re-encode every clip to WAV and keep `sample.prompt` a message list
-    (`apply_chat_template=False`) so the audio data-URI survives into the rollout.
+    (`needs_chat_template=False`) so the audio data-URI survives into the rollout.
     """
 
 
@@ -119,15 +119,20 @@ def _dataset():
         hf_config = "clean"
         hf_split = "validation"
         n_rows = 8
-        # Re-materialize each run so prompt changes take effect instead of being
-        # shadowed by a stale jsonl on the data volume.
-        always_prepare = True
-        # Keep sample.prompt a conversation list (don't collapse to a templated
-        # string) so the audio data-URI survives for the transcription rollout.
-        apply_chat_template = False
 
-        def __init__(self, **kwargs):
-            super().__init__(rows=[], **kwargs)
+        def __init__(self, *, n_rows=None):
+            if n_rows is not None:
+                self.n_rows = n_rows
+            super().__init__(rows=[])
+
+        @property
+        def requires_refresh_before_training(self):
+            return True
+
+        @property
+        def needs_chat_template(self):
+            # Preserve message lists so the audio data-URI reaches the rollout.
+            return False
 
         def _build_rows(self) -> list[dict]:
             import base64 as b64
@@ -165,17 +170,11 @@ def _dataset():
                 )
             return rows
 
-        def load(self, split: str = "all") -> list[dict]:
+        def rows(self):
             return self._build_rows()
 
-        def prepare(self, path, eval_paths=None):
-            rows = self._build_rows()
-            self._write_jsonl(rows, path)
-            if eval_paths:
-                for eval_path in eval_paths.values():
-                    self._write_jsonl(rows, eval_path)
-
     dataset = LibriSpeechASRDataset(n_rows=8)
+    eval_dataset = LibriSpeechASRDataset(n_rows=8)
 
 
 @notebook_only
@@ -189,7 +188,7 @@ def _dataset_preview():
 @notebook_only
 @code
 def _dataset_preview_code():
-    row = dataset.load()[0]
+    row = next(iter(eval_dataset.rows()))
     print("prompt:", row["prompt"])
     print("audio: ", row["audios"][0][:48], "...")
     print("label: ", row["label"])
@@ -250,6 +249,7 @@ def _train():
     training_run = TrainConfig(
         model=Qwen3_ASR_1_7B(),
         dataset=dataset,
+        eval_dataset=eval_dataset,
         recipe=Qwen3_ASR_1_7b_Recipe(custom_rm_function=word_error_rate_reward),
     )
     print("Starting training...")
@@ -331,7 +331,7 @@ def _eval():
             return transcribe_and_score(deployment, example)
 
         with ThreadPoolExecutor(max_workers=max_concurrency) as executor:
-            return list(executor.map(_score_one, dataset.load()))
+            return list(executor.map(_score_one, eval_dataset.rows()))
 
     rows = run_eval(deployment)
     mean_wer = sum(r["wer"] for r in rows) / len(rows) if rows else float("nan")

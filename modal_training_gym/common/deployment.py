@@ -198,6 +198,7 @@ class DeploymentConfig:
             self.checkpoint.path if self.checkpoint is not None else "",
             f"{type(recipe).__name__}:{recipe.recipe_type.value}",
             self.app_name or "",
+            "",
             model_path,
         )
 

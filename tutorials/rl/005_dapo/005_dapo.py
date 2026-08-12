@@ -77,9 +77,9 @@ class MathDataset(HuggingFaceDataset):
     input_key = "prompt"
     label_key = "label"
     output_format = "jsonl"
-    apply_chat_template = True
+    needs_chat_template = True
     row_offset = 0
-    always_prepare = True
+    requires_refresh_before_training = True
 
     def load(self, split: str = "all") -> Any:
         from datasets import load_dataset
@@ -244,6 +244,7 @@ def _main_impl() -> None:
     training_run = TrainConfig(
         model=base_model,
         dataset=train_dataset,
+        eval_dataset=eval_dataset,
         recipe=SlimeRecipe(
             rm_type="dapo",
             custom_rm_function=dapo_overlong_rm,

@@ -96,9 +96,8 @@ def _dataset_intro():
     `*.in`/`*.out` file pairs, so we define stdin/stdout test cases
     inline and pass them to `score_in_sandbox` via the `test_cases` field.
 
-    A single dataset instance handles both training and eval —
-    `prepare()` writes train and eval splits to the volume,
-    while `load()` returns all tasks for offline evaluation.
+    Training and evaluation use separate `HarborDataset` instances. Each
+    instance exposes its selected split through the standard `rows()` API.
     """
 
 
@@ -110,7 +109,7 @@ def _dataset():
         dataset_name="harbor/hello-world",
         label_metadata_path="task.toml",
         train_repeats=20,
-        always_prepare=True, # For the purpose of this tutorial, we want to prepare the dataset every time we run it, in case there is stale data from a previous run.
+        requires_refresh_before_training=True, # For this tutorial, prepare the dataset every run in case a previous run left stale data.
         system_prompt=(
             "You are an expert Python programmer. "
             "Solve the given problem by writing a complete Python program. "
@@ -118,6 +117,12 @@ def _dataset():
             "Do not create or write any files. "
             "Put your solution in a ```python code fence."
         ),
+    )
+    eval_dataset = HarborDataset(
+        split="eval",
+        dataset_name="harbor/hello-world",
+        label_metadata_path="task.toml",
+        system_prompt=dataset.system_prompt,
     )
 
 
@@ -173,11 +178,8 @@ def _serve_eval_base():
         deployment.wait_until_ready(timeout=3000)
 
         def _score_one(example):
-            prompt = example["instruction"]
-            messages = [
-                {"role": "system", "content": dataset.system_prompt},
-                {"role": "user", "content": prompt},
-            ]
+            messages = example["messages"]
+            prompt = messages[-1]["content"]
             response = deployment.generate(
                 prompt,
                 ensure_ready=False,
@@ -188,7 +190,7 @@ def _serve_eval_base():
             return float(reward)
 
         with ThreadPoolExecutor(max_workers=max_concurrency) as executor:
-            rewards = list(executor.map(_score_one, dataset.load()))
+            rewards = list(executor.map(_score_one, eval_dataset.rows()))
         return sum(rewards) / len(rewards) if rewards else float("nan")
 
     print("Running base eval...")
@@ -230,6 +232,7 @@ def _train():
     training_run = TrainConfig(
         model=Qwen3_4B(),
         dataset=dataset,
+        eval_dataset=eval_dataset,
         recipe=SlimeRecipe(
             custom_rm_function=sandbox_rm,
 

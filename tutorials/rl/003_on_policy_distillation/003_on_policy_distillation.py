@@ -87,7 +87,7 @@ class MathDataset(HuggingFaceDataset):
     input_column = "prompt"
     output_column = "label"
     output_format = "jsonl"
-    apply_chat_template = False
+    needs_chat_template = False
 
 eval_dataset = MathDataset(n_rows=20)
 
@@ -272,6 +272,7 @@ def _main_impl() -> None:
     training_run = TrainConfig(
         model=base_model,
         dataset=train_dataset,
+        eval_dataset=eval_dataset,
         recipe=SlimeRecipe(
             custom_rm_function=math_opd_rm,
 

@@ -318,6 +318,7 @@ def serialize_recipe_params(
     recipe: Any,
     *,
     dataset: Any = None,
+    eval_dataset: Any = None,
     model: Any = None,
 ) -> dict[str, Any]:
     """The recipe's effective CLI flags, serialized for the dashboard run record.
@@ -327,7 +328,9 @@ def serialize_recipe_params(
     """
     return {
         key: serialize_recipe_param_value(key, value)
-        for key, value in recipe._fields(dataset=dataset, model=model).items()
+        for key, value in recipe._fields(
+            dataset=dataset, eval_dataset=eval_dataset, model=model
+        ).items()
     }
 
 
@@ -375,11 +378,14 @@ def build_train_cmd(
     *,
     model: Any = None,
     dataset: Any = None,
+    eval_dataset: Any = None,
     model_script_attr: str,
 ) -> str:
     """Build the Ray job entrypoint, sourcing model arch args if needed."""
     train_script = f"{root}/{'train_async.py' if cfg.async_mode else 'train.py'}"
-    args = shlex.join(cfg.cli_args(dataset=dataset, model=model))
+    args = shlex.join(
+        cfg.cli_args(dataset=dataset, eval_dataset=eval_dataset, model=model)
+    )
     if model_script := getattr(cfg, model_script_attr, ""):
         inner = (
             f"source {root}/{model_script} && "

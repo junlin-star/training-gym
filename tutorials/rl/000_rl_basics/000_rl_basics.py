@@ -120,13 +120,13 @@ class HaikuDataset(HuggingFaceDataset):
     input_column = "keywords"
     output_column = "text"
     output_format = "jsonl"
-    apply_chat_template = True
+    needs_chat_template = True
     system_prompt = (
         "You are a haiku poet. Write a haiku about the given topic. "
         "Use the 5-7-5 syllable format across three lines."
     )
     prompt_template = "Write a haiku about {input}."
-    always_prepare = True # For the purpose of this tutorial, we want to prepare the dataset every time we run it, in case there is stale data from a previous run.
+    requires_refresh_before_training = True # Rebuild every run so tutorial changes are not shadowed by stale data.
 
 eval_dataset = HaikuDataset(n_rows=5)
 
@@ -194,6 +194,7 @@ def _main_impl() -> None:
     training_run = TrainConfig(
         model=base_model,
         dataset=train_dataset,
+        eval_dataset=eval_dataset,
         recipe=SlimeRecipe(
             custom_rm_function=haiku_rm,
 
@@ -265,6 +266,7 @@ def _main_impl() -> None:
     new_training_run = TrainConfig(
         model=Qwen3_4B(),
         dataset=train_dataset,
+        eval_dataset=eval_dataset,
         checkpoint=checkpoint,
         recipe=SlimeRecipe(
             custom_rm_function=haiku_rm,

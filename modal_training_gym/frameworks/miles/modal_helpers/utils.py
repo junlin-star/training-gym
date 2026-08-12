@@ -33,11 +33,14 @@ def prepare_miles_config(miles_cfg, model, tmpdir: str) -> None:
     )
 
 
-def build_train_cmd(miles_cfg, miles_root: str, model=None, dataset=None) -> str:
+def build_train_cmd(
+    miles_cfg, miles_root: str, model=None, dataset=None, eval_dataset=None
+) -> str:
     return _build_train_cmd(
         miles_cfg,
         miles_root,
         model=model,
         dataset=dataset,
+        eval_dataset=eval_dataset,
         model_script_attr="miles_model_script",
     )
