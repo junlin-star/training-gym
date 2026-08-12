@@ -210,8 +210,8 @@ test("runTimeline keeps adjacent generation outside the train parent", () => {
       },
     },
   });
-  const roots = timeline.groups[0].rows[0].spans.filter(
-    (span) => span.depth === 0,
+  const roots = timeline.groups[0].rows.flatMap((row) =>
+    row.spans.filter((span) => span.depth === row.rootDepth),
   );
   const train = roots.find((span) => span.name === "train_models");
   const generation = roots.find((span) => span.name === "generate_samples");
@@ -253,6 +253,27 @@ test("anchorLanes shifts a lane just enough to fit its owner", () => {
   assert.equal(spans[1].clockShifted, true);
 });
 
+test("anchorLanes centers a substantially shorter shifted lane", () => {
+  const spans = anchoredLane(10, 20, 20, 25);
+  anchorLanes(spans);
+
+  assert.deepEqual(
+    [spans[1].start, spans[1].end],
+    [12.5, 17.5],
+  );
+  assert.ok(Math.abs(spans[1].clockOffset + 7.5) < 1e-9);
+  assert.equal(spans[1].clockShifted, true);
+});
+
+test("anchorLanes leaves an already-fitting lane unchanged", () => {
+  const spans = anchoredLane(10, 20, 12, 18);
+  anchorLanes(spans);
+
+  assert.deepEqual([spans[1].start, spans[1].end], [12, 18]);
+  assert.equal(spans[1].clockShifted, undefined);
+  assert.equal(spans[1].clockOffset, undefined);
+});
+
 test("anchorLanes chooses a concrete parent instead of a disjoint union", () => {
   const driverA = {
     name: "train_models",
@@ -274,13 +295,13 @@ test("anchorLanes chooses a concrete parent instead of a disjoint union", () => 
     rolloutId: 1,
     laneKey: "1:actor",
     start: 135,
-    end: 155,
+    end: 165,
   };
 
   anchorLanes([driverA, driverB, actor]);
   nest([driverA, driverB, actor]);
 
-  assert.deepEqual([actor.start, actor.end], [149.99, 169.99]);
+  assert.deepEqual([actor.start, actor.end], [149.99, 179.99]);
   assert.ok(Math.abs(actor.clockOffset - 14.99) < 1e-9);
   assert.equal(actor.depth, 1);
   assert.equal(actor.parent, driverB);
@@ -369,4 +390,64 @@ test("anchorLanes shifts every span in a lane without changing durations", () =>
     spans.slice(1).map((span) => span.end - span.start),
     durations,
   );
+});
+
+test("runTimeline gives each worker role its own row", () => {
+  const timeline = runTimeline({
+    0: {
+      roles: {
+        driver: {
+          lane_start_unix_s: 100,
+          phases: {
+            train_models: {
+              count: 1,
+              total_duration_s: 20,
+              first_start_s: 0,
+              last_end_s: 20,
+            },
+          },
+        },
+        actor: {
+          lane_start_unix_s: 100,
+          phases: {
+            forward_backward: {
+              count: 1,
+              total_duration_s: 4,
+              first_start_s: 2,
+              last_end_s: 6,
+            },
+          },
+        },
+        critic: {
+          lane_start_unix_s: 100,
+          phases: {
+            forward_backward: {
+              count: 1,
+              total_duration_s: 4,
+              first_start_s: 2,
+              last_end_s: 6,
+            },
+          },
+        },
+      },
+    },
+  });
+  const rows = timeline.groups[0].rows;
+
+  assert.deepEqual(rows.map((row) => row.role), ["driver", "actor", "critic"]);
+  assert.deepEqual(
+    rows.slice(1).map((row) => row.sortedSpans.map((span) => span.role)),
+    [["actor"], ["critic"]],
+  );
+  assert.ok(rows.slice(1).every((row) => row.sortedSpans.every((span) => span.depth > 0)));
+  assert.deepEqual(
+    rows.slice(1).map((row) => [row.sortedSpans[0].start, row.sortedSpans[0].end]),
+    [
+      [102, 106],
+      [102, 106],
+    ],
+  );
+  assert.notEqual(rows[1].key, rows[2].key);
+  assert.equal(rows[1].sortedSpans[0].parent, undefined);
+  assert.equal(rows[2].sortedSpans[0].parent, undefined);
 });

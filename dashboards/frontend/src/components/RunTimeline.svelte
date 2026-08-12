@@ -41,10 +41,16 @@
   let intervalOrigin = $derived(runOrigin ?? timeline.runStart);
   let rowHeight = $derived(showDetails ? DETAIL_ROW_HEIGHT_PX : ROW_HEIGHT_PX);
   let groups = $derived(
-    timeline.groups.map((group) => ({
-      ...group,
-      height: HEADER_PX + group.rows.length * (rowHeight + ROW_GAP_PX),
-    })),
+    timeline.groups.map((group) => {
+      const rows = showDetails
+        ? group.rows
+        : group.rows.filter((row) => row.rootDepth === 0);
+      return {
+        ...group,
+        rows,
+        height: HEADER_PX + rows.length * (rowHeight + ROW_GAP_PX),
+      };
+    }),
   );
   $effect(() => {
     timelineKey;
@@ -333,7 +339,7 @@
         (bar) =>
           !bar.mergedGeneration &&
           !HIDDEN_PHASES.has(bar.name) &&
-          (showDetails || bar.depth === 0),
+          (showDetails || bar.depth === row.rootDepth),
       )
   }
 
@@ -341,9 +347,13 @@
     return row.insetKeys.has(bar.key) ? BAR_GAP_PX : 0;
   }
 
-  function visibleChildren(bar) {
+  function visibleChildren(bar, row) {
     return showDetails
-      ? (bar.children || []).filter((child) => !HIDDEN_PHASES.has(child.name))
+      ? (bar.children || []).filter(
+          (child) =>
+            !HIDDEN_PHASES.has(child.name) &&
+            child.role === row.role,
+        )
       : [];
   }
 
@@ -575,16 +585,16 @@
                             onclick={(e) => pinTip(e, bar)}
                           ></button>
                         {/if}
-                        {#if visibleChildren(bar).length}
+                        {#if visibleChildren(bar, row).length}
                           <div class="bar-children">
-                            {#each visibleChildren(bar) as child (child.key)}
+                            {#each visibleChildren(bar, row) as child (child.key)}
                               {@render renderBar(child, row)}
                             {/each}
                           </div>
                         {/if}
                       </div>
                     {/snippet}
-                    {#each displaySpans(row).filter((bar) => bar.depth === 0) as bar (bar.key)}
+                    {#each displaySpans(row).filter((bar) => bar.depth === row.rootDepth) as bar (bar.key)}
                       {@render renderBar(bar, row)}
                     {/each}
                   </div>

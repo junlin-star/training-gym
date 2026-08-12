@@ -139,6 +139,12 @@ export function clipIdleSpans(spans, async) {
 function rowsOf(spans, async) {
   if (!spans.length) return [];
   const prepareRow = (row) => {
+    row.rootDepth =
+      row.rootDepth ??
+      row.spans.reduce(
+        (depth, span) => Math.min(depth, span.depth),
+        Number.POSITIVE_INFINITY,
+      );
     row.sortedSpans = [...row.spans].sort(
       (a, b) => a.depth - b.depth || a.start - b.start || b.end - a.end,
     );
@@ -165,19 +171,9 @@ function rowsOf(spans, async) {
     }
     return row;
   };
-  const driverSpans = spans.filter((span) => !async || span.role !== "rollout");
-  if (!async) {
-    return [prepareRow(
-      {
-        key: "driver",
-        label: "Train",
-        role: "driver",
-        hint: "Driver and trainer phases on the shared wall clock.",
-        spans: driverSpans,
-      },
-    )];
-  }
-
+  const driverSpans = spans.filter(
+    (span) => span.role === "driver" || (!async && span.role === "rollout"),
+  );
   const rows = [
     prepareRow({
       key: "driver",
@@ -185,8 +181,31 @@ function rowsOf(spans, async) {
       role: "driver",
       hint: "Driver and trainer phases on the shared wall clock.",
       spans: driverSpans,
+      rootDepth: 0,
     }),
   ];
+  const workerRoles = [
+    ...new Set(
+      spans
+        .filter((span) => span.role !== "driver" && span.role !== "rollout")
+        .map((span) => span.role),
+    ),
+  ].sort();
+  for (const role of workerRoles) {
+    const roleSpans = spans.filter((span) => span.role === role);
+    if (!roleSpans.length) continue;
+    rows.push(
+      prepareRow({
+        key: `worker-${role}`,
+        label: role[0].toUpperCase() + role.slice(1),
+        role,
+        hint: `${role} worker phases on the aligned wall clock.`,
+        spans: roleSpans,
+      }),
+    );
+  }
+  if (!async) return rows;
+
   const rolloutSpans = spans.filter((span) => span.role === "rollout");
   const roots = rolloutSpans.filter(
     (span) => span.depth === 0 && !span.mergedGeneration,

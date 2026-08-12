@@ -11,6 +11,8 @@ import {
   rolloutIdForTimingKey,
 } from "./timing_vocabulary.js";
 
+const SHORT_LANE_PARENT_RATIO = 0.75; // Center lanes shorter than 75% of their parent.
+
 export function collect(timings) {
   const spans = [];
   for (const [id, lanes] of Object.entries(timings || {})) {
@@ -109,10 +111,15 @@ export function anchorLanes(spans) {
     }
     if (candidates.length === 1) {
       const parent = candidates[0];
+      const laneDuration = laneEnd - laneStart;
+      const parentDuration = parent.end - parent.start;
       let offset = 0;
       if (laneEnd > parent.end) offset = parent.end - laneEnd;
       if (laneStart + offset < parent.start) offset = parent.start - laneStart;
       if (Math.abs(offset) < 1e-9) continue;
+      if (laneDuration < parentDuration * SHORT_LANE_PARENT_RATIO) {
+        offset = parent.start + (parentDuration - laneDuration) / 2 - laneStart;
+      }
 
       for (const span of lane) {
         span.start += offset;
@@ -152,8 +159,15 @@ export function anchorLanes(spans) {
       }
     }
     if (!best) continue;
-    const { offset } = best;
+    let { offset } = best;
     if (Math.abs(offset) < 1e-9) continue;
+    const parentDuration = best.candidate.end - best.candidate.start;
+    if (laneDuration < parentDuration * SHORT_LANE_PARENT_RATIO) {
+      offset =
+        best.candidate.start +
+        (parentDuration - laneDuration) / 2 -
+        laneStart;
+    }
 
     for (const span of lane) {
       span.start += offset;
