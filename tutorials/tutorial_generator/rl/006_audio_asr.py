@@ -85,7 +85,6 @@ def _imports():
         TrainConfig,
         list_checkpoints,
     )
-    from modal_training_gym.deploy_recipes import SglangRecipe
 
 
 @markdown
@@ -316,7 +315,6 @@ def _eval():
     deployment = AdHocDeployment.launch(
         Qwen3_ASR_1_7B(),
         checkpoint=checkpoint,
-        recipe=SglangRecipe(),
         unauthenticated=True,
     )
     print(f"Serving trained model at {deployment.url}")

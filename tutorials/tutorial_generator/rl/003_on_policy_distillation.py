@@ -282,7 +282,6 @@ def _eval_base():
     base_model = Qwen3_4B()
     base_deployment = AdHocDeployment.launch(
         base_model,
-        recipe=SglangRecipe(),
         unauthenticated=True,
     )
     print(f"Student URL: {base_deployment.url}")
@@ -454,7 +453,6 @@ def _eval_trained():
     trained_deployment = AdHocDeployment.launch(
         Qwen3_4B(),
         checkpoint=checkpoint,
-        recipe=SglangRecipe(),
         app_name="qwen3-4b-opd-trained-serve",
         served_model_name="qwen3-4b-opd",
         unauthenticated=True,

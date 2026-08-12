@@ -79,7 +79,6 @@ def _imports():
         TrainConfig,
         list_checkpoints,
     )
-    from modal_training_gym.deploy_recipes import SglangRecipe
 
 
 @markdown
@@ -107,7 +106,6 @@ def _serve_base_model():
     base_model = Qwen3_4B()
     base_model_deployment = AdHocDeployment.launch(
         base_model,
-        recipe=SglangRecipe(),
         unauthenticated=True,
     )
     print(f"Base model deployed to {base_model_deployment.url}")
@@ -363,7 +361,6 @@ def _serve_and_eval_trained():
     trained_model_deployment = AdHocDeployment.launch(
         Qwen3_4B(),
         checkpoint=checkpoint,
-        recipe=SglangRecipe(),
         app_name="qwen3-4b-haiku-serve",
         served_model_name="qwen3-4b-haiku",
         unauthenticated=True,
@@ -447,7 +444,6 @@ def _trained_eval_off_of_a_checkpoint_code():
     new_model_deployment = AdHocDeployment.launch(
         Qwen3_4B(),
         checkpoint=new_checkpoint,
-        recipe=SglangRecipe(),
         app_name="qwen3-4b-haiku-serve-new",
         served_model_name="qwen3-4b-haiku",
         unauthenticated=True,

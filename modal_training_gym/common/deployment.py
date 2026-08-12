@@ -225,7 +225,7 @@ class _CrashloopDetector:
 class AdHocDeployment(BaseModel):
     """A recipe-driven deployed model endpoint.
 
-    Use :meth:`launch` to build and deploy an SGLang or vLLM serving app.
+    Use `launch` to build and deploy an SGLang or vLLM serving app.
     The returned handle carries the live URL, Modal app id, and convenience
     methods for generation and evaluation.
     """
@@ -246,7 +246,7 @@ class AdHocDeployment(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
-    def _parse_legacy_deployment(cls, value: object) -> object:
+    def _parse_deployment(cls, value: object) -> object:
         """Flatten records written by the legacy deployment API."""
         if not isinstance(value, dict) or "deployment_config" not in value:
             return value
@@ -269,13 +269,15 @@ class AdHocDeployment(BaseModel):
         model: ModelConfig | str,
         checkpoint: Checkpoint | None = None,
         *,
-        recipe: VllmRecipe | SglangRecipe,
+        recipe: VllmRecipe | SglangRecipe | None = None,
         app_name: str | None = None,
         served_model_name: str | None = None,
         unauthenticated: bool = True,
     ) -> "AdHocDeployment":
-        """Build, deploy, and return a recipe-driven deployment handle."""
         model = ModelConfig(model_name=model) if isinstance(model, str) else model
+
+        if recipe is None:
+            recipe = SglangRecipe()
 
         if (
             checkpoint is not None

@@ -52,7 +52,6 @@ from modal_training_gym import (
     WandbConfig,
     list_checkpoints,
 )
-from modal_training_gym.deploy_recipes import SglangRecipe
 
 # ## Dataset
 #
@@ -295,7 +294,6 @@ def _main_impl() -> None:
     base_model = Qwen3_VL_8B()
     base_deployment = AdHocDeployment.launch(
         base_model,
-        recipe=SglangRecipe(),
         unauthenticated=True,
     )
     print(f"Base model URL: {base_deployment.url}")
@@ -373,7 +371,6 @@ def _main_impl() -> None:
     trained_deployment = AdHocDeployment.launch(
         Qwen3_VL_8B(),
         checkpoint=checkpoint,
-        recipe=SglangRecipe(),
         app_name="qwen3-vl-8b-grounding-serve",
         served_model_name="qwen3-vl-8b-grounding",
         unauthenticated=True,

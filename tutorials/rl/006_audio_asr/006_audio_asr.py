@@ -43,7 +43,6 @@ from modal_training_gym import (
     TrainConfig,
     list_checkpoints,
 )
-from modal_training_gym.deploy_recipes import SglangRecipe
 
 # ## Load LibriSpeech audio
 #
@@ -254,7 +253,6 @@ def _main_impl() -> None:
     deployment = AdHocDeployment.launch(
         Qwen3_ASR_1_7B(),
         checkpoint=checkpoint,
-        recipe=SglangRecipe(),
         unauthenticated=True,
     )
     print(f"Serving trained model at {deployment.url}")

@@ -79,7 +79,6 @@ def _imports():
         list_checkpoints,
         score_in_sandbox,
     )
-    from modal_training_gym.deploy_recipes import SglangRecipe
 
 
 @markdown
@@ -164,7 +163,6 @@ def _serve_eval_base():
     base_model = Qwen3_4B()
     base_deployment = AdHocDeployment.launch(
         base_model,
-        recipe=SglangRecipe(),
         unauthenticated=True,
     )
     print(f"Base model URL: {base_deployment.url}")
@@ -275,7 +273,6 @@ def _serve_trained():
     trained_deployment = AdHocDeployment.launch(
         Qwen3_4B(),
         checkpoint=checkpoint,
-        recipe=SglangRecipe(),
         app_name="qwen3-4b-hello-world-serve",
         served_model_name="qwen3-4b-hello-world",
         unauthenticated=True,
