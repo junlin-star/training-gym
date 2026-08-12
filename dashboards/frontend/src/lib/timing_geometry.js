@@ -94,7 +94,7 @@ export function clipIdleSpans(spans, async) {
     intervals.push([span.start, span.end]);
     workByRow.set(row, intervals);
   }
-  for (const intervals of workByRow.values()) {
+  for (const [row, intervals] of workByRow.entries()) {
     intervals.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
     const merged = [];
     for (const [start, end] of intervals) {
@@ -105,7 +105,7 @@ export function clipIdleSpans(spans, async) {
         merged.push([start, end]);
       }
     }
-    intervals.splice(0, intervals.length, ...merged);
+    workByRow.set(row, merged);
   }
   const piecesByIndex = new Map();
   spans.forEach((span, index) => {
