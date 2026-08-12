@@ -12,7 +12,12 @@ pip install git+https://github.com/modal-projects/training-gym.git@main
 Run `training-gym --help` or `training-gym <command> --help` to see the
 available commands and options.
 
-## `training-gym skills install`
+## Agent skills
+
+Use the `training-gym skills` commands to manage bundled agent skills in a
+project.
+
+### `training-gym skills install`
 
 Install the bundled `agent-driven-training` skill into the current project:
 
@@ -21,16 +26,23 @@ training-gym skills install
 ```
 
 The command finds the nearest Git repository and copies the skill to
-`.agents/skills/agent-driven-training`. It also creates 
-`.claude/skills/agent-driven-training` as a relative symbolic link
-to the canonical copy for Claude compatibility.
+`.agents/skills/agent-driven-training`. That canonical installation is completed
+before the command configures Claude compatibility.
+
+When `.claude/skills` is safe to manage, the command creates
+`.claude/skills/agent-driven-training` as a relative symbolic link to the
+canonical copy. Existing Claude paths are preserved without `--force`. If
+`.claude` or `.claude/skills` is itself a symbolic link, the command either
+recognizes that it already exposes `.agents/skills` or skips the Claude link
+with a warning; the canonical installation still succeeds.
 
 Options:
 
 - `--project-dir DIR`: install into a specific project instead of discovering
   the nearest Git repository.
-- `--force`: replace an existing skill or Claude link. Without this option,
-  locally modified files are preserved.
+- `--force`: replace an existing canonical skill or manageable Claude child
+  path. Without this option, locally modified or conflicting paths are
+  preserved.
 
 ## Dashboard configuration
 

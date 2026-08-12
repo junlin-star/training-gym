@@ -84,8 +84,11 @@ training-gym skills install
 ```
 
 This copies `agent-driven-training` to the cross-tool `.agents/skills/`
-directory and links `.claude/skills/agent-driven-training` to that canonical
-copy. Run it again with `--force` to replace an existing copy or link.
+directory, then links `.claude/skills/agent-driven-training` to that canonical
+copy when the Claude path is safe to manage. Claude-side conflicts are
+preserved with a warning and do not block the canonical installation. Run the
+command again with `--force` to replace an existing canonical copy or
+manageable Claude child path.
 
 This repository also includes an `AGENTS.md` and the source `skills/`
 directory that teach agents how to use and develop the framework.
