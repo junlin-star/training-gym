@@ -131,14 +131,14 @@ def rollout_lanes(records: list[dict[str, Any]]) -> dict[str, Any]:
 def measured_run_times(
     training_run_id: str,
 ) -> tuple[
-    dict[str, dict[str, int | None]], dict[str, dict[str, dict[str, float | None]]]
+    dict[str, dict[str, float | None]], dict[str, dict[str, dict[str, float | None]]]
 ]:
     not_in_step = (
         Substep.CHECKPOINT_SAVE.value,
         Substep.EVAL_BEFORE.value,
         Substep.EVAL_AFTER.value,
     )
-    step_times: dict[str, dict[str, int | None]] = {}
+    step_times: dict[str, dict[str, float | None]] = {}
     substep_times: dict[str, dict[str, dict[str, float | None]]] = {}
     for rollout_id, records in sorted(
         load_run(training_run_id).items(),
@@ -167,7 +167,7 @@ def measured_run_times(
         if not substeps:
             continue
         step = str(rollout_id + 1)
-        step_times[step] = {"duration_s": round(step_duration)}
+        step_times[step] = {"duration_s": round(step_duration, 3)}
         substep_times[step] = substeps
     return step_times, substep_times
 

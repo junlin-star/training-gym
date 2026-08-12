@@ -275,11 +275,12 @@ export function runTimeline(timings, asyncOverride = null) {
   const async =
     asyncOverride ??
     (!sync &&
-      generationSpans.some((generation) =>
-        stepSpans.some(
-          (step) => generation.start < step.end && step.start < generation.end,
-        ),
-      ));
+      (generationSpans.length > 0 ||
+        generationSpans.some((generation) =>
+          stepSpans.some(
+            (step) => generation.start < step.end && step.start < generation.end,
+          ),
+        )));
   const spans = nest(clipIdleSpans(rawSpans, async));
   if (sync) mergeSyncGenerationSpans(spans);
 

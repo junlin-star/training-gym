@@ -24,7 +24,7 @@ def test_measured_run_times_excludes_not_in_step_phases(monkeypatch):
                     "role": "driver",
                     "lane_start_unix_s": 100.0,
                     "phases": {
-                        "train_models": _phase(10.0, 20.0),
+                        "train_models": _phase(10.1234, 20.0),
                         "evaluate_rollouts": _phase(0.0, 5.0),
                         "checkpoint_save": _phase(20.0, 23.0),
                     },
@@ -35,4 +35,4 @@ def test_measured_run_times_excludes_not_in_step_phases(monkeypatch):
 
     step_times, _substep_times = step_timing.measured_run_times("run")
 
-    assert step_times == {"1": {"duration_s": 10}}
+    assert step_times == {"1": {"duration_s": 9.877}}

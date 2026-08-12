@@ -210,7 +210,7 @@ test("runTimeline keeps adjacent generation outside the train parent", () => {
         },
       },
     },
-  });
+  }, false);
   const roots = timeline.groups[0].rows[0].spans.filter(
     (span) => span.depth === 0,
   );
@@ -294,6 +294,21 @@ test("sync generation tooltips preserve the async phase breakdown", () => {
         !HIDDEN_PHASES.has(span.name),
     );
   assert.equal(drawnSyncBars.length, 1);
+});
+
+test("rollout spans get their own row without overlap detection", () => {
+  const timeline = runTimeline(generationPayload(false));
+  assert.equal(timeline.async, true);
+  assert.ok(
+    timeline.groups[0].rows.some(
+      (row) => row.role === "rollout" && row.spans.some((span) => span.role === "rollout"),
+    ),
+  );
+  assert.ok(
+    !timeline.groups[0].rows
+      .find((row) => row.key === "driver")
+      .spans.some((span) => span.role === "rollout"),
+  );
 });
 
 const anchoredLane = (parentStart, parentEnd, laneStart, laneEnd) => [
