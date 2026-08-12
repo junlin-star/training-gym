@@ -415,6 +415,56 @@ def test_incremental_timing_read_failure_preserves_complete_cache(
     assert stale["metadata"]["timing_stale"] is True
 
 
+def test_incremental_timing_read_drops_lane_missing_mid_refresh(monkeypatch, tmp_path):
+    _run_timings, read_timings, timing_cache, entry_factory = _timing_reader_context(
+        monkeypatch, tmp_path
+    )
+    initial_entries = [
+        {
+            "path": "substep-timing/incremental-missing/00000000__rollout.json",
+            "mtime": 1,
+            "size": 10,
+        },
+        {
+            "path": "substep-timing/incremental-missing/00000001__rollout.json",
+            "mtime": 1,
+            "size": 10,
+        },
+    ]
+    listings = iter(
+        [
+            initial_entries,
+            [
+                {**initial_entries[0], "mtime": 2},
+                {**initial_entries[1], "mtime": 2},
+            ],
+        ]
+    )
+    reads = 0
+
+    async def list_metadata(*_args, **_kwargs):
+        return next(listings), False
+
+    async def get_record(_store, key, **_kwargs):
+        nonlocal reads
+        reads += 1
+        if reads > 2 and key.endswith("00000001__rollout"):
+            raise KeyError(key)
+        return _incremental_record(int(key[:8]))
+
+    monkeypatch.setattr(_dashboard, "vol_list_metadata", list_metadata)
+    monkeypatch.setattr(_dashboard, "_metadata_vol_get", get_record)
+    timing_cache["incremental-missing"] = entry_factory()
+
+    initial, failed = asyncio.run(read_timings("incremental-missing"))
+    assert not failed
+    updated, failed = asyncio.run(read_timings("incremental-missing"))
+
+    assert not failed
+    assert set(initial) == {"0", "1"}
+    assert set(updated) == {"0"}
+
+
 def test_rollout_route_preserves_raw_text_and_adds_cleaned_text(
     fake_volume, monkeypatch, tmp_path
 ):

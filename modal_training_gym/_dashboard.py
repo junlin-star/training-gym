@@ -947,17 +947,18 @@ def fastapi_app():
             ),
             return_exceptions=True,
         )
-        if any(isinstance(result, Exception) for result in read_results):
-            return {}, True
-        entry.file_records = {
-            item["path"]: {
+        updated: dict[str, dict[str, Any]] = {}
+        for item, result in zip(changed, read_results, strict=True):
+            if isinstance(result, (KeyError, FileNotFoundError)):
+                continue
+            if isinstance(result, Exception):
+                return {}, True
+            updated[item["path"]] = {
                 "mtime": current[item["path"]][0],
                 "size": current[item["path"]][1],
-                "record": record,
+                "record": result,
             }
-            for item, record in zip(changed, read_results, strict=True)
-        }
-        entry.file_records.update(unchanged)
+        entry.file_records = {**unchanged, **updated}
         found: dict[int | None, list[JsonDict]] = {}
         for cached in entry.file_records.values():
             parsed = cached["record"]
