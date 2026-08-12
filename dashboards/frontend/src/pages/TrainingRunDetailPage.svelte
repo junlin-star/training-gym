@@ -321,23 +321,6 @@
     activeSamplePos = Math.max(0, Math.min(list.length - 1, activeSamplePos + delta));
   }
 
-  // A prompt group shares one screenshot: bytes on the first sample as `image`, the
-  // rest carry only `image_ref`.
-  let rolloutImages = $derived.by(() => {
-    const byRef = {};
-    for (const s of expandedRollout?.samples ?? []) {
-      const meta = s?.metadata;
-      if (meta?.image_ref && meta.image) byRef[meta.image_ref] = meta.image;
-    }
-    return byRef;
-  });
-
-  function sampleImage(sample) {
-    const meta = sample?.metadata;
-    if (!meta) return null;
-    return meta.image ?? (meta.image_ref ? rolloutImages[meta.image_ref] : null) ?? null;
-  }
-
   // The rollout currently shown in the viewer (or null when no bucket is open).
   let activeSample = $derived.by(() => {
     const d = sampleDist;
@@ -345,12 +328,10 @@
     const list = d.buckets[activeBucket] || [];
     const entry = list[activeSamplePos];
     if (!entry) return null;
-    const sample = expandedRollout.samples[entry.positions[0]];
     return {
-      sample,
+      sample: expandedRollout.samples[entry.positions[0]],
       samples: entry.positions.map((p) => expandedRollout.samples[p]),
       score: entry.score,
-      image: sampleImage(sample),
       pos: activeSamplePos,
       count: list.length,
     };
@@ -369,21 +350,7 @@
     }
   }
 
-  function sampleToPayload(s, { inlineImage = false, refOnly = false } = {}) {
-    let metadata = s.metadata || null;
-    if (inlineImage && metadata?.image_ref && !metadata.image) {
-      // Only trade the ref for bytes if the lookup resolved — the carrier sample may
-      // not be loaded, and the download still needs some way to name the screenshot.
-      const resolved = sampleImage(s);
-      if (resolved) {
-        const { image_ref, ...rest } = metadata;
-        metadata = { ...rest, image: resolved };
-      }
-    } else if (refOnly && metadata?.image && metadata.image_ref) {
-      // Bytes travel once in the payload's `images` map; keep only the ref here.
-      const { image, ...rest } = metadata;
-      metadata = rest;
-    }
+  function sampleToPayload(s) {
     return {
       score: s.score,
       rollout_index: rolloutIndex(s),
@@ -395,7 +362,7 @@
       raw_response: s.raw_response || null,
       raw_prompt: s.raw_prompt || null,
       trace: s.trace || null,
-      metadata,
+      metadata: s.metadata || null,
     };
   }
 
@@ -404,12 +371,8 @@
     const turns = activeSample.samples;
     const payload =
       turns.length === 1
-        ? sampleToPayload(turns[0], { inlineImage: true })
-        : {
-            mean: activeSample.score,
-            turns: turns.length,
-            samples: turns.map((s) => sampleToPayload(s, { inlineImage: true })),
-          };
+        ? sampleToPayload(turns[0])
+        : { mean: activeSample.score, turns: turns.length, samples: turns.map(sampleToPayload) };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -433,9 +396,7 @@
       rollouts: groups.length,
       n_samples_per_prompt: expandedRollout.n_samples_per_prompt ?? null,
       mean: scores.reduce((a, v) => a + v, 0) / scores.length,
-      // Shared screenshots, keyed by the `metadata.image_ref` each sample carries.
-      images: rolloutImages,
-      samples: samples.map((s) => sampleToPayload(s, { refOnly: true })),
+      samples: samples.map(sampleToPayload),
     };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
@@ -1732,11 +1693,11 @@
                               src={activeSample.sample.metadata.audio}
                             ></audio>
                           {/if}
-                          {#if activeSample.image}
+                          {#if activeSample.sample.metadata?._metadata_type === "image" || activeSample.sample.metadata?.image}
                             <div class="rollout-sample-label">image</div>
                             <img
                               class="block w-full max-w-[400px] h-auto m-[4px_0_8px] rounded-[4px] [border:1px_solid_var(--border)]"
-                              src={activeSample.image}
+                              src={activeSample.sample.metadata.image}
                               alt="rollout input"
                               loading="lazy"
                             />
@@ -1782,7 +1743,6 @@
                                 "_metadata_type",
                                 "audio",
                                 "image",
-                                "image_ref",
                                 "trajectory_messages",
                                 "eval_report",
                                 "reference",
