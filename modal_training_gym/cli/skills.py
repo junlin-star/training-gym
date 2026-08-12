@@ -47,6 +47,16 @@ def _find_project_root(start: Path) -> Path:
     )
 
 
+def _symlinked_claude_link_parent(project_root: Path) -> Path | None:
+    """Return the first symlink in the Claude skill parent hierarchy."""
+    claude_directory = project_root / ".claude"
+    claude_skills_directory = project_root / CLAUDE_SKILLS_DIRECTORY
+    for candidate in (claude_directory, claude_skills_directory):
+        if candidate.is_symlink():
+            return candidate
+    return None
+
+
 def _directory_contents(path: Path) -> dict[Path, bytes]:
     """Return file contents keyed by paths relative to ``path``."""
     return {
@@ -120,13 +130,18 @@ def install_skills(*, project_dir: Path | None, force: bool) -> Path:
         if project_dir is not None
         else _find_project_root(Path.cwd())
     )
+    symlinked_claude_parent = _symlinked_claude_link_parent(project_root)
     source = _bundled_skill_path()
     destination = project_root / SKILLS_DIRECTORY / SKILL_NAME
     claude_link = project_root / CLAUDE_SKILLS_DIRECTORY / SKILL_NAME
-    claude_link_installed, replace_claude_link = _claude_link_state(
-        claude_link,
-        force=force,
-    )
+    if symlinked_claude_parent is None:
+        claude_link_installed, replace_claude_link = _claude_link_state(
+            claude_link,
+            force=force,
+        )
+    else:
+        claude_link_installed = False
+        replace_claude_link = False
     skill_installed = False
     replace_existing = False
 
@@ -192,13 +207,22 @@ def install_skills(*, project_dir: Path | None, force: bool) -> Path:
             if staging_root is not None:
                 shutil.rmtree(staging_root, ignore_errors=True)
 
-    if not claude_link_installed:
+    if symlinked_claude_parent is None and not claude_link_installed:
         _install_claude_link(claude_link, replace_existing=replace_claude_link)
 
-    if skill_installed and claude_link_installed:
+    if skill_installed:
         click.echo(f"{SKILL_NAME} is already installed at {destination}")
     else:
         click.echo(f"Installed {SKILL_NAME} at {destination}")
+    if symlinked_claude_parent is not None:
+        click.echo(
+            "Skipped Claude skill link because "
+            f"{symlinked_claude_parent} is a symbolic link.",
+            err=True,
+        )
+    elif claude_link_installed:
+        click.echo(f"Claude skill already linked at {claude_link}")
+    else:
         click.echo(f"Linked Claude skill at {claude_link}")
     return destination
 

@@ -152,6 +152,33 @@ def test_skills_install_force_replaces_existing_claude_skill(monkeypatch, tmp_pa
     assert existing.resolve() == destination
 
 
+def test_force_skips_symlinked_claude_parent_but_installs_canonical_skill(
+    monkeypatch, tmp_path
+):
+    (tmp_path / ".git").mkdir()
+    (tmp_path / ".claude").mkdir()
+    real_skill = tmp_path / "skills" / SKILL_NAME
+    real_skill.mkdir(parents=True)
+    (real_skill / "SKILL.md").write_text("customized\n")
+    (tmp_path / ".claude" / "skills").symlink_to(
+        Path("..") / "skills",
+        target_is_directory=True,
+    )
+    monkeypatch.chdir(tmp_path)
+
+    result = CliRunner().invoke(
+        cli_module.entrypoint_cli,
+        ["skills", "install", "--force"],
+    )
+
+    destination = tmp_path / ".agents" / "skills" / SKILL_NAME
+    assert result.exit_code == 0
+    assert _contents(destination) == _contents(_bundled_skill_path())
+    assert "Skipped Claude skill link" in result.stderr
+    assert (real_skill / "SKILL.md").read_text() == "customized\n"
+    assert (tmp_path / ".claude" / "skills").is_symlink()
+
+
 def test_skills_install_restores_existing_skill_when_replace_fails(
     monkeypatch, tmp_path
 ):
