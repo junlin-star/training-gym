@@ -77,7 +77,18 @@ training-gym open  # opens in your browser
 
 ## Agent set-up
 
-This repository includes an `AGENTS.md` and a `skills/` directory that teaches agents how to use the framework.
+Install the Training Gym skill into your project:
+
+```bash
+training-gym skills install
+```
+
+This copies `agent-driven-training` to the cross-tool `.agents/skills/`
+directory and links `.claude/skills/agent-driven-training` to that canonical
+copy. Run it again with `--force` to replace an existing copy or link.
+
+This repository also includes an `AGENTS.md` and the source `skills/`
+directory that teach agents how to use and develop the framework.
 
 Agents browsing the docs can start at the [llms.txt](https://gym.modal.dev/llms.txt).
 
