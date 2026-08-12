@@ -13,7 +13,6 @@ from modal_training_gym.train_recipes.miles_recipe.recipe import MilesRecipe
 
 if TYPE_CHECKING:
     from modal_training_gym.common.dataset import DatasetConfig
-    from modal_training_gym.common.models import ModelConfig
 
 _PATCH_DIR = (
     Path(__file__).resolve().parents[2]
@@ -242,13 +241,3 @@ class Gemma4_26B_A4B_Recipe(MilesRecipe):
         # resolving twice stays a no-op.
         object.__setattr__(resolved, "_explicit_fields", explicit | vision.keys())
         return resolved
-
-    def validate_model_parallelism(self, model: "ModelConfig") -> None:
-        super().validate_model_parallelism(model)
-        if self.pipeline_model_parallel_size != 1:
-            raise TrainingGymConfigError(
-                f"{type(self).__name__} needs pipeline_model_parallel_size=1: the "
-                "bridge keeps the vision tower and embedding on one pipeline stage, "
-                "so a split only fails once Megatron builds the model. Got "
-                f"{self.pipeline_model_parallel_size}."
-            )

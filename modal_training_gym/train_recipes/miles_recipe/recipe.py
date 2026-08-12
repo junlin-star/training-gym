@@ -23,6 +23,7 @@ from modal_training_gym.train_recipes.base import (
 from modal_training_gym.train_recipes.gpu_allocation import (
     resolve_gpu_allocation,
     validate_num_experts_divisible_by_expert_parallel_size,
+    validate_pipeline_parallel_supported,
 )
 
 _MILES_SKIP = {
@@ -771,6 +772,7 @@ class MilesRecipe(BaseTrainRecipe):
 
     def validate_model_parallelism(self, model: ModelConfig) -> None:
         validate_num_experts_divisible_by_expert_parallel_size(self, model)
+        validate_pipeline_parallel_supported(self, model)
 
     # ── Internal ──────────────────────────────────────────────────────────────
 

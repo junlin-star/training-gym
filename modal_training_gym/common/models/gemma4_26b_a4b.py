@@ -10,17 +10,20 @@ class Gemma4_26B_A4B(HFModelConfiguration):
 
     Mixture-of-Experts with 128 experts, 8 active per token plus 1 shared.
     The checkpoint is a ``Gemma4ForConditionalGeneration``: the MoE decoder
-    described by ``architecture`` plus a 27-layer vision tower.
+    described by ``architecture`` plus a 27-layer vision tower, over a tied
+    input/output embedding. The bridge loads that on a single pipeline stage,
+    hence ``supports_pipeline_parallel = False``.
     Downloads from ``google/gemma-4-26B-A4B-it`` on HuggingFace.
     """
 
     model_name = "google/gemma-4-26B-A4B-it"
     response_parser = staticmethod(parse_gemma4_response)
+    supports_pipeline_parallel = False
 
     architecture = ModelArchitecture(
         # text_config from config.json. The recipe sets ``miles_model_script``, so
         # these are not emitted as flags, but they drive the expert-parallel
-        # validator and FLOPs accounting; keep them in step with that script.
+        # validator; keep them in step with that script.
         num_layers=30,
         hidden_size=2816,
         ffn_hidden_size=2112,
