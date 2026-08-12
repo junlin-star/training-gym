@@ -3,7 +3,7 @@ from __future__ import annotations
 from modal_training_gym.frameworks.slime import launcher
 
 
-def _build_commands(monkeypatch, mode):
+def _build_commands(monkeypatch):
     commands = []
 
     class FakeImage:
@@ -19,15 +19,13 @@ def _build_commands(monkeypatch, mode):
             return self
 
     monkeypatch.setattr(launcher, "Image", FakeImage)
-    launcher._build_slime_base_image(mode)
+    launcher._build_slime_base_image()
     return commands
 
 
-def test_pinned_image_timing_patch_command_is_mode_independent(monkeypatch):
-    auto_commands = _build_commands(monkeypatch, "auto")
-    off_commands = _build_commands(monkeypatch, "off")
+def test_pinned_image_timing_patch_command_has_no_mode_environment(monkeypatch):
+    commands = _build_commands(monkeypatch)
 
-    assert auto_commands == off_commands
-    assert auto_commands[-1].startswith("echo ")
-    assert "TRAINING_GYM_SUBSTEP_TIMING=" not in auto_commands[-1]
-    assert "TG_BEST_EFFORT_ENTRYPOINTS=1" not in auto_commands[-1]
+    assert commands[-1].startswith("echo ")
+    assert "TRAINING_GYM_SUBSTEP_TIMING" not in commands[-1]
+    assert "TG_BEST_EFFORT_ENTRYPOINTS" not in commands[-1]

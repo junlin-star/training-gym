@@ -149,7 +149,7 @@ _PATCH_SGLANG_PARALLEL_ALIASES_B64 = encode_patch(
 )
 
 
-def _build_slime_base_image(substep_timing: str = "auto") -> "Image":
+def _build_slime_base_image() -> "Image":
     return (
         Image.from_registry(SLIME_IMAGE)
         .entrypoint([])
@@ -318,7 +318,7 @@ def build_slime_app(
     _caller_module, caller_script = resolve_caller_context()
 
     # ── Image ────────────────────────────────────────────────────────────────
-    image = _build_slime_base_image(slime.substep_timing)
+    image = _build_slime_base_image()
 
     # Hybrid models have layers with different parameter sets (e.g. GDN
     # layers carry linear_attn.dt_bias that standard attention layers lack).
