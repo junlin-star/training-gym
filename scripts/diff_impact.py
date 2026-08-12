@@ -191,7 +191,7 @@ def _model_index() -> tuple[dict[str, frozenset[str]], dict[str, frozenset[str]]
     re-validates it.
 
     Only the PR-matrix set is indexed. A model registered with
-    ``run_on_pr=False`` (e.g. Kimi on 16 x 8 H200) must never reach a PR
+    ``run_on_pr=False`` (e.g. Kimi on 32 x 8 H200) must never reach a PR
     matrix, so no diff can select it.
     """
     from modal_training_gym.common.models.validation import _ValidationConfig

@@ -129,7 +129,7 @@ def test_blank_dispatch_asks_for_the_pr_only_set():
     """The workflow's blank-models branch must narrow explicitly.
 
     ``list`` prints the whole registry, so a blank dispatch that dropped
-    ``--pr-only`` would fan out to Kimi on 16 x 8 H200.
+    ``--pr-only`` would fan out to Kimi on 32 x 8 H200.
     """
     import re
 

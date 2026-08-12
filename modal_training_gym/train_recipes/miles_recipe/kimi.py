@@ -53,7 +53,6 @@ def _remove_if_invalid(path: str | Path) -> bool:
 
 @dataclass(config=ConfigDict(extra="forbid", arbitrary_types_allowed=True))
 class _KimiK2Recipe(MilesRecipe):
-    docker_image: str = "radixark/miles:kimi-k3"
     gpu_type: str = "H200"
     model_setup_gpu: str | None = "H200"
     memory: tuple[int, int] = (1024, int(2 * 1024 * 1024))
@@ -62,7 +61,7 @@ class _KimiK2Recipe(MilesRecipe):
             "rm -rf /root/.cache/huggingface 2>/dev/null || true",
         ]
     )
-    miles_model_script: str = "scripts/models/kimi-k2-thinking.sh"
+    miles_model_name: str = "kimi-k25"
     environment: dict[str, str] = field(
         default_factory=lambda: {
             "PYTHONPATH": "/root/Megatron-LM/",
@@ -74,10 +73,9 @@ class _KimiK2Recipe(MilesRecipe):
         }
     )
 
-    actor_num_nodes: int = 16
+    actor_num_nodes: int = 32
     actor_num_gpus_per_node: int = 8
     colocate: bool = True
-    skip_eval_before_train: bool = True
     update_weight_buffer_size: int = 4 * 512 * 1024 * 1024
     model_name: str = "kimi_k25"
 
@@ -94,9 +92,6 @@ class _KimiK2Recipe(MilesRecipe):
     n_samples_per_prompt: int = 8
     rollout_max_response_len: int = 16384
     rollout_temperature: float = 1.0
-    sglang_cuda_graph_bs: list[int] = field(
-        default_factory=lambda: [1, 2, 4, 8] + list(range(16, 129, 8))
-    )
     global_batch_size: int = 256
     use_dynamic_global_batch_size: bool = True
 
@@ -107,7 +102,7 @@ class _KimiK2Recipe(MilesRecipe):
     eps_clip: float = 0.2
     eps_clip_high: float = 0.28
     optimizer: str = "adam"
-    lr: float = 1e-5
+    lr: float = 1e-6
     lr_decay_style: str = "constant"
     weight_decay: float = 0.1
     adam_beta1: float = 0.9
@@ -117,27 +112,14 @@ class _KimiK2Recipe(MilesRecipe):
     use_precision_aware_optimizer: bool = True
     use_distributed_optimizer: bool = True
 
-    lora_rank: int | None = 32
-    lora_alpha: int | None = 32
-    lora_dropout: float | None = 0.0
-    target_modules: str | None = (
-        "q_a_proj,kv_a_proj_with_mqa,o_proj,gate_proj,up_proj,down_proj"
-    )
-    experts_shared_outer_loras: bool = True
-    lora_base_cpu_backup: bool = True
-    no_gradient_accumulation_fusion: bool = True
-    sglang_lora_backend: str | None = "triton"
-    sglang_lora_use_virtual_experts: bool = True
-    use_tis: bool = True
-
     train_backend: str = "megatron"
     tensor_model_parallel_size: int = 8
     sequence_parallel: bool = True
-    pipeline_model_parallel_size: int = 2
-    context_parallel_size: int = 8
-    expert_model_parallel_size: int = 64
+    pipeline_model_parallel_size: int = 8
+    context_parallel_size: int = 4
+    expert_model_parallel_size: int = 32
     expert_tensor_parallel_size: int = 1
-    decoder_last_pipeline_num_layers: int = 30
+    decoder_last_pipeline_num_layers: int = 5
 
     recompute_granularity: str = "full"
     recompute_method: str = "uniform"
@@ -153,10 +135,8 @@ class _KimiK2Recipe(MilesRecipe):
 
     rollout_num_gpus_per_engine: int = 8
     sglang_mem_fraction_static: float = 0.7
-    sglang_moe_runner_backend: str | None = "triton"
     sglang_ep_size: int = 8
     sglang_server_concurrency: int = 1024
-    use_miles_router: bool = True
     use_rollout_routing_replay: bool = True
 
     def post_process_model(self) -> None:

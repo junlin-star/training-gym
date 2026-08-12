@@ -804,7 +804,7 @@ def build_miles_app(
                 miles.sglang_router_ip = cluster.head_addr
                 miles.sglang_router_port = router_port
                 print(
-                    f"SGLang router launched at "
+                    f"Router launched at "
                     f"{miles.sglang_router_ip}:{miles.sglang_router_port}"
                 )
             prepare_miles_config(miles, model, tempfile.mkdtemp())
