@@ -37,3 +37,16 @@ def test_remote_entry_clock_is_propagated_and_cannot_be_overwritten() -> None:
         launcher._capture_remote_entry_clock(
             {"DRIFT_ASYNC_RL_OPERATOR_POOL_RECEIPT_SHA256": "not-a-sha"}
         )
+
+
+def test_remote_execution_identity_binds_app_and_function_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(launcher, "current_function_call_id", lambda: "fc-call")
+    assert launcher._remote_execution_identity("ap-app") == {
+        "TRAINING_GYM_MODAL_APP_ID": "ap-app",
+        "TRAINING_GYM_FUNCTION_CALL_ID": "fc-call",
+    }
+    monkeypatch.setattr(launcher, "current_function_call_id", lambda: "")
+    with pytest.raises(RuntimeError, match="identity is unavailable"):
+        launcher._remote_execution_identity("ap-app")

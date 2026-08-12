@@ -29,7 +29,15 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 from collections.abc import Callable, Mapping
 from enum import Enum
-from modal import App, Dict as ModalDict, Image, Secret, Volume, Retries
+from modal import (
+    App,
+    Dict as ModalDict,
+    Image,
+    Retries,
+    Secret,
+    Volume,
+    current_function_call_id,
+)
 
 from modal_training_gym.common import hf_secrets
 
@@ -132,6 +140,18 @@ def _remote_entry_runtime_env(
     """Propagate the sealed entry clock without allowing recipe overwrite."""
 
     return {**environment, **remote_entry_clock}
+
+
+def _remote_execution_identity(modal_app_id: str) -> dict[str, str]:
+    """Bind Ray workers to the actual Modal app/function invocation."""
+
+    function_call_id = str(current_function_call_id() or "")
+    if not modal_app_id or not function_call_id:
+        raise RuntimeError("remote Modal app/function-call identity is unavailable")
+    return {
+        "TRAINING_GYM_MODAL_APP_ID": modal_app_id,
+        "TRAINING_GYM_FUNCTION_CALL_ID": function_call_id,
+    }
 
 
 SLIME_ROOT = "/root/slime"
@@ -1547,6 +1567,7 @@ def build_slime_app(
         # unchanged to the receipt-bound worker runtime.
         remote_entry_clock = _capture_remote_entry_clock(slime.environment or {})
         modal_app_id = modal_app_id or os.environ.get("MODAL_APP_ID", "")
+        remote_execution_identity = _remote_execution_identity(modal_app_id)
         modal_app_url = modal_app_url or modal_app_dashboard_url(modal_app_id)
 
         # Make the dashboard URL visible to both the launcher's own
@@ -2018,6 +2039,7 @@ def build_slime_app(
                     "MASTER_ADDR": cluster.head_addr,
                     "TRAINING_GYM_TRAINING_RUN_ID": training_run_id,
                     "TRAINING_GYM_APP_NAME": app_name,
+                    **remote_execution_identity,
                     "TRAINING_GYM_TOTAL_STEPS": str(slime.num_rollout),
                     "TRAINING_GYM_RESPONSE_PARSER_PATH": _response_parser_path(model),
                     "TRAINING_GYM_CAPTURE_TRACE": (
