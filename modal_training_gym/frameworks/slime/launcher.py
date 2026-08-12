@@ -108,6 +108,33 @@ from modal_training_gym.common.patches import encode_patch
 from modal_training_gym.common.checkpoint import Checkpoint
 from modal_training_gym.common.framework import Framework
 
+
+def _capture_remote_entry_clock(environment: Mapping[str, str]) -> dict[str, str]:
+    """Capture the Modal entry clock before cluster or attempt initialization."""
+
+    receipt_sha256 = environment.get("DRIFT_ASYNC_RL_OPERATOR_POOL_RECEIPT_SHA256", "")
+    if not receipt_sha256:
+        return {}
+    if len(receipt_sha256) != 64 or any(
+        character not in "0123456789abcdef" for character in receipt_sha256
+    ):
+        raise ValueError("operator-pool receipt hash is malformed at remote entry")
+    return {
+        "DRIFT_ASYNC_RL_REMOTE_ENTRY_EPOCH_NS": str(time.time_ns()),
+        "DRIFT_ASYNC_RL_REMOTE_ENTRY_MONOTONIC_NS": str(time.monotonic_ns()),
+        "DRIFT_ASYNC_RL_REMOTE_ENTRY_RECEIPT_SHA256": receipt_sha256,
+    }
+
+
+def _remote_entry_runtime_env(
+    environment: Mapping[str, str],
+    remote_entry_clock: Mapping[str, str],
+) -> dict[str, str]:
+    """Propagate the sealed entry clock without allowing recipe overwrite."""
+
+    return {**environment, **remote_entry_clock}
+
+
 SLIME_ROOT = "/root/slime"
 # Pin by digest to prevent mutable-tag drift.  Tag: nightly-dev-20260703b
 SLIME_IMAGE = "slimerl/slime@sha256:269b44b17e3f7136447db4cdaa3bf36ef9e3169f1596af0d7180c45f2a301965"
@@ -689,7 +716,9 @@ def _pop_train_function_timeout(train_function_kwargs: dict[str, Any]) -> int:
 
     timeout = train_function_kwargs.pop("timeout", 48 * 60 * 60)
     if isinstance(timeout, bool) or not isinstance(timeout, int) or timeout <= 0:
-        raise TypeError("slime.train_function_kwargs['timeout'] must be a positive integer")
+        raise TypeError(
+            "slime.train_function_kwargs['timeout'] must be a positive integer"
+        )
     return timeout
 
 
@@ -775,8 +804,12 @@ async def _persist_and_verify_d1a_terminal_success(
     expected_app_id = str(getattr(run_record, "modal_app_id", "") or "")
     expected_function_id = str(getattr(run_record, "function_call_id", "") or "")
     expected_root = f"/checkpoints/{expected_run_id}"
-    if not all((expected_run_id, expected_app_id, expected_function_id, expected_attempt_id)):
-        raise RuntimeError("D1a terminal success lacks its exact run/app/function/attempt IDs")
+    if not all(
+        (expected_run_id, expected_app_id, expected_function_id, expected_attempt_id)
+    ):
+        raise RuntimeError(
+            "D1a terminal success lacks its exact run/app/function/attempt IDs"
+        )
 
     record_type = type(run_record)
     last_error: Exception | None = None
@@ -785,7 +818,9 @@ async def _persist_and_verify_d1a_terminal_success(
             await run_record.save(is_async=True)
             persisted = await record_type.from_id(expected_run_id, is_async=True)
             metadata = getattr(persisted, "metadata", None)
-            attempts_ledger = metadata.get("attempts") if isinstance(metadata, dict) else None
+            attempts_ledger = (
+                metadata.get("attempts") if isinstance(metadata, dict) else None
+            )
             sole_attempt = (
                 attempts_ledger[0]
                 if isinstance(attempts_ledger, list) and len(attempts_ledger) == 1
@@ -839,12 +874,16 @@ def _restore_d1a_terminal_binding(authoritative: Any, latest: Any) -> Any:
         if not expected:
             raise RuntimeError(f"authoritative D1a {field} is empty at terminal save")
         if observed and observed != expected:
-            raise RuntimeError(f"persisted D1a {field} conflicts with the exact live binding")
+            raise RuntimeError(
+                f"persisted D1a {field} conflicts with the exact live binding"
+            )
         setattr(latest, field, expected)
     expected_url = str(getattr(authoritative, "modal_app_url", "") or "")
     observed_url = str(getattr(latest, "modal_app_url", "") or "")
     if observed_url and expected_url and observed_url != expected_url:
-        raise RuntimeError("persisted D1a modal_app_url conflicts with the live binding")
+        raise RuntimeError(
+            "persisted D1a modal_app_url conflicts with the live binding"
+        )
     latest.modal_app_url = expected_url
     return latest
 
@@ -1503,6 +1542,11 @@ def build_slime_app(
         framework_status_url: str = "",
         framework_status_token: str = "",
     ):
+        # Modal's native timeout begins at this function entry.  Capture one
+        # authoritative wall/monotonic pair before cluster discovery, volume
+        # reloads, attempt creation, Ray bootstrap, or model setup, and pass it
+        # unchanged to the receipt-bound worker runtime.
+        remote_entry_clock = _capture_remote_entry_clock(slime.environment or {})
         modal_app_id = modal_app_id or os.environ.get("MODAL_APP_ID", "")
         modal_app_url = modal_app_url or modal_app_dashboard_url(modal_app_id)
 
@@ -1991,7 +2035,10 @@ def build_slime_app(
                     ),
                     "TRAINING_GYM_FRAMEWORK_STATUS_URL": phase_report_url,
                     **wandb_env,
-                    **slime.environment,
+                    **_remote_entry_runtime_env(
+                        slime.environment or {},
+                        remote_entry_clock,
+                    ),
                     "TRAINING_GYM_ATTEMPT_MODE": slime.attempt_mode,
                     "TRAINING_GYM_ATTEMPT_ID": attempt_id,
                     "TRAINING_GYM_LOGICAL_SAVE_ROOT": logical_save_root,
