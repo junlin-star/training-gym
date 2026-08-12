@@ -339,7 +339,7 @@
         (bar) =>
           !bar.mergedGeneration &&
           !HIDDEN_PHASES.has(bar.name) &&
-          (showDetails || bar.depth === row.rootDepth),
+          (showDetails || bar.depth === 0),
       )
   }
 
@@ -347,13 +347,20 @@
     return row.insetKeys.has(bar.key) ? BAR_GAP_PX : 0;
   }
 
-  function visibleChildren(bar, row) {
+  function childrenByRole(bar) {
+    const groups = new Map();
+    for (const child of visibleChildren(bar)) {
+      const role = child.role || "unknown";
+      const group = groups.get(role) || [];
+      group.push(child);
+      groups.set(role, group);
+    }
+    return [...groups.entries()];
+  }
+
+  function visibleChildren(bar) {
     return showDetails
-      ? (bar.children || []).filter(
-          (child) =>
-            !HIDDEN_PHASES.has(child.name) &&
-            child.role === row.role,
-        )
+      ? (bar.children || []).filter((child) => !HIDDEN_PHASES.has(child.name))
       : [];
   }
 
@@ -585,16 +592,35 @@
                             onclick={(e) => pinTip(e, bar)}
                           ></button>
                         {/if}
-                        {#if visibleChildren(bar, row).length}
-                          <div class="bar-children">
-                            {#each visibleChildren(bar, row) as child (child.key)}
-                              {@render renderBar(child, row)}
-                            {/each}
+                        {#if visibleChildren(bar).length}
+                          {@const roleGroups = childrenByRole(bar)}
+                          <div
+                            class="bar-children"
+                            class:multi-role={roleGroups.length > 1}
+                          >
+                            {#if roleGroups.length === 1}
+                              {#each roleGroups[0][1] as child (child.key)}
+                                {@render renderBar(child, row)}
+                              {/each}
+                            {:else}
+                              {#each roleGroups as [role, children], roleIndex (role)}
+                                <div
+                                  class="role-line"
+                                  style:top={`${(roleIndex * 100) / roleGroups.length}%`}
+                                  style:height={`${100 / roleGroups.length}%`}
+                                  data-role={role}
+                                >
+                                  {#each children as child (child.key)}
+                                    {@render renderBar(child, row)}
+                                  {/each}
+                                </div>
+                              {/each}
+                            {/if}
                           </div>
                         {/if}
                       </div>
                     {/snippet}
-                    {#each displaySpans(row).filter((bar) => bar.depth === row.rootDepth) as bar (bar.key)}
+                    {#each displaySpans(row).filter((bar) => bar.depth === 0) as bar (bar.key)}
                       {@render renderBar(bar, row)}
                     {/each}
                   </div>
@@ -930,6 +956,27 @@
 
   .bar-children > .bar-shell {
     pointer-events: auto;
+  }
+
+  .role-line {
+    position: absolute;
+    left: 0;
+    right: 0;
+    pointer-events: none;
+  }
+
+  .role-line > .bar-shell {
+    pointer-events: auto;
+  }
+
+  .bar-children.multi-role .bar.nested-bar {
+    top: 1px;
+    height: calc(100% - 2px);
+  }
+
+  .bar-children.multi-role .bar-hit-target {
+    top: 1px;
+    bottom: 1px;
   }
 
   .bar.outlined {

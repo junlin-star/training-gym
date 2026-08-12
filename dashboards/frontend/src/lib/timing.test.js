@@ -210,8 +210,8 @@ test("runTimeline keeps adjacent generation outside the train parent", () => {
       },
     },
   });
-  const roots = timeline.groups[0].rows.flatMap((row) =>
-    row.spans.filter((span) => span.depth === row.rootDepth),
+  const roots = timeline.groups[0].rows[0].spans.filter(
+    (span) => span.depth === 0,
   );
   const train = roots.find((span) => span.name === "train_models");
   const generation = roots.find((span) => span.name === "generate_samples");
@@ -392,7 +392,7 @@ test("anchorLanes shifts every span in a lane without changing durations", () =>
   );
 });
 
-test("runTimeline gives each worker role its own row", () => {
+test("runTimeline keeps multiple worker roles nested under one parent", () => {
   const timeline = runTimeline({
     0: {
       roles: {
@@ -433,21 +433,66 @@ test("runTimeline gives each worker role its own row", () => {
     },
   });
   const rows = timeline.groups[0].rows;
-
-  assert.deepEqual(rows.map((row) => row.role), ["driver", "actor", "critic"]);
-  assert.deepEqual(
-    rows.slice(1).map((row) => row.sortedSpans.map((span) => span.role)),
-    [["actor"], ["critic"]],
+  const train = rows[0].spans.find(
+    (span) => span.name === "train_models" && span.depth === 0,
   );
-  assert.ok(rows.slice(1).every((row) => row.sortedSpans.every((span) => span.depth > 0)));
+  const roles = new Map();
+  for (const child of train.children) {
+    const group = roles.get(child.role) || [];
+    group.push(child);
+    roles.set(child.role, group);
+  }
+
+  assert.equal(rows.length, 1);
+  assert.deepEqual([...roles.keys()], ["actor", "critic"]);
+  assert.ok([...roles.values()].every((children) => children.length === 1));
   assert.deepEqual(
-    rows.slice(1).map((row) => [row.sortedSpans[0].start, row.sortedSpans[0].end]),
+    [...roles.values()].map(([child]) => [child.start, child.end]),
     [
       [102, 106],
       [102, 106],
     ],
   );
-  assert.notEqual(rows[1].key, rows[2].key);
-  assert.equal(rows[1].sortedSpans[0].parent, undefined);
-  assert.equal(rows[2].sortedSpans[0].parent, undefined);
+  assert.notEqual(roles.get("actor")[0], roles.get("critic")[0]);
+});
+
+test("runTimeline keeps a single worker role layout unchanged", () => {
+  const timeline = runTimeline({
+    0: {
+      roles: {
+        driver: {
+          lane_start_unix_s: 100,
+          phases: {
+            train_models: {
+              count: 1,
+              total_duration_s: 20,
+              first_start_s: 0,
+              last_end_s: 20,
+            },
+          },
+        },
+        actor: {
+          lane_start_unix_s: 100,
+          phases: {
+            forward_backward: {
+              count: 1,
+              total_duration_s: 4,
+              first_start_s: 2,
+              last_end_s: 6,
+            },
+          },
+        },
+      },
+    },
+  });
+  const train = timeline.groups[0].rows[0].spans.find(
+    (span) => span.name === "train_models",
+  );
+
+  assert.equal(timeline.groups[0].rows.length, 1);
+  assert.deepEqual(
+    [train.children[0].start, train.children[0].end],
+    [102, 106],
+  );
+  assert.equal(train.children[0].role, "actor");
 });
