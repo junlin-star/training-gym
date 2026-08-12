@@ -44,7 +44,7 @@ import modal
 import re
 
 from modal_training_gym import (
-    AdHocDeployment,
+    CustomDeployment,
     MultimodalDataset,
     Qwen3_VL_8B,
     Qwen3_VL_8b_Recipe,
@@ -223,7 +223,7 @@ async def grounding_reward(args, sample, **kwargs) -> float:
 # training to see how well it grounds UI elements out of the box.
 
 def grounding_eval_fn(
-    deployment: AdHocDeployment, example: dict
+    deployment: CustomDeployment, example: dict
 ) -> dict:
     # Eval sends the screenshot as a separate image_url, so drop the marker.
     prompt = example["prompt"].replace("<image>", "").strip()
@@ -292,7 +292,7 @@ def _main_impl() -> None:
     train_dataset = ScreenSpotDataset(n_rows=800)
 
     base_model = Qwen3_VL_8B()
-    base_deployment = AdHocDeployment.launch(
+    base_deployment = CustomDeployment.launch(
         base_model,
         unauthenticated=True,
     )
@@ -368,7 +368,7 @@ def _main_impl() -> None:
     checkpoint = list_checkpoints(train_result.training_run_id)[-1]
     print(f"Checkpoint: {checkpoint.path}")
 
-    trained_deployment = AdHocDeployment.launch(
+    trained_deployment = CustomDeployment.launch(
         Qwen3_VL_8B(),
         checkpoint=checkpoint,
         app_name="qwen3-vl-8b-grounding-serve",

@@ -8,7 +8,7 @@ TUTORIAL_METADATA = {
     "difficulty": "Beginner",
     "order": 10,
     "api_classes": [
-        "AdHocDeployment",
+        "CustomDeployment",
         "Qwen3_8B",
         "SglangRecipe",
     ],
@@ -31,7 +31,7 @@ def _intro():
     isolated container with its own filesystem.
 
     What you'll learn:
-    1. Deploy a model with `AdHocDeployment` and get an
+    1. Deploy a model with `CustomDeployment` and get an
        OpenAI-compatible endpoint.
     2. Use the OpenAI Python SDK pointed at your self-hosted
        endpoint (no API key needed).
@@ -78,7 +78,7 @@ def _imports():
     import openai
 
     from modal_training_gym import (
-        AdHocDeployment,
+        CustomDeployment,
         Qwen3_8B,
     )
     from modal_training_gym.deploy_recipes import SglangRecipe
@@ -165,8 +165,8 @@ def _deploy_section():
     """
     ## Deploy the model
 
-    `AdHocDeployment.launch()` launches an sglang-backed inference
-    server on Modal and returns an `AdHocDeployment` with a live URL.
+    `CustomDeployment.launch()` launches an sglang-backed inference
+    server on Modal and returns an `CustomDeployment` with a live URL.
     The server exposes an **OpenAI-compatible** `/v1/chat/completions`
     endpoint, so we point the standard OpenAI Python SDK at it.
 
@@ -182,7 +182,7 @@ def _deploy_model():
     recipe = SglangRecipe(
         extra_server_args={"--tool-call-parser": "qwen25"},
     )
-    deployment = AdHocDeployment.launch(
+    deployment = CustomDeployment.launch(
         Qwen3_8B(),
         recipe=recipe,
         unauthenticated=True,

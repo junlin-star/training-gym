@@ -85,7 +85,7 @@ Repo: https://github.com/modal-projects/training-gym
 ### Deployment
 
 - [Endpoint](https://gym.modal.dev/reference/deployment/endpoint/): `Endpoint`
-- [AdHocDeployment](https://gym.modal.dev/reference/deployment/adhocdeployment/): `AdHocDeployment`
+- [CustomDeployment](https://gym.modal.dev/reference/deployment/customdeployment/): `CustomDeployment`
 - [SglangRecipe](https://gym.modal.dev/reference/deployment/sglangrecipe/): `SglangRecipe`
 - [VllmRecipe](https://gym.modal.dev/reference/deployment/vllmrecipe/): `VllmRecipe`
 

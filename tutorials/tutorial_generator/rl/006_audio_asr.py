@@ -12,7 +12,7 @@ TUTORIAL_METADATA = {
         "Qwen3_ASR_1_7b_Recipe",
         "MultimodalDataset",
         "TrainConfig",
-        "AdHocDeployment",
+        "CustomDeployment",
     ],
     "required_modal_secrets": [
         {"name": "wandb-secret", "key": "WANDB_API_KEY"},
@@ -78,7 +78,7 @@ def _install():
 @code
 def _imports():
     from modal_training_gym import (
-        AdHocDeployment,
+        CustomDeployment,
         MultimodalDataset,
         Qwen3_ASR_1_7B,
         Qwen3_ASR_1_7b_Recipe,
@@ -261,7 +261,7 @@ def _eval_intro():
     """
     ## Evaluate the trained checkpoint
 
-    `AdHocDeployment.launch()` serves the trained checkpoint on SGLang
+    `CustomDeployment.launch()` serves the trained checkpoint on SGLang
     (converting the Megatron checkpoint to HuggingFace first, audio tower included).
     Then we `POST` each clip to `/v1/audio/transcriptions`, scoring word
     accuracy (`1 − WER`), and print the mean WER and mean accuracy.
@@ -271,7 +271,7 @@ def _eval_intro():
 @code
 def _eval_fn():
     def transcribe_and_score(
-        deployment: AdHocDeployment, example: dict
+        deployment: CustomDeployment, example: dict
     ) -> dict:
         import base64
         import io
@@ -312,7 +312,7 @@ def _eval_fn():
 @code
 def _eval():
     checkpoint = list_checkpoints(train_result.training_run_id)[-1]
-    deployment = AdHocDeployment.launch(
+    deployment = CustomDeployment.launch(
         Qwen3_ASR_1_7B(),
         checkpoint=checkpoint,
         unauthenticated=True,

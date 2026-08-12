@@ -1,5 +1,5 @@
 from modal_training_gym.common import deployment as deployment_module
-from modal_training_gym.common.deployment import AdHocDeployment
+from modal_training_gym.common.deployment import CustomDeployment
 
 
 def test_chat_serializes_tool_arguments_without_mutating_messages(monkeypatch) -> None:
@@ -29,7 +29,7 @@ def test_chat_serializes_tool_arguments_without_mutating_messages(monkeypatch) -
 
     monkeypatch.setattr(requests, "post", post)
     monkeypatch.setattr(deployment_module, "_modal_proxy_auth_headers", lambda: {})
-    deployment = AdHocDeployment.model_construct(
+    deployment = CustomDeployment.model_construct(
         deployment_id="test",
         served_model_name="test-model",
         url="https://example.test",
@@ -62,7 +62,7 @@ def test_chat_serializes_tool_arguments_without_mutating_messages(monkeypatch) -
 
 
 def test_generate_accepts_caller_supplied_messages(monkeypatch) -> None:
-    deployment = AdHocDeployment.model_construct(
+    deployment = CustomDeployment.model_construct(
         deployment_id="test",
         served_model_name="test-model",
         url="https://example.test",
@@ -79,7 +79,7 @@ def test_generate_accepts_caller_supplied_messages(monkeypatch) -> None:
         captured["kwargs"] = kwargs
         return {"content": "print('hello world')"}
 
-    monkeypatch.setattr(AdHocDeployment, "chat", chat)
+    monkeypatch.setattr(CustomDeployment, "chat", chat)
 
     response = deployment.generate(
         "unused fallback",

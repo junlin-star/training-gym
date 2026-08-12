@@ -36,7 +36,7 @@
 import modal
 
 from modal_training_gym import (
-    AdHocDeployment,
+    CustomDeployment,
     MultimodalDataset,
     Qwen3_ASR_1_7B,
     Qwen3_ASR_1_7b_Recipe,
@@ -150,13 +150,13 @@ async def word_error_rate_reward(args, sample, **kwargs) -> float:
 
 # ## Evaluate the trained checkpoint
 #
-# `AdHocDeployment.launch()` serves the trained checkpoint on SGLang
+# `CustomDeployment.launch()` serves the trained checkpoint on SGLang
 # (converting the Megatron checkpoint to HuggingFace first, audio tower included).
 # Then we `POST` each clip to `/v1/audio/transcriptions`, scoring word
 # accuracy (`1 − WER`), and print the mean WER and mean accuracy.
 
 def transcribe_and_score(
-    deployment: AdHocDeployment, example: dict
+    deployment: CustomDeployment, example: dict
 ) -> dict:
     import base64
     import io
@@ -250,7 +250,7 @@ def _main_impl() -> None:
     print(f"Training run id: {train_result.training_run_id}")
 
     checkpoint = list_checkpoints(train_result.training_run_id)[-1]
-    deployment = AdHocDeployment.launch(
+    deployment = CustomDeployment.launch(
         Qwen3_ASR_1_7B(),
         checkpoint=checkpoint,
         unauthenticated=True,

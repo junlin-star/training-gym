@@ -9,7 +9,7 @@ TUTORIAL_METADATA = {
     "order": 20,
     "api_classes": [
         "HarborDataset",
-        "AdHocDeployment",
+        "CustomDeployment",
         "Qwen3_4B",
         "SlimeRecipe",
         "TrainConfig",
@@ -70,7 +70,7 @@ def _install():
 @code
 def _imports():
     from modal_training_gym import (
-        AdHocDeployment,
+        CustomDeployment,
         HarborDataset,
         Qwen3_4B,
         SlimeRecipe,
@@ -161,7 +161,7 @@ def _harbor_eval_intro():
 @code
 def _serve_eval_base():
     base_model = Qwen3_4B()
-    base_deployment = AdHocDeployment.launch(
+    base_deployment = CustomDeployment.launch(
         base_model,
         unauthenticated=True,
     )
@@ -270,7 +270,7 @@ def _serve_trained_intro():
 @code
 def _serve_trained():
     checkpoint = list_checkpoints(train_result.training_run_id)[-1]
-    trained_deployment = AdHocDeployment.launch(
+    trained_deployment = CustomDeployment.launch(
         Qwen3_4B(),
         checkpoint=checkpoint,
         app_name="qwen3-4b-hello-world-serve",

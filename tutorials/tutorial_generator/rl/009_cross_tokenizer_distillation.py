@@ -9,7 +9,7 @@ TUTORIAL_METADATA = {
     "order": 60,
     "api_classes": [
         "Qwen3_6_35B",
-        "AdHocDeployment",
+        "CustomDeployment",
         "Qwen3_6_35b_Recipe",
         "TrainConfig",
     ],
@@ -72,7 +72,7 @@ def _imports():
     import re
 
     from modal_training_gym import (
-        AdHocDeployment,
+        CustomDeployment,
         Qwen3_6_35B,
         TrainConfig,
         list_checkpoints,
@@ -112,7 +112,7 @@ def _deploy_teacher():
     # OPD fires one /generate prefill per trajectory. With 16×8=128 traj/step, the
     # default max_running_requests=16 saturates and returns 503s for minutes — raise
     # the teacher queue and throttle client-side (see TEACHER_RM_CONCURRENCY below).
-    teacher_deployment = AdHocDeployment.launch(
+    teacher_deployment = CustomDeployment.launch(
         HFModelConfiguration(model_name="deepseek-ai/DeepSeek-V4-Flash"),
         recipe=DeepSeek_V4_Flash_SglangRecipe(
             context_length=16384,
@@ -426,7 +426,7 @@ def _eval_base():
 
 @code
 def _eval_function():
-    def bfcl_eval_fn(deployment: AdHocDeployment, example: dict) -> dict:
+    def bfcl_eval_fn(deployment: CustomDeployment, example: dict) -> dict:
         label = json.loads(example["label"])
         task_id = label["task_id"]
         N = label["total_steps"]
@@ -516,7 +516,7 @@ def _run_baseline_eval():
             print(f"{'First-call tool match':<25} {_frac(rows, 'tool_match'):>10.1%}")
 
     student_recipe = Qwen3_6_35b_SglangRecipe(context_length=SERVED_CONTEXT_LEN)
-    base_deployment = AdHocDeployment.launch(base_model, recipe=student_recipe)
+    base_deployment = CustomDeployment.launch(base_model, recipe=student_recipe)
     print(f"Student URL: {base_deployment.url}")
 
     teacher_mean = None
@@ -1190,7 +1190,7 @@ def _eval_trained():
     checkpoint = list_checkpoints(train_result.training_run_id)[-1]
     print(f"Checkpoint: {checkpoint.path}")
 
-    trained_deployment = AdHocDeployment.launch(
+    trained_deployment = CustomDeployment.launch(
         Qwen3_6_35B(),
         recipe=student_recipe,
         checkpoint=checkpoint,

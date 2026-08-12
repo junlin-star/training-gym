@@ -8,7 +8,7 @@ TUTORIAL_METADATA = {
     "order": 10,
     "api_classes": [
         "Qwen3_4B",
-        "AdHocDeployment",
+        "CustomDeployment",
         "TrainConfig",
         "SlimeRecipe",
         "TrainResult",
@@ -72,7 +72,7 @@ def _imports():
     import re
 
     from modal_training_gym import (
-        AdHocDeployment,
+        CustomDeployment,
         HuggingFaceDataset,
         Qwen3_4B,
         SlimeRecipe,
@@ -92,10 +92,10 @@ def _serve_base_intro():
     The training gym has several config classes so you can define deployment, training, and evaluation configurations,
     and reuse them across different runs for parameter sweeps.
 
-    Let's start by launching an `AdHocDeployment`.
+    Let's start by launching an `CustomDeployment`.
 
-    Calling `AdHocDeployment.launch()` builds and deploys an SGLang app, then
-    returns an `AdHocDeployment` with the endpoint URL. Pass
+    Calling `CustomDeployment.launch()` builds and deploys an SGLang app, then
+    returns an `CustomDeployment` with the endpoint URL. Pass
     `unauthenticated=True` so the endpoint is reachable without Modal
     proxy-auth tokens.
     """
@@ -104,7 +104,7 @@ def _serve_base_intro():
 @code
 def _serve_base_model():
     base_model = Qwen3_4B()
-    base_model_deployment = AdHocDeployment.launch(
+    base_model_deployment = CustomDeployment.launch(
         base_model,
         unauthenticated=True,
     )
@@ -348,7 +348,7 @@ def _trained_eval_intro():
 
     The returned `TrainResult` has the checkpoint path and volume
     metadata attached. You can pass an explicit `checkpoint=` to
-    `AdHocDeployment.launch()` to pin a specific checkpoint, or omit it to use
+    `CustomDeployment.launch()` to pin a specific checkpoint, or omit it to use
     the model's default path.
     """
 
@@ -358,7 +358,7 @@ def _serve_and_eval_trained():
     checkpoint = list_checkpoints(train_result.training_run_id)[-1]
     print(checkpoint.path)
 
-    trained_model_deployment = AdHocDeployment.launch(
+    trained_model_deployment = CustomDeployment.launch(
         Qwen3_4B(),
         checkpoint=checkpoint,
         app_name="qwen3-4b-haiku-serve",
@@ -441,7 +441,7 @@ def _trained_eval_off_of_a_checkpoint_code():
     new_checkpoint = list_checkpoints(new_train_result.training_run_id)[-1]
     print(new_checkpoint.path)
     
-    new_model_deployment = AdHocDeployment.launch(
+    new_model_deployment = CustomDeployment.launch(
         Qwen3_4B(),
         checkpoint=new_checkpoint,
         app_name="qwen3-4b-haiku-serve-new",

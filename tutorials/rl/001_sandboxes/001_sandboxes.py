@@ -27,7 +27,7 @@
 import modal
 
 from modal_training_gym import (
-    AdHocDeployment,
+    CustomDeployment,
     HarborDataset,
     Qwen3_4B,
     SlimeRecipe,
@@ -147,7 +147,7 @@ def _main_impl() -> None:
             "https://modal.com/secrets with an HF_TOKEN entry, then re-run."
         ) from e
 
-    base_deployment = AdHocDeployment.launch(
+    base_deployment = CustomDeployment.launch(
         base_model,
         unauthenticated=True,
     )
@@ -192,7 +192,7 @@ def _main_impl() -> None:
     # ## Evaluate the trained checkpoint
 
     checkpoint = list_checkpoints(train_result.training_run_id)[-1]
-    trained_deployment = AdHocDeployment.launch(
+    trained_deployment = CustomDeployment.launch(
         Qwen3_4B(),
         checkpoint=checkpoint,
         app_name="qwen3-4b-hello-world-serve",

@@ -9,9 +9,9 @@ _EXPORTS = {
         "modal_training_gym.common.checkpoint",
         "convert_checkpoint_to_hf",
     ),
-    "AdHocDeployment": (
+    "CustomDeployment": (
         "modal_training_gym.common.deployment",
-        "AdHocDeployment",
+        "CustomDeployment",
     ),
     "DatasetConfig": ("modal_training_gym.common.dataset", "DatasetConfig"),
     "Endpoint": ("modal_training_gym.common.endpoint", "Endpoint"),
@@ -122,7 +122,7 @@ _EXPORTS = {
 }
 
 __all__ = [
-    "AdHocDeployment",
+    "CustomDeployment",
     "Kimi_K2_6_LoRA_Recipe",
     "Kimi_K2_5_LoRA_Recipe",
     "Checkpoint",

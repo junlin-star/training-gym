@@ -33,7 +33,7 @@ import re
 
 from modal_training_gym import (
     DatasetConfig,
-    AdHocDeployment,
+    CustomDeployment,
     Qwen3_4B,
     SlimeRecipe,
     TrainConfig,
@@ -241,7 +241,7 @@ async def number_guess_rm(args, sample, **kwargs) -> float:
 # small loop over the eval dataset.
 
 def run_guessing_trajectory(
-    deployment: AdHocDeployment,
+    deployment: CustomDeployment,
     *,
     target: int,
     max_turns: int = _MAX_TURNS,
@@ -278,7 +278,7 @@ def run_guessing_trajectory(
     }
 
 def guessing_eval_fn(
-    deployment: AdHocDeployment,
+    deployment: CustomDeployment,
     example: dict,
 ) -> dict:
     target = int(example["target"])
@@ -347,7 +347,7 @@ def _main_impl() -> None:
 
     # ## Serve and evaluate the base model
 
-    base_deployment = AdHocDeployment.launch(
+    base_deployment = CustomDeployment.launch(
         Qwen3_4B(),
         unauthenticated=True,
     )
@@ -424,7 +424,7 @@ def _main_impl() -> None:
     # ## Evaluate trained checkpoint
 
     checkpoint = list_checkpoints(train_result.training_run_id)[-1]
-    trained_deployment = AdHocDeployment.launch(
+    trained_deployment = CustomDeployment.launch(
         Qwen3_4B(),
         checkpoint=checkpoint,
         app_name="qwen3-4b-guessing-multiturn-serve",

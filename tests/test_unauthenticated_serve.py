@@ -1,4 +1,4 @@
-"""Local checks for AdHocDeployment.launch(unauthenticated=...)."""
+"""Local checks for CustomDeployment.launch(unauthenticated=...)."""
 
 from __future__ import annotations
 
@@ -6,8 +6,8 @@ import inspect
 from unittest.mock import MagicMock, patch
 
 import pytest
+from modal_training_gym import CustomDeployment
 from modal_training_gym.common import deployment as deployment_module
-from modal_training_gym.common.deployment import AdHocDeployment
 from modal_training_gym.common.models.base import ModelConfig
 from modal_training_gym.deploy_recipes.sglang_recipe import SglangRecipe
 from modal_training_gym.deploy_recipes.sglang_recipe.serve_sglang import (
@@ -58,7 +58,7 @@ def test_vllm_builder_forwards_unauthenticated_to_app_server() -> None:
 
 
 def test_default_unauthenticated_is_true() -> None:
-    parameters = inspect.signature(AdHocDeployment.launch).parameters
+    parameters = inspect.signature(CustomDeployment.launch).parameters
     assert parameters["recipe"].default is None
     assert parameters["unauthenticated"].default is True
     assert {
@@ -92,11 +92,11 @@ def test_sglang_serve_forwards_unauthenticated() -> None:
             return_value="https://example.modal.run",
         ),
         patch(
-            "modal_training_gym.common.deployment.AdHocDeployment.save",
+            "modal_training_gym.common.deployment.CustomDeployment.save",
             return_value=None,
         ),
     ):
-        deployment = AdHocDeployment.launch(
+        deployment = CustomDeployment.launch(
             "test/model",
             recipe=SglangRecipe(),
             app_name="custom-app",
@@ -127,7 +127,7 @@ def _serve_vllm(*, unauthenticated: bool = True) -> tuple[object, MagicMock]:
             return_value="https://example.modal.run",
         ),
         patch(
-            "modal_training_gym.common.deployment.AdHocDeployment.save",
+            "modal_training_gym.common.deployment.CustomDeployment.save",
             return_value=None,
         ),
         patch(
@@ -135,7 +135,7 @@ def _serve_vllm(*, unauthenticated: bool = True) -> tuple[object, MagicMock]:
             return_value="https://modal.com/apps/ap-test",
         ),
     ):
-        deployment = AdHocDeployment.launch(
+        deployment = CustomDeployment.launch(
             ModelConfig(model_name="test/model"),
             recipe=VllmRecipe(),
             unauthenticated=unauthenticated,
@@ -159,7 +159,7 @@ def test_vllm_serve_forwards_default_unauthenticated() -> None:
 
 
 def test_from_config_missing_unauthenticated_defaults_true() -> None:
-    deployment = AdHocDeployment.model_validate(
+    deployment = CustomDeployment.model_validate(
         {
             "deployment_id": "dep-1",
             "url": "https://example.modal.run",
@@ -178,7 +178,7 @@ def test_from_config_missing_unauthenticated_defaults_true() -> None:
 
 def test_save_preserves_dashboard_metadata_shape(monkeypatch) -> None:
     captured: dict = {}
-    deployment = AdHocDeployment.model_construct(
+    deployment = CustomDeployment.model_construct(
         deployment_id="dep-1",
         model=ModelConfig(model_name="test/model"),
         recipe=VllmRecipe(),

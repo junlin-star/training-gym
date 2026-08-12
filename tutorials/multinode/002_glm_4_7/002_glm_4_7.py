@@ -33,7 +33,7 @@
 import modal
 
 from modal_training_gym import (
-    AdHocDeployment,
+    CustomDeployment,
     GLM_4_7,
     HuggingFaceDataset,
     TrainConfig,
@@ -123,7 +123,7 @@ def _main_impl() -> None:
     checkpoint = list_checkpoints(train_result.training_run_id)[-1]
     print(f"Checkpoint: {checkpoint.path}")
 
-    deployment = AdHocDeployment.launch(
+    deployment = CustomDeployment.launch(
         GLM_4_7(),
         checkpoint=checkpoint,
         recipe=GLM_4_7_SglangRecipe(),

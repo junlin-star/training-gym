@@ -10,7 +10,7 @@ TUTORIAL_METADATA = {
     "api_classes": [
         "Qwen3_4B",
         "Qwen3_8B",
-        "AdHocDeployment",
+        "CustomDeployment",
         "SlimeRecipe",
         "TrainConfig",
     ],
@@ -33,7 +33,7 @@ def _intro():
 
     The tutorial follows these steps:
 
-    1. **Deploy the teacher** (Qwen3-8B) on an SGLang server with `AdHocDeployment`.
+    1. **Deploy the teacher** (Qwen3-8B) on an SGLang server with `CustomDeployment`.
     2. **Load a math dataset** (`dapo-math-17k`) and define a verifiable eval that checks `Answer: \\boxed{N}`.
     3. **Evaluate the base student** (Qwen3-4B) to get a baseline accuracy.
     4. **Define a reward function** that calls the teacher's `/generate` endpoint with `return_logprob=True` and combines the teacher log-probs with a math correctness score.
@@ -95,7 +95,7 @@ def _imports():
     import re
 
     from modal_training_gym import (
-        AdHocDeployment,
+        CustomDeployment,
         HuggingFaceDataset,
         Qwen3_4B,
         Qwen3_8B,
@@ -121,7 +121,7 @@ def _deploy_intro():
 @code
 def _deploy_teacher():
     teacher_model = Qwen3_8B()
-    teacher_deployment = AdHocDeployment.launch(
+    teacher_deployment = CustomDeployment.launch(
         teacher_model,
         recipe=SglangRecipe(gpu="H100"),
         app_name="opd-teacher-qwen3-8b",
@@ -225,7 +225,7 @@ def _eval_fn():
             pass
         return pred == gt
 
-    def math_eval_fn(deployment: AdHocDeployment, example: dict) -> dict:
+    def math_eval_fn(deployment: CustomDeployment, example: dict) -> dict:
         prompt = example["prompt"][0]["content"]
         label = example["label"]
 
@@ -280,7 +280,7 @@ def _eval_base_intro():
 @code
 def _eval_base():
     base_model = Qwen3_4B()
-    base_deployment = AdHocDeployment.launch(
+    base_deployment = CustomDeployment.launch(
         base_model,
         unauthenticated=True,
     )
@@ -450,7 +450,7 @@ def _eval_trained():
     checkpoint = list_checkpoints(train_result.training_run_id)[-1]
     print(f"Checkpoint: {checkpoint.path}")
 
-    trained_deployment = AdHocDeployment.launch(
+    trained_deployment = CustomDeployment.launch(
         Qwen3_4B(),
         checkpoint=checkpoint,
         app_name="qwen3-4b-opd-trained-serve",

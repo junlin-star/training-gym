@@ -11,7 +11,7 @@ TUTORIAL_METADATA = {
         "Qwen3_VL_8B",
         "Qwen3_VL_8b_Recipe",
         "MultimodalDataset",
-        "AdHocDeployment",
+        "CustomDeployment",
         "TrainConfig",
         "WandbConfig",
         "list_checkpoints",
@@ -78,7 +78,7 @@ def _imports():
     import re
 
     from modal_training_gym import (
-        AdHocDeployment,
+        CustomDeployment,
         MultimodalDataset,
         Qwen3_VL_8B,
         Qwen3_VL_8b_Recipe,
@@ -296,7 +296,7 @@ def _eval_base_intro():
 @code
 def _eval_helpers():
     def grounding_eval_fn(
-        deployment: AdHocDeployment, example: dict
+        deployment: CustomDeployment, example: dict
     ) -> dict:
         # Eval sends the screenshot as a separate image_url, so drop the marker.
         prompt = example["prompt"].replace("<image>", "").strip()
@@ -347,7 +347,7 @@ def _eval_helpers():
 @code
 def _eval_base():
     base_model = Qwen3_VL_8B()
-    base_deployment = AdHocDeployment.launch(
+    base_deployment = CustomDeployment.launch(
         base_model,
         unauthenticated=True,
     )
@@ -450,7 +450,7 @@ def _eval_trained():
     checkpoint = list_checkpoints(train_result.training_run_id)[-1]
     print(f"Checkpoint: {checkpoint.path}")
 
-    trained_deployment = AdHocDeployment.launch(
+    trained_deployment = CustomDeployment.launch(
         Qwen3_VL_8B(),
         checkpoint=checkpoint,
         app_name="qwen3-vl-8b-grounding-serve",

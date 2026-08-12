@@ -23,9 +23,9 @@ Typical flow:
     print(result.checkpoint_dir)            # /checkpoints/my-app_train_...
     print(result.latest_checkpoint_path())  # .../iter_0000050
 
-    from modal_training_gym import AdHocDeployment
+    from modal_training_gym import CustomDeployment
     from modal_training_gym.deploy_recipes import SglangRecipe
-    deployment = AdHocDeployment.launch(result.model, recipe=SglangRecipe())
+    deployment = CustomDeployment.launch(result.model, recipe=SglangRecipe())
     print(deployment.url)
 
 Two design invariants:

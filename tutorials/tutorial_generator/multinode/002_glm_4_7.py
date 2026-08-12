@@ -10,7 +10,7 @@ TUTORIAL_METADATA = {
         "GLM_4_7",
         "GLM_4_7_Recipe",
         "GLM_4_7_SglangRecipe",
-        "AdHocDeployment",
+        "CustomDeployment",
         "TrainConfig",
         "TrainResult",
     ],
@@ -69,7 +69,7 @@ def _install():
 @code
 def _imports():
     from modal_training_gym import (
-        AdHocDeployment,
+        CustomDeployment,
         GLM_4_7,
         HuggingFaceDataset,
         TrainConfig,
@@ -178,7 +178,7 @@ def _serve_checkpoint():
     checkpoint = list_checkpoints(train_result.training_run_id)[-1]
     print(f"Checkpoint: {checkpoint.path}")
 
-    deployment = AdHocDeployment.launch(
+    deployment = CustomDeployment.launch(
         GLM_4_7(),
         checkpoint=checkpoint,
         recipe=GLM_4_7_SglangRecipe(),

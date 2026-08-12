@@ -9,7 +9,7 @@ TUTORIAL_METADATA = {
     "order": 30,
     "api_classes": [
         "DatasetConfig",
-        "AdHocDeployment",
+        "CustomDeployment",
         "Qwen3_4B",
         "SlimeRecipe",
         "TrainConfig",
@@ -71,7 +71,7 @@ def _imports():
 
     from modal_training_gym import (
         DatasetConfig,
-        AdHocDeployment,
+        CustomDeployment,
         Qwen3_4B,
         SlimeRecipe,
         TrainConfig,
@@ -304,7 +304,7 @@ def _eval_intro():
 @code
 def _eval_helpers():
     def run_guessing_trajectory(
-        deployment: AdHocDeployment,
+        deployment: CustomDeployment,
         *,
         target: int,
         max_turns: int = _MAX_TURNS,
@@ -341,7 +341,7 @@ def _eval_helpers():
         }
 
     def guessing_eval_fn(
-        deployment: AdHocDeployment,
+        deployment: CustomDeployment,
         example: dict,
     ) -> dict:
         target = int(example["target"])
@@ -403,7 +403,7 @@ def _serve_base_intro():
 
 @code
 def _serve_base():
-    base_deployment = AdHocDeployment.launch(
+    base_deployment = CustomDeployment.launch(
         Qwen3_4B(),
         unauthenticated=True,
     )
@@ -496,7 +496,7 @@ def _trained_eval_intro():
 @code
 def _trained_eval():
     checkpoint = list_checkpoints(train_result.training_run_id)[-1]
-    trained_deployment = AdHocDeployment.launch(
+    trained_deployment = CustomDeployment.launch(
         Qwen3_4B(),
         checkpoint=checkpoint,
         app_name="qwen3-4b-guessing-multiturn-serve",

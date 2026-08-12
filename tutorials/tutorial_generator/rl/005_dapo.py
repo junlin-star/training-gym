@@ -9,7 +9,7 @@ TUTORIAL_METADATA = {
     "order": 35,
     "api_classes": [
         "Qwen3_4B",
-        "AdHocDeployment",
+        "CustomDeployment",
         "HuggingFaceDataset",
         "SlimeRecipe",
         "TrainConfig",
@@ -87,7 +87,7 @@ def _imports():
     from typing import Any
 
     from modal_training_gym import (
-        AdHocDeployment,
+        CustomDeployment,
         HuggingFaceDataset,
         Qwen3_4B,
         SlimeRecipe,
@@ -175,7 +175,7 @@ def _eval_helpers():
             pass
         return pred == gt
 
-    def math_eval_fn(deployment: AdHocDeployment, example: dict) -> dict:
+    def math_eval_fn(deployment: CustomDeployment, example: dict) -> dict:
         prompt = example["prompt"][0]["content"]
         label = example["label"]
 
@@ -224,7 +224,7 @@ def _eval_base_intro():
 @code
 def _eval_base():
     base_model = Qwen3_4B()
-    base_deployment = AdHocDeployment.launch(
+    base_deployment = CustomDeployment.launch(
         base_model,
         unauthenticated=True,
     )
@@ -402,7 +402,7 @@ def _eval_trained():
     checkpoint = list_checkpoints(train_result.training_run_id)[-1]
     print(f"Checkpoint: {checkpoint.path}")
 
-    trained_deployment = AdHocDeployment.launch(
+    trained_deployment = CustomDeployment.launch(
         Qwen3_4B(),
         checkpoint=checkpoint,
         app_name="qwen3-4b-dapo-serve",

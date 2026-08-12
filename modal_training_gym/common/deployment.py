@@ -107,7 +107,7 @@ def _raise_for_proxy_auth(status_code: int, url: str) -> None:
         "and MODAL_SECRET (ws-…) in the shell that runs the eval/serve. For calls "
         "issued from remote workers (e.g. a custom rm/reward function), also "
         "forward the pair into the worker via a modal.Secret. SGLang endpoints "
-        "are public by default; pass AdHocDeployment.launch(..., "
+        "are public by default; pass CustomDeployment.launch(..., "
         "unauthenticated=False) to "
         "require proxy auth."
     )
@@ -221,7 +221,7 @@ class _CrashloopDetector:
         return elapsed, phase
 
 
-class AdHocDeployment(BaseModel):
+class CustomDeployment(BaseModel):
     """A recipe-driven deployed model endpoint.
 
     Use `launch` to build and deploy an SGLang or vLLM serving app.
@@ -272,7 +272,7 @@ class AdHocDeployment(BaseModel):
         app_name: str | None = None,
         served_model_name: str | None = None,
         unauthenticated: bool = True,
-    ) -> "AdHocDeployment":
+    ) -> "CustomDeployment":
         model = ModelConfig(model_name=model) if isinstance(model, str) else model
 
         if recipe is None:
