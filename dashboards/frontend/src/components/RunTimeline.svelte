@@ -668,7 +668,7 @@
         )}
       </span>
     {/if}
-    {#if tip.bar.children?.length}
+    {#if groupedTipChildren.length}
       <div class="tg-tip-children">
         {#each groupedTipChildren as child (child.name)}
           <span class="tg-tip-child">

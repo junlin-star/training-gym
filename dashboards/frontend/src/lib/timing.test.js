@@ -270,11 +270,14 @@ test("sync generation tooltips preserve the async phase breakdown", () => {
       ({ name, duration, count }) => ({ name, duration, count }),
     );
 
+  const syncGeneration = barFor(syncTimeline, "generate_rollouts");
+  const asyncGeneration = barFor(asyncTimeline, "generate_samples");
+  assert.equal(syncGeneration.children.length, 0);
   assert.deepEqual(
-    tooltipChildren(barFor(syncTimeline, "generate_rollouts")),
-    tooltipChildren(barFor(asyncTimeline, "generate_samples")),
+    tooltipChildren(syncGeneration),
+    tooltipChildren(asyncGeneration),
   );
-  assert.deepEqual(tooltipChildren(barFor(syncTimeline, "generate_rollouts")), [
+  assert.deepEqual(tooltipChildren(syncGeneration), [
     {
       name: "reward_post_process",
       duration: 2,
