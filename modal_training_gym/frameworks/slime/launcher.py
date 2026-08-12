@@ -121,7 +121,6 @@ def _capture_remote_entry_clock(environment: Mapping[str, str]) -> dict[str, str
         raise ValueError("operator-pool receipt hash is malformed at remote entry")
     return {
         "DRIFT_ASYNC_RL_REMOTE_ENTRY_EPOCH_NS": str(time.time_ns()),
-        "DRIFT_ASYNC_RL_REMOTE_ENTRY_MONOTONIC_NS": str(time.monotonic_ns()),
         "DRIFT_ASYNC_RL_REMOTE_ENTRY_RECEIPT_SHA256": receipt_sha256,
     }
 
