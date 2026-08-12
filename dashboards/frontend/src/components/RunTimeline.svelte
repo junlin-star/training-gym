@@ -266,13 +266,28 @@
   }
 
   function nestedZIndex(row, bar) {
+    const pixelsPerSecond = viewport
+      ? (viewport.clientWidth * zoom) / timeline.span
+      : 0;
     const nestedBars = row.sortedSpans
       .filter((candidate) => candidate.depth > 0)
       .sort(
-        (a, b) =>
-          a.duration - b.duration ||
-          a.start - b.start ||
-          String(a.key).localeCompare(String(b.key)),
+        (a, b) => {
+          const centerDistance =
+            Math.abs((a.start + a.end - b.start - b.end) / 2) *
+            pixelsPerSecond;
+          if (centerDistance < 1) {
+            return (
+              b.start - a.start ||
+              String(a.key).localeCompare(String(b.key))
+            );
+          }
+          return (
+            a.duration - b.duration ||
+            a.start - b.start ||
+            String(a.key).localeCompare(String(b.key))
+          );
+        },
       );
     const index = nestedBars.findIndex((candidate) => candidate.key === bar.key);
     return index < 0 ? 3 : nestedBars.length - index + 3;
