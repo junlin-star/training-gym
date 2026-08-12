@@ -377,8 +377,6 @@ def _main_impl() -> None:
     # - `num_rollout=20` — total rollout/train iterations to run. Each iteration samples
     #   a batch, scores it, and applies one policy update.
     # - `rollout_batch_size=8` — prompts sampled per rollout iteration.
-    # - `n_samples_per_prompt=1` — GRPO group size. `1` disables grouping; bump to ≥2
-    #   to get within-prompt advantage normalization.
     # - `rollout_max_response_len=64` — max new tokens per sglang call. We keep it tiny
     #    because every turn is `<answer>N</answer>` plus a bit of thinking.
     # - `rollout_temperature=1.0` — sampling temperature during rollouts.
@@ -409,7 +407,7 @@ def _main_impl() -> None:
 
             num_rollout=20,
             rollout_batch_size=8,
-            n_samples_per_prompt=1,
+            n_samples_per_prompt=4,
             rollout_max_response_len=64,
             rollout_temperature=1.0,
 
