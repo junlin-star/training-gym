@@ -532,12 +532,6 @@ class RolloutImageStore:
     deep-copies it per ``n_samples_per_prompt``), so members hold equal-content but
     distinct image objects. Content keying is what collapses them, so every sample
     is resolved from its own candidates.
-
-    That makes content keying the store's floor cost, and for a PIL image it is a
-    full raw-pixel materialisation plus a hash — too much to pay per sample for a
-    whole rollout once nothing more can be captured. So keying closes at the first
-    miss after the limit is spent (see ``_resolve``), which bounds the work to the
-    distinct images plus the group that straddled the limit.
     """
 
     def __init__(self, limit: int) -> None:
@@ -548,7 +542,6 @@ class RolloutImageStore:
         self._ref_by_raw: dict[Any, str] = {}
         self._key_by_id: dict[int, Any] = {}
         self._pinned: list[Any] = []
-        # Set once no unkeyed candidate can resolve; see _resolve.
         self._closed = False
 
     @property
@@ -590,9 +583,6 @@ class RolloutImageStore:
         for candidate in _image_candidates(sample):
             key = self._memo_key(candidate)
             if key is None:
-                # Content keying is the expensive step, so it is skipped once it
-                # can only ever miss. Same-object candidates still resolve for
-                # free above.
                 if self._closed:
                     continue
                 key = self._key(candidate)
@@ -604,12 +594,6 @@ class RolloutImageStore:
                 return cached
             if self.count >= self._limit:
                 self._ref_by_raw[key] = ""
-                # Prompt-group members are contiguous, so with the limit spent and
-                # this candidate a miss, the group that spent it is behind us and
-                # every group ahead is one that was never captured. Close keying
-                # rather than pay it per sample for the rest of the rollout. The
-                # trade: an already-captured image reappearing in a later,
-                # non-adjacent group is left unannotated instead of resolved.
                 self._closed = True
                 continue
             uri = _image_to_data_uri(candidate)
