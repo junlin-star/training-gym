@@ -96,8 +96,6 @@ def _build_miles_base_image(miles: MilesRecipe) -> Image:
     )
     if miles.image_env:
         image = image.env(miles.image_env)
-    if miles.image_run_commands:
-        image = image.run_commands(*miles.image_run_commands)
     return image
 
 
@@ -189,15 +187,17 @@ def build_miles_app(
             ignore=["**/__pycache__", "**/*.pyc", "**/.git", "**/.venv"],
         )
         # The local checkout just overwrote the patched miles sources;
-        # re-apply every build-time patch.
+        # re-apply the built-in patches.
         image = image.run_commands(
             f"echo {_PATCH_SGLANG_ABORT_B64} | base64 -d | python3"
             " || echo 'WARNING: sglang abort patch did not apply to the"
             " local_miles checkout; transient router failures during rollout"
             " cleanup may crash the run'",
             *_REPORTING_PATCH_COMMANDS,
-            *(miles.image_run_commands or []),
         )
+
+    if miles.image_run_commands:
+        image = image.run_commands(*miles.image_run_commands)
 
     if miles.image_overlay is not None:
         image = miles.image_overlay(image)
