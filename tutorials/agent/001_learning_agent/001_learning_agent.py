@@ -57,9 +57,12 @@ import random
 import re
 import shutil
 import subprocess
+import tempfile
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+
+import modal
 
 from modal_training_gym import (
     DatasetConfig,
@@ -627,24 +630,48 @@ def search_answer(
 # gold answer and rubric. The label never enters the prompt — it reaches the
 # reward function as `sample.label` and nothing else.
 #
-# The rows were generated locally, so we hand them to the config as
-# constructor kwargs; the gym cloudpickles the instance out to the container
-# that materializes the dataset.
+# **The exam does not travel in the closure.** Modal cloudpickles every
+# function with whatever its closure reaches and rejects the result past
+# 64 KiB — and a hundred questions with gold answers and rubrics is bigger
+# than that. So the exam is parked on a Volume and the config carries two
+# filenames; the container reads them back with `Volume.read_file`, which
+# needs no mount. The rule of thumb: *code* rides in the closure, *data*
+# rides on a volume.
+
+EXAM_VOLUME = "learning-agent-exam"
+
+def ship(key: str, payload: list[dict]) -> str:
+    """Park data on the volume under `key` and hand back the key."""
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as handle:
+        json.dump(payload, handle)
+    volume = modal.Volume.from_name(EXAM_VOLUME, create_if_missing=True)
+    with volume.batch_upload(force=True) as batch:
+        batch.put_file(handle.name, f"/{key}")
+    return key
+
+def fetch(key: str) -> list[dict]:
+    """Read a shipment back — here, or inside a training container."""
+    volume = modal.Volume.from_name(EXAM_VOLUME, create_if_missing=True)
+    return json.loads(b"".join(volume.read_file(key)).decode())
 
 class ExamDataset(DatasetConfig):
     input_key = "messages"
     label_key = "label"
     apply_chat_template = True
     always_prepare = True
-    rows: list[dict] = []
-    eval_rows: list[dict] = []
+    # Keys on the volume, not the rows themselves: this instance is
+    # cloudpickled into the container that materializes the dataset.
+    train_key: str = ""
+    eval_key: str = ""
 
     def load(self, split="all"):
+        rows = fetch(self.train_key) if self.train_key else []
+        eval_rows = fetch(self.eval_key) if self.eval_key else []
         if split == "eval":
-            return self.eval_rows
+            return eval_rows
         if split == "train":
-            return self.rows
-        return self.rows + self.eval_rows
+            return rows
+        return rows + eval_rows
 
     def prepare(self, path: str, eval_paths: dict[str, str] | None = None):
         import os
@@ -663,11 +690,14 @@ class ExamDataset(DatasetConfig):
             }
 
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        Dataset.from_list([to_example(i) for i in self.rows]).to_parquet(path)
+        Dataset.from_list(
+            [to_example(i) for i in self.load(split="train")]
+        ).to_parquet(path)
+        eval_rows = self.load(split="eval")
         for eval_path in (eval_paths or {}).values():
             os.makedirs(os.path.dirname(eval_path), exist_ok=True)
             Dataset.from_list(
-                [to_example(i) for i in self.eval_rows]
+                [to_example(i) for i in eval_rows]
             ).to_parquet(eval_path)
 
 # ## Rollouts: the same harness, inside the training engine
@@ -682,9 +712,10 @@ class ExamDataset(DatasetConfig):
 # trained.
 #
 # **The corpus rides along.** The searchable index is captured in the
-# closure and cloudpickled into the training container with the function —
-# no volume mount, no download step, because a few hundred KB of markdown is
-# cheaper to ship than to coordinate.
+# closure. This function is not subject to the 64 KiB budget the dataset
+# hit: the gym cloudpickles `custom_generate_function` into a module baked
+# into the training image rather than into a Modal function, so a few
+# hundred KB of markdown is cheaper to ship than to coordinate.
 #
 # Everything the episode learns about itself is stashed on
 # `sample.metadata`. Numeric keys there are picked up automatically by the
@@ -1040,9 +1071,12 @@ def _main_impl() -> None:
 
     student_model = Qwen3_4B()
 
-    train_dataset = ExamDataset(rows=train_items, eval_rows=dev_items)
-    dev_dataset = ExamDataset(rows=[], eval_rows=dev_items)
-    test_dataset = ExamDataset(rows=[], eval_rows=test_items)
+    train_dataset = ExamDataset(
+        train_key=ship("exam-train.json", train_items),
+        eval_key=ship("exam-dev.json", dev_items),
+    )
+    dev_dataset = ExamDataset(eval_key="exam-dev.json")
+    test_dataset = ExamDataset(eval_key=ship("exam-test.json", test_items))
 
     dev_eval = EvalConfig(
         dataset=dev_dataset,
