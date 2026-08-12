@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import subprocess
+import zipfile
 from pathlib import Path
 
 from click.testing import CliRunner
@@ -22,6 +24,27 @@ def _contents(path: Path) -> dict[Path, bytes]:
 
 def _claude_link(project_root: Path) -> Path:
     return project_root / ".claude" / "skills" / SKILL_NAME
+
+
+def test_wheel_contains_bundled_skill(tmp_path):
+    project_root = Path(__file__).resolve().parents[1]
+    subprocess.run(
+        ["uv", "build", "--wheel", "--out-dir", str(tmp_path)],
+        cwd=project_root,
+        check=True,
+    )
+
+    wheel = next(tmp_path.glob("*.whl"))
+    packaged_prefix = f"modal_training_gym/_skills/{SKILL_NAME}/"
+    with zipfile.ZipFile(wheel) as archive:
+        packaged_contents = {
+            Path(name.removeprefix(packaged_prefix)): archive.read(name)
+            for name in archive.namelist()
+            if name.startswith(packaged_prefix) and not name.endswith("/")
+        }
+
+    source = project_root / "skills" / SKILL_NAME
+    assert packaged_contents == _contents(source)
 
 
 def test_skills_install_copies_bundled_skill_to_git_root(monkeypatch, tmp_path):

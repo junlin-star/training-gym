@@ -38,6 +38,7 @@ Options:
 training-gym --help
 training-gym skills --help
 training-gym skills install --help
+```
 
 ## Dashboard configuration
 

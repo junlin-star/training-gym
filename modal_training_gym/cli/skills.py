@@ -80,7 +80,7 @@ def _claude_link_state(link: Path, *, force: bool) -> tuple[bool, bool]:
 
 
 def _install_claude_link(link: Path, *, replace_existing: bool) -> None:
-    """Atomically link Claude's skill directory to the canonical skill."""
+    """Link Claude's skill directory to the canonical skill."""
     staging_root: Path | None = None
     backup: Path | None = None
     try:
@@ -227,5 +227,5 @@ def skills_group() -> None:
     help="Replace an existing agent-driven-training skill.",
 )
 def install_command(*, project_dir: Path | None, force: bool) -> None:
-    """Install agent-driven-training into .agents/skills."""
+    """Install agent-driven-training skill into .agents/skills and .claude/skills."""
     install_skills(project_dir=project_dir, force=force)
