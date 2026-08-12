@@ -709,20 +709,21 @@ class TrainConfig:
                                 framework_status_url=framework_status_url,
                                 framework_status_token=framework_status_token,
                             )
-                    elif isinstance(self.recipe, MilesRecipe) and needs_conversion:
+                    elif isinstance(self.recipe, MilesRecipe):
                         _set_status(MilesStatus.DOWNLOAD_MODEL, is_active=False)
                         app.download.remote(
                             training_run_id=training_run_id,
                             framework_status_url=framework_status_url,
                             framework_status_token=framework_status_token,
                         )
-                        _set_status(MilesStatus.CONVERT_MODEL, is_active=False)
-                        _convert_checkpoint_on_cache_miss(
-                            app,
-                            training_run_id=training_run_id,
-                            framework_status_url=framework_status_url,
-                            framework_status_token=framework_status_token,
-                        )
+                        if needs_conversion:
+                            _set_status(MilesStatus.CONVERT_MODEL, is_active=False)
+                            _convert_checkpoint_on_cache_miss(
+                                app,
+                                training_run_id=training_run_id,
+                                framework_status_url=framework_status_url,
+                                framework_status_token=framework_status_token,
+                            )
 
                 function_call = app.train.spawn(
                     modal_app_id=modal_app_id,

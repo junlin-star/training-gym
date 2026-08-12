@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from scripts.diff_impact import affected_miles_models, analyze_diff
+from scripts.diff_impact import affected_models, analyze_diff
 
 
 def test_model_file_diff_maps_to_related_tutorials() -> None:
@@ -47,9 +47,9 @@ def test_miles_framework_diff_validates_pr_smoke_models() -> None:
         "b/modal_training_gym/frameworks/miles/launcher.py\n"
     )
 
-    assert affected_miles_models(diff) == (
+    assert affected_models(diff) == (
         "Moonlight-16B-A3B-Instruct",
-        "Qwen3.5-4B",
+        "Qwen3.5-4B-Miles",
     )
 
 
@@ -59,4 +59,4 @@ def test_slime_only_diff_does_not_validate_miles_models() -> None:
         "b/modal_training_gym/frameworks/slime/launcher.py\n"
     )
 
-    assert affected_miles_models(diff) == ()
+    assert "Qwen3.5-4B-Miles" not in affected_models(diff)

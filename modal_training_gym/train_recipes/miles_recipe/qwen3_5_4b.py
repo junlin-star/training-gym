@@ -7,7 +7,7 @@ from modal_training_gym.train_recipes.miles_recipe.recipe import MilesRecipe
 
 
 @dataclass(config=ConfigDict(extra="forbid", arbitrary_types_allowed=True))
-class Qwen3_5_4b_Recipe(MilesRecipe):
+class Qwen3_5_4b_Miles_Recipe(MilesRecipe):
     """Qwen3.5-4B on 1x8xH100, following Miles' colocated GRPO recipe."""
 
     gpu_type: str = "H100"

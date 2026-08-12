@@ -42,6 +42,7 @@ _MILES_SKIP = {
     "image_overlay",
     "image_run_commands",
     "image_env",
+    "model_setup_gpu",
     "local_miles",
     "patch_files",
     "wandb",
@@ -147,6 +148,8 @@ class MilesRecipe(BaseTrainRecipe):
         Extra shell commands run while building the image.
     image_env : dict[str, str]
         Extra env vars baked into the image.
+    model_setup_gpu : str | None
+        Optional GPU for model post-processing before the training cluster starts.
     capture_trace : bool
         Attach miles' per-sample execution trace (generate/reward/tool-call
         timeline) to recorded rollouts for the dashboard.
@@ -448,7 +451,7 @@ class MilesRecipe(BaseTrainRecipe):
     recipe_type: RecipeType = RecipeType.MILES
 
     # ── Launcher instructions (not Miles CLI flags) ─────────────────────────
-    docker_image: str = "radixark/miles:dev-202608101247"
+    docker_image: str = "radixark/miles:dev-202608120325"
     gpu_type: str = "H100"
     memory: int | tuple[int, int] | None = None
     cloud: str | None = None
@@ -458,6 +461,7 @@ class MilesRecipe(BaseTrainRecipe):
     image_overlay: Callable[[modal.Image], modal.Image] | None = None
     image_run_commands: list[str] = field(default_factory=list)
     image_env: dict[str, str] = field(default_factory=dict)
+    model_setup_gpu: str | None = None
     local_miles: str | None = None
     patch_files: list[str] = field(default_factory=list)
 
@@ -516,6 +520,8 @@ class MilesRecipe(BaseTrainRecipe):
     rollout_stop_token_ids: list[int] | None = None
     rollout_num_gpus_per_engine: int = 1
     use_miles_router: bool = False
+    sglang_router_ip: str | None = None
+    sglang_router_port: int | None = None
     use_rollout_routing_replay: bool = False
 
     # ── Parallelism ─────────────────────────────────────────────────────────
@@ -695,16 +701,35 @@ class MilesRecipe(BaseTrainRecipe):
                 "disable_bias_linear": arch.disable_bias_linear,
                 "qk_layernorm": arch.qk_layernorm,
                 "untie_embeddings_and_output_weights": arch.untie_embeddings_and_output_weights,
+                "no_masked_softmax_fusion": arch.no_masked_softmax_fusion,
+                "multi_latent_attention": arch.multi_latent_attention,
+                "kv_lora_rank": arch.kv_lora_rank,
+                "qk_head_dim": arch.qk_head_dim,
+                "qk_pos_emb_head_dim": arch.qk_pos_emb_head_dim,
+                "v_head_dim": arch.v_head_dim,
                 "use_rotary_position_embeddings": arch.use_rotary_position_embeddings,
                 "rotary_base": arch.rotary_base,
+                "rotary_scaling_factor": arch.rotary_scaling_factor,
+                "mscale": arch.mscale,
+                "mscale_all_dim": arch.mscale_all_dim,
+                "no_rope_fusion": arch.no_rope_fusion,
             }
         )
         optional = {
             "num_experts": arch.num_experts,
+            "moe_layer_freq": arch.moe_layer_freq,
             "moe_ffn_hidden_size": arch.moe_ffn_hidden_size,
             "moe_shared_expert_intermediate_size": arch.moe_shared_expert_intermediate_size,
             "moe_router_topk": arch.moe_router_topk,
+            "moe_router_pre_softmax": arch.moe_router_pre_softmax,
             "moe_router_score_function": arch.moe_router_score_function,
+            "moe_router_enable_expert_bias": arch.moe_router_enable_expert_bias,
+            "moe_router_load_balancing_type": arch.moe_router_load_balancing_type,
+            "moe_token_dispatcher_type": arch.moe_token_dispatcher_type,
+            "moe_router_bias_update_rate": arch.moe_router_bias_update_rate,
+            "moe_router_group_topk": arch.moe_router_group_topk,
+            "moe_router_num_groups": arch.moe_router_num_groups,
+            "moe_router_topk_scaling_factor": arch.moe_router_topk_scaling_factor,
             "moe_token_drop_policy": arch.moe_token_drop_policy,
             "moe_router_dtype": arch.moe_router_dtype,
             "moe_aux_loss_coeff": arch.moe_aux_loss_coeff,
@@ -714,10 +739,15 @@ class MilesRecipe(BaseTrainRecipe):
             else None,
         }
         fields.update({k: v for k, v in optional.items() if v not in (None, "", 0)})
+        for key in ("moe_aux_loss_coeff", "moe_router_bias_update_rate"):
+            if optional[key] is not None:
+                fields[key] = optional[key]
         for key in (
             "moe_grouped_gemm",
             "moe_shared_expert_gate",
             "moe_permute_fusion",
+            "moe_router_pre_softmax",
+            "moe_router_enable_expert_bias",
             "apply_layernorm_1p",
             "use_gated_attention",
             "attention_output_gate",
@@ -751,6 +781,8 @@ class MilesRecipe(BaseTrainRecipe):
                     continue
                 elif self.miles_model_name:
                     continue
+                elif k in fields and fields[k] not in (None, "", 0, False):
+                    continue
                 fields[k] = v
         if dataset is not None:
             fields.update(self._dataset_to_fields(dataset))
@@ -774,7 +806,7 @@ class MilesRecipe(BaseTrainRecipe):
             Kimi_K2_6_LoRA_Recipe,
         )
         from modal_training_gym.train_recipes.miles_recipe.qwen3_5_4b import (
-            Qwen3_5_4b_Recipe,
+            Qwen3_5_4b_Miles_Recipe,
         )
         from modal_training_gym.train_recipes.miles_recipe.moonlight_16b_a3b import (
             Moonlight_16B_A3B_Recipe,
@@ -785,7 +817,7 @@ class MilesRecipe(BaseTrainRecipe):
         if model_config.model_name == "moonshotai/Kimi-K2.6":
             return Kimi_K2_6_LoRA_Recipe()
         if model_config.model_name == "Qwen/Qwen3.5-4B":
-            return Qwen3_5_4b_Recipe()
+            return Qwen3_5_4b_Miles_Recipe()
         if model_config.model_name == "moonshotai/Moonlight-16B-A3B-Instruct":
             return Moonlight_16B_A3B_Recipe()
         return None

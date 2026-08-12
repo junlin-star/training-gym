@@ -22,7 +22,7 @@ def get_checkpoint_conversion_policy(
         miles_cfg,
         model=model,
         single_rank_mtp=False,
-        extended_arch_args=False,
+        extended_arch_args=True,
         external_arch_args_attr="miles_model_name",
     )
 

@@ -69,9 +69,16 @@ class _ValidationConfig:
     def find(cls, name: str) -> "_ValidationConfig":
         """Look up an entry by short name or HF repo id, case-insensitively."""
         wanted = name.strip().lower()
-        for config in VALIDATION_CONFIGS:
-            if wanted in (config.name.lower(), config.model_name.lower()):
-                return config
+        matches = [
+            config
+            for config in VALIDATION_CONFIGS
+            if wanted in (config.name.lower(), config.model_name.lower())
+        ]
+        if len(matches) == 1:
+            return matches[0]
+        if len(matches) > 1:
+            choices = ", ".join(sorted(config.name for config in matches))
+            raise ValueError(f"ambiguous model {name!r}; use one of: {choices}")
         available = ", ".join(config.name for config in cls.select(pr_only=False))
         raise ValueError(f"unknown model {name!r}; available: {available}")
 

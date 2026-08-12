@@ -13,7 +13,6 @@ from pydantic.dataclasses import dataclass
 from modal_training_gym.frameworks.miles.modal_helpers.utils import (
     resolve_checkpoint_ref,
 )
-from modal_training_gym.common.errors import TrainingGymConfigError
 from modal_training_gym.train_recipes.miles_recipe.recipe import MilesRecipe
 
 
@@ -54,14 +53,16 @@ def _remove_if_invalid(path: str | Path) -> bool:
 
 @dataclass(config=ConfigDict(extra="forbid", arbitrary_types_allowed=True))
 class _KimiK2Recipe(MilesRecipe):
+    docker_image: str = "radixark/miles:kimi-k3"
     gpu_type: str = "H200"
+    model_setup_gpu: str | None = "H200"
     memory: tuple[int, int] = (1024, int(2 * 1024 * 1024))
     image_run_commands: list[str] = field(
         default_factory=lambda: [
             "rm -rf /root/.cache/huggingface 2>/dev/null || true",
         ]
     )
-    miles_model_name: str = "kimi-k2-thinking"
+    miles_model_script: str = "scripts/models/kimi-k2-thinking.sh"
     environment: dict[str, str] = field(
         default_factory=lambda: {
             "PYTHONPATH": "/root/Megatron-LM/",
@@ -152,49 +153,25 @@ class _KimiK2Recipe(MilesRecipe):
 
     rollout_num_gpus_per_engine: int = 8
     sglang_mem_fraction_static: float = 0.7
+    sglang_moe_runner_backend: str | None = "triton"
     sglang_ep_size: int = 8
     sglang_server_concurrency: int = 1024
     use_rollout_routing_replay: bool = True
 
-    def download_model(self) -> None:
-        if self.source_hf_checkpoint:
-            resolve_checkpoint_ref(self.source_hf_checkpoint, local_files_only=False)
-
     def post_process_model(self) -> None:
-        if not self.source_hf_checkpoint:
-            raise TrainingGymConfigError("Kimi recipes require source_hf_checkpoint")
-
         source_hf_path = Path(
-            resolve_checkpoint_ref(self.source_hf_checkpoint, local_files_only=False)
+            resolve_checkpoint_ref(self.hf_checkpoint, local_files_only=False)
         )
-        int4_path = Path(str(self.hf_checkpoint))
         bf16_path = Path(str(self.ref_load))
-        lock_path = int4_path.parent / f".{int4_path.name}.postprocess.lock"
+        lock_path = bf16_path.parent / f".{bf16_path.name}.postprocess.lock"
         lock_path.parent.mkdir(parents=True, exist_ok=True)
 
         with open(lock_path, "w") as lock_file:
             fcntl.flock(lock_file, fcntl.LOCK_EX)
-            if not _remove_if_invalid(int4_path):
-                int4_cmd = [
-                    "python",
-                    "/root/miles/tools/convert_hf_to_int4_direct.py",
-                    "--model-dir",
-                    str(source_hf_path),
-                    "--save-dir",
-                    str(int4_path),
-                    "--group-size",
-                    self.environment["OPEN_TRAINING_INT4_GROUP_SIZE"],
-                ]
-                print(
-                    "\n=== Converting Kimi HF checkpoint to INT4: "
-                    f"{' '.join(shlex.quote(arg) for arg in int4_cmd)} ==="
-                )
-                subprocess.run(int4_cmd, check=True)
-
             if not _remove_if_invalid(bf16_path):
                 bf16_cmd = [
                     "python",
-                    "/opt/training-gym/tools/convert_kimi_int4_to_bf16.py",
+                    "/root/miles/tools/convert_kimi_int4_to_bf16.py",
                     "--model-dir",
                     str(source_hf_path),
                     "--output-dir",
@@ -209,13 +186,11 @@ class _KimiK2Recipe(MilesRecipe):
 
 @dataclass(config=ConfigDict(extra="forbid", arbitrary_types_allowed=True))
 class Kimi_K2_5_LoRA_Recipe(_KimiK2Recipe):
-    source_hf_checkpoint: str = "moonshotai/Kimi-K2.5"
     hf_checkpoint: str = "/checkpoints/Kimi-K2.5-int4"
     ref_load: str = "/checkpoints/Kimi-K2.5-bf16"
 
 
 @dataclass(config=ConfigDict(extra="forbid", arbitrary_types_allowed=True))
 class Kimi_K2_6_LoRA_Recipe(_KimiK2Recipe):
-    source_hf_checkpoint: str = "moonshotai/Kimi-K2.6"
     hf_checkpoint: str = "/checkpoints/Kimi-K2.6-int4"
     ref_load: str = "/checkpoints/Kimi-K2.6-bf16"

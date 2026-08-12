@@ -21,6 +21,7 @@ from typing import Any, Callable
 
 import cloudpickle
 from modal import Image, Volume
+from modal._vendor import cloudpickle as modal_cloudpickle
 
 from modal_training_gym.common import COMMON_TRAINING_GYM_TAGS, modal_tag_value
 from modal_training_gym.common.framework import (
@@ -49,6 +50,7 @@ def resolve_caller_context() -> tuple[Any, str | None]:
     caller_module = resolve_caller_module()
     if caller_module is not None and caller_module.__name__ != "__main__":
         cloudpickle.register_pickle_by_value(caller_module)
+        modal_cloudpickle.register_pickle_by_value(caller_module)
     register_modal_cloudpickle_reducers()
 
     caller_script = None

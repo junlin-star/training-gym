@@ -62,20 +62,12 @@ def test_registry_uses_the_packages_one_framework_enum():
 
 
 def test_registry_names_are_unique():
-    """A copy-pasted entry must fail a test, not silently shadow a model.
-
-    ``_ValidationConfig.find`` returns the first case-insensitive match on
-    either spelling, so two entries answering to one name or repo id would hide
-    whichever came second. Keyed on identity, not name: an entry whose short
-    name is also its repo id registers one key twice and is fine.
-    """
+    """Every model/framework pair needs an unambiguous dispatch name."""
     seen: dict[str, _ValidationConfig] = {}
     for config in ALL_CONFIGS:
-        for key in (config.name.lower(), config.model_name.lower()):
-            other = seen.setdefault(key, config)
-            assert other is config, (
-                f"{other.name!r} and {config.name!r} both answer to {key!r}"
-            )
+        key = config.name.lower()
+        other = seen.setdefault(key, config)
+        assert other is config, f"duplicate validation name: {config.name!r}"
 
 
 @pytest.mark.parametrize("config", ALL_CONFIGS, ids=lambda c: c.name)
@@ -88,8 +80,13 @@ def test_config_resolves_by_name_case_insensitively(config):
 @pytest.mark.parametrize("config", ALL_CONFIGS, ids=lambda c: c.name)
 def test_config_resolves_by_hf_repo_id(config):
     """``check -m Qwen/Qwen3-4B`` must keep working, not just the short name."""
-    assert _ValidationConfig.find(config.model_name) is config
-    assert _ValidationConfig.find(config.model_name.upper()) is config
+    matches = [c for c in ALL_CONFIGS if c.model_name == config.model_name]
+    if len(matches) == 1:
+        assert _ValidationConfig.find(config.model_name) is config
+        assert _ValidationConfig.find(config.model_name.upper()) is config
+    else:
+        with pytest.raises(ValueError, match="ambiguous model"):
+            _ValidationConfig.find(config.model_name)
 
 
 def test_unknown_model_names_are_rejected():

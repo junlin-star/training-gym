@@ -11,7 +11,7 @@ class Moonlight_16B_A3B_Recipe(MilesRecipe):
     """Moonlight-16B-A3B on 1x8xH100, following Miles' DAPO recipe."""
 
     gpu_type: str = "H100"
-    miles_model_name: str = "moonlight"
+    miles_model_name: str = ""
     environment: dict[str, str] = field(
         default_factory=lambda: {
             "PYTHONPATH": "/root/Megatron-LM/",

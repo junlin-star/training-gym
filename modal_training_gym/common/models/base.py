@@ -119,13 +119,28 @@ class ModelArchitecture:
     disable_bias_linear: bool = True
     qk_layernorm: bool = True
     untie_embeddings_and_output_weights: bool = False
+    no_masked_softmax_fusion: bool = False
+    multi_latent_attention: bool = False
+    kv_lora_rank: int = 0
+    qk_head_dim: int = 0
+    qk_pos_emb_head_dim: int = 0
+    v_head_dim: int = 0
     num_experts: int = 0
+    moe_layer_freq: str = ""
     moe_ffn_hidden_size: int = 0
     moe_shared_expert_intermediate_size: int = 0
     moe_grouped_gemm: bool = False
     moe_shared_expert_gate: bool = False
     moe_router_topk: int = 0
+    moe_router_pre_softmax: bool = False
     moe_router_score_function: str = ""
+    moe_router_enable_expert_bias: bool = False
+    moe_router_load_balancing_type: str = ""
+    moe_token_dispatcher_type: str = ""
+    moe_router_bias_update_rate: float | None = None
+    moe_router_group_topk: int = 0
+    moe_router_num_groups: int = 0
+    moe_router_topk_scaling_factor: float | None = None
     moe_token_drop_policy: str = ""
     moe_router_dtype: str = ""
     moe_permute_fusion: bool = False
@@ -138,6 +153,10 @@ class ModelArchitecture:
     use_rotary_position_embeddings: bool = True
     rotary_base: int = 10000
     rotary_percent: float = 1.0
+    rotary_scaling_factor: float | None = None
+    mscale: float | None = None
+    mscale_all_dim: float | None = None
+    no_rope_fusion: bool = False
 
 
 @dataclass

@@ -192,11 +192,11 @@ API_REFERENCE_MANIFEST = [
         "sidebar_label": "MilesRecipe",
     },
     {
-        "class_name": "Qwen3_5_4b_Recipe",
+        "class_name": "Qwen3_5_4b_Miles_Recipe",
         "module": "modal_training_gym.train_recipes.miles_recipe.qwen3_5_4b",
         "group": "training",
         "class_type": "config_data",
-        "sidebar_label": "Qwen3_5_4b_Recipe",
+        "sidebar_label": "Qwen3_5_4b_Miles_Recipe",
     },
     {
         "class_name": "Moonlight_16B_A3B_Recipe",

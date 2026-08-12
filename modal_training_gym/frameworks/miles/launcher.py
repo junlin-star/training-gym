@@ -2,6 +2,7 @@ import asyncio
 import hashlib
 import os
 import shlex
+import socket
 import subprocess
 import shutil
 import tempfile
@@ -66,11 +67,52 @@ from modal_training_gym.frameworks.miles.modal_helpers.utils import (
 )
 
 MILES_ROOT = "/root/miles"
-SYSTEM_LIB_DIR = "/usr/lib/x86_64-linux-gnu"
 # v0.8.0+ makes per-task CPU/memory requests configurable via enforcement
 # policies ("limit"/"ignore"), letting sandboxes burst on Modal and bill by
 # actual CPU-/RAM-second usage instead of over-provisioning a static reservation.
 HARBOR_PKG_VERSION = "0.8.0"
+
+
+def _available_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("", 0))
+        return sock.getsockname()[1]
+
+
+def _start_sglang_router(host: str) -> tuple[subprocess.Popen, int]:
+    port = _available_port()
+    prometheus_port = _available_port()
+    process = subprocess.Popen(
+        [
+            "sglang-router",
+            "launch",
+            "--host",
+            host,
+            "--port",
+            str(port),
+            "--prometheus-port",
+            str(prometheus_port),
+            "--log-level",
+            "warn",
+            "--request-timeout-secs",
+            "14400",
+        ]
+    )
+    deadline = time.time() + 30
+    while time.time() < deadline:
+        if process.poll() is not None:
+            raise RuntimeError(
+                f"SGLang router exited during startup with code {process.returncode}"
+            )
+        try:
+            with socket.create_connection((host, port), timeout=1):
+                return process, port
+        except OSError:
+            time.sleep(0.5)
+    process.terminate()
+    process.wait(timeout=5)
+    raise RuntimeError(f"SGLang router at {host}:{port} was not ready after 30s")
+
 
 _MILES_PATCHES = Path(__file__).parent / "modal_helpers" / "patches"
 _PATCH_SGLANG_ABORT_B64 = encode_patch("patch_sglang_abort", _MILES_PATCHES)
@@ -113,14 +155,6 @@ def _response_parser_path(model: Any) -> str:
     return f"{module}.{qualname}" if module and qualname else ""
 
 
-def _compose_ld_library_path() -> str:
-    parts = [SYSTEM_LIB_DIR]
-    for part in os.environ.get("LD_LIBRARY_PATH", "").split(":"):
-        if part and part not in parts:
-            parts.append(part)
-    return ":".join(parts)
-
-
 def build_ray_runtime_env(
     *,
     head_addr: str,
@@ -129,24 +163,10 @@ def build_ray_runtime_env(
     extra_env: dict[str, str] | None = None,
     framework_status_token: str = "",
 ) -> dict:
-    """Runtime env for the Ray job that runs miles.
-
-    Ray workers do not pick up the container's linker path on their own, and
-    without it the Megatron actor can resolve a libibverbs that does not match
-    the image's libmlx5 and die importing mooncake. The system lib dir is put
-    in front for that reason; the rest is read from the container, so whatever
-    the image exports — including any wheel-shipped nvidia lib dirs — is
-    carried through. Composing it here rather than in an ``image_env`` entry
-    keeps it independent of whether the base image exports ``LD_LIBRARY_PATH``
-    in its own ``ENV``: a Dockerfile ``$LD_LIBRARY_PATH`` expands to an empty
-    string when it does not, which would drop those dirs and leave a trailing
-    empty entry that the loader reads as the working directory. A recipe can
-    still override the whole thing through ``environment``.
-    """
+    """Runtime env for the Ray job that runs miles."""
     env_vars: dict[str, str] = {
         "no_proxy": f"127.0.0.1,{head_addr}",
         "MASTER_ADDR": head_addr,
-        "LD_LIBRARY_PATH": _compose_ld_library_path(),
     }
     env_vars.update(extra_env or {})
     env_vars.update(wandb_env)
@@ -338,6 +358,7 @@ def build_miles_app(
 
     @app.function(
         image=image,
+        gpu=miles.model_setup_gpu,
         volumes={
             str(HF_CACHE_PATH): hf_cache_volume,
             checkpoints_mount_path: checkpoints_volume,
@@ -378,7 +399,6 @@ def build_miles_app(
         run_prepare_dataset(dataset, data_volume, MilesRecipe._resolve_data_paths)
 
     convert_nnodes = get_checkpoint_conversion_policy(miles, model=model)[0]
-    convert_multi_node = convert_nnodes > 1
 
     @app.function(
         image=image,
@@ -443,11 +463,10 @@ def build_miles_app(
         volumes=all_volumes,
         timeout=4 * 60 * 60,
         secrets=proxy_auth_secrets() or None,
-        experimental_options={"efa_enabled": True} if convert_multi_node else {},
         serialized=True,
         name="convert_checkpoint",
     )
-    @clustered(convert_nnodes, rdma=convert_multi_node)
+    @clustered(convert_nnodes, rdma=False)
     def convert_checkpoint(
         hf_path: str,
         training_run_id: str = "",
@@ -535,8 +554,6 @@ def build_miles_app(
         if training_run_id:
             flush_status_reporter(timeout_seconds=2.0)
 
-    _multi_node = miles.total_nodes > 1
-
     @app.function(
         image=image,
         gpu=gpu_spec,
@@ -555,11 +572,10 @@ def build_miles_app(
         timeout=24 * 60 * 60,
         retries=Retries(max_retries=10, initial_delay=0.0),
         single_use_containers=True,
-        experimental_options={"efa_enabled": True} if _multi_node else {},
         serialized=True,
         name="train",
     )
-    @clustered(miles.total_nodes, rdma=_multi_node)
+    @clustered(miles.total_nodes, rdma=False)
     async def train(
         modal_app_id: str = "",
         modal_app_url: str = "",
@@ -756,7 +772,18 @@ def build_miles_app(
             return
         assert run_record is not None
 
+        router_process: subprocess.Popen | None = None
+        original_router_ip = miles.sglang_router_ip
+        original_router_port = miles.sglang_router_port
         try:  # Wraps all post-setup work so any failure marks the run terminal.
+            if miles.sglang_router_ip is None and not miles.use_miles_router:
+                router_process, router_port = _start_sglang_router(cluster.head_addr)
+                miles.sglang_router_ip = cluster.head_addr
+                miles.sglang_router_port = router_port
+                print(
+                    f"SGLang router launched at "
+                    f"{miles.sglang_router_ip}:{miles.sglang_router_port}"
+                )
             prepare_miles_config(miles, model, tempfile.mkdtemp())
 
             if wandb_key := os.environ.get("WANDB_API_KEY", ""):
@@ -883,6 +910,15 @@ def build_miles_app(
             mark_run_failed(run_record, exc)
             raise
         finally:
+            miles.sglang_router_ip = original_router_ip
+            miles.sglang_router_port = original_router_port
+            if router_process is not None:
+                router_process.terminate()
+                try:
+                    router_process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    router_process.kill()
+                    router_process.wait(timeout=5)
             latest_run_record = await build_terminal_run_record(
                 run_record, training_run_id
             )
