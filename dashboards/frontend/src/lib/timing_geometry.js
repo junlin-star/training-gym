@@ -34,10 +34,26 @@ function mergeSyncGenerationSpans(spans) {
     }
     for (const descendant of descendants) {
       if (!TOOLTIP_HIDDEN_PHASES.has(descendant.name)) {
-        aggregateStats[descendant.name] = {
+        const duration = descendant.duration ?? descendant.end - descendant.start;
+        const aggregate = {
           ...descendant,
+          duration,
+          total: descendant.total ?? duration,
+          count: descendant.count ?? 1,
+          longest: descendant.longest ?? duration,
           mergedGeneration: false,
         };
+        const current = aggregateStats[descendant.name];
+        if (current) {
+          current.duration += aggregate.duration;
+          current.total += aggregate.total;
+          current.count += aggregate.count;
+          current.longest = Math.max(current.longest, aggregate.longest);
+          current.start = Math.min(current.start, aggregate.start);
+          current.end = Math.max(current.end, aggregate.end);
+        } else {
+          aggregateStats[descendant.name] = aggregate;
+        }
       }
     }
     if (Object.keys(aggregateStats).length) {

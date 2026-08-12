@@ -224,12 +224,12 @@ test("runTimeline keeps adjacent generation outside the train parent", () => {
 });
 
 const generationPayload = (sync) => {
-  const phase = (total, start, end) => ({
-    count: 1,
+  const phase = (total, start, end, count = 1, invocations = [[start, end]]) => ({
+    count,
     total_duration_s: total,
     first_start_s: start,
     last_end_s: end,
-    invocations: [[start, end]],
+    invocations,
   });
   const rollout = {
     lane_start_unix_s: 100,
@@ -237,7 +237,10 @@ const generationPayload = (sync) => {
       generate_samples: phase(10, 0, 10),
       sample_generation: phase(2, 1, 3),
       reward: phase(1, 3, 4),
-      reward_post_process: phase(1, 4, 5),
+      reward_post_process: phase(2, 4, 6, 2, [
+        [4, 5],
+        [5, 6],
+      ]),
     },
   };
   return {
@@ -262,17 +265,21 @@ test("sync generation tooltips preserve the async phase breakdown", () => {
     timeline.groups
       .flatMap((group) => group.rows.flatMap((row) => row.spans))
       .find((span) => span.name === name);
-  const tooltipNames = (bar) =>
+  const tooltipChildren = (bar) =>
     groupTooltipChildren(bar.children, bar.aggregateStats).map(
-      (child) => child.name,
+      ({ name, duration, count }) => ({ name, duration, count }),
     );
 
   assert.deepEqual(
-    tooltipNames(barFor(syncTimeline, "generate_rollouts")),
-    tooltipNames(barFor(asyncTimeline, "generate_samples")),
+    tooltipChildren(barFor(syncTimeline, "generate_rollouts")),
+    tooltipChildren(barFor(asyncTimeline, "generate_samples")),
   );
-  assert.deepEqual(tooltipNames(barFor(syncTimeline, "generate_rollouts")), [
-    "reward_post_process",
+  assert.deepEqual(tooltipChildren(barFor(syncTimeline, "generate_rollouts")), [
+    {
+      name: "reward_post_process",
+      duration: 2,
+      count: 2,
+    },
   ]);
 
   const drawnSyncBars = syncTimeline.groups
