@@ -11,6 +11,7 @@ from dataclasses import dataclass
 
 from ..framework import Framework
 from .base import ModelConfig
+from .gemma4_26b_a4b import Gemma4_26B_A4B
 from .kimi_k2_5 import Kimi_K2_5
 from .kimi_k2_6 import Kimi_K2_6
 from .qwen3_0_6b import Qwen3_0_6B
@@ -87,6 +88,9 @@ VALIDATION_CONFIGS: set[_ValidationConfig] = {
     _ValidationConfig("Qwen3.5-4B", Qwen3_5_4B, Framework.SLIME),
     _ValidationConfig("Qwen3.5-9B", Qwen3_5_9B, Framework.SLIME),
     _ValidationConfig("Qwen3.6-35B-A3B", Qwen3_6_35B, Framework.SLIME),
+    _ValidationConfig(
+        "Gemma-4-26B-A4B-it", Gemma4_26B_A4B, Framework.MILES, run_on_pr=False
+    ),
     # Too large to fan out on a PR (16 x 8 H200), but still dispatchable by
     # name. Flipping run_on_pr is the only change needed to gate PRs on one.
     _ValidationConfig("Kimi-K2.5", Kimi_K2_5, Framework.MILES, run_on_pr=False),

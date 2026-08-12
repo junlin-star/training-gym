@@ -196,6 +196,7 @@ def build_miles_app(
             " local_miles checkout; transient router failures during rollout"
             " cleanup may crash the run'",
             *_REPORTING_PATCH_COMMANDS,
+            *(miles.image_run_commands or []),
         )
 
     if miles.image_overlay is not None:
