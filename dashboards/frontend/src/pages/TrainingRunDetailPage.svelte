@@ -369,17 +369,18 @@
     }
   }
 
-  function sampleToPayload(s, { inlineImage = false, refOnly = false } = {}) {
+  // How a payload carries a sample's input image:
+  //   "ignore"    — leave `metadata` exactly as the API sent it
+  //   "refs_only" — drop inline bytes; the ref names an entry in the payload's `images` map
+  //   "resolve"   — inline the bytes this sample's ref points at, for a standalone payload
+  function sampleToPayload(s, imageHandling = "ignore") {
     let metadata = s.metadata || null;
-    if (inlineImage && metadata?.image_ref && !metadata.image) {
-      // Only trade the ref for bytes if the lookup resolved — the carrier sample may
-      // not be loaded, and the download still needs some way to name the screenshot.
+    if (imageHandling === "resolve" && metadata?.image_ref && !metadata.image) {
+      // Only add bytes if the lookup resolved — the carrier sample may not be loaded,
+      // in which case the ref alone is still the best the payload can say.
       const resolved = sampleImage(s);
-      if (resolved) {
-        const { image_ref, ...rest } = metadata;
-        metadata = { ...rest, image: resolved };
-      }
-    } else if (refOnly && metadata?.image && metadata.image_ref) {
+      if (resolved) metadata = { ...metadata, image: resolved };
+    } else if (imageHandling === "refs_only" && metadata?.image && metadata.image_ref) {
       // Bytes travel once in the payload's `images` map; keep only the ref here.
       const { image, ...rest } = metadata;
       metadata = rest;
@@ -404,11 +405,11 @@
     const turns = activeSample.samples;
     const payload =
       turns.length === 1
-        ? sampleToPayload(turns[0], { inlineImage: true })
+        ? sampleToPayload(turns[0], "resolve")
         : {
             mean: activeSample.score,
             turns: turns.length,
-            samples: turns.map((s) => sampleToPayload(s, { inlineImage: true })),
+            samples: turns.map((s) => sampleToPayload(s, "resolve")),
           };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
@@ -433,9 +434,9 @@
       rollouts: groups.length,
       n_samples_per_prompt: expandedRollout.n_samples_per_prompt ?? null,
       mean: scores.reduce((a, v) => a + v, 0) / scores.length,
-      // Shared screenshots, keyed by the `metadata.image_ref` each sample carries.
+      // Shared images, keyed by the `metadata.image_ref` each sample carries.
       images: rolloutImages,
-      samples: samples.map((s) => sampleToPayload(s, { refOnly: true })),
+      samples: samples.map((s) => sampleToPayload(s, "refs_only")),
     };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
