@@ -13,6 +13,7 @@ class Moonlight_16B_A3B_Instruct(HFModelConfiguration):
         ffn_hidden_size=11264,
         num_attention_heads=16,
         group_query_attention=False,
+        num_query_groups=16,
         kv_channels=128,
         vocab_size=163840,
         normalization="RMSNorm",
