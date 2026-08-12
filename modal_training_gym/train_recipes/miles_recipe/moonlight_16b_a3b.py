@@ -26,6 +26,7 @@ class Moonlight_16B_A3B_Recipe(MilesRecipe):
     actor_num_nodes: int = 1
     actor_num_gpus_per_node: int = 8
     colocate: bool = True
+    use_miles_router: bool = True
 
     num_rollout: int = 3000
     rollout_batch_size: int = 128
