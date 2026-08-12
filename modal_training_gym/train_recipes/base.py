@@ -1,9 +1,8 @@
 import dataclasses as _dc
-import functools
 import json
 import os
 from abc import ABC
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar
@@ -26,53 +25,6 @@ CHECKPOINTS_PATH = Path("/checkpoints")
 
 # Recipe fields whose dict values are emitted as JSON CLI arguments.
 JSON_CONFIG_FIELDS = ("train_env_vars", "apply_chat_template_kwargs", "multimodal_keys")
-
-
-def carry_explicit_fields(source: Any, rebuilt: Any) -> Any:
-    """Restore ``source``'s record of caller-set fields onto a rebuilt recipe.
-
-    Rebuilding as ``type(r)(**all_fields)`` passes every field as a kwarg, so the
-    validator would record them all as caller-set and make ``_for_dataset`` a no-op.
-    """
-    explicit = getattr(source, "explicit_fields", None)
-    if explicit is not None:
-        object.__setattr__(rebuilt, "_explicit_fields", frozenset(explicit))
-    return rebuilt
-
-
-def explicit_fields_from(cls: type, data: Any) -> frozenset[str]:
-    """Field names the caller supplied, from whatever pydantic is validating.
-
-    A ``Recipe(...)`` call arrives as ``ArgsKwargs``; ``model_validate`` and
-    ``TypeAdapter`` pass a mapping, whose keys are the supplied fields. Anything
-    else yields the empty set, which ``carry_explicit_fields`` restores.
-    """
-    if isinstance(data, Mapping):
-        return frozenset(str(key) for key in data)
-    names: set[str] = set()
-    if args := getattr(data, "args", None):
-        names.update(f.name for f in _dc.fields(cls)[: len(args)])
-    if kwargs := getattr(data, "kwargs", None):
-        names.update(kwargs)
-    return frozenset(names)
-
-
-@functools.cache
-def _declared_below(cls: type) -> frozenset[str]:
-    """Fields declared by subclasses below the recipe that owns ``_for_dataset``.
-
-    Those are the caller's own config, so they count as chosen. The walk stops at
-    the recipe defining ``_for_dataset`` — whose own fields are the defaults it
-    exists to override — or at the framework base recipe, whichever comes first.
-    """
-    names: set[str] = set()
-    for klass in cls.__mro__:
-        if klass is BaseTrainRecipe or BaseTrainRecipe in klass.__bases__:
-            break
-        if "_for_dataset" in vars(klass):
-            break
-        names |= set(vars(klass).get("__annotations__", {}))
-    return frozenset(names)
 
 
 class RecipeType(Enum):
@@ -143,36 +95,6 @@ class BaseTrainRecipe(ABC):
         no preset for, rather than returning ``None``.
         """
         return None
-
-    # ── Caller-set field tracking ─────────────────────────────────────────────
-
-    @property
-    def explicit_fields(self) -> frozenset[str]:
-        """Names of the fields the caller chose.
-
-        The value alone cannot tell: an explicit ``num_rollout=2`` is
-        indistinguishable from an unset field defaulting to 2. Pydantic tracks
-        constructor arguments for models but not dataclasses, so each framework
-        recipe installs a ``_capture_explicit_fields`` wrap-validator.
-        """
-        return getattr(self, "_explicit_fields", frozenset()) | _declared_below(
-            type(self)
-        )
-
-    def __setattr__(self, name: str, value: Any) -> None:
-        """Record post-construction assignment, so a swept field counts as chosen."""
-        super().__setattr__(name, value)
-        if not name.startswith("_"):
-            object.__setattr__(self, "_explicit_fields", self.explicit_fields | {name})
-
-    def _for_dataset(self, dataset: "DatasetConfig | None") -> "BaseTrainRecipe":
-        """This recipe with its dataset-dependent fields filled in.
-
-        A preset for a model whose config depends on the data's modality (Gemma-4 is
-        one checkpoint with a text-only and a vision-language mode) overrides this.
-        Every other recipe is already complete and returns itself.
-        """
-        return self
 
     def validate_model_parallelism(self, model: "ModelConfig") -> None:
         """Preflight the parallelism plan. Overridden per framework."""

@@ -26,11 +26,7 @@ from modal_training_gym.common.modal_urls import modal_app_dashboard_url
 from modal_training_gym.utils.metadata import MetadataStore, vol_put
 from modal_training_gym.frameworks.miles import build_miles_app
 from modal_training_gym.frameworks.slime import build_slime_app
-from modal_training_gym.train_recipes.base import (
-    BaseTrainRecipe,
-    RecipeType,
-    carry_explicit_fields,
-)
+from modal_training_gym.train_recipes.base import BaseTrainRecipe, RecipeType
 from modal_training_gym.train_recipes.miles_recipe import MilesRecipe
 from modal_training_gym.train_recipes.slime_recipe import SlimeRecipe
 from pydantic import ConfigDict
@@ -66,7 +62,7 @@ def _merge_recipe(base: BaseTrainRecipe, overrides: BaseTrainRecipe) -> BaseTrai
         default_val = _field_default(f)
         if f.name in declared or default_val is _dc.MISSING or user_val != default_val:
             base_fields[f.name] = user_val
-    return carry_explicit_fields(overrides, type(base)(**base_fields))
+    return type(base)(**base_fields)
 
 
 def _field_default(field: _dc.Field) -> Any:
@@ -85,26 +81,17 @@ def _try_validate_model_parallelism(
         validate(model)
 
 
-def _try_for_dataset(recipe: _RecipeT, dataset: DatasetConfig | None) -> _RecipeT:
-    # Not every framework recipe implements this second resolution pass.
-    if for_dataset := getattr(recipe, "_for_dataset", None):
-        return cast(_RecipeT, for_dataset(dataset))
-    return recipe
-
-
 def _resolve_recipe(
     model: ModelConfig,
     recipe: _RecipeT,
-    dataset: DatasetConfig | None = None,
     *,
     merge_model_recipe: bool,
 ) -> _RecipeT:
     base_recipe = type(recipe).get_base_recipe(model) if merge_model_recipe else None
-    if base_recipe is not None:
-        recipe = cast(_RecipeT, _merge_recipe(base_recipe, recipe))
-    # Presets whose config depends on the data's modality (Gemma-4's vision mode)
-    # finish here, merge or no merge: such a recipe is unusable unresolved.
-    resolved = _try_for_dataset(recipe, dataset)
+    if base_recipe is None:
+        _try_validate_model_parallelism(recipe, model)
+        return recipe
+    resolved = cast(_RecipeT, _merge_recipe(base_recipe, recipe))
     _try_validate_model_parallelism(resolved, model)
     return resolved
 
@@ -379,9 +366,8 @@ class TrainConfig:
     merge_model_recipe : bool
         When ``True``, merges the known-model preset recipe (e.g.
         ``Qwen3_4b_Recipe``) onto recipe fields you left unset. Set
-        ``False`` to skip that merge; a recipe whose config depends on the
-        data's modality (Gemma-4's vision mode) still resolves against the
-        dataset either way. Default ``True``.
+        ``False`` to run the recipe exactly as written, with no preset
+        defaults. Default ``True``.
     detach : bool
         Whether the training app should outlive the local client. The Modal
         app is always started detached so a dropped connection can't kill a
@@ -449,7 +435,6 @@ class TrainConfig:
                 miles=_resolve_recipe(
                     self.model,
                     cast(MilesRecipe, self.recipe),
-                    self.dataset,
                     merge_model_recipe=self.merge_model_recipe,
                 ),
                 model=self.model,
@@ -466,7 +451,6 @@ class TrainConfig:
             combined = _resolve_recipe(
                 self.model,
                 cast(SlimeRecipe, self.recipe),
-                self.dataset,
                 merge_model_recipe=self.merge_model_recipe,
             )
             return build_slime_app(
@@ -534,7 +518,7 @@ class TrainConfig:
             )
 
             combined = _resolve_recipe(
-                model, recipe, dataset, merge_model_recipe=self.merge_model_recipe
+                model, recipe, merge_model_recipe=self.merge_model_recipe
             )
             summary["recipe"] = {
                 # gpu_type is a launcher-only field (in _MILES_SKIP) so it is
@@ -590,10 +574,7 @@ class TrainConfig:
 
     def _resolved_recipe_for_logging(self) -> BaseTrainRecipe:
         return _resolve_recipe(
-            self.model,
-            self.recipe,
-            self.dataset,
-            merge_model_recipe=self.merge_model_recipe,
+            self.model, self.recipe, merge_model_recipe=self.merge_model_recipe
         )
 
     def context_plan_line(self) -> str | None:

@@ -5,7 +5,6 @@ from typing import Any, ClassVar
 from modal_training_gym.train_recipes.base import (
     BaseTrainRecipe,
     RecipeType,
-    explicit_fields_from,
     # Re-exported for backwards compatibility (e.g. frameworks/slime/launcher.py
     # imports the volume paths from this module).
     CHECKPOINTS_PATH as CHECKPOINTS_PATH,
@@ -657,14 +656,6 @@ class SlimeRecipe(BaseTrainRecipe):
     # ── Validators ───────────────────────────────────────────────────────────
 
     _SKIP_FIELDS: ClassVar[frozenset[str]] = frozenset(_SLIME_SKIP)
-
-    @model_validator(mode="wrap")
-    @classmethod
-    def _capture_explicit_fields(cls, data: Any, handler: Any) -> "SlimeRecipe":
-        names = explicit_fields_from(cls, data)
-        recipe = handler(data)
-        object.__setattr__(recipe, "_explicit_fields", names)
-        return recipe
 
     @model_validator(mode="after")
     def _resolve_callable_paths(self) -> "SlimeRecipe":

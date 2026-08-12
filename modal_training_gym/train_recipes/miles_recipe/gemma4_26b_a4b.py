@@ -1,18 +1,18 @@
 """Gemma-4-26B-A4B GRPO recipe on miles (1x8xH200), text-only or vision-language."""
 
-from dataclasses import field, replace
+import dataclasses as _dc
+from collections.abc import Mapping
+from dataclasses import field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any, ClassVar, Literal
 
 from pydantic import ConfigDict, model_validator
 from pydantic.dataclasses import dataclass
+from pydantic_core import ArgsKwargs
 
 from modal_training_gym.common.errors import TrainingGymConfigError
 from modal_training_gym.common.patches import encode_patch
 from modal_training_gym.train_recipes.miles_recipe.recipe import MilesRecipe
-
-if TYPE_CHECKING:
-    from modal_training_gym.common.dataset import DatasetConfig
 
 _PATCH_DIR = (
     Path(__file__).resolve().parents[2]
@@ -36,15 +36,11 @@ def _image_patches() -> list[str]:
     ]
 
 
-def _has_images(dataset: "DatasetConfig | None") -> bool:
-    return "image" in (getattr(dataset, "multimodal_keys", None) or {})
-
-
 _EPHEMERAL_DISK_MIB = 1_048_576
 
 
-# Applied over the text defaults on an image dataset, for fields the caller left
-# unset: smaller rollouts, since images are expensive.
+# Defaults for modality="vision", for fields the caller left unset: smaller
+# rollouts, since images are expensive.
 _VISION_MODE: dict[str, Any] = {
     "num_rollout": 15,
     "rollout_batch_size": 8,
@@ -64,18 +60,32 @@ _VISION_MODE: dict[str, Any] = {
 class Gemma4_26B_A4B_Recipe(MilesRecipe):
     """Gemma-4-26B-A4B MoE GRPO on 1×8×H200 with TP4/PP1/EP8, colocated.
 
-    One checkpoint, two modes: these fields train on text, and an image dataset
-    (``MultimodalDataset(modality="image")``) swaps in ``_VISION_MODE`` for every
-    field the caller left unset. Vision runs need ``apply_chat_template=True`` so
-    the prompt reaches the processor as a string, a leading ``<image>`` in each
-    prompt so the processor inserts a placeholder for it — without one the image
-    never reaches the model and it answers "I cannot see the image" at a constant
-    reward — plus their own reward: the text path's ``gemma_math`` scores maths,
-    not images, so vision mode clears it.
+    One checkpoint, two modes, chosen by ``modality``. The fields below are the
+    text defaults; ``modality="vision"`` replaces those named in ``_VISION_MODE``
+    with smaller-rollout values. Either way an argument you pass wins, because
+    the vision values are applied as defaults before your arguments, not over
+    them::
+
+        TrainConfig(
+            model=Gemma4_26B_A4B(),
+            dataset=MultimodalDataset(modality="image", n_rows=120),
+            recipe=Gemma4_26B_A4B_Recipe(modality="vision"),
+        ).train()
+
+    A vision run needs ``apply_chat_template=True`` so the prompt reaches the
+    processor as a string, a leading ``<image>`` in each prompt so the processor
+    inserts a placeholder for it — without one the image never reaches the model
+    and it answers "I cannot see the image" at a constant reward — plus its own
+    reward: the text path's ``gemma_math`` scores maths, not images, so
+    ``modality="vision"`` clears ``rm_type`` and requires you to supply one.
 
     Based on upstream ``scripts/run_gemma_4_26b_a4b.py``, with the deviations
     noted inline.
     """
+
+    _SKIP_FIELDS: ClassVar[frozenset[str]] = MilesRecipe._SKIP_FIELDS | {"modality"}
+
+    modality: Literal["text", "vision"] = "text"
 
     gpu_type: str = "H200"
     colocate: bool = True
@@ -175,6 +185,37 @@ class Gemma4_26B_A4B_Recipe(MilesRecipe):
     no_gradient_accumulation_fusion: bool = True
     no_check_for_nan_in_loss_and_grad: bool = True
 
+    @model_validator(mode="before")
+    @classmethod
+    def _apply_vision_defaults(cls, data: Any) -> Any:
+        """Fill unsupplied ``_VISION_MODE`` fields when ``modality="vision"``.
+
+        Applied to the incoming arguments rather than to the built recipe, so a
+        value the caller supplied is never overwritten and there is nothing to
+        disambiguate afterwards. Rebuilding a resolved recipe from all of its
+        fields is therefore a no-op.
+        """
+        if isinstance(data, ArgsKwargs):
+            args, kwargs = data.args or (), dict(data.kwargs or {})
+        elif isinstance(data, Mapping):
+            args, kwargs = (), dict(data)
+        else:
+            return data
+
+        names = [f.name for f in _dc.fields(cls) if f.init is not False]
+        positional = set(names[: len(args)])
+        if "modality" in positional:
+            modality = args[names.index("modality")]
+        else:
+            modality = kwargs.get("modality", "text")
+        if modality != "vision":
+            return data
+
+        for name, value in _VISION_MODE.items():
+            if name not in positional and name not in kwargs:
+                kwargs[name] = value
+        return ArgsKwargs(args, kwargs) if isinstance(data, ArgsKwargs) else kwargs
+
     @model_validator(mode="after")
     def _keep_image_patches(self) -> "Gemma4_26B_A4B_Recipe":
         """Keep the build-time patches at the head of ``image_run_commands``.
@@ -213,31 +254,25 @@ class Gemma4_26B_A4B_Recipe(MilesRecipe):
     def _brings_own_reward(self) -> bool:
         if self.custom_rm_function is not None or self.rollout_function is not None:
             return True
-        if "rm_type" in self.explicit_fields and self.rm_type:
+        if self.rm_type:
             return True
         extra = self.extra_config
         if isinstance(extra, str) and extra:
             return True
         return isinstance(extra, dict) and bool(extra.get("custom_rm_path"))
 
-    def _for_dataset(self, dataset: "DatasetConfig | None") -> MilesRecipe:
-        if not _has_images(dataset):
-            return self
-        if not self._brings_own_reward():
+    @model_validator(mode="after")
+    def _require_vision_reward(self) -> "Gemma4_26B_A4B_Recipe":
+        """A vision run scores nothing unless the caller brings a reward.
+
+        ``_VISION_MODE`` clears the text path's ``gemma_math``, so without this
+        the run would reach a rollout before anything noticed.
+        """
+        if self.modality == "vision" and not self._brings_own_reward():
             raise TrainingGymConfigError(
-                f"{type(self).__name__} on an image dataset needs its own reward: "
-                f"the text default rm_type={self.rm_type!r} scores maths, not "
-                "images, so vision mode clears it. Pass custom_rm_function=..., "
-                "or rm_type=... to choose a built-in deliberately."
+                f"{type(self).__name__}(modality='vision') needs its own reward: "
+                "the text default rm_type='gemma_math' scores maths, not images, "
+                "so vision mode clears it. Pass custom_rm_function=..., or "
+                "rm_type=... to choose a built-in deliberately."
             )
-        # Keyed on what the caller passed, not on how it compares: an explicit
-        # value equal to the text default must still win.
-        explicit = self.explicit_fields
-        vision = {
-            name: value for name, value in _VISION_MODE.items() if name not in explicit
-        }
-        resolved = replace(self, **vision)
-        # `replace` marks every field explicit, so carry the real set forward and
-        # resolving twice stays a no-op.
-        object.__setattr__(resolved, "_explicit_fields", explicit | vision.keys())
-        return resolved
+        return self

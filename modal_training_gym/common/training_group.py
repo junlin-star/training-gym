@@ -36,7 +36,6 @@ from typing import Any
 from modal_training_gym.common.run import TrainingRun
 from modal_training_gym.common.train import TrainConfig
 from modal_training_gym.common.train_result import TrainResult
-from modal_training_gym.train_recipes.base import carry_explicit_fields
 
 
 class TrainingGroupError(ValueError):
@@ -90,7 +89,7 @@ def _revalidate_recipe(recipe: Any) -> Any:
         for f in _dc.fields(recipe)
         if f.init is not False
     }
-    return carry_explicit_fields(recipe, type(recipe)(**field_values))
+    return type(recipe)(**field_values)
 
 
 class TrainingGroup:
