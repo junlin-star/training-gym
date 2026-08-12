@@ -163,8 +163,7 @@ def _ensure_claude_compatibility(
 
     if symlinked_parent is not None:
         click.echo(
-            "Skipped Claude skill link because "
-            f"{symlinked_parent} is a symbolic link.",
+            f"Skipped Claude skill link because {symlinked_parent} is a symbolic link.",
             err=True,
         )
         return
