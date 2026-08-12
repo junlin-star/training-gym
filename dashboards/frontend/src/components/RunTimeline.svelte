@@ -230,11 +230,11 @@
     }
   }
 
-  function showTip(e, bar) {
+  function showTip(e, bar, role = null) {
     clearHideTimer();
     if (pinned) return;
     laneTip = null;
-    tip = { x: e.clientX, y: e.clientY, bar };
+    tip = { x: e.clientX, y: e.clientY, bar, role };
   }
 
   function moveTip(e) {
@@ -264,7 +264,7 @@
     scheduleHide("lane");
   }
 
-  function pinTip(e, bar) {
+  function pinTip(e, bar, role = null) {
     e.stopPropagation();
     if (pinned && isActive(bar)) {
       pinned = false;
@@ -272,7 +272,7 @@
       return;
     }
     pinned = true;
-    tip = { x: e.clientX, y: e.clientY, bar };
+    tip = { x: e.clientX, y: e.clientY, bar, role };
   }
 
   function clearPin() {
@@ -284,6 +284,10 @@
   function tipTitle(bar) {
     const name = labelFor(bar.name, bar.rolloutId);
     return bar.ordinal ? `${name} ${bar.ordinal}` : name;
+  }
+
+  function tipRole(role) {
+    return role ? role[0].toUpperCase() + role.slice(1) : null;
   }
 
   const roleDescriptions = {
@@ -508,7 +512,7 @@
                     style:top={`${HEADER_PX + index * (rowHeight + ROW_GAP_PX)}px`}
                     style:height={`${rowHeight}px`}
                   >
-                    {#snippet renderBar(bar, row)}
+                    {#snippet renderBar(bar, row, roleLine = false)}
                       <div
                         class="bar-shell"
                         class:nested-shell={bar.depth > 0}
@@ -565,10 +569,10 @@
                                 : colorFor(bar.name)
                               : undefined
                           }
-                          onmouseenter={(e) => showTip(e, bar)}
+                          onmouseenter={(e) => showTip(e, bar, roleLine ? bar.role : null)}
                           onmousemove={moveTip}
                           onmouseleave={hideTip}
-                          onclick={(e) => pinTip(e, bar)}
+                          onclick={(e) => pinTip(e, bar, roleLine ? bar.role : null)}
                         >
                         </button>
                         {#if bar.depth > 0}
@@ -580,10 +584,10 @@
                             style:z-index={nestedHitTargets.get(row)?.get(bar.key)?.zIndex}
                             style:--hit-left={nestedHitTargets.get(row)?.get(bar.key)?.left}
                             style:--hit-right={nestedHitTargets.get(row)?.get(bar.key)?.right}
-                            onmouseenter={(e) => showTip(e, bar)}
+                            onmouseenter={(e) => showTip(e, bar, roleLine ? bar.role : null)}
                             onmousemove={moveTip}
                             onmouseleave={hideTip}
-                            onclick={(e) => pinTip(e, bar)}
+                            onclick={(e) => pinTip(e, bar, roleLine ? bar.role : null)}
                           ></button>
                         {/if}
                         {#if visibleChildren(bar).length}
@@ -605,7 +609,7 @@
                                   data-role={role}
                                 >
                                   {#each children as child (child.key)}
-                                    {@render renderBar(child, row)}
+                                    {@render renderBar(child, row, true)}
                                   {/each}
                                 </div>
                               {/each}
@@ -644,7 +648,9 @@
         {tip.bar.rolloutId == null ? "" : `Step ${tip.bar.rolloutId} · `}{fmtSecs(tip.bar.duration)}
       </span>
     </div>
-    <span class="tg-tip-name">{tipTitle(tip.bar)}</span>
+    <span class="tg-tip-name">
+      {#if tipRole(tip.role)}<span class="tg-tip-role">{tipRole(tip.role)} · </span>{/if}{tipTitle(tip.bar)}
+    </span>
     {#if tip.bar.clockShifted}
       <span class="tg-tip-stat">
         node clocks may differ; aligned to the driver's clock.
