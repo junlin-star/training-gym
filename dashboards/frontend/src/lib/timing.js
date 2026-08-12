@@ -16,6 +16,7 @@ export {
 export {
   anchorLanes,
   groupTooltipChildren,
+  isAsyncSpans,
   nest,
   timingIsAsync,
 } from "./timing_spans.js";

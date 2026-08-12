@@ -6,6 +6,7 @@ import {
   clipIdleSpans,
   groupTooltipChildren,
   HIDDEN_PHASES,
+  timingIsAsync,
   nest,
   runTimeline,
   shouldShowTimingSection,
@@ -297,7 +298,8 @@ test("sync generation tooltips preserve the async phase breakdown", () => {
 });
 
 test("rollout spans get their own row without overlap detection", () => {
-  const timeline = runTimeline(generationPayload(false));
+  const payload = generationPayload(false);
+  const timeline = runTimeline(payload, timingIsAsync(payload));
   assert.equal(timeline.async, true);
   assert.ok(
     timeline.groups[0].rows.some(

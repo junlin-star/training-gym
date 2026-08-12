@@ -4,7 +4,7 @@ import {
   NEGLIGIBLE_WORK_S,
   TOOLTIP_HIDDEN_PHASES,
 } from "./timing_vocabulary.js";
-import { collect, nest, stepsOf } from "./timing_spans.js";
+import { collect, isAsyncSpans, nest, stepsOf } from "./timing_spans.js";
 
 function mergeSyncGenerationSpans(spans) {
   const drivers = new Map(
@@ -263,24 +263,11 @@ export function runTimeline(timings, asyncOverride = null) {
   }
   const steps = stepsOf(measured);
   const rawSpans = measured;
-  const generationSpans = rawSpans.filter((span) => span.role === "rollout");
-  const stepSpans = rawSpans.filter(
-    (span) =>
-      span.role !== "rollout" &&
-      span.kind !== "idle",
-  );
   const sync = rawSpans.some(
     (span) => span.role === "driver" && span.name === "generate_rollouts",
   );
   const async =
-    asyncOverride ??
-    (!sync &&
-      (generationSpans.length > 0 ||
-        generationSpans.some((generation) =>
-          stepSpans.some(
-            (step) => generation.start < step.end && step.start < generation.end,
-          ),
-        )));
+    asyncOverride ?? isAsyncSpans(rawSpans);
   const spans = nest(clipIdleSpans(rawSpans, async));
   if (sync) mergeSyncGenerationSpans(spans);
 

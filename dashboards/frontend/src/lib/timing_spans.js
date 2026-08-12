@@ -180,39 +180,20 @@ export function anchorLanes(spans) {
 }
 
 export function timingIsAsync(timings) {
-  const generations = [];
-  const steps = [];
+  return isAsyncSpans(collect(timings));
+}
+
+export function isAsyncSpans(spans) {
   let sync = false;
-  for (const lanes of Object.values(timings || {})) {
-    for (const [role, lane] of Object.entries(lanes?.roles || {})) {
-      const laneStart = Number(lane?.lane_start_unix_s);
-      if (!Number.isFinite(laneStart)) continue;
-      for (const [name, phase] of Object.entries(lane?.phases || {})) {
-        const count = Number(phase?.count) || 0;
-        const total = Number(phase?.total_duration_s) || 0;
-        if (!count || total < NEGLIGIBLE_WORK_S) continue;
-        const start = laneStart + Number(phase?.first_start_s);
-        const end = laneStart + Number(phase?.last_end_s);
-        if (!Number.isFinite(start) || !Number.isFinite(end)) continue;
-        if (role === "rollout") {
-          generations.push([start, end]);
-        } else if (role === "driver" && name === "generate_rollouts") {
-          sync = true;
-        } else if (!IDLE_PHASES.has(name)) {
-          steps.push([start, end]);
-        }
-      }
+  let hasRollout = false;
+  for (const span of spans) {
+    if (span.role === "rollout") {
+      hasRollout = true;
+    } else if (span.role === "driver" && span.name === "generate_rollouts") {
+      sync = true;
     }
   }
-  return (
-    !sync &&
-    generations.some(([generationStart, generationEnd]) =>
-      steps.some(
-        ([stepStart, stepEnd]) =>
-          generationStart < stepEnd && stepStart < generationEnd,
-      ),
-    )
-  );
+  return !sync && hasRollout;
 }
 
 export function groupTooltipChildren(children, aggregateStats = {}) {
