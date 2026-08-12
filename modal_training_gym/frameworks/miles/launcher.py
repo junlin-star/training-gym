@@ -89,7 +89,7 @@ def _start_sglang_router(host: str, miles: MilesRecipe) -> tuple[subprocess.Pope
                 "sglang_router_port": port,
                 "miles_router_max_connections": None,
                 "miles_router_timeout": None,
-                "sglang_server_concurrency": miles.sglang_server_concurrency,
+                "sglang_server_concurrency": miles.sglang_server_concurrency or 512,
                 "rollout_num_gpus": miles.actor_num_nodes
                 * miles.actor_num_gpus_per_node,
                 "rollout_num_gpus_per_engine": miles.rollout_num_gpus_per_engine,
