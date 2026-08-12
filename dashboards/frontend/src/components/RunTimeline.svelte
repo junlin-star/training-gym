@@ -61,6 +61,113 @@
   let zoom = $state(1);
   let viewport = $state(null);
 
+  function nestedHitTargetsForRow(row, pixelsPerSecond) {
+    const nestedBars = row.sortedSpans.filter((candidate) => candidate.depth > 0);
+    const minimumDuration = pixelsPerSecond ? 2 / pixelsPerSecond : 0;
+    const effectiveEnd = (candidate) =>
+      candidate.start +
+      Math.max(candidate.end - candidate.start, minimumDuration);
+    const centers = nestedBars
+      .map((candidate) => ({
+        candidate,
+        center: (candidate.start + effectiveEnd(candidate)) / 2,
+      }))
+      .sort(
+        (a, b) =>
+          a.center - b.center ||
+          String(a.candidate.key).localeCompare(String(b.candidate.key)),
+      );
+    const previousCenters = new Map();
+    let previous = Number.NEGATIVE_INFINITY;
+    for (let index = 0; index < centers.length; ) {
+      const center = centers[index].center;
+      let end = index;
+      while (end < centers.length && centers[end].center === center) end += 1;
+      for (let current = index; current < end; current += 1) {
+        previousCenters.set(centers[current].candidate.key, previous);
+      }
+      previous = center;
+      index = end;
+    }
+    const nextCenters = new Map();
+    let next = Number.POSITIVE_INFINITY;
+    for (let index = centers.length - 1; index >= 0; ) {
+      const center = centers[index].center;
+      let start = index;
+      while (start >= 0 && centers[start].center === center) start -= 1;
+      for (let current = start + 1; current <= index; current += 1) {
+        nextCenters.set(centers[current].candidate.key, next);
+      }
+      next = center;
+      index = start;
+    }
+
+    const orderedBars = [...nestedBars].sort((a, b) => {
+      const centerDistance =
+        Math.abs((a.start + a.end - b.start - b.end) / 2) *
+        pixelsPerSecond;
+      if (pixelsPerSecond > 0 && centerDistance < 1) {
+        return (
+          b.start - a.start ||
+          String(a.key).localeCompare(String(b.key))
+        );
+      }
+      return (
+        a.duration - b.duration ||
+        a.start - b.start ||
+        String(a.key).localeCompare(String(b.key))
+      );
+    });
+    const zIndexes = new Map(
+      orderedBars.map((candidate, index) => [
+        candidate.key,
+        orderedBars.length - index + 3,
+      ]),
+    );
+    const targets = new Map();
+    for (const candidate of nestedBars) {
+      const center = (candidate.start + effectiveEnd(candidate)) / 2;
+      const leftBoundary = previousCenters.get(candidate.key);
+      const rightBoundary = nextCenters.get(candidate.key);
+      const leftExpansion =
+        leftBoundary === Number.NEGATIVE_INFINITY
+          ? 6
+          : candidate.start -
+            (leftBoundary + center) / 2;
+      const rightExpansion =
+        rightBoundary === Number.POSITIVE_INFINITY
+          ? 6
+          : (center + rightBoundary) / 2 - candidate.end;
+      const leftCap =
+        candidate.insideStart == null
+          ? 6
+          : Math.max(0, candidate.start - candidate.insideStart - 2 / pixelsPerSecond);
+      const rightCap =
+        candidate.insideEnd == null
+          ? 6
+          : Math.max(0, candidate.insideEnd - candidate.end - 2 / pixelsPerSecond);
+      targets.set(candidate.key, {
+        zIndex: zIndexes.get(candidate.key),
+        left: `${Math.max(-6, Math.min(leftCap, leftExpansion) * pixelsPerSecond)}px`,
+        right: `${Math.max(-6, Math.min(rightCap, rightExpansion) * pixelsPerSecond)}px`,
+      });
+    }
+    return targets;
+  }
+
+  let nestedHitTargets = $derived.by(() => {
+    const pixelsPerSecond = viewport
+      ? (viewport.clientWidth * zoom) / timeline.span
+      : 0;
+    const targets = new WeakMap();
+    for (const group of groups) {
+      for (const row of group.rows) {
+        targets.set(row, nestedHitTargetsForRow(row, pixelsPerSecond));
+      }
+    }
+    return targets;
+  });
+
   function setZoom(next, anchorX = null) {
     const clamped = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, next));
     if (clamped === zoom) return;
@@ -265,70 +372,6 @@
     return `${Math.max(0, end - start) * 100}%`;
   }
 
-  function nestedZIndex(row, bar) {
-    const pixelsPerSecond = viewport
-      ? (viewport.clientWidth * zoom) / timeline.span
-      : 0;
-    const nestedBars = row.sortedSpans
-      .filter((candidate) => candidate.depth > 0)
-      .sort(
-        (a, b) => {
-          const centerDistance =
-            Math.abs((a.start + a.end - b.start - b.end) / 2) *
-            pixelsPerSecond;
-          if (centerDistance < 1) {
-            return (
-              b.start - a.start ||
-              String(a.key).localeCompare(String(b.key))
-            );
-          }
-          return (
-            a.duration - b.duration ||
-            a.start - b.start ||
-            String(a.key).localeCompare(String(b.key))
-          );
-        },
-      );
-    const index = nestedBars.findIndex((candidate) => candidate.key === bar.key);
-    return index < 0 ? 3 : nestedBars.length - index + 3;
-  }
-
-  function nestedHitExpansion(row, bar, side) {
-    const pixelsPerSecond = viewport
-      ? (viewport.clientWidth * zoom) / timeline.span
-      : 0;
-    if (!pixelsPerSecond) return "0px";
-    const minimumDuration = 2 / pixelsPerSecond;
-    const effectiveEnd = (candidate) =>
-      candidate.start +
-      Math.max(candidate.end - candidate.start, minimumDuration);
-    const effectiveStart = bar.start;
-    const effectiveBarEnd = effectiveEnd(bar);
-    const center = (effectiveStart + effectiveBarEnd) / 2;
-    const centers = row.sortedSpans
-      .filter((candidate) => candidate.depth > 0 && candidate.key !== bar.key)
-      .map((candidate) => (candidate.start + effectiveEnd(candidate)) / 2);
-    const previous = Math.max(
-      ...centers.filter((candidate) => candidate < center),
-      Number.NEGATIVE_INFINITY,
-    );
-    const next = Math.min(
-      ...centers.filter((candidate) => candidate > center),
-      Number.POSITIVE_INFINITY,
-    );
-    const boundary =
-      side === "left"
-        ? previous === Number.NEGATIVE_INFINITY
-          ? null
-          : (previous + center) / 2
-        : next === Number.POSITIVE_INFINITY
-          ? null
-          : (center + next) / 2;
-    if (boundary == null) return "6px";
-    const expansion =
-      side === "left" ? effectiveStart - boundary : boundary - bar.end;
-    return `${Math.max(-6, Math.min(6, expansion * pixelsPerSecond))}px`;
-  }
 </script>
 
 <svelte:window onclick={clearPin} />
@@ -490,16 +533,18 @@
                               : undefined
                           }
                           style:z-index={
-                            bar.depth > 0 ? nestedZIndex(row, bar) : undefined
+                            bar.depth > 0
+                              ? nestedHitTargets.get(row)?.get(bar.key)?.zIndex
+                              : undefined
                           }
                           style:--hit-left={
                             bar.depth > 0
-                              ? nestedHitExpansion(row, bar, "left")
+                              ? nestedHitTargets.get(row)?.get(bar.key)?.left
                               : undefined
                           }
                           style:--hit-right={
                             bar.depth > 0
-                              ? nestedHitExpansion(row, bar, "right")
+                              ? nestedHitTargets.get(row)?.get(bar.key)?.right
                               : undefined
                           }
                           style:border-color={
@@ -521,9 +566,9 @@
                             class="bar-hit-target"
                             data-bar-key={bar.key}
                             aria-label={`${labelFor(bar.name, bar.rolloutId)} ${fmtSecs(bar.duration)}`}
-                            style:z-index={nestedZIndex(row, bar)}
-                            style:--hit-left={nestedHitExpansion(row, bar, "left")}
-                            style:--hit-right={nestedHitExpansion(row, bar, "right")}
+                            style:z-index={nestedHitTargets.get(row)?.get(bar.key)?.zIndex}
+                            style:--hit-left={nestedHitTargets.get(row)?.get(bar.key)?.left}
+                            style:--hit-right={nestedHitTargets.get(row)?.get(bar.key)?.right}
                             onmouseenter={(e) => showTip(e, bar)}
                             onmousemove={moveTip}
                             onmouseleave={hideTip}
