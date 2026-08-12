@@ -156,6 +156,7 @@ class _KimiK2Recipe(MilesRecipe):
     sglang_moe_runner_backend: str | None = "triton"
     sglang_ep_size: int = 8
     sglang_server_concurrency: int = 1024
+    use_miles_router: bool = True
     use_rollout_routing_replay: bool = True
 
     def post_process_model(self) -> None:

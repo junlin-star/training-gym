@@ -1,5 +1,6 @@
 import asyncio
 import hashlib
+import json
 import os
 import shlex
 import socket
@@ -79,11 +80,31 @@ def _available_port() -> int:
         return sock.getsockname()[1]
 
 
-def _start_sglang_router(host: str) -> tuple[subprocess.Popen, int]:
+def _start_sglang_router(host: str, miles: MilesRecipe) -> tuple[subprocess.Popen, int]:
     port = _available_port()
-    prometheus_port = _available_port()
-    process = subprocess.Popen(
-        [
+    if miles.use_miles_router:
+        router_args = json.dumps(
+            {
+                "sglang_router_ip": host,
+                "sglang_router_port": port,
+                "miles_router_max_connections": None,
+                "miles_router_timeout": None,
+                "sglang_server_concurrency": miles.sglang_server_concurrency,
+                "rollout_num_gpus": miles.actor_num_nodes
+                * miles.actor_num_gpus_per_node,
+                "rollout_num_gpus_per_engine": miles.rollout_num_gpus_per_engine,
+                "rollout_health_check_interval": miles.rollout_health_check_interval,
+                "miles_router_health_check_failure_threshold": 3,
+            }
+        )
+        script = (
+            "import json,sys; from types import SimpleNamespace; "
+            "from miles.router.router import run_router; "
+            "run_router(SimpleNamespace(**json.loads(sys.argv[1])))"
+        )
+        command = ["python3", "-c", script, router_args]
+    else:
+        command = [
             "sglang-router",
             "launch",
             "--host",
@@ -91,14 +112,14 @@ def _start_sglang_router(host: str) -> tuple[subprocess.Popen, int]:
             "--port",
             str(port),
             "--prometheus-port",
-            str(prometheus_port),
+            str(_available_port()),
             "--log-level",
             "warn",
             "--request-timeout-secs",
             "14400",
         ]
-    )
-    deadline = time.time() + 30
+    process = subprocess.Popen(command)
+    deadline = time.time() + 10 * 60
     while time.time() < deadline:
         if process.poll() is not None:
             raise RuntimeError(
@@ -111,7 +132,7 @@ def _start_sglang_router(host: str) -> tuple[subprocess.Popen, int]:
             time.sleep(0.5)
     process.terminate()
     process.wait(timeout=5)
-    raise RuntimeError(f"SGLang router at {host}:{port} was not ready after 30s")
+    raise RuntimeError(f"Router at {host}:{port} was not ready after 10 minutes")
 
 
 _MILES_PATCHES = Path(__file__).parent / "modal_helpers" / "patches"
@@ -776,8 +797,10 @@ def build_miles_app(
         original_router_ip = miles.sglang_router_ip
         original_router_port = miles.sglang_router_port
         try:  # Wraps all post-setup work so any failure marks the run terminal.
-            if miles.sglang_router_ip is None and not miles.use_miles_router:
-                router_process, router_port = _start_sglang_router(cluster.head_addr)
+            if miles.sglang_router_ip is None:
+                router_process, router_port = _start_sglang_router(
+                    cluster.head_addr, miles
+                )
                 miles.sglang_router_ip = cluster.head_addr
                 miles.sglang_router_port = router_port
                 print(
