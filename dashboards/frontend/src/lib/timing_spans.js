@@ -84,16 +84,9 @@ export function anchorLanes(spans) {
     lanes.set(key, bucket);
     if (span.role === "driver" && span.rolloutId != null) {
       const phases = drivers.get(span.rolloutId) || new Map();
-      const bounds = phases.get(span.name);
-      phases.set(
-        span.name,
-        bounds
-          ? {
-              start: Math.min(bounds.start, span.start),
-              end: Math.max(bounds.end, span.end),
-            }
-          : { start: span.start, end: span.end },
-      );
+      const candidates = phases.get(span.name) || [];
+      candidates.push(span);
+      phases.set(span.name, candidates);
       drivers.set(span.rolloutId, phases);
     }
   }
@@ -105,8 +98,8 @@ export function anchorLanes(spans) {
     if (categories.size !== 1) continue;
     const category = CATEGORIES[[...categories][0]];
     if (!category?.owner) continue;
-    const parent = drivers.get(first.rolloutId)?.get(category.owner);
-    if (!parent) continue;
+    const candidates = drivers.get(first.rolloutId)?.get(category.owner);
+    if (!candidates?.length) continue;
 
     let laneStart = Infinity;
     let laneEnd = -Infinity;
@@ -114,9 +107,52 @@ export function anchorLanes(spans) {
       laneStart = Math.min(laneStart, span.start);
       laneEnd = Math.max(laneEnd, span.end);
     }
-    let offset = 0;
-    if (laneEnd > parent.end) offset = parent.end - laneEnd;
-    if (laneStart + offset < parent.start) offset = parent.start - laneStart;
+    if (candidates.length === 1) {
+      const parent = candidates[0];
+      let offset = 0;
+      if (laneEnd > parent.end) offset = parent.end - laneEnd;
+      if (laneStart + offset < parent.start) offset = parent.start - laneStart;
+      if (Math.abs(offset) < 1e-9) continue;
+
+      for (const span of lane) {
+        span.start += offset;
+        span.end += offset;
+        span.clockShifted = true;
+        span.clockOffset = offset;
+      }
+      continue;
+    }
+
+    const laneDuration = laneEnd - laneStart;
+    let best = null;
+    for (const candidate of candidates) {
+      if (
+        candidate.end - candidate.start <
+        laneDuration - CROSS_LANE_CONTAINMENT_TOLERANCE_S
+      ) {
+        continue;
+      }
+      const minOffset =
+        candidate.start -
+        CROSS_LANE_CONTAINMENT_TOLERANCE_S -
+        laneStart;
+      const maxOffset =
+        candidate.end +
+        CROSS_LANE_CONTAINMENT_TOLERANCE_S -
+        laneEnd;
+      if (minOffset > maxOffset) continue;
+      const offset = Math.max(minOffset, Math.min(0, maxOffset));
+      if (
+        !best ||
+        Math.abs(offset) < Math.abs(best.offset) ||
+        (Math.abs(offset) === Math.abs(best.offset) &&
+          candidate.start < best.candidate.start)
+      ) {
+        best = { candidate, offset };
+      }
+    }
+    if (!best) continue;
+    const { offset } = best;
     if (Math.abs(offset) < 1e-9) continue;
 
     for (const span of lane) {

@@ -253,6 +253,75 @@ test("anchorLanes shifts a lane just enough to fit its owner", () => {
   assert.equal(spans[1].clockShifted, true);
 });
 
+test("anchorLanes chooses a concrete parent instead of a disjoint union", () => {
+  const driverA = {
+    name: "train_models",
+    category: "train",
+    role: "driver",
+    rolloutId: 1,
+    start: 100,
+    end: 130,
+  };
+  const driverB = {
+    ...driverA,
+    start: 150,
+    end: 180,
+  };
+  const actor = {
+    name: "forward_backward",
+    category: "train",
+    role: "actor",
+    rolloutId: 1,
+    laneKey: "1:actor",
+    start: 135,
+    end: 155,
+  };
+
+  anchorLanes([driverA, driverB, actor]);
+  nest([driverA, driverB, actor]);
+
+  assert.deepEqual([actor.start, actor.end], [149.99, 169.99]);
+  assert.ok(Math.abs(actor.clockOffset - 14.99) < 1e-9);
+  assert.equal(actor.depth, 1);
+  assert.equal(actor.parent, driverB);
+});
+
+test("anchorLanes leaves a lane unshifted when no concrete parent fits", () => {
+  const spans = [
+    {
+      name: "train_models",
+      category: "train",
+      role: "driver",
+      rolloutId: 1,
+      start: 100,
+      end: 110,
+    },
+    {
+      name: "train_models",
+      category: "train",
+      role: "driver",
+      rolloutId: 1,
+      start: 120,
+      end: 130,
+    },
+    {
+      name: "forward_backward",
+      category: "train",
+      role: "actor",
+      rolloutId: 1,
+      laneKey: "1:actor",
+      start: 90,
+      end: 130,
+    },
+  ];
+
+  anchorLanes(spans);
+
+  assert.deepEqual([spans[2].start, spans[2].end], [90, 130]);
+  assert.equal(spans[2].clockShifted, undefined);
+  assert.equal(spans[2].clockOffset, undefined);
+});
+
 test("anchorLanes clamps a shift that would move the lane before its owner", () => {
   const spans = anchoredLane(10, 20, 5, 25);
   anchorLanes(spans);
