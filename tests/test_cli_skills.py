@@ -5,6 +5,7 @@ import subprocess
 import zipfile
 from pathlib import Path
 
+import pytest
 from click.testing import CliRunner
 
 from modal_training_gym import cli as cli_module
@@ -145,13 +146,20 @@ def test_skills_install_force_replaces_modified_skill(monkeypatch, tmp_path):
     assert _contents(destination) == _contents(_bundled_skill_path())
 
 
-def test_skills_install_preserves_existing_claude_skill_without_force(
-    monkeypatch, tmp_path
+@pytest.mark.parametrize("existing_kind", ["directory", "symlink"])
+def test_skills_install_preserves_claude_conflict_without_force(
+    monkeypatch,
+    tmp_path,
+    existing_kind,
 ):
     (tmp_path / ".git").mkdir()
     existing = _claude_link(tmp_path)
-    existing.mkdir(parents=True)
-    (existing / "SKILL.md").write_text("customized\n")
+    if existing_kind == "directory":
+        existing.mkdir(parents=True)
+        (existing / "SKILL.md").write_text("customized\n")
+    else:
+        existing.parent.mkdir(parents=True)
+        existing.symlink_to(Path("somewhere-else"), target_is_directory=True)
     monkeypatch.chdir(tmp_path)
 
     result = CliRunner().invoke(cli_module.entrypoint_cli, ["skills", "install"])
@@ -159,24 +167,11 @@ def test_skills_install_preserves_existing_claude_skill_without_force(
     destination = tmp_path / ".agents" / "skills" / SKILL_NAME
     assert result.exit_code == 0
     assert "Skipped Claude skill link" in result.stderr
-    assert (existing / "SKILL.md").read_text() == "customized\n"
     assert _contents(destination) == _contents(_bundled_skill_path())
-
-
-def test_skills_install_skips_wrong_claude_link_without_force(monkeypatch, tmp_path):
-    (tmp_path / ".git").mkdir()
-    existing = _claude_link(tmp_path)
-    existing.parent.mkdir(parents=True)
-    existing.symlink_to(Path("somewhere-else"), target_is_directory=True)
-    monkeypatch.chdir(tmp_path)
-
-    result = CliRunner().invoke(cli_module.entrypoint_cli, ["skills", "install"])
-
-    destination = tmp_path / ".agents" / "skills" / SKILL_NAME
-    assert result.exit_code == 0
-    assert "Skipped Claude skill link" in result.stderr
-    assert existing.readlink() == Path("somewhere-else")
-    assert _contents(destination) == _contents(_bundled_skill_path())
+    if existing_kind == "directory":
+        assert (existing / "SKILL.md").read_text() == "customized\n"
+    else:
+        assert existing.readlink() == Path("somewhere-else")
 
 
 def test_skills_install_force_replaces_existing_claude_skill(monkeypatch, tmp_path):
@@ -198,16 +193,31 @@ def test_skills_install_force_replaces_existing_claude_skill(monkeypatch, tmp_pa
     assert existing.resolve() == destination
 
 
-def test_force_skips_symlinked_claude_parent_but_installs_canonical_skill(
-    monkeypatch, tmp_path
+@pytest.mark.parametrize(
+    "symlinked_parent",
+    ["claude-directory", "skills-directory"],
+)
+def test_force_skips_symlinked_claude_parent(
+    monkeypatch,
+    tmp_path,
+    symlinked_parent,
 ):
     (tmp_path / ".git").mkdir()
-    (tmp_path / ".claude").mkdir()
-    real_skill = tmp_path / "skills" / SKILL_NAME
+    if symlinked_parent == "claude-directory":
+        real_claude_directory = tmp_path / "shared-claude"
+        real_skill = real_claude_directory / "skills" / SKILL_NAME
+        parent = tmp_path / ".claude"
+        parent_target = real_claude_directory
+    else:
+        (tmp_path / ".claude").mkdir()
+        real_skill = tmp_path / "skills" / SKILL_NAME
+        parent = tmp_path / ".claude" / "skills"
+        parent_target = Path("..") / "skills"
+
     real_skill.mkdir(parents=True)
     (real_skill / "SKILL.md").write_text("customized\n")
-    (tmp_path / ".claude" / "skills").symlink_to(
-        Path("..") / "skills",
+    parent.symlink_to(
+        parent_target,
         target_is_directory=True,
     )
     monkeypatch.chdir(tmp_path)
@@ -222,32 +232,7 @@ def test_force_skips_symlinked_claude_parent_but_installs_canonical_skill(
     assert _contents(destination) == _contents(_bundled_skill_path())
     assert "Skipped Claude skill link" in result.stderr
     assert (real_skill / "SKILL.md").read_text() == "customized\n"
-    assert (tmp_path / ".claude" / "skills").is_symlink()
-
-
-def test_force_skips_symlinked_claude_directory(monkeypatch, tmp_path):
-    (tmp_path / ".git").mkdir()
-    real_claude_directory = tmp_path / "shared-claude"
-    real_skill = real_claude_directory / "skills" / SKILL_NAME
-    real_skill.mkdir(parents=True)
-    (real_skill / "SKILL.md").write_text("customized\n")
-    (tmp_path / ".claude").symlink_to(
-        real_claude_directory,
-        target_is_directory=True,
-    )
-    monkeypatch.chdir(tmp_path)
-
-    result = CliRunner().invoke(
-        cli_module.entrypoint_cli,
-        ["skills", "install", "--force"],
-    )
-
-    destination = tmp_path / ".agents" / "skills" / SKILL_NAME
-    assert result.exit_code == 0
-    assert _contents(destination) == _contents(_bundled_skill_path())
-    assert "Skipped Claude skill link" in result.stderr
-    assert (real_skill / "SKILL.md").read_text() == "customized\n"
-    assert (tmp_path / ".claude").is_symlink()
+    assert parent.is_symlink()
 
 
 def test_skills_install_accepts_parent_link_to_canonical_skills(monkeypatch, tmp_path):
