@@ -530,11 +530,8 @@ class RolloutImageStore:
 
     Frameworks build a prompt group by copying one prepared sample (miles
     deep-copies it per ``n_samples_per_prompt``), so members hold equal-content but
-    distinct image objects. ``group_key`` records the outcome for one such set of
-    copies, paying the content hash — the only thing that can collapse them — once
-    for the set rather than once per sample. It has to identify the prepared sample
-    and not merely its group: a multi-turn episode reports every turn under one
-    group index, and each turn carries its own screenshot.
+    distinct image objects. Content keying is what collapses them, so every sample
+    is resolved from its own candidates.
     """
 
     def __init__(self, limit: int) -> None:
@@ -544,7 +541,6 @@ class RolloutImageStore:
         # once per sample.
         self._ref_by_raw: dict[Any, str] = {}
         self._key_by_id: dict[int, Any] = {}
-        self._ref_by_group: dict[Any, str] = {}
         self._pinned: list[Any] = []
 
     @property
@@ -555,12 +551,11 @@ class RolloutImageStore:
     def _key(self, candidate: Any) -> Any:
         """Key ``candidate``, reusing the key already computed for that object.
 
-        Covers a prompt group that shares one image object; ``annotate``'s
-        ``group_key`` covers one whose members hold copies. Either way the content
-        key -- a full raw-pixel materialisation plus a hash for a PIL image -- is
-        paid per distinct image rather than per sample. Content keying still decides
-        equality: this only short-circuits the same object, which cannot have
-        different content within one payload.
+        Covers a prompt group that shares one image object, so the content key -- a
+        full raw-pixel materialisation plus a hash for a PIL image -- is not paid
+        once per sample. Content keying still decides equality: this only
+        short-circuits the same object, which cannot have different content within
+        one payload.
         """
         memo = self._key_by_id.get(id(candidate))
         if memo is not None:
@@ -572,27 +567,11 @@ class RolloutImageStore:
         self._key_by_id[id(candidate)] = key
         return key
 
-    def annotate(
-        self, sample: Any, metadata: dict[str, Any], group_key: Any = None
-    ) -> bool:
-        """Write this sample's image keys onto ``metadata``; True if one resolves.
-
-        ``group_key`` (the sample's group and prompt, when known) reuses the first
-        outcome recorded for it instead of re-hashing an identical copy of its image.
-        """
+    def annotate(self, sample: Any, metadata: dict[str, Any]) -> bool:
+        """Write this sample's image keys onto ``metadata``; True if one resolves."""
         if not self._limit:
             return False
-        if group_key is not None:
-            cached = self._ref_by_group.get(group_key)
-            if cached is not None:
-                if not cached:
-                    return False
-                metadata["image_ref"] = cached
-                return True
-        ref = self._resolve(sample, metadata)
-        if group_key is not None:
-            self._ref_by_group[group_key] = ref
-        return bool(ref)
+        return bool(self._resolve(sample, metadata))
 
     def _resolve(self, sample: Any, metadata: dict[str, Any]) -> str:
         """Annotate from ``sample``'s own candidates; the ref written, else ``""``."""
@@ -704,11 +683,7 @@ def _sample_to_dict(
     if audio_uri := _extract_audio_from_prompt(prompt):
         metadata["_metadata_type"] = "audio"
         metadata["audio"] = audio_uri
-    elif image_store is not None and image_store.annotate(
-        sample,
-        metadata,
-        group_key=None if group_index is None else (group_index, prompt_text),
-    ):
+    elif image_store is not None and image_store.annotate(sample, metadata):
         metadata["_metadata_type"] = "image"
 
     response_text = _coerce_text(response)
