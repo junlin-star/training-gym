@@ -369,15 +369,11 @@
     }
   }
 
-  // How a payload carries a sample's input image:
-  //   "ignore"    — leave `metadata` exactly as the API sent it
-  //   "refs_only" — drop inline bytes; the ref names an entry in the payload's `images` map
-  //   "resolve"   — inline the bytes this sample's ref points at, for a standalone payload
+  // `imageHandling`: "ignore" | "refs_only" | "resolve".
   function sampleToPayload(s, imageHandling = "ignore") {
     let metadata = s.metadata || null;
     if (imageHandling === "resolve" && metadata?.image_ref && !metadata.image) {
-      // Only add bytes if the lookup resolved — the carrier sample may not be loaded,
-      // in which case the ref alone is still the best the payload can say.
+      // Only add bytes if the lookup resolved — the carrier sample may not be loaded.
       const resolved = sampleImage(s);
       if (resolved) metadata = { ...metadata, image: resolved };
     } else if (imageHandling === "refs_only" && metadata?.image && metadata.image_ref) {

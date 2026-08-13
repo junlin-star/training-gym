@@ -56,7 +56,9 @@ _TRAJECTORY_MAX_MESSAGES = 128
 # Keys handled separately below (compacted/size-limited their own way) —
 # never copy them through the generic passthrough too, or they'd end up
 # duplicated under the same name with two different shapes.
-_RESERVED_METADATA_KEYS = frozenset({"trajectory_messages", "eval_report"})
+_RESERVED_METADATA_KEYS = frozenset(
+    {"trajectory_messages", "eval_report", "image", "image_ref"}
+)
 # Per-tag cap on the generic metadata passthrough so a stray large value a
 # reward function stashes on the sample can't bloat the rollout payload.
 _MAX_TAG_VALUE_BYTES = 2048
