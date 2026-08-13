@@ -5,7 +5,7 @@ name: Validate Models
 #
 # Pull requests validate only the models the diff touches, and only those
 # registered with run_on_pr=True — diff_impact.py enforces that, so a model too
-# large to gate merges on (Kimi on 32 x 8 H200) can never enter a PR matrix.
+# large to gate merges on (Kimi on 16 x 8 H200) can never enter a PR matrix.
 # workflow_dispatch can name any registered model, which is how a Kimi run or a
 # miles image bump (bump MilesRecipe on a branch, then dispatch) gets validated.
 
@@ -27,7 +27,7 @@ permissions:
 
 concurrency:
   # PR runs share a per-ref group so a new push supersedes the old run. A dispatch
-  # may be a 32 x 8 H200 job, so it gets a group of its own (run_id is unique per
+  # may be a 16 x 8 H200 job, so it gets a group of its own (run_id is unique per
   # run): manual validations never abort — nor queue behind — one another.
   group: validate-models-${{ github.ref }}-${{ github.event_name == 'pull_request' && 'pr' || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -69,7 +69,7 @@ jobs:
           else
             # --pr-only is load-bearing: bare `list` prints the whole registry,
             # so without it a dispatch left blank would fan out to Kimi on
-            # 32 x 8 H200. Blank means "the set a PR would have run".
+            # 16 x 8 H200. Blank means "the set a PR would have run".
             models=$(uv run scripts/validate_model_configs.py list --pr-only)
           fi
           echo "Selected models: $models"

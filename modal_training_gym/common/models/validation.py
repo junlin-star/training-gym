@@ -12,7 +12,6 @@ from dataclasses import dataclass
 from ..framework import Framework
 from .base import ModelConfig
 from .kimi_k2_5 import Kimi_K2_5
-from .kimi_k2_6 import Kimi_K2_6
 from .moonlight_16b_a3b_instruct import Moonlight_16B_A3B_Instruct
 from .qwen3_0_6b import Qwen3_0_6B
 from .qwen3_1_7b import Qwen3_1_7B
@@ -53,7 +52,7 @@ class _ValidationConfig:
 
         Narrow is the default here, unlike the ``list`` CLI: the caller that
         matters is ``diff_impact``, and a bare ``select()`` that quietly
-        included Kimi would put 32 x 8 H200 on a pull request.
+        included Kimi would put 16 x 8 H200 on a pull request.
         """
         return sorted(
             (
@@ -96,10 +95,9 @@ VALIDATION_CONFIGS: set[_ValidationConfig] = {
     _ValidationConfig("Qwen3.5-4B-Miles", Qwen3_5_4B, Framework.MILES),
     _ValidationConfig("Qwen3.5-9B", Qwen3_5_9B, Framework.SLIME),
     _ValidationConfig("Qwen3.6-35B-A3B", Qwen3_6_35B, Framework.SLIME),
-    # Too large to fan out on a PR (32 x 8 H200), but still dispatchable by
+    # Too large to fan out on a PR (16 x 8 H200), but still dispatchable by
     # name. Flipping run_on_pr is the only change needed to gate PRs on one.
     _ValidationConfig("Kimi-K2.5", Kimi_K2_5, Framework.MILES, run_on_pr=False),
-    _ValidationConfig("Kimi-K2.6", Kimi_K2_6, Framework.MILES, run_on_pr=False),
     _ValidationConfig(
         "Moonlight-16B-A3B-Instruct",
         Moonlight_16B_A3B_Instruct,

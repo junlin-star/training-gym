@@ -281,6 +281,8 @@ class MilesRecipe(BaseTrainRecipe):
         Extra prompts sampled so filter-rejected groups can be replaced (DAPO).
     dynamic_sampling_filter_path : str | None
         Import path of the predicate deciding which sample groups to keep.
+    filter_zero_reward_samples : bool
+        Drop zero-reward samples before training.
     balance_data : bool
         Rebalance kept samples across data-parallel ranks.
     use_dynamic_global_batch_size : bool
@@ -574,6 +576,7 @@ class MilesRecipe(BaseTrainRecipe):
     # ── Dynamic sampling (DAPO) ────────────────────────────────────────────
     over_sampling_batch_size: int | None = None
     dynamic_sampling_filter_path: str | None = None
+    filter_zero_reward_samples: bool = False
     balance_data: bool = False
     use_dynamic_global_batch_size: bool = False
 
@@ -770,8 +773,8 @@ class MilesRecipe(BaseTrainRecipe):
         if model is not None:
             self.validate_model_parallelism(model)
             for k, v in self._model_to_fields(model).items():
-                # An explicitly configured hf_checkpoint wins: the Kimi recipes
-                # point it at a converted INT4 copy on the volume, not at the
+                # An explicitly configured hf_checkpoint wins: the Kimi recipe
+                # points it at a converted INT4 copy on the volume, not at the
                 # model's own HF weights.
                 if k == "hf_checkpoint":
                     if fields.get(k):
@@ -803,7 +806,6 @@ class MilesRecipe(BaseTrainRecipe):
     def get_base_recipe(cls, model_config: ModelConfig) -> "MilesRecipe | None":
         from modal_training_gym.train_recipes.miles_recipe.kimi import (
             Kimi_K2_5_LoRA_Recipe,
-            Kimi_K2_6_LoRA_Recipe,
         )
         from modal_training_gym.train_recipes.miles_recipe.qwen3_5_4b import (
             Qwen3_5_4b_Miles_Recipe,
@@ -814,8 +816,6 @@ class MilesRecipe(BaseTrainRecipe):
 
         if model_config.model_name == "moonshotai/Kimi-K2.5":
             return Kimi_K2_5_LoRA_Recipe()
-        if model_config.model_name == "moonshotai/Kimi-K2.6":
-            return Kimi_K2_6_LoRA_Recipe()
         if model_config.model_name == "Qwen/Qwen3.5-4B":
             return Qwen3_5_4b_Miles_Recipe()
         if model_config.model_name == "moonshotai/Moonlight-16B-A3B-Instruct":

@@ -17,8 +17,6 @@ from .qwen3_4b import Qwen3_4B
 from .qwen3_8b import Qwen3_8B
 from .qwen3_30b import Qwen3_30B
 from .kimi_k2_5 import Kimi_K2_5
-from .kimi_k2_6 import Kimi_K2_6
-
 from .qwen3_5_0_8b import Qwen3_5_0_8B
 from .qwen3_5_2b import Qwen3_5_2B
 from .qwen3_5_4b import Qwen3_5_4B
@@ -41,7 +39,6 @@ __all__ = [
     "Qwen3_8B",
     "Qwen3_30B",
     "Kimi_K2_5",
-    "Kimi_K2_6",
     "ToolCall",
     "parse_glm_response",
     "parse_kimi_k2_response",

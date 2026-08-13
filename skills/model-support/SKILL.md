@@ -26,7 +26,7 @@ If reward doesn't climb, isolate which layer is at fault: data (`DatasetConfig` 
 
 ### Common gotchas (both frameworks)
 
-Naming convention: For the model name in artifacts, it should be `_` separated by model family identifiers and replacing `.` for versioning (e.g. `Qwen3_4b`, `Qwen3_6_35b`, `Kimi_K2_6`).
+Naming convention: For the model name in artifacts, it should be `_` separated by model family identifiers and replacing `.` for versioning (e.g. `Qwen3_4b`, `Qwen3_6_35b`, `Kimi_K2_5`).
 
 `--max-tokens-per-gpu` is a flag for training, whereas `--rollout-max-response-len` is a flag for rollouts.
 

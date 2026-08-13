@@ -82,7 +82,7 @@ Built-in subclasses:
 | `Qwen3_4B` | `Qwen/Qwen3-4B` | yes | slime-ready |
 | `GLM_4_7` | `zai-org/GLM-4.7` | yes | MoE; slime-ready |
 | `Llama2_7B` | `meta-llama/Llama-2-7b-hf` | no | torchrun-based workflows |
-| `Kimi_K2_5` | `moonshotai/Kimi-K2.5` | no | **overrides `download`**: HF snapshot + seeds transformers dynamic-module cache (INT4→BF16 is recipe-side, not `download`) |
+| `Kimi_K2_5` | `moonshotai/Kimi-K2.5` | no | downloads INT4 weights to the checkpoint volume; the Miles recipe creates the BF16 reference |
 
 **Rule of thumb for slime**: slime emits architecture fields as CLI flags,
 so it requires `architecture` to be a populated `ModelArchitecture(...)`.
@@ -138,7 +138,7 @@ Framework-agnostic `ModelConfig.download` overrides (e.g.
 
 Current tools:
 
-- `convert_kimi_int4_to_bf16.py` -- INT4 -> BF16 conversion for Kimi K2.5.
+- `ensure_glm_tokenizer.py` -- prepares the tokenizer files required by GLM.
 
 To add a new tool: drop the script in `modal_training_gym/tools/`, commit.
 It's automatically mounted via `add_local_dir(TOOLS_LOCAL_PATH,
@@ -184,7 +184,7 @@ remote_path=TOOLS_REMOTE_PATH, copy=True)` on every framework image.
 - Extra post-processing (format conversion, weight repacking, tokenizer
   tweaks) -> override `download` in the subclass. Reference
   `tools/<script>.py` via the canonical `/opt/training-gym/tools` path.
-  Do **not** put this logic in a framework launcher -- it keeps Kimi-style
+  Do **not** put this logic in a framework launcher -- it keeps model-specific
   quirks with the model spec, not the framework plumbing.
 
 ## Adding a new tutorial

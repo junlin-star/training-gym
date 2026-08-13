@@ -54,20 +54,13 @@ def _remove_if_invalid(path: str | Path) -> bool:
 @dataclass(config=ConfigDict(extra="forbid", arbitrary_types_allowed=True))
 class _KimiK2Recipe(MilesRecipe):
     gpu_type: str = "H200"
-    cloud: str | None = "gcp"
     model_setup_gpu: str | None = "H200"
     memory: tuple[int, int] = (1024, int(2 * 1024 * 1024))
-    image_run_commands: list[str] = field(
-        default_factory=lambda: [
-            "rm -rf /root/.cache/huggingface 2>/dev/null || true",
-        ]
-    )
     miles_model_name: str = "kimi-k25"
     environment: dict[str, str] = field(
         default_factory=lambda: {
             "PYTHONPATH": "/root/Megatron-LM/",
             "CUDA_DEVICE_MAX_CONNECTIONS": "1",
-            "NCCL_NET": "Socket",
             "NCCL_NVLS_ENABLE": "1",
             "NCCL_TIMEOUT": "3600",
             "OPEN_TRAINING_INT4_FAKE_QAT_FLAG": "1",
@@ -75,7 +68,7 @@ class _KimiK2Recipe(MilesRecipe):
         }
     )
 
-    actor_num_nodes: int = 32
+    actor_num_nodes: int = 16
     actor_num_gpus_per_node: int = 8
     colocate: bool = True
     update_weight_buffer_size: int = 4 * 512 * 1024 * 1024
@@ -95,6 +88,7 @@ class _KimiK2Recipe(MilesRecipe):
     rollout_max_response_len: int = 16384
     rollout_temperature: float = 1.0
     global_batch_size: int = 256
+    filter_zero_reward_samples: bool = True
     use_dynamic_global_batch_size: bool = True
 
     advantage_estimator: str = "grpo"
@@ -104,7 +98,7 @@ class _KimiK2Recipe(MilesRecipe):
     eps_clip: float = 0.2
     eps_clip_high: float = 0.28
     optimizer: str = "adam"
-    lr: float = 1e-6
+    lr: float = 1e-5
     lr_decay_style: str = "constant"
     weight_decay: float = 0.1
     adam_beta1: float = 0.9
@@ -113,22 +107,35 @@ class _KimiK2Recipe(MilesRecipe):
     overlap_cpu_optimizer_d2h_h2d: bool = True
     use_precision_aware_optimizer: bool = True
     use_distributed_optimizer: bool = True
-    train_env_vars: dict[str, str] = field(default_factory=lambda: {"NCCL_NET": "IB"})
+    lora_rank: int = 32
+    lora_alpha: int = 32
+    lora_dropout: float = 0.0
+    target_modules: str = (
+        "q_a_proj,kv_a_proj_with_mqa,o_proj,gate_proj,up_proj,down_proj"
+    )
+    experts_shared_outer_loras: bool = True
+    lora_base_cpu_backup: bool = True
+    no_gradient_accumulation_fusion: bool = True
+    sglang_lora_backend: str = "triton"
+    sglang_lora_use_virtual_experts: bool = True
+    use_tis: bool = True
 
     train_backend: str = "megatron"
     tensor_model_parallel_size: int = 8
     sequence_parallel: bool = True
-    pipeline_model_parallel_size: int = 8
-    context_parallel_size: int = 4
-    expert_model_parallel_size: int = 32
+    pipeline_model_parallel_size: int = 2
+    context_parallel_size: int = 8
+    expert_model_parallel_size: int = 64
     expert_tensor_parallel_size: int = 1
-    decoder_last_pipeline_num_layers: int = 5
+    decoder_last_pipeline_num_layers: int = 30
 
     recompute_granularity: str = "full"
     recompute_method: str = "uniform"
     recompute_num_layers: int = 1
     use_dynamic_batch_size: bool = True
     max_tokens_per_gpu: int = 4096
+    eval_interval: int = 20
+    n_samples_per_eval_prompt: int = 16
     attention_dropout: float = 0.0
     hidden_dropout: float = 0.0
     accumulate_allreduce_grads_in_fp32: bool = True
@@ -140,7 +147,9 @@ class _KimiK2Recipe(MilesRecipe):
     sglang_mem_fraction_static: float = 0.7
     sglang_ep_size: int = 8
     sglang_server_concurrency: int = 1024
-    use_miles_router: bool = True
+    sglang_cuda_graph_bs: list[int] = field(
+        default_factory=lambda: [1, 2, 4, 8] + list(range(16, 129, 8))
+    )
     use_rollout_routing_replay: bool = True
 
     def post_process_model(self) -> None:
@@ -173,9 +182,3 @@ class _KimiK2Recipe(MilesRecipe):
 class Kimi_K2_5_LoRA_Recipe(_KimiK2Recipe):
     hf_checkpoint: str = "/checkpoints/Kimi-K2.5-int4"
     ref_load: str = "/checkpoints/Kimi-K2.5-bf16"
-
-
-@dataclass(config=ConfigDict(extra="forbid", arbitrary_types_allowed=True))
-class Kimi_K2_6_LoRA_Recipe(_KimiK2Recipe):
-    hf_checkpoint: str = "/checkpoints/Kimi-K2.6-int4"
-    ref_load: str = "/checkpoints/Kimi-K2.6-bf16"

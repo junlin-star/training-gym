@@ -451,9 +451,9 @@ def parse_glm_response(text: str) -> ParsedResponse:
     )
 
 
-# ── Kimi K2 family (K2.5 / K2.6) ───────────────────────────────────────
+# ── Kimi K2.5 ──────────────────────────────────────────────────────────
 
-# Kimi K2 wraps tool calls in a token-delimited section; each call carries an
+# Kimi K2.5 wraps tool calls in a token-delimited section; each call carries an
 # id of the form ``functions.<name>:<index>`` and a JSON argument blob:
 #
 #   <|tool_calls_section_begin|>
@@ -474,7 +474,7 @@ _KIMI_CALL_RE = re.compile(
 
 
 def parse_kimi_k2_response(text: str) -> ParsedResponse:
-    """Parse Kimi K2 (K2.5 / K2.6) output into structured content.
+    """Parse Kimi K2.5 output into structured content.
 
     Handles ``<think>``/``</think>`` reasoning blocks, the Kimi chat-template
     delimiters (``<|im_end|>``, ``<|im_start|>assistant``), and the

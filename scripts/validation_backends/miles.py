@@ -9,7 +9,7 @@ from modal_training_gym.train_recipes.miles_recipe import MilesRecipe
 
 
 class DapoMath17kDataset(HuggingFaceDataset):
-    """DAPO-Math-17k prompts, as used by the Kimi multinode tutorials."""
+    """DAPO-Math-17k prompts for Miles math-RL validation."""
 
     hf_repo = "zhuzilin/dapo-math-17k"
     input_column = ""
