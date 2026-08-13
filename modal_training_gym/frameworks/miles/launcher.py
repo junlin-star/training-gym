@@ -69,7 +69,6 @@ from modal_training_gym.frameworks.miles.modal_helpers.utils import (
 )
 
 MILES_ROOT = "/root/miles"
-SYSTEM_LIB_DIR = "/usr/lib/x86_64-linux-gnu"
 # v0.8.0+ makes per-task CPU/memory requests configurable via enforcement
 # policies ("limit"/"ignore"), letting sandboxes burst on Modal and bill by
 # actual CPU-/RAM-second usage instead of over-provisioning a static reservation.
@@ -190,7 +189,6 @@ def _compose_ld_library_path() -> str:
             lib_dir = os.path.join(package_dir, "lib")
             if os.path.exists(os.path.join(lib_dir, "libnccl.so.2")):
                 parts.append(lib_dir)
-    parts.append(SYSTEM_LIB_DIR)
     for part in os.environ.get("LD_LIBRARY_PATH", "").split(":"):
         if part and part not in parts:
             parts.append(part)
@@ -208,12 +206,11 @@ def build_ray_runtime_env(
     """Runtime env for the Ray job that runs miles.
 
     Ray workers do not pick up the container's linker path on their own, and
-    without it the Megatron actor can resolve a libibverbs that does not match
-    the image's libmlx5 and die importing mooncake. A wheel-shipped NCCL is put
-    first so SGLang's ctypes loader uses the same NCCL as PyTorch, followed by
-    the system lib dir to keep libibverbs and libmlx5 matched. The rest is read
-    from the container, so paths supplied by Modal or the image are carried
-    through. Composing it here rather than in an ``image_env`` entry
+    without it SGLang's ctypes loader can resolve a different NCCL than PyTorch.
+    A wheel-shipped NCCL is put first so both use the same version. The rest is
+    read from the container, so paths supplied by Modal or the image are carried
+    through and its RDMA libraries keep their native loader order. Composing it
+    here rather than in an ``image_env`` entry
     keeps it independent of whether the base image exports ``LD_LIBRARY_PATH``
     in its own ``ENV``: a Dockerfile ``$LD_LIBRARY_PATH`` expands to an empty
     string when it does not, which would drop those dirs and leave a trailing
@@ -223,8 +220,9 @@ def build_ray_runtime_env(
     env_vars: dict[str, str] = {
         "no_proxy": f"127.0.0.1,{head_addr}",
         "MASTER_ADDR": head_addr,
-        "LD_LIBRARY_PATH": _compose_ld_library_path(),
     }
+    if ld_library_path := _compose_ld_library_path():
+        env_vars["LD_LIBRARY_PATH"] = ld_library_path
     env_vars.update(extra_env or {})
     env_vars.update(wandb_env)
     env_vars.update(environment)
