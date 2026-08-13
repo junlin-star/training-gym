@@ -66,6 +66,7 @@ class _KimiK2Recipe(MilesRecipe):
         default_factory=lambda: {
             "PYTHONPATH": "/root/Megatron-LM/",
             "CUDA_DEVICE_MAX_CONNECTIONS": "1",
+            "NCCL_NET": "Socket",
             "NCCL_NVLS_ENABLE": "1",
             "NCCL_TIMEOUT": "3600",
             "OPEN_TRAINING_INT4_FAKE_QAT_FLAG": "1",
@@ -111,6 +112,7 @@ class _KimiK2Recipe(MilesRecipe):
     overlap_cpu_optimizer_d2h_h2d: bool = True
     use_precision_aware_optimizer: bool = True
     use_distributed_optimizer: bool = True
+    train_env_vars: dict[str, str] = field(default_factory=lambda: {"NCCL_NET": "IB"})
 
     train_backend: str = "megatron"
     tensor_model_parallel_size: int = 8
