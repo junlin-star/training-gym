@@ -167,7 +167,7 @@ class RoleRecorder:
                 if timing is None:
                     self.phases[name] = {
                         "count": 1,
-                        "total_duration_s": duration,
+                        "busy_duration_s": duration,
                         "longest_duration_s": duration,
                         "first_start_s": start - self._t0,
                         "last_end_s": end - self._t0,
@@ -179,7 +179,7 @@ class RoleRecorder:
                     )
                 elif timing:
                     timing["count"] += 1
-                    timing["total_duration_s"] += duration
+                    timing["busy_duration_s"] += duration
                     timing["longest_duration_s"] = max(
                         timing["longest_duration_s"], duration
                     )
@@ -209,15 +209,15 @@ class RoleRecorder:
                 with self._lock:
                     snapshot, self._snapshot = self._snapshot, None
                 if snapshot is not None and snapshot["phases"] != self._posted_phases:
-                    result = status_reporter.post_item_result(dict(snapshot))
-                    if result == status_reporter.PostResult.OK:
+                    result, failure = status_reporter.post_item_result(dict(snapshot))
+                    if result == status_reporter._PostResult.OK:
                         self._last_post_not_found = False
                         self._posted_phases = snapshot["phases"]
                         self._post_retries = 0
                         self._auth_rejections = 0
                         with _UNSUPPORTED_LOCK:
                             _NOT_FOUND_COUNT = 0
-                    elif result == status_reporter.PostResult.NOT_FOUND:
+                    elif failure == status_reporter._PostResultFailure.NOT_FOUND:
                         self._last_post_not_found = True
                         should_report = False
                         with _UNSUPPORTED_LOCK:
@@ -234,7 +234,7 @@ class RoleRecorder:
                                 "redeploy the dashboard to record it."
                             )
                             print(message, flush=True)
-                    elif result == status_reporter.PostResult.AUTH_FAILED:
+                    elif failure == status_reporter._PostResultFailure.AUTH_FAILED:
                         self._auth_rejections += 1
                         if self._auth_rejections >= AUTH_REJECTION_LATCH_THRESHOLD:
                             self._disable(
@@ -245,13 +245,13 @@ class RoleRecorder:
                         else:
                             self._requeue_snapshot(snapshot)
                             self._snapshot_ready.set()
-                    elif result == status_reporter.PostResult.PERMANENT:
+                    elif failure == status_reporter._PostResultFailure.PERMANENT:
                         self._disable(
                             "permanent",
                             "WARNING: substep timing upload rejected with a "
                             "permanent client error; dropping snapshot.",
                         )
-                    elif result == status_reporter.PostResult.FAILED:
+                    elif failure == status_reporter._PostResultFailure.RETRYABLE:
                         self._auth_rejections = 0
                         self._post_retries += 1
                         if self._post_retries >= MAX_POST_RETRIES:

@@ -11,6 +11,15 @@ from modal_training_gym.common import timing_recorder
 from modal_training_gym.common.timing_recorder import RoleRecorder
 
 
+def _post_result(failure: str | None):
+    if failure is None:
+        return status_reporter._PostResult.OK, None
+    return (
+        status_reporter._PostResult.FAILED,
+        status_reporter._PostResultFailure(failure),
+    )
+
+
 @pytest.fixture(autouse=True)
 def _reset_timing_mode_cache():
     timing_recorder.reset_timing_mode_cache()
@@ -28,12 +37,9 @@ def test_status_reporter_retries_throttled_errors(monkeypatch):
             "urlopen",
             lambda request, timeout, code=code: raise_http_error(code),
         )
-        assert (
-            status_reporter._post(
-                {"_url": "https://dashboard.test", "payload": "value"}
-            )
-            == "failed"
-        )
+        assert status_reporter._post(
+            {"_url": "https://dashboard.test", "payload": "value"}
+        ) == _post_result("retryable")
 
     for code in (401, 403):
         monkeypatch.setattr(
@@ -41,22 +47,18 @@ def test_status_reporter_retries_throttled_errors(monkeypatch):
             "urlopen",
             lambda request, timeout, code=code: raise_http_error(code),
         )
-        assert (
-            status_reporter._post(
-                {"_url": "https://dashboard.test", "payload": "value"}
-            )
-            == "auth_failed"
-        )
+        assert status_reporter._post(
+            {"_url": "https://dashboard.test", "payload": "value"}
+        ) == _post_result("auth_failed")
 
     monkeypatch.setattr(
         status_reporter,
         "urlopen",
         lambda request, timeout: raise_http_error(422),
     )
-    assert (
-        status_reporter._post({"_url": "https://dashboard.test", "payload": "value"})
-        == "permanent"
-    )
+    assert status_reporter._post(
+        {"_url": "https://dashboard.test", "payload": "value"}
+    ) == _post_result("permanent")
 
 
 def test_auth_rejections_latch_lane(monkeypatch):
@@ -69,7 +71,7 @@ def test_auth_rejections_latch_lane(monkeypatch):
     def post_item_result(item):
         posted.append(item)
         done.set()
-        return "auth_failed"
+        return _post_result("auth_failed")
 
     monkeypatch.setattr(status_reporter, "post_item_result", post_item_result)
     recorder = RoleRecorder("driver", 0)
@@ -91,14 +93,16 @@ def test_transient_failures_do_not_latch_auth(monkeypatch):
     monkeypatch.setattr(timing_recorder, "MIN_PUBLISH_INTERVAL_S", 0.0)
     monkeypatch.setenv("TRAINING_GYM_FRAMEWORK_STATUS_URL", "https://dashboard.test")
     monkeypatch.setenv("TRAINING_GYM_TRAINING_RUN_ID", "auth-run")
-    attempts = iter(["auth_failed", "failed", "auth_failed", "failed", "auth_failed"])
+    attempts = iter(
+        ["auth_failed", "retryable", "auth_failed", "retryable", "auth_failed"]
+    )
     posted = []
     done = threading.Event()
 
     def post_item_result(item):
         posted.append(item)
         done.set()
-        return next(attempts)
+        return _post_result(next(attempts))
 
     monkeypatch.setattr(status_reporter, "post_item_result", post_item_result)
     recorder = RoleRecorder("driver", 0)
@@ -115,14 +119,14 @@ def test_success_resets_auth_rejections(monkeypatch):
     monkeypatch.setattr(timing_recorder, "MIN_PUBLISH_INTERVAL_S", 0.0)
     monkeypatch.setenv("TRAINING_GYM_FRAMEWORK_STATUS_URL", "https://dashboard.test")
     monkeypatch.setenv("TRAINING_GYM_TRAINING_RUN_ID", "auth-run")
-    attempts = iter(["auth_failed", "ok", "auth_failed", "ok"])
+    attempts = iter(["auth_failed", None, "auth_failed", None])
     posted = []
     done = threading.Event()
 
     def post_item_result(item):
         posted.append(item)
         done.set()
-        return next(attempts)
+        return _post_result(next(attempts))
 
     monkeypatch.setattr(status_reporter, "post_item_result", post_item_result)
     recorder = RoleRecorder("driver", 0)
@@ -151,7 +155,7 @@ def test_missing_timing_route_latches_off_and_warns(monkeypatch, capsys):
     def post_item_result(item):
         posted.append(item)
         first_post.set()
-        return "not_found"
+        return _post_result("not_found")
 
     monkeypatch.setattr(status_reporter, "post_item_result", post_item_result)
 
@@ -202,14 +206,14 @@ def test_failed_snapshot_retries_without_close_duplicate(monkeypatch):
     monkeypatch.setenv("TRAINING_GYM_TRAINING_RUN_ID", "run-1")
 
     posted = []
-    attempts = iter(["failed", "ok"])
+    attempts = iter(["retryable", None])
     second_post = threading.Event()
 
     def post_item_result(item):
         posted.append(item)
         if len(posted) == 2:
             second_post.set()
-        return next(attempts)
+        return _post_result(next(attempts))
 
     monkeypatch.setattr(status_reporter, "post_item_result", post_item_result)
 
@@ -235,7 +239,7 @@ def test_closing_lane_retries_final_snapshot_after_exhaustion(monkeypatch):
     first_post = threading.Event()
     release_first_post = threading.Event()
     delivered = threading.Event()
-    attempts = iter(["failed", "failed", "ok"])
+    attempts = iter(["retryable", "retryable", None])
 
     def post_item_result(item):
         posted.append(item)
@@ -243,9 +247,9 @@ def test_closing_lane_retries_final_snapshot_after_exhaustion(monkeypatch):
             first_post.set()
             release_first_post.wait(timeout=1)
         result = next(attempts)
-        if result == "ok":
+        if result is None:
             delivered.set()
-        return result
+        return _post_result(result)
 
     monkeypatch.setattr(status_reporter, "post_item_result", post_item_result)
 
@@ -277,7 +281,7 @@ def test_closing_lane_retry_deadline_bounds_shutdown(monkeypatch):
     def post_item_result(item):
         first_post.set()
         release_first_post.wait(timeout=1)
-        return "failed"
+        return _post_result("retryable")
 
     monkeypatch.setattr(status_reporter, "post_item_result", post_item_result)
 
@@ -309,7 +313,7 @@ def test_preloop_lanes_accumulate_on_one_recorder(monkeypatch):
     def post_item_result(item):
         posted.append(item)
         posted_event.set()
-        return "ok"
+        return _post_result(None)
 
     monkeypatch.setattr(status_reporter, "post_item_result", post_item_result)
 
@@ -351,7 +355,7 @@ def test_permanent_rejection_latches_recorder(monkeypatch, capsys):
     def post_item_result(item):
         posted.append(item)
         first_post.set()
-        return "permanent"
+        return _post_result("permanent")
 
     monkeypatch.setattr(status_reporter, "post_item_result", post_item_result)
 

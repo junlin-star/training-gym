@@ -38,11 +38,15 @@ _DEFAULT_TIMEOUT_SECONDS = 2.0
 _STATUS_TOKEN_ENV = "TRAINING_GYM_FRAMEWORK_STATUS_TOKEN"
 
 
-class PostResult(str, Enum):
+class _PostResult(str, Enum):
     OK = "ok"  # The dashboard accepted the POST.
+    FAILED = "failed"  # The POST did not succeed.
+
+
+class _PostResultFailure(str, Enum):
     NOT_FOUND = "not_found"  # HTTP 404/405: dashboard predates the timing endpoint.
     AUTH_FAILED = "auth_failed"  # HTTP 401/403: dashboard authentication failed.
-    FAILED = "failed"  # Retryable transport or server failure.
+    RETRYABLE = "retryable"  # Transport, timeout, or server failure; retrying may help.
     PERMANENT = "permanent"  # Other 4xx: retrying cannot fix the request.
 
 
@@ -87,7 +91,9 @@ def _worker() -> None:
             _QUEUE.task_done()
 
 
-def _post(item: dict[str, Any]) -> PostResult:
+def _post(
+    item: dict[str, Any],
+) -> tuple[_PostResult, _PostResultFailure | None]:
     url = item.pop("_url", "")
     timeout = float(
         item.pop("_timeout", _DEFAULT_TIMEOUT_SECONDS) or _DEFAULT_TIMEOUT_SECONDS
@@ -96,7 +102,7 @@ def _post(item: dict[str, Any]) -> PostResult:
     # enqueue_item callers); don't re-resolve it here.
     token = str(item.pop("_token", "") or "").strip()
     if not url:
-        return PostResult.FAILED
+        return _PostResult.FAILED, _PostResultFailure.RETRYABLE
     body = json.dumps(item, default=str).encode("utf-8")
 
     from modal_training_gym.common.config import modal_proxy_auth_headers
@@ -120,17 +126,17 @@ def _post(item: dict[str, Any]) -> PostResult:
     except HTTPError as exc:
         # A 404/405 means this dashboard was deployed before the timing endpoint existed.
         if exc.code in {404, 405}:
-            return PostResult.NOT_FOUND
+            return _PostResult.FAILED, _PostResultFailure.NOT_FOUND
         if 400 <= exc.code < 500:
             if exc.code in {401, 403}:
-                return PostResult.AUTH_FAILED
+                return _PostResult.FAILED, _PostResultFailure.AUTH_FAILED
             if exc.code in {408, 425, 429}:
-                return PostResult.FAILED
-            return PostResult.PERMANENT
-        return PostResult.FAILED
+                return _PostResult.FAILED, _PostResultFailure.RETRYABLE
+            return _PostResult.FAILED, _PostResultFailure.PERMANENT
+        return _PostResult.FAILED, _PostResultFailure.RETRYABLE
     except (OSError, URLError):
-        return PostResult.FAILED
-    return PostResult.OK
+        return _PostResult.FAILED, _PostResultFailure.RETRYABLE
+    return _PostResult.OK, None
 
 
 def enqueue_item(item: dict[str, Any]) -> None:
@@ -147,10 +153,12 @@ def enqueue_item(item: dict[str, Any]) -> None:
 
 
 def post_item(item: dict[str, Any]) -> bool:
-    return _post(item) == PostResult.OK
+    return _post(item)[0] == _PostResult.OK
 
 
-def post_item_result(item: dict[str, Any]) -> PostResult:
+def post_item_result(
+    item: dict[str, Any],
+) -> tuple[_PostResult, _PostResultFailure | None]:
     return _post(item)
 
 
