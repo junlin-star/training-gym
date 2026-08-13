@@ -3,7 +3,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Any, Awaitable
 
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field
 
 from modal_training_gym.common.status import SlimeStatus
 from modal_training_gym.common.timing_recorder import (
@@ -33,9 +33,11 @@ class Role(str, Enum):
 
 class PhaseTiming(BaseModel):
     count: int
-    # Sum of invocation durations; retained for aggregate work time, unlike
-    # the wall-clock span between first_start_s and last_end_s.
-    total_duration_s: float
+    # Sum of invocation durations; retained as busy time, unlike the wall-clock
+    # span between first_start_s and last_end_s. Accept the old key for stored records.
+    busy_duration_s: float = Field(
+        validation_alias=AliasChoices("busy_duration_s", "total_duration_s")
+    )
     # Longest single invocation; retained to expose per-invocation outliers.
     longest_duration_s: float
     # Together these define the wall-clock span
@@ -48,7 +50,7 @@ class PhaseTiming(BaseModel):
 
     @property
     def average_duration_s(self) -> float:
-        return self.total_duration_s / self.count if self.count else 0.0
+        return self.busy_duration_s / self.count if self.count else 0.0
 
 
 class RoleTimingRecord(BaseModel):
@@ -139,14 +141,14 @@ def measured_run_times(
             role = record["role"]
             for name, phase in record["phases"].items():
                 if role == Role.DRIVER.value and name not in not_in_step:
-                    step_duration += phase["total_duration_s"]
+                    step_duration += phase["busy_duration_s"]
                 if role == Role.DRIVER.value:
                     key = name
                 else:
                     key = f"{name} ({role})"
                 substeps[key] = {
                     "start": lane_start + phase["first_start_s"],
-                    "duration_s": phase["total_duration_s"],
+                    "duration_s": phase["busy_duration_s"],
                 }
         if not substeps:
             continue
@@ -157,7 +159,10 @@ def measured_run_times(
 
 
 def load_run(training_run_id: str) -> dict[int | None, list[dict[str, Any]]]:
-    records = vol_list(RoleTimingRecord.store(training_run_id))
+    records = [
+        RoleTimingRecord.model_validate(record).model_dump(mode="json")
+        for record in vol_list(RoleTimingRecord.store(training_run_id))
+    ]
     grouped: dict[int | None, list[dict[str, Any]]] = {}
     for record in records:
         grouped.setdefault(record["rollout_id"], []).append(record)
@@ -171,6 +176,10 @@ async def load_run_async(
         RoleTimingRecord.store(training_run_id),
         is_async=True,
     )
+    records = [
+        RoleTimingRecord.model_validate(record).model_dump(mode="json")
+        for record in records
+    ]
     grouped: dict[int | None, list[dict[str, Any]]] = {}
     for record in records:
         grouped.setdefault(record["rollout_id"], []).append(record)
@@ -207,7 +216,7 @@ def legacy_run_to_records(
             rel = start - lane_start
             phases[_LEGACY_RENAMES.get(name, name)] = {
                 "count": 1,
-                "total_duration_s": round(duration, 6),
+                "busy_duration_s": round(duration, 6),
                 "longest_duration_s": round(duration, 6),
                 "first_start_s": round(rel, 6),
                 "last_end_s": round(rel + duration, 6),

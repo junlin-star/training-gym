@@ -23,7 +23,8 @@ export function collect(timings) {
       if (!Number.isFinite(laneStart)) continue;
       for (const [name, phase] of Object.entries(lane?.phases || {})) {
         const count = Number(phase?.count) || 0;
-        const total = Number(phase?.total_duration_s) || 0;
+        const total =
+          Number(phase?.busy_duration_s ?? phase?.total_duration_s) || 0;
         if (!count || total < NEGLIGIBLE_WORK_S) continue;
         const where = {
           rolloutId,

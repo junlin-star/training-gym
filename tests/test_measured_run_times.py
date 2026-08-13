@@ -7,7 +7,7 @@ from modal_training_gym.common.step_timing import RoleTimingRecord
 def _phase(start: float, end: float, *, invocations=None) -> dict:
     return {
         "count": 1,
-        "total_duration_s": end - start,
+        "busy_duration_s": end - start,
         "longest_duration_s": end - start,
         "first_start_s": start,
         "last_end_s": end,
@@ -49,3 +49,25 @@ def test_role_timing_record_ignores_legacy_created_at():
     )
 
     assert "created_at" not in record.model_dump()
+
+
+def test_phase_timing_accepts_legacy_total_duration_key():
+    record = RoleTimingRecord.model_validate(
+        {
+            "training_run_id": "run",
+            "role": "driver",
+            "phases": {
+                "train_models": {
+                    "count": 1,
+                    "total_duration_s": 2.0,
+                    "longest_duration_s": 2.0,
+                    "first_start_s": 0.0,
+                    "last_end_s": 2.0,
+                }
+            },
+        }
+    )
+
+    phase = record.phases["train_models"]
+    assert phase.busy_duration_s == 2.0
+    assert "total_duration_s" not in phase.model_dump()
