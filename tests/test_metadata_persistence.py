@@ -13,14 +13,17 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from types import SimpleNamespace
 
 import pytest
+from modal.exception import Error
 
 from modal_training_gym.common import run as run_mod
 from modal_training_gym.common.framework import Framework
 from modal_training_gym.common.train_result import TrainResult
 from modal_training_gym.common.training_rollout import TrainingRolloutResult
 from modal_training_gym.utils.metadata import MetadataStore
+from modal_training_gym.utils import metadata
 
 
 @pytest.mark.parametrize("fw", list(Framework))
@@ -69,6 +72,27 @@ def test_rollout_async_save_survives_unmounted_volume(fake_volume):
 def test_train_result_payload_is_json_serializable(fw):
     payload = TrainResult(app_name="a", framework=fw, training_run_id="t")._to_dict()
     assert json.loads(json.dumps(payload))["framework"] == fw.value
+
+
+def test_vol_list_raises_but_failure_aware_variant_reports_error(monkeypatch):
+    class FailingVolume:
+        def reload(self):
+            pass
+
+        def iterdir(self, _path):
+            return [SimpleNamespace(path="store/item.json")]
+
+        def read_file(self, _path):
+            raise Error("volume read failed")
+
+    monkeypatch.setattr(metadata, "_metadata_volume", lambda: FailingVolume())
+
+    with pytest.raises(Error, match="volume read failed"):
+        metadata.vol_list("store")
+
+    records, had_failures = metadata.vol_list_with_failures("store")
+    assert records == []
+    assert had_failures is True
 
 
 @pytest.mark.skipif(

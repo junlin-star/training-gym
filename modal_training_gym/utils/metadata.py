@@ -113,7 +113,7 @@ def _canonical_items_for(
 
     if is_async:
 
-        async def _run() -> tuple[list[dict[str, Any]], bool]:
+        async def _run() -> list[dict[str, Any]]:
             if item_store is None:
                 return []
             return _keep(await vol_list(item_store, is_async=True))
@@ -251,15 +251,19 @@ def vol_list(
     *,
     is_async: bool = False,
 ) -> list[dict[str, Any]] | Awaitable[list[dict[str, Any]]]:
-    result = vol_list_with_failures(store, is_async=is_async)
+    result = _vol_list_core(store, is_async=is_async)
     if is_async:
 
         async def _run() -> list[dict[str, Any]]:
-            records, _had_failures = await result
+            records, failure = await result
+            if failure is not None:
+                raise failure
             return records
 
         return _run()
-    records, _had_failures = result
+    records, failure = result
+    if failure is not None:
+        raise failure
     return records
 
 
@@ -268,12 +272,32 @@ def vol_list_with_failures(
     *,
     is_async: bool = False,
 ) -> tuple[list[dict[str, Any]], bool] | Awaitable[tuple[list[dict[str, Any]], bool]]:
+    result = _vol_list_core(store, is_async=is_async)
+    if is_async:
+
+        async def _run() -> tuple[list[dict[str, Any]], bool]:
+            records, failure = await result
+            return records, failure is not None
+
+        return _run()
+    records, failure = result
+    return records, failure is not None
+
+
+def _vol_list_core(
+    store: MetadataStore | str,
+    *,
+    is_async: bool = False,
+) -> (
+    tuple[list[dict[str, Any]], Exception | None]
+    | Awaitable[tuple[list[dict[str, Any]], Exception | None]]
+):
     from modal.exception import Error, NotFoundError
 
     vol = _metadata_volume()
     if is_async:
 
-        async def _run() -> list[dict[str, Any]]:
+        async def _run() -> tuple[list[dict[str, Any]], Exception | None]:
             await _safe_reload(vol, is_async=True)
 
             async def _read(path: str) -> dict[str, Any] | None:
@@ -292,10 +316,10 @@ def vol_list_with_failures(
                     ]
                     break
                 except (FileNotFoundError, NotFoundError):
-                    return [], False
+                    return [], None
                 except Error as exc:
                     if "rate limit" not in str(exc).lower() or attempt == 2:
-                        raise
+                        return [], exc
                     await asyncio.sleep(2**attempt)
             else:
                 paths = []
@@ -305,8 +329,8 @@ def vol_list_with_failures(
             failures = [result for result in results if isinstance(result, Exception)]
             records = [result for result in results if isinstance(result, dict)]
             if failures:
-                return records, True
-            return records, False
+                return records, failures[0]
+            return records, None
 
         return _run()
 
@@ -320,16 +344,16 @@ def vol_list_with_failures(
                 if entry.path.endswith(".json"):
                     data = b"".join(vol.read_file(entry.path))
                     results.append(json.loads(data))
-            return results, False
+            return results, None
         except (FileNotFoundError, NotFoundError):
-            return results, False
+            return results, None
         except Error as exc:
             if "rate limit" in str(exc).lower() and attempt < 2:
                 _time.sleep(2**attempt)
                 results = []
                 continue
-            return results, True
-    return results, False
+            return results, exc
+    return results, None
 
 
 def vol_list_metadata(
@@ -393,7 +417,7 @@ def vol_list_metadata_with_failures(
         return entries, False
     except (FileNotFoundError, NotFoundError):
         return [], False
-    except Exception:
+    except Error:
         return [], True
 
 
