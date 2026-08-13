@@ -80,7 +80,7 @@ def test_auth_rejections_latch_lane(monkeypatch):
     if recorder._poster is not None:
         recorder._poster.join(timeout=1)
     assert len(posted) == timing_recorder.AUTH_REJECTION_LATCH_THRESHOLD
-    assert recorder._auth_rejected
+    assert recorder._disabled_reason == "auth"
 
     with recorder.phase("forward_backward"):
         pass
@@ -108,7 +108,7 @@ def test_transient_failures_do_not_latch_auth(monkeypatch):
     recorder.__exit__(None, None, None)
     if recorder._poster is not None:
         recorder._poster.join(timeout=1)
-    assert not recorder._auth_rejected
+    assert recorder._disabled_reason is None
 
 
 def test_success_resets_auth_rejections(monkeypatch):
@@ -133,7 +133,7 @@ def test_success_resets_auth_rejections(monkeypatch):
     if recorder._poster is not None:
         recorder._poster.join(timeout=1)
     assert recorder._auth_rejections == 0
-    assert not recorder._auth_rejected
+    assert recorder._disabled_reason is None
 
 
 def test_missing_timing_route_latches_off_and_warns(monkeypatch, capsys):
@@ -366,5 +366,5 @@ def test_permanent_rejection_latches_recorder(monkeypatch, capsys):
         recorder._poster.join(timeout=1)
 
     assert len(posted) == 1
-    assert recorder._permanent_rejected
+    assert recorder._disabled_reason == "permanent"
     assert capsys.readouterr().out.count("permanent client error") == 1

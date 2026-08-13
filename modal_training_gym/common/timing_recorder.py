@@ -103,14 +103,10 @@ class RoleRecorder:
         self._snapshot_ready = threading.Event()
         self._poster: threading.Thread | None = None
         self._closed = False
-        self._closing = False
         self._closing_deadline: float | None = None
         self._post_retries = 0
         self._auth_rejections = 0
-        self._auth_rejected = False
-        self._auth_rejection_reported = False
-        self._permanent_reported = False
-        self._permanent_rejected = False
+        self._disabled_reason: str | None = None
         self._persistent = persistent
 
     def __enter__(self) -> "RoleRecorder":
@@ -130,13 +126,28 @@ class RoleRecorder:
     def _close(self) -> None:
         if self._closed:
             return
-        self._closing = True
         self._closing_deadline = time.monotonic() + TIMING_TIMEOUT_SECONDS
         self._publish_on_exit()
         if self._poster is not None and self._poster not in _CLOSED_POSTERS:
             _CLOSED_POSTERS.append(self._poster)
         self._closed = True
         self._snapshot_ready.set()
+
+    def _disable(self, reason: str, warning: str) -> None:
+        with self._lock:
+            if self._disabled_reason is not None:
+                return
+            self._disabled_reason = reason
+        print(warning, flush=True)
+
+    def _remaining_closing_s(self) -> float:
+        deadline = self._closing_deadline
+        return deadline - time.monotonic() if deadline is not None else 0.0
+
+    def _requeue_snapshot(self, snapshot: dict[str, object]) -> None:
+        with self._lock:
+            if self._snapshot is None:
+                self._snapshot = snapshot
 
     @contextmanager
     def phase(self, name: str) -> Iterator[None]:
@@ -226,32 +237,20 @@ class RoleRecorder:
                     elif result == status_reporter.PostResult.AUTH_FAILED:
                         self._auth_rejections += 1
                         if self._auth_rejections >= AUTH_REJECTION_LATCH_THRESHOLD:
-                            with self._lock:
-                                self._auth_rejected = True
-                                should_report = not self._auth_rejection_reported
-                                self._auth_rejection_reported = True
-                            if should_report:
-                                print(
-                                    "WARNING: substep timing upload authentication "
-                                    "failed repeatedly; disabling this timing lane.",
-                                    flush=True,
-                                )
+                            self._disable(
+                                "auth",
+                                "WARNING: substep timing upload authentication "
+                                "failed repeatedly; disabling this timing lane.",
+                            )
                         else:
-                            with self._lock:
-                                if self._snapshot is None:
-                                    self._snapshot = snapshot
+                            self._requeue_snapshot(snapshot)
                             self._snapshot_ready.set()
                     elif result == status_reporter.PostResult.PERMANENT:
-                        with self._lock:
-                            self._permanent_rejected = True
-                            should_report = not self._permanent_reported
-                            self._permanent_reported = True
-                        if should_report:
-                            print(
-                                "WARNING: substep timing upload rejected with a "
-                                "permanent client error; dropping snapshot.",
-                                flush=True,
-                            )
+                        self._disable(
+                            "permanent",
+                            "WARNING: substep timing upload rejected with a "
+                            "permanent client error; dropping snapshot.",
+                        )
                     elif result == status_reporter.PostResult.FAILED:
                         self._auth_rejections = 0
                         self._post_retries += 1
@@ -267,23 +266,13 @@ class RoleRecorder:
                                     "authentication or connectivity.",
                                     flush=True,
                                 )
-                            if self._closing:
-                                deadline = self._closing_deadline
-                                remaining = (
-                                    deadline - time.monotonic()
-                                    if deadline is not None
-                                    else 0.0
-                                )
-                                if remaining > 0:
-                                    with self._lock:
-                                        if self._snapshot is None:
-                                            self._snapshot = snapshot
-                                    time.sleep(min(MAX_RETRY_BACKOFF_S, remaining))
-                                    self._snapshot_ready.set()
+                            remaining = self._remaining_closing_s()
+                            if remaining > 0:
+                                self._requeue_snapshot(snapshot)
+                                time.sleep(min(MAX_RETRY_BACKOFF_S, remaining))
+                                self._snapshot_ready.set()
                         else:
-                            with self._lock:
-                                if self._snapshot is None:
-                                    self._snapshot = snapshot
+                            self._requeue_snapshot(snapshot)
                             time.sleep(
                                 min(
                                     MAX_RETRY_BACKOFF_S,
@@ -296,11 +285,8 @@ class RoleRecorder:
                         _CLOSED_POSTERS.remove(self._poster)
                     return
             except Exception:
-                if self._closing:
-                    deadline = self._closing_deadline
-                    remaining = (
-                        deadline - time.monotonic() if deadline is not None else 0.0
-                    )
+                remaining = self._remaining_closing_s()
+                if self._closing_deadline is not None:
                     if remaining <= 0:
                         return
                     time.sleep(min(0.05, remaining))
@@ -309,7 +295,7 @@ class RoleRecorder:
 
     def _publish(self, force: bool = False) -> None:
         with self._lock:
-            if self._permanent_rejected or self._auth_rejected or not self.phases:
+            if self._disabled_reason is not None or not self.phases:
                 return
         if timing_mode() == "off":
             return
