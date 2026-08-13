@@ -121,6 +121,7 @@ class _KimiK2Recipe(MilesRecipe):
     no_gradient_accumulation_fusion: bool = True
     sglang_lora_backend: str = "triton"
     sglang_lora_use_virtual_experts: bool = True
+    sglang_moe_runner_backend: str = "triton"
     use_tis: bool = True
 
     train_backend: str = "megatron"
