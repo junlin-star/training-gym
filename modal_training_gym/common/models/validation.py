@@ -11,6 +11,7 @@ from dataclasses import dataclass
 
 from ..framework import Framework
 from .base import ModelConfig
+from .inkling_small import Inkling_Small
 from .kimi_k2_5 import Kimi_K2_5
 from .kimi_k2_6 import Kimi_K2_6
 from .qwen3_0_6b import Qwen3_0_6B
@@ -91,4 +92,5 @@ VALIDATION_CONFIGS: set[_ValidationConfig] = {
     # name. Flipping run_on_pr is the only change needed to gate PRs on one.
     _ValidationConfig("Kimi-K2.5", Kimi_K2_5, Framework.MILES, run_on_pr=False),
     _ValidationConfig("Kimi-K2.6", Kimi_K2_6, Framework.MILES, run_on_pr=False),
+    _ValidationConfig("Inkling-Small", Inkling_Small, Framework.MILES, run_on_pr=False),
 }

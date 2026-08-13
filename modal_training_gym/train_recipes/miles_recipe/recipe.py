@@ -797,6 +797,9 @@ class MilesRecipe(BaseTrainRecipe):
 
     @classmethod
     def get_base_recipe(cls, model_config: ModelConfig) -> "MilesRecipe | None":
+        from modal_training_gym.train_recipes.miles_recipe.inkling import (
+            Inkling_Small_Recipe,
+        )
         from modal_training_gym.train_recipes.miles_recipe.kimi import (
             Kimi_K2_5_LoRA_Recipe,
             Kimi_K2_6_LoRA_Recipe,
@@ -806,6 +809,8 @@ class MilesRecipe(BaseTrainRecipe):
             return Kimi_K2_5_LoRA_Recipe()
         if model_config.model_name == "moonshotai/Kimi-K2.6":
             return Kimi_K2_6_LoRA_Recipe()
+        if model_config.model_name == "thinkingmachines/Inkling-Small":
+            return Inkling_Small_Recipe()
         return None
 
     def download_model(self) -> None:
