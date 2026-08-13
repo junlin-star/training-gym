@@ -71,6 +71,7 @@ class _KimiK2Recipe(MilesRecipe):
     actor_num_nodes: int = 16
     actor_num_gpus_per_node: int = 8
     colocate: bool = True
+    use_miles_router: bool = True
     update_weight_buffer_size: int = 4 * 512 * 1024 * 1024
     model_name: str = "kimi_k25"
 
