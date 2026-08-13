@@ -69,6 +69,7 @@ from modal_training_gym.frameworks.miles.modal_helpers.utils import (
 )
 
 MILES_ROOT = "/root/miles"
+MILES_RDMA_LIB_DIR = "/opt/training-gym/rdma"
 # v0.8.0+ makes per-task CPU/memory requests configurable via enforcement
 # policies ("limit"/"ignore"), letting sandboxes burst on Modal and bill by
 # actual CPU-/RAM-second usage instead of over-provisioning a static reservation.
@@ -159,6 +160,12 @@ def _build_miles_base_image(miles: MilesRecipe) -> Image:
             *_REPORTING_PATCH_COMMANDS,
         )
     )
+    if miles.total_nodes > 1:
+        image = image.run_commands(
+            f"mkdir -p {MILES_RDMA_LIB_DIR} && "
+            f"cp -L /usr/lib/x86_64-linux-gnu/libibverbs.so.1 {MILES_RDMA_LIB_DIR}/ && "
+            f"cp -L /usr/lib/x86_64-linux-gnu/libmlx5.so.1 {MILES_RDMA_LIB_DIR}/"
+        )
     if miles.image_env:
         image = image.env(miles.image_env)
     if miles.image_run_commands:
@@ -189,6 +196,11 @@ def _compose_ld_library_path() -> str:
             lib_dir = os.path.join(package_dir, "lib")
             if os.path.exists(os.path.join(lib_dir, "libnccl.so.2")):
                 parts.append(lib_dir)
+    if all(
+        os.path.exists(os.path.join(MILES_RDMA_LIB_DIR, library))
+        for library in ("libibverbs.so.1", "libmlx5.so.1")
+    ):
+        parts.append(MILES_RDMA_LIB_DIR)
     for part in os.environ.get("LD_LIBRARY_PATH", "").split(":"):
         if part and part not in parts:
             parts.append(part)
@@ -207,10 +219,10 @@ def build_ray_runtime_env(
 
     Ray workers do not pick up the container's linker path on their own, and
     without it SGLang's ctypes loader can resolve a different NCCL than PyTorch.
-    A wheel-shipped NCCL is put first so both use the same version. The rest is
-    read from the container, so paths supplied by Modal or the image are carried
-    through and its RDMA libraries keep their native loader order. Composing it
-    here rather than in an ``image_env`` entry
+    A wheel-shipped NCCL is put first so both use the same version. Multi-node
+    images also carry the matched verbs/provider pair from image build time so
+    a host RDMA mount cannot replace only half of that pair. The rest is read
+    from the container. Composing it here rather than in an ``image_env`` entry
     keeps it independent of whether the base image exports ``LD_LIBRARY_PATH``
     in its own ``ENV``: a Dockerfile ``$LD_LIBRARY_PATH`` expands to an empty
     string when it does not, which would drop those dirs and leave a trailing
