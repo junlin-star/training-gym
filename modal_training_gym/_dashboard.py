@@ -928,8 +928,8 @@ def fastapi_app():
 
     async def _read_run_timings(
         training_run_id: str,
+        entry: TimingEntry,
     ) -> tuple[JsonDict, bool]:
-        entry = timing_cache[training_run_id]
         listed, had_read_failures = await vol_list_metadata_with_failures(
             RoleTimingRecord.store(training_run_id),
             is_async=True,
@@ -1020,7 +1020,9 @@ def fastapi_app():
         async with entry.lock:
             if not entry.fresh:
                 entry.dirty = False
-                timings, had_read_failures = await _read_run_timings(training_run_id)
+                timings, had_read_failures = await _read_run_timings(
+                    training_run_id, entry
+                )
                 if had_read_failures:
                     entry.read_at = time.monotonic()
                     entry.final = False

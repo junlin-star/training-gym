@@ -151,7 +151,7 @@ def test_timing_post_during_finalization_does_not_cache_final(monkeypatch, tmp_p
     timing_cache = cells["timing_cache"].cell_contents
     entry = timing_cache.setdefault("race-run", cells["TimingEntry"].cell_contents())
 
-    async def read_timings(_training_run_id):
+    async def read_timings(_training_run_id, _entry):
         return {}, False
 
     async def run_has_ended(_training_run_id):
@@ -164,6 +164,23 @@ def test_timing_post_during_finalization_does_not_cache_final(monkeypatch, tmp_p
     asyncio.run(run_timings("race-run"))
 
     assert entry.final is False
+
+
+def test_timing_read_survives_entry_eviction(monkeypatch, tmp_path):
+    run_timings, _read_timings, timing_cache, entry_factory = _timing_reader_context(
+        monkeypatch, tmp_path
+    )
+    timing_cache["evicted-run"] = entry_factory()
+
+    async def read_timings(training_run_id, entry):
+        assert entry is not None
+        del timing_cache[training_run_id]
+        return {}, False
+
+    cells = dict(zip(run_timings.__code__.co_freevars, run_timings.__closure__))
+    cells["_read_run_timings"].cell_contents = read_timings
+
+    assert asyncio.run(run_timings("evicted-run")) == {}
 
 
 def test_timing_read_failure_preserves_cached_lanes(monkeypatch, tmp_path):
@@ -194,7 +211,7 @@ def test_timing_read_failure_preserves_cached_lanes(monkeypatch, tmp_path):
         ]
     )
 
-    async def read_timings(_training_run_id):
+    async def read_timings(_training_run_id, _entry):
         return next(reads)
 
     async def run_has_ended(_training_run_id):
@@ -236,11 +253,16 @@ def _timing_reader_context(monkeypatch, tmp_path):
         endpoint.__code__.co_freevars.index("_run_timings")
     ].cell_contents
     cells = dict(zip(run_timings.__code__.co_freevars, run_timings.__closure__))
-    read_timings = cells["_read_run_timings"].cell_contents
+    read_impl = cells["_read_run_timings"].cell_contents
+    timing_cache = cells["timing_cache"].cell_contents
+
+    async def read_timings(training_run_id):
+        return await read_impl(training_run_id, timing_cache[training_run_id])
+
     return (
         run_timings,
         read_timings,
-        cells["timing_cache"].cell_contents,
+        timing_cache,
         cells["TimingEntry"].cell_contents,
     )
 
