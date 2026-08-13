@@ -6,6 +6,7 @@ import subprocess
 import shutil
 import tempfile
 import time
+import warnings
 from collections.abc import Callable
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -89,6 +90,12 @@ def _build_miles_base_image(miles: MilesRecipe) -> Image:
         # A published named Image already carries the entrypoint reset and the
         # built-in patches (see scripts/publish_framework_images.py), and
         # referencing it by name never triggers a rebuild.
+        if miles.docker_image != MilesRecipe.docker_image:
+            warnings.warn(
+                f"named_image={miles.named_image!r} takes precedence over "
+                f"docker_image={miles.docker_image!r}; the registry image is ignored.",
+                stacklevel=2,
+            )
         image = Image.from_name(miles.named_image)
     else:
         image = (
