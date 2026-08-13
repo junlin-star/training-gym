@@ -54,6 +54,7 @@ def _remove_if_invalid(path: str | Path) -> bool:
 @dataclass(config=ConfigDict(extra="forbid", arbitrary_types_allowed=True))
 class _KimiK2Recipe(MilesRecipe):
     gpu_type: str = "H200"
+    cloud: str | None = "gcp"
     model_setup_gpu: str | None = "H200"
     memory: tuple[int, int] = (1024, int(2 * 1024 * 1024))
     image_run_commands: list[str] = field(
