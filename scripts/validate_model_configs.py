@@ -85,6 +85,20 @@ def _step_keys(result: "ValidationResult") -> list[str]:
     return sorted(keys, key=lambda k: int(k) if k.isdigit() else k)
 
 
+def _warn_if_timings_missing(
+    training_run_id: str,
+    status: TrainingRunStatus,
+    step_times: dict | None,
+    substep_times: dict | None,
+) -> None:
+    if status == TrainingRunStatus.COMPLETED and not step_times and not substep_times:
+        print(
+            f"warning: no timing records found for completed run "
+            f"{training_run_id}; the dashboard may have been unreachable or "
+            "substep timing may be disabled"
+        )
+
+
 def _ordered_substeps(
     subs: dict[str, dict[str, float | None]],
 ) -> list[tuple[str, dict[str, float | None]]]:
@@ -264,6 +278,13 @@ def run_base_training(
             break
         previous = current
         time.sleep(0.5)
+
+    _warn_if_timings_missing(
+        train_result.training_run_id,
+        training_run.status,
+        step_times,
+        substep_times,
+    )
 
     return ValidationResult(
         base_model_name=config.name,
