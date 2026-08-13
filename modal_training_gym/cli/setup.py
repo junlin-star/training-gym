@@ -128,7 +128,7 @@ def ensure_proxy_auth(interactive: bool = True, force: bool = False) -> bool:
             return True
     else:
         print(
-            "\nAuthenticated ad-hoc deployments "
+            "\nAuthenticated custom deployments "
             "(CustomDeployment.launch(..., unauthenticated=False)) need "
             "a Modal proxy-auth token pair (MODAL_KEY / MODAL_SECRET)."
         )

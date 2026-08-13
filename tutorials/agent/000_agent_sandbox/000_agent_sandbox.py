@@ -149,7 +149,7 @@ def _main_impl() -> None:
     # ## Deploy the model
     #
     # `CustomDeployment.launch()` launches an sglang-backed inference
-    # server on Modal and returns an `CustomDeployment` with a live URL.
+    # server on Modal and returns a `CustomDeployment` with a live URL.
     # The server exposes an **OpenAI-compatible** `/v1/chat/completions`
     # endpoint, so we point the standard OpenAI Python SDK at it.
     #

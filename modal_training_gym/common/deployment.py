@@ -1,4 +1,4 @@
-"""Recipe-driven ad-hoc model deployments."""
+"""Recipe-driven custom model deployments."""
 
 from __future__ import annotations
 

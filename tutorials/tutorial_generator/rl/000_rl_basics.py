@@ -92,10 +92,10 @@ def _serve_base_intro():
     The training gym has several config classes so you can define deployment, training, and evaluation configurations,
     and reuse them across different runs for parameter sweeps.
 
-    Let's start by launching an `CustomDeployment`.
+    Let's start by launching a `CustomDeployment`.
 
     Calling `CustomDeployment.launch()` builds and deploys an SGLang app, then
-    returns an `CustomDeployment` with the endpoint URL. Pass
+    returns a `CustomDeployment` with the endpoint URL. Pass
     `unauthenticated=True` so the endpoint is reachable without Modal
     proxy-auth tokens.
     """
