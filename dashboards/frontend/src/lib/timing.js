@@ -2,7 +2,6 @@ export {
   CATEGORIES,
   colorFor,
   fmtSecs,
-  GROUPS,
   HIDDEN_PHASES,
   isLegacyTiming,
   labelFor,
