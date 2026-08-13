@@ -157,13 +157,6 @@ def _enqueue(payload: dict[str, Any]) -> None:
         pass
 
 
-def _post_framework_status(payload: dict[str, Any], timeout: float) -> None:
-    url = _phase_url()
-    if not url:
-        return
-    _post({"_url": url, "_timeout": timeout, **payload})
-
-
 def _enqueue_rollout(payload: dict[str, Any]) -> None:
     """Enqueue a rollout-data payload (large, longer timeout)."""
     url = _rollout_url()
@@ -175,6 +168,13 @@ def _enqueue_rollout(payload: dict[str, Any]) -> None:
         _REPORT_QUEUE.put_nowait(item)
     except Exception:
         pass
+
+
+def _post_framework_status(payload: dict[str, Any], timeout: float) -> None:
+    url = _phase_url()
+    if not url:
+        return
+    _post({"_url": url, "_timeout": timeout, **payload})
 
 
 def _enqueue_advantage(payload: dict[str, Any]) -> None:
