@@ -4,7 +4,7 @@ import time
 from enum import Enum
 from typing import Any, Awaitable
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field
 
 from modal_training_gym.common.status import SlimeStatus
 from modal_training_gym.common.timing_recorder import (
@@ -12,18 +12,6 @@ from modal_training_gym.common.timing_recorder import (
     MAX_TIMING_PHASES,
 )
 from modal_training_gym.utils.metadata import MetadataStore, vol_list, vol_put
-
-
-def is_safe_run_id(value: str) -> bool:
-    return (
-        bool(value)
-        and value[0] != "."
-        and all(
-            character
-            in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-"
-            for character in value
-        )
-    )
 
 
 class Role(str, Enum):
@@ -63,13 +51,6 @@ class RoleTimingRecord(BaseModel):
     phases: dict[str, PhaseTiming] = Field(
         default_factory=dict, max_length=MAX_TIMING_PHASES
     )
-
-    @field_validator("training_run_id")
-    @classmethod
-    def validate_training_run_id(cls, value: str) -> str:
-        if not is_safe_run_id(value):
-            raise ValueError("unsafe training run id")
-        return value
 
     @property
     def storage_key(self) -> str:

@@ -51,7 +51,6 @@ from modal_training_gym.common.run_summary import (
 )
 from modal_training_gym.common.step_timing import (
     RoleTimingRecord,
-    is_safe_run_id,
     legacy_run_to_records,
     rollout_lanes,
 )
@@ -1039,8 +1038,6 @@ def fastapi_app():
     async def get_run_timings(
         training_run_id: str = FastAPIPath(),
     ):
-        if not is_safe_run_id(training_run_id):
-            raise HTTPException(status_code=422, detail="unsafe training run id")
         return JSONResponse(await _run_timings(training_run_id))
 
     # ── Live Modal log stream (SSE, pure pass-through) ───────────────────
