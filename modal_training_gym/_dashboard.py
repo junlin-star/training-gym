@@ -63,7 +63,7 @@ from modal_training_gym.common.training_rollout import (
 from modal_training_gym.utils.metadata import (
     _bounded_gather_with_retries,
     vol_get as _metadata_vol_get,
-    vol_list_metadata,
+    vol_list_metadata_with_failures,
 )
 
 SummaryLoader = Callable[[], Awaitable[list[JsonDict]]]
@@ -930,10 +930,9 @@ def fastapi_app():
         training_run_id: str,
     ) -> tuple[JsonDict, bool]:
         entry = timing_cache[training_run_id]
-        listed, had_read_failures = await vol_list_metadata(
+        listed, had_read_failures = await vol_list_metadata_with_failures(
             RoleTimingRecord.store(training_run_id),
             is_async=True,
-            return_failures=True,
         )
         if had_read_failures:
             return {}, True

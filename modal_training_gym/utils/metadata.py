@@ -113,7 +113,7 @@ def _canonical_items_for(
 
     if is_async:
 
-        async def _run() -> list[dict[str, Any]]:
+        async def _run() -> tuple[list[dict[str, Any]], bool]:
             if item_store is None:
                 return []
             return _keep(await vol_list(item_store, is_async=True))
@@ -248,12 +248,24 @@ def vol_list(
     store: MetadataStore | str,
     *,
     is_async: bool = False,
-    return_failures: bool = False,
-) -> (
-    list[dict[str, Any]]
-    | tuple[list[dict[str, Any]], bool]
-    | Awaitable[list[dict[str, Any]] | tuple[list[dict[str, Any]], bool]]
-):
+) -> list[dict[str, Any]] | Awaitable[list[dict[str, Any]]]:
+    result = vol_list_with_failures(store, is_async=is_async)
+    if is_async:
+
+        async def _run() -> list[dict[str, Any]]:
+            records, _had_failures = await result
+            return records
+
+        return _run()
+    records, _had_failures = result
+    return records
+
+
+def vol_list_with_failures(
+    store: MetadataStore | str,
+    *,
+    is_async: bool = False,
+) -> tuple[list[dict[str, Any]], bool] | Awaitable[tuple[list[dict[str, Any]], bool]]:
     from modal.exception import NotFoundError
 
     vol = _metadata_volume()
@@ -278,13 +290,9 @@ def vol_list(
                     ]
                     break
                 except (FileNotFoundError, NotFoundError):
-                    if return_failures:
-                        return [], False
-                    return []
+                    return [], False
                 except Exception as exc:
                     if "rate limit" not in str(exc).lower() or attempt == 2:
-                        if return_failures:
-                            return [], True
                         raise
                     await asyncio.sleep(2**attempt)
             else:
@@ -294,11 +302,9 @@ def vol_list(
             )
             failures = [result for result in results if isinstance(result, Exception)]
             records = [result for result in results if isinstance(result, dict)]
-            if return_failures:
-                return records, bool(failures)
             if failures:
-                raise failures[0]
-            return records
+                return records, True
+            return records, False
 
         return _run()
 
@@ -312,32 +318,40 @@ def vol_list(
                 if entry.path.endswith(".json"):
                     data = b"".join(vol.read_file(entry.path))
                     results.append(json.loads(data))
-            return (results, False) if return_failures else results
+            return results, False
         except (FileNotFoundError, NotFoundError):
-            if return_failures:
-                return results, False
-            return results
+            return results, False
         except Exception as exc:
             if "rate limit" in str(exc).lower() and attempt < 2:
                 _time.sleep(2**attempt)
                 results = []
                 continue
-            if return_failures:
-                return results, True
-            raise
-    return (results, False) if return_failures else results
+            return results, True
+    return results, False
 
 
 def vol_list_metadata(
     store: MetadataStore | str,
     *,
     is_async: bool = False,
-    return_failures: bool = False,
-) -> (
-    list[dict[str, Any]]
-    | tuple[list[dict[str, Any]], bool]
-    | Awaitable[list[dict[str, Any]] | tuple[list[dict[str, Any]], bool]]
-):
+) -> list[dict[str, Any]] | Awaitable[list[dict[str, Any]]]:
+    result = vol_list_metadata_with_failures(store, is_async=is_async)
+    if is_async:
+
+        async def _run() -> list[dict[str, Any]]:
+            entries, _had_failures = await result
+            return entries
+
+        return _run()
+    entries, _had_failures = result
+    return entries
+
+
+def vol_list_metadata_with_failures(
+    store: MetadataStore | str,
+    *,
+    is_async: bool = False,
+) -> tuple[list[dict[str, Any]], bool] | Awaitable[tuple[list[dict[str, Any]], bool]]:
     from modal.exception import NotFoundError
 
     vol = _metadata_volume()
@@ -356,14 +370,12 @@ def vol_list_metadata(
                         async for entry in vol.iterdir.aio(_store_path(store))
                         if entry.path.endswith(".json")
                     ]
-                    return (entries, False) if return_failures else entries
+                    return entries, False
                 except (FileNotFoundError, NotFoundError):
-                    return ([], False) if return_failures else []
+                    return [], False
                 except Exception as exc:
                     if "rate limit" not in str(exc).lower() or attempt == 2:
-                        if return_failures:
-                            return [], True
-                        raise
+                        return [], True
                     await asyncio.sleep(2**attempt)
             raise AssertionError("unreachable")
 
@@ -376,13 +388,11 @@ def vol_list_metadata(
             for entry in vol.iterdir(_store_path(store))
             if entry.path.endswith(".json")
         ]
-        return (entries, False) if return_failures else entries
+        return entries, False
     except (FileNotFoundError, NotFoundError):
-        return ([], False) if return_failures else []
-    except Exception as exc:
-        if return_failures:
-            return [], True
-        raise exc
+        return [], False
+    except Exception:
+        return [], True
 
 
 def vol_list_prefix(store: MetadataStore | str, prefix: str) -> list[dict[str, Any]]:
@@ -411,6 +421,10 @@ def vol_list_prefix(store: MetadataStore | str, prefix: str) -> list[dict[str, A
 
 
 def vol_remove_keys_with_prefix(store: MetadataStore | str, prefix: str) -> int:
+    """Delete every item whose key (file basename) starts with ``prefix``.
+
+    Reads directory entries only (unlike vol_list_prefix). Returns the number of items removed.
+    """
     from modal.exception import NotFoundError
 
     vol = _metadata_volume()
@@ -550,7 +564,7 @@ def vol_compact_summary_items(
     summary_items = (
         vol_get_summary_items(summary_store, key=key, payload_key=payload_key) or []
     )
-    canonical_items, had_failures = vol_list(item_store, return_failures=True)
+    canonical_items, had_failures = vol_list_with_failures(item_store)
     if had_failures:
         return summary_items
 

@@ -292,7 +292,7 @@ def test_incremental_timing_read_cold_start_reads_all_lanes(monkeypatch, tmp_pat
         reads.append(key)
         return records[key]
 
-    monkeypatch.setattr(_dashboard, "vol_list_metadata", list_metadata)
+    monkeypatch.setattr(_dashboard, "vol_list_metadata_with_failures", list_metadata)
     monkeypatch.setattr(_dashboard, "_metadata_vol_get", get_record)
     timing_cache["incremental-cold"] = entry_factory()
 
@@ -324,7 +324,7 @@ def test_incremental_timing_read_reuses_unchanged_lanes(monkeypatch, tmp_path):
         reads += 1
         return _incremental_record(0)
 
-    monkeypatch.setattr(_dashboard, "vol_list_metadata", list_metadata)
+    monkeypatch.setattr(_dashboard, "vol_list_metadata_with_failures", list_metadata)
     monkeypatch.setattr(_dashboard, "_metadata_vol_get", get_record)
     timing_cache["incremental-unchanged"] = entry_factory()
 
@@ -360,7 +360,7 @@ def test_incremental_timing_read_only_reads_updated_lane(monkeypatch, tmp_path):
         reads.append(key)
         return _incremental_record(int(key[:8]))
 
-    monkeypatch.setattr(_dashboard, "vol_list_metadata", list_metadata)
+    monkeypatch.setattr(_dashboard, "vol_list_metadata_with_failures", list_metadata)
     monkeypatch.setattr(_dashboard, "_metadata_vol_get", get_record)
     timing_cache["incremental-update"] = entry_factory()
 
@@ -400,7 +400,7 @@ def test_incremental_timing_read_failure_preserves_complete_cache(
             return _incremental_record(0)
         raise RuntimeError("read failed")
 
-    monkeypatch.setattr(_dashboard, "vol_list_metadata", list_metadata)
+    monkeypatch.setattr(_dashboard, "vol_list_metadata_with_failures", list_metadata)
     monkeypatch.setattr(_dashboard, "_metadata_vol_get", get_record)
     timing_cache["incremental-failure"] = entry_factory()
     initial, failed = asyncio.run(read_timings("incremental-failure"))
@@ -452,7 +452,7 @@ def test_incremental_timing_read_drops_lane_missing_mid_refresh(monkeypatch, tmp
             raise KeyError(key)
         return _incremental_record(int(key[:8]))
 
-    monkeypatch.setattr(_dashboard, "vol_list_metadata", list_metadata)
+    monkeypatch.setattr(_dashboard, "vol_list_metadata_with_failures", list_metadata)
     monkeypatch.setattr(_dashboard, "_metadata_vol_get", get_record)
     timing_cache["incremental-missing"] = entry_factory()
 

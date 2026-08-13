@@ -11,7 +11,12 @@ from modal_training_gym.common.timing_recorder import (
     MAX_PHASE_INVOCATIONS,
     MAX_TIMING_PHASES,
 )
-from modal_training_gym.utils.metadata import MetadataStore, vol_list, vol_put
+from modal_training_gym.utils.metadata import (
+    MetadataStore,
+    vol_list,
+    vol_list_with_failures,
+    vol_put,
+)
 
 
 class Role(str, Enum):
@@ -164,10 +169,9 @@ def load_run(training_run_id: str) -> dict[int | None, list[dict[str, Any]]]:
 async def load_run_async(
     training_run_id: str,
 ) -> tuple[dict[int | None, list[dict[str, Any]]], bool]:
-    records, had_failures = await vol_list(
+    records, had_failures = await vol_list_with_failures(
         RoleTimingRecord.store(training_run_id),
         is_async=True,
-        return_failures=True,
     )
     grouped: dict[int | None, list[dict[str, Any]]] = {}
     for record in records:
