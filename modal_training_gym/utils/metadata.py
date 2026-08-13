@@ -153,6 +153,8 @@ def _store_path(store: MetadataStore | str) -> str:
 async def _bounded_gather_with_retries(
     readers: Iterable[Callable[[], Awaitable[T]]],
 ) -> list[T | BaseException]:
+    from modal.exception import Error
+
     semaphore = asyncio.Semaphore(16)
 
     async def _read(reader: Callable[[], Awaitable[T]]) -> T:
@@ -160,7 +162,7 @@ async def _bounded_gather_with_retries(
             for attempt in range(3):
                 try:
                     return await reader()
-                except Exception as exc:
+                except Error as exc:
                     if "rate limit" not in str(exc).lower() or attempt == 2:
                         raise
                     await asyncio.sleep(2**attempt)
@@ -266,7 +268,7 @@ def vol_list_with_failures(
     *,
     is_async: bool = False,
 ) -> tuple[list[dict[str, Any]], bool] | Awaitable[tuple[list[dict[str, Any]], bool]]:
-    from modal.exception import NotFoundError
+    from modal.exception import Error, NotFoundError
 
     vol = _metadata_volume()
     if is_async:
@@ -291,7 +293,7 @@ def vol_list_with_failures(
                     break
                 except (FileNotFoundError, NotFoundError):
                     return [], False
-                except Exception as exc:
+                except Error as exc:
                     if "rate limit" not in str(exc).lower() or attempt == 2:
                         raise
                     await asyncio.sleep(2**attempt)
@@ -321,7 +323,7 @@ def vol_list_with_failures(
             return results, False
         except (FileNotFoundError, NotFoundError):
             return results, False
-        except Exception as exc:
+        except Error as exc:
             if "rate limit" in str(exc).lower() and attempt < 2:
                 _time.sleep(2**attempt)
                 results = []
@@ -352,7 +354,7 @@ def vol_list_metadata_with_failures(
     *,
     is_async: bool = False,
 ) -> tuple[list[dict[str, Any]], bool] | Awaitable[tuple[list[dict[str, Any]], bool]]:
-    from modal.exception import NotFoundError
+    from modal.exception import Error, NotFoundError
 
     vol = _metadata_volume()
     if is_async:
@@ -373,7 +375,7 @@ def vol_list_metadata_with_failures(
                     return entries, False
                 except (FileNotFoundError, NotFoundError):
                     return [], False
-                except Exception as exc:
+                except Error as exc:
                     if "rate limit" not in str(exc).lower() or attempt == 2:
                         return [], True
                     await asyncio.sleep(2**attempt)
