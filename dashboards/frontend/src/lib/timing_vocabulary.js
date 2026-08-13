@@ -120,6 +120,14 @@ export const NESTS_IN = {
   sample_generation: ["generate_samples"],
 };
 
+export const GROUPS = [
+  {
+    key: "timeline",
+    label: "Timeline",
+    hint: "measured phases on the shared wall clock",
+  },
+];
+
 export const NEGLIGIBLE_WORK_S = 0.0005;
 export const CROSS_LANE_CONTAINMENT_TOLERANCE_S = 0.01;
 export function labelFor(name, rolloutId = null) {
