@@ -214,7 +214,7 @@ def build_ray_runtime_env(
         "no_proxy": f"127.0.0.1,{head_addr}",
         "MASTER_ADDR": head_addr,
         "LD_LIBRARY_PATH": _compose_ld_library_path(),
-         "TRAINING_GYM_SUBSTEP_TIMING": substep_timing,
+        "TRAINING_GYM_SUBSTEP_TIMING": substep_timing,
     }
     env_vars.update(extra_env or {})
     env_vars.update(wandb_env)
