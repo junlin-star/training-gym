@@ -420,6 +420,7 @@ def build_miles_app(
         run_prepare_dataset(dataset, data_volume, MilesRecipe._resolve_data_paths)
 
     convert_nnodes = get_checkpoint_conversion_policy(miles, model=model)[0]
+    convert_multi_node = convert_nnodes > 1
 
     @app.function(
         image=image,
@@ -484,10 +485,11 @@ def build_miles_app(
         volumes=all_volumes,
         timeout=4 * 60 * 60,
         secrets=proxy_auth_secrets() or None,
+        experimental_options={"efa_enabled": True} if convert_multi_node else {},
         serialized=True,
         name="convert_checkpoint",
     )
-    @clustered(convert_nnodes, rdma=False)
+    @clustered(convert_nnodes, rdma=convert_multi_node)
     def convert_checkpoint(
         hf_path: str,
         training_run_id: str = "",
@@ -575,6 +577,8 @@ def build_miles_app(
         if training_run_id:
             flush_status_reporter(timeout_seconds=2.0)
 
+    _multi_node = miles.total_nodes > 1
+
     @app.function(
         image=image,
         gpu=gpu_spec,
@@ -593,10 +597,11 @@ def build_miles_app(
         timeout=24 * 60 * 60,
         retries=Retries(max_retries=10, initial_delay=0.0),
         single_use_containers=True,
+        experimental_options={"efa_enabled": True} if _multi_node else {},
         serialized=True,
         name="train",
     )
-    @clustered(miles.total_nodes, rdma=False)
+    @clustered(miles.total_nodes, rdma=_multi_node)
     async def train(
         modal_app_id: str = "",
         modal_app_url: str = "",
