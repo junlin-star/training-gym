@@ -603,7 +603,7 @@ def build_miles_app(
                 rel = os.path.relpath(root, staging_path)
                 dst_dir = save_path if rel == "." else os.path.join(save_path, rel)
                 os.makedirs(dst_dir, exist_ok=True)
-                for filename in sorted(files):
+                for filename in sorted(files, key=lambda n: (n == ".metadata", n)):
                     shutil.move(
                         os.path.join(root, filename), os.path.join(dst_dir, filename)
                     )
