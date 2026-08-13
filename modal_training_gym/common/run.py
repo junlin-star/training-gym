@@ -111,7 +111,11 @@ class TrainingRun(BaseModel):
     completed_at: int | None = None
     updated_at: int = 0
     duration_seconds: int | None = None
+    # TODO(joy): Remove with the legacy timing runs; retained for old runs and
+    # serialized validation-harness results to keep rendering them.
     step_times: dict[str, dict[str, int | None]] | None = None
+    # TODO(joy): Remove with the legacy timing runs; retained for old runs and
+    # serialized validation-harness results to keep rendering them.
     substep_times: dict[str, dict[str, dict[str, float | None]]] | None = None
     # Terminal failure message (Ray driver error / exception) for a failed run,
     # so the cause is queryable from the record and shown on the dashboard even
