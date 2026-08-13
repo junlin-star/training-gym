@@ -24,13 +24,6 @@ Phase 2's single step and Phase 3's smoke test both have to show:
 
 If reward doesn't climb, isolate which layer is at fault: data (`DatasetConfig` — check rendered prompts read correctly and labels match source rows), the run setup (reward function shape, too few steps / too small batches / too low lr), the recipe (sampling, stop tokens, response budget, masking, optimizer, parallelism), or framework plumbing (weight sync, stale weights, checkpoint conversion).
 
-### Before you patch (both frameworks)
-
-If it's possible to not patch, do not patch. Patching the framework may leave us unable to bump its image, or off parity with upstream. When thinking about patching:
-1. Why do we need this patch (what bug is this patch trying to fix)?
-2. Is someone trying to fix this bug upstream? Is the fix merged (is this something bumping the image will just fix)? If not, should we flag it to the framework's team instead of patching ourselves?
-3. Is the patch going to break any models or recipes outside of our config? If possible, constrain model-specific patches to just a particular recipe or model (see the Qwen3 ASR patches for slime, and the router-timeout / VL-preprocessing patches for miles).
-
 ### Common gotchas (both frameworks)
 
 Naming convention: For the model name in artifacts, it should be `_` separated by model family identifiers and replacing `.` for versioning (e.g. `Qwen3_4b`, `Qwen3_6_35b`, `Kimi_K2_6`).

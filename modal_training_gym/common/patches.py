@@ -12,13 +12,10 @@ import base64
 from pathlib import Path
 
 # Patches that target Megatron itself (``/root/Megatron-LM``), which the slime and
-# miles images both ship — they are not slime-specific despite living under the
-# slime tree for historical reasons. Both launchers encode them from this constant
-# so there is exactly one copy; moving the files would invalidate the slime image
-# cache for no behavioral gain.
-MEGATRON_PATCHES = (
-    Path(__file__).parent.parent / "frameworks" / "slime" / "modal_helpers" / "patches"
-)
+# miles images both ship. They are framework-agnostic, so they live here rather than
+# under either framework's tree, and both launchers encode them from this constant so
+# there is exactly one copy.
+MEGATRON_PATCHES = Path(__file__).parent / "megatron_patches"
 
 
 def encode_patch(name: str, patches_dir: Path) -> str:

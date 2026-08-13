@@ -23,9 +23,6 @@ _CONVERSION_EXTRA_ARGS = [
     ("make_vocab_size_divisible_by", "make-vocab-size-divisible-by"),
 ]
 
-# A recipe carries one ``decoder_{first,last}_pipeline_num_layers`` pair shared by
-# conversion and training. It describes a split across >1 pipeline stages, so it is
-# meaningless (and rejected by Megatron) when the conversion layout is PP1.
 _PIPELINE_SPLIT_ARGS = {
     "decoder_first_pipeline_num_layers",
     "decoder_last_pipeline_num_layers",
@@ -193,6 +190,10 @@ def get_checkpoint_conversion_policy(
         if etp:
             extra_args.append(f"--expert-tensor-parallel-size {etp}")
         for attr, flag in _CONVERSION_EXTRA_ARGS:
+            # A recipe carries one ``decoder_{first,last}_pipeline_num_layers`` pair
+            # shared by conversion and training. It describes a split across >1
+            # pipeline stages, so it is meaningless (and rejected by Megatron) when
+            # the conversion layout is PP1.
             if pp == 1 and attr in _PIPELINE_SPLIT_ARGS:
                 continue
             if x := getattr(cfg, attr, None):
