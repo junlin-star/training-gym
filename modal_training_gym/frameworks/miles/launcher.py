@@ -85,15 +85,21 @@ _REPORTING_PATCH_COMMANDS = (
 
 
 def _build_miles_base_image(miles: MilesRecipe) -> Image:
-    image = (
-        Image.from_registry(miles.docker_image)
-        .entrypoint([])
-        .run_commands(
-            f"rm -rf {HF_CACHE_PATH} 2>/dev/null || true",
-            f"echo {_PATCH_SGLANG_ABORT_B64} | base64 -d | python3",
-            *_REPORTING_PATCH_COMMANDS,
+    if miles.named_image:
+        # A published named Image already carries the entrypoint reset and the
+        # built-in patches (see scripts/publish_framework_images.py), and
+        # referencing it by name never triggers a rebuild.
+        image = Image.from_name(miles.named_image)
+    else:
+        image = (
+            Image.from_registry(miles.docker_image)
+            .entrypoint([])
+            .run_commands(
+                f"rm -rf {HF_CACHE_PATH} 2>/dev/null || true",
+                f"echo {_PATCH_SGLANG_ABORT_B64} | base64 -d | python3",
+                *_REPORTING_PATCH_COMMANDS,
+            )
         )
-    )
     if miles.image_env:
         image = image.env(miles.image_env)
     if miles.image_run_commands:

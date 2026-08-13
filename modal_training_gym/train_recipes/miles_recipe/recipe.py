@@ -41,6 +41,7 @@ _MILES_SKIP = {
     "image_overlay",
     "image_run_commands",
     "image_env",
+    "named_image",
     "local_miles",
     "patch_files",
     "wandb",
@@ -144,6 +145,15 @@ class MilesRecipe(BaseTrainRecipe):
         Extra shell commands run while building the image.
     image_env : dict[str, str]
         Extra env vars baked into the image.
+    named_image : str | None
+        Modal named Image reference (``[[workspace/]environment/]name[:tag]``)
+        used as the base image instead of pulling ``docker_image`` from the
+        registry and applying the built-in patches. The referenced image is
+        expected to be a published Miles base image (see
+        ``scripts/publish_framework_images.py``); referencing it never
+        triggers a rebuild. Recipe-level image customizations
+        (``image_overlay``, ``patch_files``, ``image_run_commands``,
+        ``image_env``) still apply on top.
     capture_trace : bool
         Attach miles' per-sample execution trace (generate/reward/tool-call
         timeline) to recorded rollouts for the dashboard.
@@ -451,6 +461,7 @@ class MilesRecipe(BaseTrainRecipe):
     image_overlay: Callable[[modal.Image], modal.Image] | None = None
     image_run_commands: list[str] = field(default_factory=list)
     image_env: dict[str, str] = field(default_factory=dict)
+    named_image: str | None = None
     local_miles: str | None = None
     patch_files: list[str] = field(default_factory=list)
 

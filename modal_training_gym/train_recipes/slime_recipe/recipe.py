@@ -62,6 +62,7 @@ _SLIME_SKIP = {
     "patch_files",
     "image_run_commands",
     "image_env",
+    "named_image",
     "train_function_kwargs",
     "conversion_pipeline_model_parallel_size",
     "conversion_tensor_model_parallel_size",
@@ -180,6 +181,15 @@ class SlimeRecipe(BaseTrainRecipe):
         Extra shell commands run while building the image.
     image_env : dict
         Extra env vars baked into the image.
+    named_image : str | None
+        Modal named Image reference (``[[workspace/]environment/]name[:tag]``)
+        used as the base image instead of pulling ``SLIME_IMAGE`` from the
+        registry and applying the built-in patches. The referenced image is
+        expected to be a published slime base image (see
+        ``scripts/publish_framework_images.py``); referencing it never
+        triggers a rebuild. Recipe-level image customizations
+        (``image_overlay``, ``patch_files``, ``image_run_commands``,
+        ``image_env``) still apply on top.
     train_function_kwargs : dict
         Extra Modal Function options for the train function; supported keys:
         ``secrets``, ``experimental_options``, ``ephemeral_disk``.
@@ -503,6 +513,7 @@ class SlimeRecipe(BaseTrainRecipe):
     patch_files: list[str] = field(default_factory=list)
     image_run_commands: list[str] = field(default_factory=list)
     image_env: dict[str, str] = field(default_factory=dict)
+    named_image: str | None = None
     train_function_kwargs: dict[str, Any] = field(default_factory=dict)
 
     # ── Per-sample execution tracing (dashboard timeline) ───────────────────

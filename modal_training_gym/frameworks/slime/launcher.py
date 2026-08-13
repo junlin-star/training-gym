@@ -149,7 +149,12 @@ _PATCH_SGLANG_PARALLEL_ALIASES_B64 = encode_patch(
 )
 
 
-def _build_slime_base_image() -> "Image":
+def _build_slime_base_image(named_image: str | None = None) -> "Image":
+    if named_image:
+        # A published named Image already carries the entrypoint reset and the
+        # built-in patches (see scripts/publish_framework_images.py), and
+        # referencing it by name never triggers a rebuild.
+        return Image.from_name(named_image)
     return (
         Image.from_registry(SLIME_IMAGE)
         .entrypoint([])
@@ -429,7 +434,7 @@ def build_slime_app(
     _caller_module, caller_script = resolve_caller_context()
 
     # ── Image ────────────────────────────────────────────────────────────────
-    image = _build_slime_base_image()
+    image = _build_slime_base_image(slime.named_image)
 
     # Hybrid models have layers with different parameter sets (e.g. GDN
     # layers carry linear_attn.dt_bias that standard attention layers lack).
