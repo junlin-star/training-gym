@@ -39,11 +39,11 @@ _STATUS_TOKEN_ENV = "TRAINING_GYM_FRAMEWORK_STATUS_TOKEN"
 
 
 class PostResult(str, Enum):
-    OK = "ok"
-    NOT_FOUND = "not_found"
-    AUTH_FAILED = "auth_failed"
-    FAILED = "failed"
-    PERMANENT = "permanent"
+    OK = "ok"  # The dashboard accepted the POST.
+    NOT_FOUND = "not_found"  # HTTP 404/405: dashboard predates the timing endpoint.
+    AUTH_FAILED = "auth_failed"  # HTTP 401/403: dashboard authentication failed.
+    FAILED = "failed"  # Retryable transport or server failure.
+    PERMANENT = "permanent"  # Other 4xx: retrying cannot fix the request.
 
 
 def _resolve_url() -> str:
@@ -118,6 +118,7 @@ def _post(item: dict[str, Any]) -> PostResult:
         with urlopen(request, timeout=timeout) as response:
             response.read()
     except HTTPError as exc:
+        # A 404/405 means this dashboard was deployed before the timing endpoint existed.
         if exc.code in {404, 405}:
             return PostResult.NOT_FOUND
         if 400 <= exc.code < 500:
