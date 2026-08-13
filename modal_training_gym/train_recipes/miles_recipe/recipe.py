@@ -281,8 +281,6 @@ class MilesRecipe(BaseTrainRecipe):
         Extra prompts sampled so filter-rejected groups can be replaced (DAPO).
     dynamic_sampling_filter_path : str | None
         Import path of the predicate deciding which sample groups to keep.
-    filter_zero_reward_samples : bool
-        Drop zero-reward samples before training.
     balance_data : bool
         Rebalance kept samples across data-parallel ranks.
     use_dynamic_global_batch_size : bool
@@ -576,7 +574,6 @@ class MilesRecipe(BaseTrainRecipe):
     # ── Dynamic sampling (DAPO) ────────────────────────────────────────────
     over_sampling_batch_size: int | None = None
     dynamic_sampling_filter_path: str | None = None
-    filter_zero_reward_samples: bool = False
     balance_data: bool = False
     use_dynamic_global_batch_size: bool = False
 
@@ -706,10 +703,6 @@ class MilesRecipe(BaseTrainRecipe):
                 "untie_embeddings_and_output_weights": arch.untie_embeddings_and_output_weights,
                 "no_masked_softmax_fusion": arch.no_masked_softmax_fusion,
                 "multi_latent_attention": arch.multi_latent_attention,
-                "kv_lora_rank": arch.kv_lora_rank,
-                "qk_head_dim": arch.qk_head_dim,
-                "qk_pos_emb_head_dim": arch.qk_pos_emb_head_dim,
-                "v_head_dim": arch.v_head_dim,
                 "use_rotary_position_embeddings": arch.use_rotary_position_embeddings,
                 "rotary_base": arch.rotary_base,
                 "rotary_scaling_factor": arch.rotary_scaling_factor,
@@ -719,6 +712,10 @@ class MilesRecipe(BaseTrainRecipe):
             }
         )
         optional = {
+            "kv_lora_rank": arch.kv_lora_rank,
+            "qk_head_dim": arch.qk_head_dim,
+            "qk_pos_emb_head_dim": arch.qk_pos_emb_head_dim,
+            "v_head_dim": arch.v_head_dim,
             "num_experts": arch.num_experts,
             "moe_layer_freq": arch.moe_layer_freq,
             "moe_ffn_hidden_size": arch.moe_ffn_hidden_size,

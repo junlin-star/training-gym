@@ -98,7 +98,7 @@ def _append_extended_arch_args(extra_args: list[str], arch: Any) -> None:
     if arch.num_experts:
         extra_args.append(f"--num-experts {arch.num_experts}")
     if arch.moe_layer_freq:
-        extra_args.append(f"--moe-layer-freq {arch.moe_layer_freq}")
+        extra_args.append(f"--moe-layer-freq {shlex.quote(str(arch.moe_layer_freq))}")
     if arch.moe_ffn_hidden_size:
         extra_args.append(f"--moe-ffn-hidden-size {arch.moe_ffn_hidden_size}")
     if arch.moe_shared_expert_intermediate_size:
@@ -163,7 +163,7 @@ def get_checkpoint_conversion_policy(
     model: Any = None,
     single_rank_mtp: bool = False,
     extended_arch_args: bool = False,
-    external_arch_args_attr: str | None = None,
+    external_arch_args_attrs: tuple[str, ...] = (),
 ) -> tuple[int, int, list[str]]:
     """Return (num_nodes, nproc_per_node, extra_args) for checkpoint conversion.
 
@@ -171,8 +171,7 @@ def get_checkpoint_conversion_policy(
     checkpoints so the duplicated MTP head embedding/output isn't sharded (which
     corrupts the saved sharded state dict); training reshards on load.
     ``extended_arch_args`` emits the full MoE/attention arch flag set; when
-    ``external_arch_args_attr`` is set, arch flags are skipped if that
-    attribute is populated because the framework supplies them externally.
+    architecture flags are skipped when an external argument source is set.
     """
     gpus_per_node = getattr(cfg, "actor_num_gpus_per_node", 8)
     actor_nodes = getattr(cfg, "actor_num_nodes", 1)
@@ -214,8 +213,10 @@ def get_checkpoint_conversion_policy(
                 extra_args.append(f"--{flag} {x}")
 
         emit_arch = bool(model and getattr(model, "architecture", None))
-        if emit_arch and external_arch_args_attr:
-            emit_arch = not getattr(cfg, external_arch_args_attr, "")
+        if emit_arch and external_arch_args_attrs:
+            emit_arch = not any(
+                getattr(cfg, attr, "") for attr in external_arch_args_attrs
+            )
         if emit_arch:
             arch = model.architecture
             _append_common_arch_args(extra_args, arch)

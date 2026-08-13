@@ -88,7 +88,10 @@ class _KimiK2Recipe(MilesRecipe):
     rollout_max_response_len: int = 16384
     rollout_temperature: float = 1.0
     global_batch_size: int = 256
-    filter_zero_reward_samples: bool = True
+    over_sampling_batch_size: int = 64
+    dynamic_sampling_filter_path: str = (
+        "miles.rollout.filter_hub.dynamic_sampling_filters.check_reward_nonzero_std"
+    )
     use_dynamic_global_batch_size: bool = True
 
     advantage_estimator: str = "grpo"
