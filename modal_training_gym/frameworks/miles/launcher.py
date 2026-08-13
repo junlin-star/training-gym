@@ -1,5 +1,6 @@
 import asyncio
 import hashlib
+import importlib.util
 import json
 import os
 import shlex
@@ -178,7 +179,18 @@ def _response_parser_path(model: Any) -> str:
 
 
 def _compose_ld_library_path() -> str:
-    parts = [SYSTEM_LIB_DIR]
+    parts = []
+    nccl_spec = (
+        importlib.util.find_spec("nvidia.nccl")
+        if importlib.util.find_spec("nvidia") is not None
+        else None
+    )
+    if nccl_spec is not None:
+        for package_dir in nccl_spec.submodule_search_locations or ():
+            lib_dir = os.path.join(package_dir, "lib")
+            if os.path.exists(os.path.join(lib_dir, "libnccl.so.2")):
+                parts.append(lib_dir)
+    parts.append(SYSTEM_LIB_DIR)
     for part in os.environ.get("LD_LIBRARY_PATH", "").split(":"):
         if part and part not in parts:
             parts.append(part)
@@ -197,10 +209,11 @@ def build_ray_runtime_env(
 
     Ray workers do not pick up the container's linker path on their own, and
     without it the Megatron actor can resolve a libibverbs that does not match
-    the image's libmlx5 and die importing mooncake. The system lib dir is put
-    in front for that reason; the rest is read from the container, so whatever
-    the image exports — including any wheel-shipped nvidia lib dirs — is
-    carried through. Composing it here rather than in an ``image_env`` entry
+    the image's libmlx5 and die importing mooncake. A wheel-shipped NCCL is put
+    first so SGLang's ctypes loader uses the same NCCL as PyTorch, followed by
+    the system lib dir to keep libibverbs and libmlx5 matched. The rest is read
+    from the container, so paths supplied by Modal or the image are carried
+    through. Composing it here rather than in an ``image_env`` entry
     keeps it independent of whether the base image exports ``LD_LIBRARY_PATH``
     in its own ``ENV``: a Dockerfile ``$LD_LIBRARY_PATH`` expands to an empty
     string when it does not, which would drop those dirs and leave a trailing
