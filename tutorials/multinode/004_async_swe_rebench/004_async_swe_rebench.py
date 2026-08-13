@@ -216,8 +216,10 @@ def build_training_config(*, full_run: bool = False) -> TrainConfig:
         decoder_last_pipeline_num_layers=None,
         context_parallel_size=2,
         conversion_tensor_model_parallel_size=4,
-        conversion_pipeline_model_parallel_size=1,
-        ref_load="/checkpoints/Qwen3.6-27B_torch_dist_tp4pp1",
+        # Convert with the recipe's tested TP4×PP2 layout. torch_dist
+        # reshards it into the TP4×PP1 actor layout when training starts.
+        conversion_pipeline_model_parallel_size=2,
+        ref_load="/checkpoints/Qwen3.6-27B_torch_dist_tp4pp2",
         # Agent rollouts.
         rollout_function=(
             "slime.rollout.fully_async_rollout."
@@ -351,7 +353,7 @@ def _main_impl() -> None:
     # notebook or local process. Dataset preparation and checkpoint conversion are
     # automatic on the first launch and cached for later runs.
 
-    run = training_config.launch()
+    run = training_config.launch(prepare_inputs=True)
     print(f"Training run:  {run.training_run_id}")
     print(f"Modal app:     {run.modal_app_url}")
     print(f"Function call: {run.function_call_id}")
