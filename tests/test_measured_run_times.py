@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from modal_training_gym.common import step_timing
+from modal_training_gym.common.step_timing import RoleTimingRecord
 
 
 def _phase(start: float, end: float, *, invocations=None) -> dict:
@@ -36,3 +37,15 @@ def test_measured_run_times_excludes_not_in_step_phases(monkeypatch):
     step_times, _substep_times = step_timing.measured_run_times("run")
 
     assert step_times == {"1": {"duration_s": 9.877}}
+
+
+def test_role_timing_record_ignores_legacy_created_at():
+    record = RoleTimingRecord.model_validate(
+        {
+            "training_run_id": "run",
+            "role": "driver",
+            "created_at": 123,
+        }
+    )
+
+    assert "created_at" not in record.model_dump()

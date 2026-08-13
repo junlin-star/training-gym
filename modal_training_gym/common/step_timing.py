@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import time
 from enum import Enum
 from typing import Any, Awaitable
 
@@ -34,8 +33,13 @@ class Role(str, Enum):
 
 class PhaseTiming(BaseModel):
     count: int
+    # Sum of invocation durations; retained for aggregate work time, unlike
+    # the wall-clock span between first_start_s and last_end_s.
     total_duration_s: float
+    # Longest single invocation; retained to expose per-invocation outliers.
     longest_duration_s: float
+    # Together these define the wall-clock span
+    # (last_end_s - first_start_s), including gaps between invocations.
     first_start_s: float
     last_end_s: float
     invocations: list[tuple[float, float]] = Field(
@@ -51,7 +55,6 @@ class RoleTimingRecord(BaseModel):
     training_run_id: str
     rollout_id: int | None = Field(default=None, ge=0)
     role: Role
-    created_at: int = 0
     lane_start_unix_s: float | None = None
     phases: dict[str, PhaseTiming] = Field(
         default_factory=dict, max_length=MAX_TIMING_PHASES
@@ -66,12 +69,7 @@ class RoleTimingRecord(BaseModel):
     def store(training_run_id: str) -> str:
         return f"{MetadataStore.SUBSTEP_TIMING.value}/{training_run_id}"
 
-    def _touch_created_at(self) -> None:
-        if not self.created_at:
-            self.created_at = int(time.time())
-
     def save(self, *, is_async: bool = False) -> None | Awaitable[None]:
-        self._touch_created_at()
         return vol_put(
             self.store(self.training_run_id),
             self.storage_key,
@@ -184,6 +182,7 @@ def _rollout_sort_key(item: tuple[int | None, Any]) -> tuple[bool, int]:
     return rollout_id is None, 0 if rollout_id is None else rollout_id
 
 
+# Remove once no pre-measured-timing runs remain in the metadata volume.
 _LEGACY_RENAMES = {Substep.OPTIMIZER_STEP.value: Substep.TRAIN_MODELS.value}
 
 
