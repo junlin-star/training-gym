@@ -134,8 +134,7 @@ class Qwen3RecordingModel:
     def _tool_call_format_error(
         self, n_found: int, segment: str, msg: str, finish: str
     ) -> FormatError:
-        """Build a mini-swe FormatError (dict payload, matching parse_regex_actions) for a bad tool call —
-        DefaultAgent appends `content` as the next user turn and counts it toward max_consecutive_format_errors."""
+        """Build the mini-swe feedback message for a malformed tool call."""
         if finish == "length":
             msg = "your response hit the output-token limit before a complete `bash` tool call"
         content = f"Format error: {msg}.\n\nProvide a THOUGHT, then make EXACTLY ONE call to the `bash` tool with a single command. To finish the task, call `bash` with `echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT && cat patch.txt`."

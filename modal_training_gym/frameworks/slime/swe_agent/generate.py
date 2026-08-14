@@ -110,9 +110,6 @@ def _run_episode(
             step_limit=limits["max_steps"],
             cost_limit=0.0,
             wall_time_limit_seconds=limits["episode_timeout"],
-            # mini-swe defaults to 3 consecutive format errors → episode death. Qwen's occasional tool-call
-            # miss shouldn't kill a long episode; raise it well above the per-episode miss rate (Tmax uses 64).
-            max_consecutive_format_errors=limits["max_format_errors"],
         )
         sandbox.deadline = time.monotonic() + limits["episode_timeout"]
         try:
@@ -245,9 +242,6 @@ async def generate(args, sample: Any, sampling_params, evaluation: bool = False)
         "max_context_len": getattr(
             args, "rollout_max_context_len", 131072
         ),  # served window; per-turn gen cap
-        "max_format_errors": getattr(
-            args, "agentic_max_format_errors", 30
-        ),  # consecutive before episode dies
         "ramp_window": getattr(
             args, "agentic_ramp_window", 0.0
         ),  # cold-start stagger (s); spread the herd
