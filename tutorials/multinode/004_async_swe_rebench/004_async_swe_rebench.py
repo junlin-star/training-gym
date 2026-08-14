@@ -114,6 +114,8 @@ def build_training_config(*, full_run: bool = False) -> TrainConfig:
             "generate_rollout_fully_async"
         ),
         image_overlay=agentic_swe_image,
+        capture_trace=True,
+        trace_sample_limit=4,
         rm_type=None,
         num_rollout=num_rollout,
         rollout_batch_size=rollout_batch_size,
@@ -142,16 +144,12 @@ def build_training_config(*, full_run: bool = False) -> TrainConfig:
         },
         extra_config={
             "custom_generate_function_path": (
-                "modal_training_gym.frameworks.slime.agentic_rl."
+                "modal_training_gym.frameworks.slime.swe_agent."
                 "generate.generate"
             ),
-            "training_gym_custom_rollout_log_function_path": (
-                "modal_training_gym.frameworks.slime.agentic_rl."
-                "metrics.log_rollout_data"
-            ),
             "data_source_path": (
-                "modal_training_gym.frameworks.slime.agentic_rl."
-                "data_source.TextOnlyRolloutDataSourceWithBuffer"
+                "modal_training_gym.frameworks.slime.text_data_source."
+                "TextOnlyRolloutDataSourceWithBuffer"
             ),
             "metadata_key": "metadata",
             "rollout_shuffle": True,
@@ -182,13 +180,12 @@ def build_training_config(*, full_run: bool = False) -> TrainConfig:
 #
 # In addition to loss and reward, check:
 #
+# - the Training Gym conversation view for sampled rollout traces;
+# - `rollout/raw_reward`: reward over the selected training batch;
 # - `dynamic_sampling/raw_reward_all`: unbiased reward before filtering;
 # - `dynamic_sampling/kept_frac`: whether useful mixed-outcome groups are
 #   becoming too rare;
-# - `async/version_lag/max`: maximum behavior-policy lag in the trained batch;
-# - `agentic/removed_frac`: sandbox/image failures removed from gradient;
-# - `agentic/exec_timeouts/mean`: hung commands cut off by the client deadline;
-# - `agentic/truncated_frac`: episodes stopped by turn, context, or time limits.
+# - standard rollout/train timing and loss metrics.
 #
 # A rising selected-batch reward with a flat
 # `dynamic_sampling/raw_reward_all` is selection bias, not learning.

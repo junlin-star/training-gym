@@ -6,10 +6,8 @@ import types
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-from modal_training_gym.common.environments.base import EvalVerdict
-from modal_training_gym.frameworks.slime.agentic_rl import grade, metrics
-from modal_training_gym.frameworks.slime.agentic_rl.model import RecordingModel
-from modal_training_gym.frameworks.slime.agentic_rl.sandbox import Sandbox
+from modal_training_gym.common.agents import MiniSweEnvironmentAdapter
+from modal_training_gym.frameworks.slime.swe_agent.model import RecordingModel
 
 
 def _import_with_stubs(module_name: str, monkeypatch):
@@ -61,7 +59,7 @@ def test_recording_model_parses_qwen_bash_tool_call():
     assert model._parse_actions(response, "stop") == [{"command": "pytest -q"}]
 
 
-def test_sandbox_adapter_delegates_to_native_environment(monkeypatch):
+def test_mini_swe_adapter_delegates_to_native_environment():
     class Environment:
         workdir = "/repo"
         config = SimpleNamespace(exec_timeout=120)
@@ -84,12 +82,7 @@ def test_sandbox_adapter_delegates_to_native_environment(monkeypatch):
             self.closed = True
 
     environment = Environment()
-    monkeypatch.setattr(
-        "modal_training_gym.frameworks.slime.agentic_rl.sandbox.SweEnvironment.create",
-        classmethod(lambda cls, task, **kwargs: environment),
-    )
-
-    adapter = Sandbox({"instance_id": "task"})
+    adapter = MiniSweEnvironmentAdapter(environment)
 
     assert adapter.exec("pwd") == (0, "ok")
     assert adapter.get_template_vars() == {"cwd": "/repo"}
@@ -97,53 +90,8 @@ def test_sandbox_adapter_delegates_to_native_environment(monkeypatch):
     assert environment.closed is True
 
 
-def test_grade_adapter_uses_native_verdict(monkeypatch):
-    verdict = EvalVerdict(
-        passed=True,
-        metadata={
-            "dense_reward": 0.75,
-            "passed": ["a"],
-            "baseline_passed": [],
-            "required": ["a"],
-            "missing": [],
-            "progress": 0.75,
-            "pass_to_pass_fraction": 1.0,
-            "output": "PASSED a",
-        },
-    )
-    monkeypatch.setattr(grade, "grade_swe_patch", lambda *args, **kwargs: verdict)
-
-    result = grade.grade_detailed(
-        {"FAIL_TO_PASS": ["a"]},
-        "diff",
-    )
-
-    assert result["reward"] == 1.0
-    assert result["dense"] == 0.75
-
-
-def test_agentic_metrics_report_policy_lag():
-    now = 1000.0
-    samples = [
-        SimpleNamespace(
-            metadata={"agentic": {"gen_timestamp": 900.0}},
-            weight_versions=["1", "2"],
-        ),
-        SimpleNamespace(
-            metadata={"agentic": {"gen_timestamp": 950.0}},
-            weight_versions=["2"],
-        ),
-    ]
-
-    result = metrics._async_metrics(samples, now)
-
-    assert result["async/version_span/max"] == 2.0
-    assert result["async/version_lag/max"] == 1.0
-    assert result["async/sample_age_sec/max"] == 100.0
-
-
 def test_generate_hook_imports_with_remote_slime_dependencies_stubbed(monkeypatch):
-    module_name = "modal_training_gym.frameworks.slime.agentic_rl.generate"
+    module_name = "modal_training_gym.frameworks.slime.swe_agent.generate"
     sys.modules.pop(module_name, None)
 
     module = _import_with_stubs(module_name, monkeypatch)

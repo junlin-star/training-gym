@@ -1,12 +1,10 @@
 """slime per-sample rollout hook (--custom-generate-function-path). One call = one episode:
 boot the task sandbox, run the unmodified mini-swe harness through a token-recording model,
-build a token-faithful training Sample, and grade it. Per-episode stats land in
-sample.metadata['agentic'] for metrics.py; episode limits come from args (--custom-config-path).
+build a token-faithful training Sample, and grade it.
 """
 
 import asyncio
 import concurrent.futures
-import json
 import logging
 import random
 import threading
@@ -16,65 +14,21 @@ import uuid
 from slime.rollout.sglang_rollout import GenerateState
 from slime.utils.types import Sample
 
-from . import prompts
-from .grade import grade_detailed
-from .model import RecordingModel
-from .sandbox import Sandbox
+from modal_training_gym.common.agents import mini_swe as prompts
+from modal_training_gym.common.agents.mini_swe import MiniSweEnvironmentAdapter
+from modal_training_gym.common.environments.swerebench import (
+    SweEnvironment,
+    SweEnvironmentConfig,
+    grade_swe_patch,
+)
 
-logger = logging.getLogger("agentic_rl")
+from .model import RecordingModel
+
+logger = logging.getLogger("modal_training_gym.slime.swe_agent")
 
 # Per-instance boot-failure tally. A task whose image won't build returns ABORTED and slime
 # requeues the same group forever; after the cap we ship a masked reward-0 sample to drop it.
 _boot_fails: dict[str, int] = {}
-
-
-def _overlong_penalty(total_len: int, args) -> float:
-    """Soft overlong penalty as a CONTEXT-CAP GUARD (DAPO ramp shape): 0 until the trajectory nears the
-    served window, linear to -1 between (l_max - l_cache) and l_max, clamped beyond. Keyed on total_length
-    — the quantity that actually hits the context cap and ends the episode (ContextExceeded), NOT generated
-    tokens — so a long-but-fine episode well inside the budget is untouched. The caller floors this for
-    CORRECT episodes so a solve is never zeroed. Disabled when agentic_overlong_max is 0/unset."""
-    l_max = getattr(args, "agentic_overlong_max", 0) or 0
-    if not l_max:
-        return 0.0
-    l_cache = getattr(args, "agentic_overlong_cache", 40960)
-    if total_len <= l_max - l_cache:
-        return 0.0
-    if total_len >= l_max:
-        return -1.0
-    return (l_max - l_cache - total_len) / l_cache
-
-
-def _diag_dump(
-    task: dict,
-    patch: str,
-    reward: float,
-    exit_status: str,
-    reward_source: str,
-    detail: dict,
-) -> None:
-    """Diagnostic only (--agentic-diag-dump): emit one JSON log line per episode so the submitted
-    patch + grading outcome can be grepped from the run log and zero-reward episodes classified as
-    real-fix-rejected (harness leak) vs wrong-patch (true difficulty). Off in production."""
-    try:
-        out = detail.get("output", "")
-        rec = {
-            "instance": task.get("instance_id", "?"),
-            "reward": reward,
-            "exit_status": exit_status,
-            "reward_source": reward_source,
-            "n_required": len(detail.get("required", [])),
-            "n_passed": len(detail.get("passed", [])),
-            "missing": detail.get("missing", [])[:8],
-            "patch": patch[:6000],
-            "grade_head": out[
-                :1200
-            ],  # apply result (set -e aborts here on apply failure)
-            "grade_tail": out[-1800:],  # test summary when apply succeeded
-        }
-        logger.info("AGENTIC_DIAG %s", json.dumps(rec))
-    except Exception:
-        pass
 
 
 # Episodes are long I/O-bound chains; asyncio.to_thread caps at min(32, cpu+4) threads, which
@@ -128,32 +82,27 @@ def _run_episode(
         session_id,
         query_timeout=limits["query_timeout"],
         max_context_len=limits["max_context_len"],
-        action_format=limits["action_format"],
         abort_check=abort_check,
     )
-    workdir = "/" + task["repo"].split("/")[1]
-    patch, reward, solved, exit_status, grade_time, reward_source = (
-        None,
-        0.0,
-        0.0,
-        "none",
-        0.0,
-        "none",
-    )
+    workdir = task["workdir"]
+    patch, reward, solved, exit_status, grade_time = None, 0.0, 0.0, "none", 0.0
     sandbox = None
-    agent = None
     t0 = time.perf_counter()
     try:
         # lifetime must cover the full agent run: the wall limit (episode_timeout) is checked BETWEEN steps,
         # so a slow FINAL turn can run another query_timeout past it → max episode ≈ episode_timeout +
         # query_timeout. Grading runs in its own fresh sandbox, so it's not this sandbox's concern. Using
         # grade_timeout (600) here under-sized it, reaping long episodes mid-final-turn ("already shut down").
-        sandbox = Sandbox(
+        environment = SweEnvironment.create(
             task,
+            config=SweEnvironmentConfig(
+                lifetime=limits["episode_timeout"] + limits["query_timeout"] + 300,
+                exec_timeout=limits["exec_timeout"],
+                boot_retries=2,
+            ),
             lifetime=limits["episode_timeout"] + limits["query_timeout"] + 300,
-            exec_timeout=limits["exec_timeout"],
-            boot_retries=2,
         )
+        sandbox = MiniSweEnvironmentAdapter(environment)
         agent = DefaultAgent(
             model,
             sandbox,
@@ -175,8 +124,7 @@ def _run_episode(
         patch = (
             exit_info.get("submission") or ""
         )  # agent's curated source-only patch (on Submitted)
-        reward_source = "submission" if patch.strip() else "fallback_diff"
-        if not patch.strip():  # no clean submission → grade the working-tree diff (grade.py resets test files)
+        if not patch.strip():
             _, patch = sandbox.exec(
                 "git add -A && git diff --cached HEAD", cwd=workdir, timeout=120
             )
@@ -189,18 +137,13 @@ def _run_episode(
     if patch is not None and not model.aborted:
         g0 = time.perf_counter()
         try:
-            detail = grade_detailed(task, patch, timeout=limits["grade_timeout"])
-            # TRAIN REWARD only on SUBMITTED episodes. Giving the non-submit git-diff fallback dense credit
-            # reinforced rambling (the gradient learned "ramble for partial credit" over "submit-and-solve"),
-            # so non-submit → 0 enforces submit discipline; dynamic sampling then filters the all-fail groups
-            # so every kept group's winner is a real submitter. solved (metric) stays the strict working-tree
-            # binary for diagnostics (the capability-vs-submission gap).
-            reward = detail["dense"] if reward_source == "submission" else 0.0
-            solved = detail[
-                "reward"
-            ]  # strict binary → solved_frac (working-tree; informative)
-            if limits.get("diag_dump"):
-                _diag_dump(task, patch, solved, exit_status, reward_source, detail)
+            verdict = grade_swe_patch(
+                task,
+                patch,
+                timeout=limits["grade_timeout"],
+            )
+            reward = float(verdict.metadata.get("dense_reward", verdict.passed))
+            solved = float(verdict.passed)
         except Exception:
             logger.exception("grading failed (instance=%s)", task.get("instance_id"))
         grade_time = time.perf_counter() - g0
@@ -214,10 +157,7 @@ def _run_episode(
         "format_errors": model.n_format_errors,
         "length_truncations": model.n_length_truncations,  # turns the model's output was cut at the per-turn cap
         "exit_status": exit_status,
-        "solved": float(
-            solved
-        ),  # strict binary (all required pass) → solved_frac; reward is dense
-        "reward_source": reward_source,  # "submission" (curated) vs "fallback_diff" (git add -A) vs "none"
+        "solved": float(solved),
         "gen_time": round(model.gen_time, 1),
         "exec_time": round(sandbox.exec_time if sandbox is not None else 0.0, 1),
         "exec_timeouts": sandbox.exec_timeouts if sandbox is not None else 0,
@@ -304,12 +244,6 @@ async def generate(args, sample: Sample, sampling_params, evaluation: bool = Fal
         "max_format_errors": getattr(
             args, "agentic_max_format_errors", 30
         ),  # consecutive before episode dies
-        "action_format": getattr(
-            args, "agentic_action_format", None
-        ),  # "tool_call"|"bash_block"; None=per-model
-        "diag_dump": getattr(
-            args, "agentic_diag_dump", False
-        ),  # dump per-episode patch+grade detail (diagnostic)
         "ramp_window": getattr(
             args, "agentic_ramp_window", 0.0
         ),  # cold-start stagger (s); spread the herd
@@ -403,18 +337,14 @@ async def generate(args, sample: Sample, sampling_params, evaluation: bool = Fal
     _boot_fails.pop(key, None)
     sample.tokens = model.tokens
     sample.response_length = len(model.tokens) - model.prompt_len
+    sample.response = state.tokenizer.decode(
+        model.tokens[model.prompt_len :],
+        skip_special_tokens=False,
+    )
     sample.loss_mask = model.loss_mask[model.prompt_len :]
     sample.rollout_log_probs = model.logprobs[model.prompt_len :]
     sample.weight_versions = [v for v in model.versions if v is not None]
-    # Context-cap guard: penalize only trajectories nearing the 128k window (keyed on total_length),
-    # and never zero a CORRECT episode — floor keeps any full solve above any partial. reward is the dense
-    # baseline-relative signal; stats["solved"] is the strict 0/1 (set in _run_episode) for solved_frac.
-    penalty = _overlong_penalty(stats["total_length"], args)
-    shaped = reward + penalty
-    if stats.get("solved", 0.0) >= 1.0:
-        shaped = max(shaped, getattr(args, "agentic_overlong_correct_floor", 0.5))
-    stats["overlong_penalty"] = round(shaped - reward, 4)
-    sample.reward = shaped
+    sample.reward = reward
     sample.status = Sample.Status.COMPLETED
     sample.prefix_cache_info.cached_tokens = model.cached_tokens
     sample.prefix_cache_info.total_prompt_tokens = model.input_tokens

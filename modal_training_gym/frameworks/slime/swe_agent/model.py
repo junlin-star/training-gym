@@ -12,9 +12,8 @@ import urllib.error
 import urllib.request
 
 from minisweagent.exceptions import FormatError, InterruptAgentFlow
-from minisweagent.models.utils.actions_text import parse_regex_actions
 
-from .prompts import ACTION_REGEX, BASH_TOOL, FORMAT_ERROR_TEMPLATE
+from modal_training_gym.common.agents.mini_swe import BASH_TOOL
 
 # Qwen3.6 native tool-call is the qwen3_xml format (NOT JSON), e.g.:
 #   <tool_call>
@@ -34,16 +33,10 @@ _PARAM_CMD_RE = re.compile(
 # Per-turn generation budget against the served context window.
 _CONTEXT_MARGIN = 256  # headroom for stop/special tokens
 _MIN_GEN_TOKENS = 2048  # below this much room left, end the episode rather than spiral on truncated actions
-_STOP_STRINGS = [
-    "<|user|>",
-    "<|observation|>",
-]  # role tokens that begin the next turn — never inside a valid action
 
 
 class ContextExceeded(InterruptAgentFlow):
-    """The growing trajectory left no room to generate — end the episode cleanly (like LimitsExceeded).
-    With thinking kept in-context (clear_thinking=False) this is the natural end-state of a long episode
-    once accumulated reasoning fills the window."""
+    """The growing trajectory left no room to generate."""
 
 
 class RolloutAborted(InterruptAgentFlow):
@@ -65,7 +58,6 @@ class RecordingModel:
         session_id,
         query_timeout=600,
         max_context_len=131072,
-        action_format=None,
         abort_check=None,
     ):
         self.tokenizer = tokenizer
@@ -108,47 +100,26 @@ class RecordingModel:
             0  # tokens spent inside <think>…</think>, summed over turns
         )
         self._consumed = ""  # rendered text of the conversation already in `tokens`
-        # 1) Thinking-render + stop tokens, by model family (detected from the chat template). Keeping each
-        # turn's reasoning in-context makes the render a stable prefix across turns (required by the
-        # Sample→Sample append): GLM uses clear_thinking=False; Qwen3.x interleaved thinking uses
-        # preserve_thinking=True. Stop on the turn-end token(s) for the model's format. Each family also has a
-        # natural default action channel.
-        ct = getattr(tokenizer, "chat_template", "") or ""
-        if "preserve_thinking" in ct:  # Qwen3.x
-            self._think_kwargs = {"preserve_thinking": True}
-            ids = [
-                tokenizer.convert_tokens_to_ids(t)
-                for t in ("<|im_end|>", "<|endoftext|>")
+        self._think_kwargs = {"preserve_thinking": True}
+        stop_ids = [
+            tokenizer.convert_tokens_to_ids(token)
+            for token in ("<|im_end|>", "<|endoftext|>")
+        ]
+        self._stop = {
+            "stop_token_ids": [
+                token_id
+                for token_id in stop_ids
+                if isinstance(token_id, int) and token_id >= 0
             ]
-            self._stop = {
-                "stop_token_ids": [i for i in ids if isinstance(i, int) and i >= 0]
-            }
-            default_action_format = "tool_call"  # tool-call-trained → a ```bash fence gives frequent format errors
-        elif "clear_thinking" in ct:  # GLM
-            self._think_kwargs = {"clear_thinking": False}
-            self._stop = {"stop": _STOP_STRINGS}
-            default_action_format = "bash_block"  # emits the ```bash fence reliably
-        else:
-            self._think_kwargs = {}
-            self._stop = {"stop": _STOP_STRINGS}
-            default_action_format = "bash_block"
-        # 2) Action channel — an explicit, first-class choice (override via --agentic-action-format), defaulting
-        # per family. Both are supported: "bash_block" parses a ```bash text fence (ACTION_REGEX); "tool_call"
-        # renders the bash tool schema (apply_chat_template tools=) and parses the model's native <tool_call>.
-        # Either way the unit of execution is the same bash command — only how the model expresses it differs.
-        self._action_format = action_format or default_action_format
-        assert self._action_format in ("bash_block", "tool_call"), (
-            f"bad action_format {self._action_format!r}"
-        )
-        self._tools = [BASH_TOOL] if self._action_format == "tool_call" else None
+        }
+        self._tools = [BASH_TOOL]
 
     def _render(self, messages: list[dict], add_generation_prompt: bool) -> str:
         clean = [{"role": m["role"], "content": m["content"]} for m in messages]
         # Keep each turn's reasoning in-context so the render stays a stable prefix across turns — required by
         # the Sample→Sample append below. The kwarg is model-specific (detected in __init__); without it the
         # past <think> blocks get stripped on re-render, making the render non-monotonic and desyncing recording.
-        # tools= renders the bash schema into the (stable) system section for the Qwen tool-call path;
-        # None for GLM. Constant across turns, so the rendered prefix stays monotonic.
+        # tools= renders a stable bash schema into the system section.
         return self.tokenizer.apply_chat_template(
             clean,
             add_generation_prompt=add_generation_prompt,
@@ -185,16 +156,7 @@ class RecordingModel:
         )
 
     def _parse_actions(self, segment: str, finish: str) -> list[dict]:
-        """Extract the action from the post-</think> segment as [{"command": ...}]. GLM uses the ```bash
-        regex; Qwen3.x parses its native qwen3_xml <tool_call><function=bash><parameter=command>…</parameter>… .
-        Raises mini-swe FormatError on a malformed action so DefaultAgent feeds it back and retries."""
-        if self._action_format == "bash_block":
-            return parse_regex_actions(
-                segment,
-                action_regex=ACTION_REGEX,
-                format_error_template=FORMAT_ERROR_TEMPLATE,
-                template_kwargs={"finish_reason": finish},
-            )
+        """Parse one Qwen native bash tool call."""
         calls = _TOOL_CALL_RE.findall(segment)
         if len(calls) != 1:
             raise self._tool_call_format_error(
@@ -238,8 +200,8 @@ class RecordingModel:
             )
         self.n_calls += 1
         full = self._render(messages, add_generation_prompt=True)
-        # Sample→Sample append: this turn's render MUST extend the prior verbatim (clear_thinking=False
-        # keeps it prefix-stable). The slice is only correct under that invariant — guard it loudly.
+        # The render must extend the prior verbatim or exact-token recording
+        # would lose provenance.
         assert full.startswith(self._consumed), (
             "chat-template render not prefix-stable — token recording would desync"
         )
