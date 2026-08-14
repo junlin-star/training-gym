@@ -266,7 +266,7 @@ async def generate(args, sample: Any, sampling_params, evaluation: bool = False)
         _run_episode,
         task,
         state.tokenizer,
-        state.sampling_params,
+        dict(sampling_params or state.sampling_params),
         router_url,
         limits,
         session_id,
