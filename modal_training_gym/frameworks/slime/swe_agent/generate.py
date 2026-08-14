@@ -18,10 +18,10 @@ from modal_training_gym.common.environments.swerebench import (
     SWE_SYSTEM_TEMPLATE,
     SweEnvironment,
     SweEnvironmentConfig,
-    SweMiniSweEnvironmentAdapter,
     grade_swe_patch,
 )
 
+from .environment import MiniSweEnvironmentAdapter
 from .qwen3_model import Qwen3RecordingModel
 
 logger = logging.getLogger("modal_training_gym.slime.swe_agent")
@@ -102,7 +102,7 @@ def _run_episode(
             ),
             lifetime=limits["episode_timeout"] + limits["query_timeout"] + 300,
         )
-        sandbox = SweMiniSweEnvironmentAdapter(environment)
+        sandbox = MiniSweEnvironmentAdapter(environment)
         agent = DefaultAgent(
             model,
             sandbox,

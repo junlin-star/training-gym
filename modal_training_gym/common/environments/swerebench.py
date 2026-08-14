@@ -16,7 +16,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
-from modal_training_gym.common.agents import MiniSweEnvironmentAdapter
 from modal_training_gym.common.dataset import DatasetConfig
 from modal_training_gym.common.environments.base import (
     EvalVerdict,
@@ -88,6 +87,15 @@ SWE_OBSERVATION_TEMPLATE = """\
 """
 
 SWE_SUBMIT_SENTINEL = "COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"
+
+
+def extract_swe_submission(output: str, returncode: int) -> str | None:
+    """Return the submitted patch when output follows the SWE sentinel contract."""
+
+    lines = output.lstrip().splitlines(keepends=True)
+    if lines and lines[0].strip() == SWE_SUBMIT_SENTINEL and returncode == 0:
+        return "".join(lines[1:])
+    return None
 
 
 @dataclass(frozen=True)
@@ -476,40 +484,6 @@ class SweEnvironment(SandboxEnvironment):
 
     def serialize(self) -> dict[str, Any]:
         return {}
-
-
-class SweMiniSweEnvironmentAdapter(MiniSweEnvironmentAdapter):
-    """mini-swe adapter implementing SWE patch submission semantics."""
-
-    def execute(
-        self,
-        action: dict,
-        cwd: str = "",
-        *,
-        timeout: int | None = None,
-    ) -> dict:
-        result = self._step(action)
-        formatted = self._format_result(result)
-        lines = formatted["output"].lstrip().splitlines(keepends=True)
-        if (
-            lines
-            and lines[0].strip() == SWE_SUBMIT_SENTINEL
-            and formatted["returncode"] == 0
-        ):
-            from minisweagent.exceptions import Submitted
-
-            submission = "".join(lines[1:])
-            raise Submitted(
-                {
-                    "role": "exit",
-                    "content": submission,
-                    "extra": {
-                        "exit_status": "Submitted",
-                        "submission": submission,
-                    },
-                }
-            )
-        return formatted
 
 
 def grade_swe_patch(
