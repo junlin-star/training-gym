@@ -29,6 +29,20 @@ from modal_training_gym.common.environments.bfcl import (
     to_json_schema,
     tool_schemas_to_openai as bfcl_tool_schemas_to_openai,
 )
+from modal_training_gym.common.environments.swerebench import (
+    DEFAULT_SWE_ENVIRONMENT_CONFIG,
+    SUPPORTED_LOG_PARSERS,
+    SweEnvironment,
+    SweEnvironmentConfig,
+    SweRebenchV2Config,
+    SweRebenchV2Dataset,
+    grade_swe_patch,
+    normalize_swe_task,
+    parse_swe_task_row,
+    passed_pytest_tests,
+    repo_workdir,
+    test_files_from_patch,
+)
 from modal_training_gym.common.environments.toolathlon import (
     DEFAULT_CONFIG,
     TIER_A_MCPS,
@@ -90,4 +104,18 @@ __all__ = [
     "bfcl_default_system_prompt",
     "bfcl_tool_schemas_to_openai",
     "to_json_schema",
+    # SWE-Rebench — config + environment
+    "SweEnvironmentConfig",
+    "DEFAULT_SWE_ENVIRONMENT_CONFIG",
+    "SUPPORTED_LOG_PARSERS",
+    "SweEnvironment",
+    "grade_swe_patch",
+    "normalize_swe_task",
+    "parse_swe_task_row",
+    "passed_pytest_tests",
+    "repo_workdir",
+    "test_files_from_patch",
+    # SWE-Rebench — data
+    "SweRebenchV2Config",
+    "SweRebenchV2Dataset",
 ]

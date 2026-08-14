@@ -7,9 +7,10 @@ TUTORIAL_METADATA = {
     "difficulty": "Advanced",
     "order": 32,
     "api_classes": [
-        "DatasetConfig",
         "Qwen3_6_27B",
         "Qwen3_6_27b_Recipe",
+        "SweEnvironment",
+        "SweRebenchV2Dataset",
         "TrainConfig",
         "TrainingRun",
     ],
@@ -73,14 +74,14 @@ def _install():
 
 @code
 def _imports():
-    import json
     import os
-    from pathlib import Path
 
     from modal_training_gym import (
-        DatasetConfig,
         Qwen3_6_27B,
         Qwen3_6_27b_Recipe,
+        SweEnvironment,
+        SweRebenchV2Config,
+        SweRebenchV2Dataset,
         TrainConfig,
     )
 
@@ -88,53 +89,29 @@ def _imports():
 @markdown
 def _overlay_intro():
     """
-    ## Pin the agentic slime overlay
+    ## Training Gym's native agent stack
 
-    Training Gym pins its base slime image by digest. The agent loop and four
-    focused slime changes live in a separate public slime commit:
+    Training Gym provides the complete integration used below:
 
-    - the `agentic_rl` package;
-    - a staleness-bounded fully-async collector with dynamic sampling;
-    - full-group regeneration after a weight-update abort;
-    - neutral handling of fully masked samples during GRPO normalization; and
-    - correct text-only loading for Qwen3.6.
+    - `SweRebenchV2Dataset` prepares the filtered Python/pytest task slice;
+    - `SweEnvironment` runs bash in a task image and grades in a second clean
+      sandbox;
+    - the slime agent adapter runs stock mini-swe-agent while recording exact
+      SGLang token IDs, logprobs, loss masks, and weight versions;
+    - a Training Gym rollout plugin bounds fully-async staleness and performs
+      dynamic sampling; and
+    - a text-only data source avoids treating Qwen3.6's optional processor as a
+      multimodal input pipeline.
 
-    The image overlay copies only `agentic_rl/` and applies
-    `agentic_rl/training_gym.patch`. It does **not** replace `/root/slime`, so
-    Training Gym's built-in compatibility patches remain intact.
-
-    The commit is immutable. Override `SLIME_AGENTIC_REF` only when testing a
-    newer compatible commit.
+    The only added image dependency is mini-swe-agent itself. The tutorial uses
+    Training Gym's pinned slime image without cloning or patching slime.
     """
 
 
 @code
 def _overlay():
-    SLIME_OVERLAY_REPO = "https://github.com/modal-projects/slime.git"
-    SLIME_OVERLAY_REF = os.environ.get(
-        "SLIME_AGENTIC_REF",
-        "a03d399266a49280c286d87160340b3a1816878e",
-    )
-
-    def agentic_slime_overlay(image):
-        checkout = "/tmp/training-gym-agentic-slime"
-        return image.run_commands(
-            (
-                f"rm -rf {checkout} && "
-                f"git init {checkout} && "
-                f"git -C {checkout} remote add origin {SLIME_OVERLAY_REPO} && "
-                f"git -C {checkout} fetch --depth 1 origin {SLIME_OVERLAY_REF} && "
-                f"git -C {checkout} checkout --detach FETCH_HEAD"
-            ),
-            f"cp -R {checkout}/agentic_rl /root/slime/agentic_rl",
-            (
-                f"cd /root/slime && "
-                f"git apply --check {checkout}/agentic_rl/training_gym.patch && "
-                f"git apply {checkout}/agentic_rl/training_gym.patch"
-            ),
-            "uv pip install --system mini-swe-agent==2.3.0",
-            f"rm -rf {checkout}",
-        )
+    def agentic_swe_image(image):
+        return image.uv_pip_install("mini-swe-agent==2.3.0")
 
 
 @markdown
@@ -154,97 +131,9 @@ def _dataset_intro():
 
 @code
 def _dataset():
-    RAW_DATASET = "nebius/SWE-rebench-V2"
-    RAW_DATASET_REVISION = "475dd5e8703bb5fb22dd3c60b5d038b019eba1e0"
-    PREFILTER_DATASET = "junlin-modal/swe-rebench-v2"
-    PREFILTER_REVISION = "f2cf9141b7fff2febb748d4859b9b5d0d2aacda1"
-    SUPPORTED_PARSERS = {
-        "parse_log_pytest",
-        "parse_log_pytest_options",
-        "parse_log_pytest_v2",
-    }
-
-    class SweRebenchV2TutorialDataset(DatasetConfig):
-        input_key = "prompt"
-        label_key = "label"
-        output_format = "jsonl"
-        apply_chat_template = False
-        writes_eval_paths = False
-
-        def __init__(self, n_tasks: int = 8):
-            self.n_tasks = n_tasks
-            super().__init__(dataset_id=f"swe-rebench-v2-agentic-{n_tasks}")
-
-        def prepare(
-            self,
-            path: str,
-            eval_paths: dict[str, str] | None = None,
-        ) -> None:
-            from datasets import load_dataset
-            from huggingface_hub import hf_hub_download
-
-            ids_path = hf_hub_download(
-                PREFILTER_DATASET,
-                "swe_rebench_v2/prefilter_ids.json",
-                repo_type="dataset",
-                revision=PREFILTER_REVISION,
-            )
-            mixed_outcome_ids = set(
-                json.loads(Path(ids_path).read_text())["instance_ids"]
-            )
-
-            rows = []
-            source = load_dataset(
-                RAW_DATASET,
-                split="train",
-                revision=RAW_DATASET_REVISION,
-                streaming=True,
-            )
-            for raw in source:
-                install_config = raw.get("install_config") or {}
-                if raw["instance_id"] not in mixed_outcome_ids:
-                    continue
-                if (raw.get("language") or "").lower() != "python":
-                    continue
-                if install_config.get("log_parser") not in SUPPORTED_PARSERS:
-                    continue
-                if not raw.get("FAIL_TO_PASS") or not raw.get("test_patch"):
-                    continue
-
-                metadata = {
-                    "task_type": "swerebench",
-                    "instance_id": raw["instance_id"],
-                    "image_name": raw["image_name"],
-                    "repo": raw["repo"],
-                    "install_config": install_config,
-                    "test_patch": raw["test_patch"],
-                    "FAIL_TO_PASS": list(raw["FAIL_TO_PASS"]),
-                    "PASS_TO_PASS": list(raw["PASS_TO_PASS"]),
-                    "problem_statement": raw["problem_statement"],
-                }
-                rows.append(
-                    {
-                        "prompt": raw["problem_statement"],
-                        "label": raw["instance_id"],
-                        "metadata": metadata,
-                    }
-                )
-                if len(rows) >= self.n_tasks:
-                    break
-
-            if len(rows) < self.n_tasks:
-                raise RuntimeError(
-                    f"Only found {len(rows)}/{self.n_tasks} compatible tasks"
-                )
-
-            output = Path(path)
-            output.parent.mkdir(parents=True, exist_ok=True)
-            output.write_text(
-                "".join(json.dumps(row) + "\n" for row in rows),
-                encoding="utf-8",
-            )
-
-    dataset = SweRebenchV2TutorialDataset(n_tasks=8)
+    dataset = SweRebenchV2Dataset(
+        config=SweRebenchV2Config(n_tasks=8),
+    )
 
 
 @markdown
@@ -298,10 +187,10 @@ def _config():
             ref_load="/checkpoints/Qwen3.6-27B_torch_dist_tp4pp2",
             # Agent rollouts.
             rollout_function=(
-                "slime.rollout.fully_async_rollout."
+                "modal_training_gym.frameworks.slime.bounded_async_rollout."
                 "generate_rollout_fully_async"
             ),
-            image_overlay=agentic_slime_overlay,
+            image_overlay=agentic_swe_image,
             rm_type=None,
             num_rollout=num_rollout,
             rollout_batch_size=rollout_batch_size,
@@ -322,16 +211,24 @@ def _config():
             # Launcher and custom-generate settings.
             train_function_kwargs={"ephemeral_disk": 2_097_152},
             environment={
-                "PYTHONPATH": "/root/Megatron-LM/:/root/slime",
+                "PYTHONPATH": "/root/Megatron-LM/:/root/slime:/root",
                 "CUDA_DEVICE_MAX_CONNECTIONS": "1",
                 "NCCL_NVLS_ENABLE": "1",
                 "SLIME_AGENT_SANDBOX_CPU": "2",
                 "SLIME_AGENT_SANDBOX_MEMORY_MB": "4096",
             },
             extra_config={
-                "custom_generate_function_path": "agentic_rl.generate.generate",
+                "custom_generate_function_path": (
+                    "modal_training_gym.frameworks.slime.agentic_rl."
+                    "generate.generate"
+                ),
                 "training_gym_custom_rollout_log_function_path": (
-                    "agentic_rl.metrics.log_rollout_data"
+                    "modal_training_gym.frameworks.slime.agentic_rl."
+                    "metrics.log_rollout_data"
+                ),
+                "data_source_path": (
+                    "modal_training_gym.frameworks.slime.agentic_rl."
+                    "data_source.TextOnlyRolloutDataSourceWithBuffer"
                 ),
                 "metadata_key": "metadata",
                 "rollout_shuffle": True,

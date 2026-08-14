@@ -128,6 +128,22 @@ _EXPORTS = {
         "Qwen3_ASR_1_7b_Recipe",
     ),
     "score_in_sandbox": ("modal_training_gym.common.eval", "score_in_sandbox"),
+    "SweEnvironment": (
+        "modal_training_gym.common.environments",
+        "SweEnvironment",
+    ),
+    "SweEnvironmentConfig": (
+        "modal_training_gym.common.environments",
+        "SweEnvironmentConfig",
+    ),
+    "SweRebenchV2Config": (
+        "modal_training_gym.common.environments",
+        "SweRebenchV2Config",
+    ),
+    "SweRebenchV2Dataset": (
+        "modal_training_gym.common.environments",
+        "SweRebenchV2Dataset",
+    ),
     "SlimeRecipe": ("modal_training_gym.train_recipes.slime_recipe", "SlimeRecipe"),
     "ToolCall": ("modal_training_gym.common.models", "ToolCall"),
     "TrainConfig": ("modal_training_gym.common.train", "TrainConfig"),
@@ -203,6 +219,10 @@ __all__ = [
     "Qwen3_ASR_1_7b_Recipe",
     "Qwen3_VL_8b_Recipe",
     "score_in_sandbox",
+    "SweEnvironment",
+    "SweEnvironmentConfig",
+    "SweRebenchV2Config",
+    "SweRebenchV2Dataset",
     "SlimeRecipe",
     "ToolCall",
     "TrainConfig",
