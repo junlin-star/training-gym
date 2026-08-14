@@ -1,11 +1,11 @@
-"""Tutorial source for `004_async_swe_rebench` — parsed by generate_tutorial.py."""
+"""Tutorial source for `010_async_swe_rebench` — parsed by generate_tutorial.py."""
 
 TUTORIAL_METADATA = {
     "framework": "`slime`",
     "cluster_shape": "3 x 8xH200",
     "summary": "Fully-async Qwen3.6-27B agent RL on SWE-Rebench V2",
     "difficulty": "Advanced",
-    "order": 32,
+    "order": 70,
     "api_classes": [
         "Qwen3_6_27B",
         "Qwen3_6_27b_Recipe",
@@ -53,7 +53,7 @@ def _run_instructions():
     Run from the repository root:
 
     ```bash
-    uv run python tutorials/multinode/004_async_swe_rebench/004_async_swe_rebench.py
+    uv run python tutorials/rl/010_async_swe_rebench/010_async_swe_rebench.py
     ```
 
     Set `FULL_RUN=1` to use the research-scale rollout topology and schedule.
@@ -125,15 +125,19 @@ def _dataset_intro():
 
     The prepared JSONL stores only the fields the rollout needs. Task images are
     referenced by `image_name`; the dataset does not copy repositories or test
-    assets onto the Training Gym volume.
+    assets onto the Training Gym volume. The smoke run selects eight tasks;
+    `FULL_RUN=1` uses the entire filtered set.
     """
 
 
 @code
 def _dataset():
-    dataset = SweRebenchV2Dataset(
-        config=SweRebenchV2Config(n_tasks=8),
-    )
+    def build_dataset(*, full_run: bool = False) -> SweRebenchV2Dataset:
+        return SweRebenchV2Dataset(
+            config=SweRebenchV2Config(
+                n_tasks=None if full_run else 8,
+            ),
+        )
 
 
 @markdown
@@ -152,8 +156,8 @@ def _async_intro():
     collecting until the trainer has a useful batch. Watch the unbiased
     `dynamic_sampling/raw_reward_all`, not only the selected batch reward.
 
-    `FULL_RUN=1` expands to four rollout nodes and the research batch sizes.
-    It is intentionally opt-in.
+    `FULL_RUN=1` expands to four rollout nodes, the research batch sizes, and
+    the complete filtered task set. It is intentionally opt-in.
     """
 
 
@@ -249,7 +253,7 @@ def _config():
         )
         return TrainConfig(
             model=Qwen3_6_27B(),
-            dataset=dataset,
+            dataset=build_dataset(full_run=full_run),
             recipe=recipe,
         )
 

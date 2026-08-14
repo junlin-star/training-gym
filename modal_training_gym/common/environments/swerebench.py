@@ -203,6 +203,7 @@ class SweRebenchV2Dataset(DatasetConfig):
     output_format = "jsonl"
     apply_chat_template = False
     writes_eval_paths = False
+    always_prepare = True
 
     def __init__(
         self,
