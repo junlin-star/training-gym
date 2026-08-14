@@ -34,12 +34,7 @@ import logging
 import queue
 import threading
 import time
-
-from slime.rollout.sglang_rollout import GenerateState, generate_and_rm_group
-from slime.utils.async_utils import run
-from slime.utils.http_utils import get_rollout_num_engines
-from slime.utils.misc import load_function
-from slime.utils.types import Sample
+from typing import Any
 
 __all__ = [
     "AsyncRolloutWorker",
@@ -55,6 +50,8 @@ _worker_lock = threading.Lock()
 
 
 def _get_global_worker(args, data_buffer) -> AsyncRolloutWorker:
+    from slime.utils.http_utils import get_rollout_num_engines
+
     global _global_worker
     with _worker_lock:
         if _global_worker is None or not _global_worker.worker_thread.is_alive():
@@ -92,14 +89,16 @@ class AsyncRolloutWorker:
         # Done callbacks run on the worker event-loop thread. Keep this queue
         # unbounded so a full queue can never block that loop; pool_limit below
         # provides backpressure before new work is submitted.
-        self.output_queue: queue.Queue[tuple[int, list[Sample]]] = queue.Queue()
+        self.output_queue: queue.Queue[tuple[int, list[Any]]] = queue.Queue()
         self.worker_thread: threading.Thread | None = None
+        from slime.rollout.sglang_rollout import GenerateState
+
         self.state = GenerateState(args)
         # Bound every generated-but-unconsumed group, whether still active, in
         # the handoff queue, or buffered by the collector. This is the direct
         # Little's-law control on policy lag: at one batch consumed per update,
         # a pool of N * rollout_batch_size is at most roughly N updates deep.
-        self.completed_buffer: dict[int, list[Sample]] = {}
+        self.completed_buffer: dict[int, list[Any]] = {}
         self.inflight_gids: set[int] = set()
         max_staleness = getattr(args, "rollout_max_staleness", None)
         staleness_limit = (
@@ -121,8 +120,8 @@ class AsyncRolloutWorker:
         if self.worker_thread and self.worker_thread.is_alive():
             self.worker_thread.join(timeout=5)
 
-    def get_completed_groups(self) -> list[tuple[int, list[Sample]]]:
-        completed: list[tuple[int, list[Sample]]] = []
+    def get_completed_groups(self) -> list[tuple[int, list[Any]]]:
+        completed: list[tuple[int, list[Any]]] = []
         while True:
             try:
                 completed.append(self.output_queue.get_nowait())
@@ -139,6 +138,8 @@ class AsyncRolloutWorker:
         asyncio.run(self._loop())
 
     async def _loop(self) -> None:
+        from slime.rollout.sglang_rollout import generate_and_rm_group
+
         active_tasks: set[asyncio.Task] = set()
         max_concurrent = self.concurrency
         gid_counter = 0
@@ -200,6 +201,8 @@ class AsyncRolloutWorker:
 
     def _make_done_cb(self, gid: int):
         def _cb(done_task: asyncio.Task) -> None:
+            from slime.utils.types import Sample
+
             self.inflight_gids.discard(
                 gid
             )  # no longer generating → unpins the staleness window
@@ -233,7 +236,9 @@ class AsyncRolloutWorker:
 
 async def _generate_rollout_async(
     args, rollout_id: int, data_buffer
-) -> list[list[Sample]]:
+) -> list[list[Any]]:
+    from slime.utils.misc import load_function
+
     assert args.rollout_global_dataset
     worker = _get_global_worker(args, data_buffer)
 
@@ -266,7 +271,7 @@ async def _generate_rollout_async(
     last_log = started
     LOG_EVERY = 30.0
 
-    collected: list[list[Sample]] = []
+    collected: list[list[Any]] = []
     n_examined = (
         0  # groups passed through the filter this rollout (pre-filter denominator)
     )
@@ -316,7 +321,7 @@ async def _generate_rollout_async(
             last_log = now
 
     # Order by sample.index for determinism (slime convention).
-    def _key(group: list[Sample]) -> int:
+    def _key(group: list[Any]) -> int:
         for s in group:
             idx = getattr(s, "index", None)
             if idx is not None:
@@ -338,7 +343,7 @@ async def _generate_rollout_async(
     return out
 
 
-def _group_mean_reward(group: list[Sample], args) -> float:
+def _group_mean_reward(group: list[Any], args) -> float:
     rs = [
         s.get_reward_value(args)
         for s in group
@@ -385,4 +390,6 @@ def generate_rollout_fully_async(
 
     if evaluation:
         raise ValueError("fully-async rollout doesn't support evaluation mode")
+    from slime.utils.async_utils import run
+
     return run(_generate_rollout_async(args, rollout_id, data_buffer))

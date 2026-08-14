@@ -10,9 +10,7 @@ import random
 import threading
 import time
 import uuid
-
-from slime.rollout.sglang_rollout import GenerateState
-from slime.utils.types import Sample
+from typing import Any
 
 from modal_training_gym.common.agents import mini_swe as prompts
 from modal_training_gym.common.agents.mini_swe import MiniSweEnvironmentAdapter
@@ -179,10 +177,12 @@ def _run_episode(
 
 
 def _ship_masked_sample(
-    sample: Sample, tokenizer, problem_statement: str, reason: str
-) -> Sample:
+    sample: Any, tokenizer, problem_statement: str, reason: str
+) -> Any:
     """A valid but fully-masked reward-0 sample for a permanently-failing task: ships to leave
     the buffer, contributes no gradient (slime zeros the loss mask via remove_sample)."""
+    from slime.utils.types import Sample
+
     ptoks = tokenizer.encode(problem_statement or "", add_special_tokens=False)[:512]
     eos = (
         tokenizer.eos_token_id
@@ -209,13 +209,18 @@ def _recycle_or_drop(args, sample, tokenizer, problem_statement, reason):
     generate_rollout ships EVERY returned sample straight to training, where a status=ABORTED sample's
     reward=None crashes _post_process_rewards (torch.tensor(None)). So: async → ABORTED (recycle);
     sync → a masked reward-0 sample (valid reward, remove_sample=True so it contributes no gradient)."""
+    from slime.utils.types import Sample
+
     if "fully_async" in getattr(args, "rollout_function_path", ""):
         sample.status = Sample.Status.ABORTED
         return sample
     return _ship_masked_sample(sample, tokenizer, problem_statement, reason)
 
 
-async def generate(args, sample: Sample, sampling_params, evaluation: bool = False):
+async def generate(args, sample: Any, sampling_params, evaluation: bool = False):
+    from slime.rollout.sglang_rollout import GenerateState
+    from slime.utils.types import Sample
+
     state = GenerateState(args)
     if state.aborted:
         return _recycle_or_drop(
