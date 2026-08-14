@@ -359,7 +359,7 @@ def test_wait_until_ready_polls_the_model_route(
 
     monkeypatch.setattr(endpoint_module.httpx, "get", _get)
 
-    _endpoint().wait_until_ready(timeout_sec=60)
+    _endpoint().wait_until_ready(timeout=60)
 
     assert requests[0][0] == "https://ws--ep.modal.run/v1/models"
     assert requests[0][1]["headers"] == {}
@@ -381,7 +381,7 @@ def test_wait_until_ready_sends_proxy_headers_when_required(
         lambda *_, **kwargs: captured.update(kwargs) or _FakeResponse(),
     )
 
-    _endpoint(requires_proxy_auth=True).wait_until_ready(timeout_sec=60)
+    _endpoint(requires_proxy_auth=True).wait_until_ready(timeout=60)
 
     assert captured["headers"]["Modal-Key"] == "wk"
 
@@ -400,7 +400,7 @@ def test_wait_until_ready_reports_rejected_proxy_credentials(
     )
 
     with pytest.raises(RuntimeError, match="rejected proxy authentication"):
-        _endpoint(requires_proxy_auth=True).wait_until_ready(timeout_sec=60)
+        _endpoint(requires_proxy_auth=True).wait_until_ready(timeout=60)
 
 
 def test_wait_until_ready_surfaces_unexpected_statuses(
@@ -411,7 +411,7 @@ def test_wait_until_ready_surfaces_unexpected_statuses(
     )
 
     with pytest.raises(httpx.HTTPStatusError):
-        _endpoint().wait_until_ready(timeout_sec=60)
+        _endpoint().wait_until_ready(timeout=60)
 
 
 def test_wait_until_ready_times_out_and_keeps_the_last_error(
@@ -423,7 +423,7 @@ def test_wait_until_ready_times_out_and_keeps_the_last_error(
     monkeypatch.setattr(endpoint_module.httpx, "get", _get)
 
     with pytest.raises(TimeoutError, match="my-ft") as excinfo:
-        _endpoint().wait_until_ready(timeout_sec=6)
+        _endpoint().wait_until_ready(timeout=6)
 
     assert isinstance(excinfo.value.__cause__, httpx.ConnectError)
     assert clock.slept == [2, 2, 2]
@@ -441,9 +441,7 @@ def test_chat_posts_the_conversation_and_returns_the_assistant_message(
 
     monkeypatch.setattr(endpoint_module.httpx, "post", _post)
 
-    message = _endpoint().chat(
-        [{"role": "user", "content": "hello"}], extra_parameters={"temperature": 0}
-    )
+    message = _endpoint().chat([{"role": "user", "content": "hello"}], temperature=0)
 
     assert message == {"role": "assistant", "content": "hi"}
     assert captured["url"] == "https://ws--ep.modal.run/v1/chat/completions"
@@ -453,6 +451,42 @@ def test_chat_posts_the_conversation_and_returns_the_assistant_message(
         "temperature": 0,
     }
     assert captured["headers"] == {}
+
+
+def test_chat_serializes_tool_arguments_without_mutating_messages(
+    monkeypatch: pytest.MonkeyPatch, clock: _FakeClock
+) -> None:
+    captured: dict[str, Any] = {}
+
+    def _post(url: str, **kwargs: Any) -> _FakeResponse:
+        captured.update(kwargs)
+        return _FakeResponse(message={"role": "assistant", "content": ""})
+
+    monkeypatch.setattr(endpoint_module.httpx, "post", _post)
+
+    messages = [
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call_0",
+                    "type": "function",
+                    "function": {
+                        "name": "lookup",
+                        "arguments": {"key": "value"},
+                    },
+                }
+            ],
+        }
+    ]
+
+    _endpoint().chat(messages)
+
+    assert captured["json"]["messages"][0]["tool_calls"][0]["function"][
+        "arguments"
+    ] == ('{"key": "value"}')
+    assert messages[0]["tool_calls"][0]["function"]["arguments"] == {"key": "value"}
 
 
 def test_chat_sends_proxy_headers_when_required(
