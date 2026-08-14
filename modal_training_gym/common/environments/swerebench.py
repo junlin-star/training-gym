@@ -526,6 +526,7 @@ def grade_swe_patch(
                 "set -e",
                 "git reset --hard HEAD",
                 f"{_APPLY} /tmp/test.patch",
+                "set +e",
                 *test_commands,
             ]
         )
@@ -541,6 +542,7 @@ def grade_swe_patch(
                 f"{_APPLY} /tmp/model.patch",
                 *reset_test_files,
                 f"{_APPLY} /tmp/test.patch",
+                "set +e",
                 *test_commands,
             ]
         )

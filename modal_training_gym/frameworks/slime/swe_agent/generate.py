@@ -84,7 +84,6 @@ def _run_episode(
         max_context_len=limits["max_context_len"],
         abort_check=abort_check,
     )
-    workdir = task["workdir"]
     patch, reward, solved, exit_status, grade_time = None, 0.0, 0.0, "none", 0.0
     sandbox = None
     t0 = time.perf_counter()
@@ -125,9 +124,7 @@ def _run_episode(
             exit_info.get("submission") or ""
         )  # agent's curated source-only patch (on Submitted)
         if not patch.strip():
-            _, patch = sandbox.exec(
-                "git add -A && git diff --cached HEAD", cwd=workdir, timeout=120
-            )
+            patch = environment.capture_patch()
     except Exception:
         logger.exception("episode failed (instance=%s)", task.get("instance_id"))
     finally:
@@ -281,12 +278,12 @@ async def generate(args, sample: Any, sampling_params, evaluation: bool = False)
     # Hard wall-cap on the whole episode. mini-swe's wall_time_limit only fires between turns, so a single
     # slow/streaming generation on a congested engine can overshoot it by hours, poisoning the batch with
     # extreme staleness. Cap it here from the rollout side and recycle; the orphan thread unwinds on its own.
-    # A legit episode runs to wall_limit + ONE final turn (bounded by query_timeout) + grade, so the cap must
-    # cover all three or it preempts legit episodes mid-final-turn (false-negatives). +120 slack only.
+    # A legitimate episode can use its wall limit, one final generation, and
+    # both baseline/patched grading passes.
     hard_cap = (
         limits["episode_timeout"]
         + limits["query_timeout"]
-        + limits["grade_timeout"]
+        + 2 * limits["grade_timeout"]
         + 120
     )
     try:

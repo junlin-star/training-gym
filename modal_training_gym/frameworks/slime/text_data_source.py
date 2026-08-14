@@ -15,6 +15,10 @@ def _build_text_data_source():
         """Buffered source that deliberately skips an HF processor."""
 
         def __init__(self, args) -> None:
+            # Do not call super(): the pinned slime source eagerly constructs
+            # Qwen's ProcessorMixin there and routes string prompts through the
+            # multimodal path. Remove this override once slime gates processor
+            # loading on multimodal_keys.
             self.args = args
             self.epoch_id = 0
             self.sample_group_index = 0

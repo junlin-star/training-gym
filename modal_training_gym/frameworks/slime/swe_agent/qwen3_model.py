@@ -291,6 +291,8 @@ class Qwen3RecordingModel:
             drop = len(token_logprobs) + n_ctx
             if drop:
                 del self.tokens[-drop:], self.loss_mask[-drop:], self.logprobs[-drop:]
+            if self.prompt_len is not None and self.prompt_len > len(self.tokens):
+                self.prompt_len = None
             self.versions.pop()
             self.n_format_errors += 1
             raise
