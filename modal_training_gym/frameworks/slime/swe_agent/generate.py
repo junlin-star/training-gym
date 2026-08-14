@@ -12,15 +12,17 @@ import time
 import uuid
 from typing import Any
 
-from modal_training_gym.common.agents import mini_swe as prompts
-from modal_training_gym.common.agents.mini_swe import MiniSweEnvironmentAdapter
 from modal_training_gym.common.environments.swerebench import (
+    SWE_INSTANCE_TEMPLATE,
+    SWE_OBSERVATION_TEMPLATE,
+    SWE_SYSTEM_TEMPLATE,
     SweEnvironment,
     SweEnvironmentConfig,
+    SweMiniSweEnvironmentAdapter,
     grade_swe_patch,
 )
 
-from .model import RecordingModel
+from .qwen3_model import Qwen3RecordingModel
 
 logger = logging.getLogger("modal_training_gym.slime.swe_agent")
 
@@ -61,7 +63,7 @@ def _run_episode(
     limits: dict,
     session_id: str,
     abort_check=None,
-) -> tuple[float, RecordingModel, dict]:
+) -> tuple[float, Qwen3RecordingModel, dict]:
     """Run stock mini-swe in a sandbox. Never raises; returns (reward, model, stats)."""
     from minisweagent.agents.default import DefaultAgent
 
@@ -72,11 +74,11 @@ def _run_episode(
     if (ramp := limits.get("ramp_window", 0.0)) > 0:
         time.sleep(random.uniform(0.0, ramp))
 
-    model = RecordingModel(
+    model = Qwen3RecordingModel(
         tokenizer,
         sampling_params,
         router_url,
-        prompts.OBSERVATION_TEMPLATE,
+        SWE_OBSERVATION_TEMPLATE,
         session_id,
         query_timeout=limits["query_timeout"],
         max_context_len=limits["max_context_len"],
@@ -100,12 +102,12 @@ def _run_episode(
             ),
             lifetime=limits["episode_timeout"] + limits["query_timeout"] + 300,
         )
-        sandbox = MiniSweEnvironmentAdapter(environment)
+        sandbox = SweMiniSweEnvironmentAdapter(environment)
         agent = DefaultAgent(
             model,
             sandbox,
-            system_template=prompts.SYSTEM_TEMPLATE,
-            instance_template=prompts.INSTANCE_TEMPLATE,
+            system_template=SWE_SYSTEM_TEMPLATE,
+            instance_template=SWE_INSTANCE_TEMPLATE,
             step_limit=limits["max_steps"],
             cost_limit=0.0,
             wall_time_limit_seconds=limits["episode_timeout"],

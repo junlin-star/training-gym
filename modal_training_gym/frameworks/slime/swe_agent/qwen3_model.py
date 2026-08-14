@@ -1,8 +1,4 @@
-"""mini-swe-agent Model that calls sglang directly and records exact tokens — the model-API
-seam. Keeps ONE running token sequence: each turn appends the new context (loss_mask 0) and the
-exact generated ids (loss_mask 1), so the trajectory is token-in-token-out faithful (one training
-Sample, no re-tokenization). One instance per episode; read tokens/loss_mask/logprobs/versions after.
-"""
+"""Qwen3 mini-swe model adapter with exact-token SGLang recording."""
 
 import json
 import random
@@ -13,7 +9,7 @@ import urllib.request
 
 from minisweagent.exceptions import FormatError, InterruptAgentFlow
 
-from modal_training_gym.common.agents.mini_swe import BASH_TOOL
+from modal_training_gym.common.environments.swerebench import SWE_BASH_TOOL
 
 # Qwen3.6 native tool-call is the qwen3_xml format (NOT JSON), e.g.:
 #   <tool_call>
@@ -46,7 +42,7 @@ class RolloutAborted(InterruptAgentFlow):
     while the sync drain waits for it. generate() sees model.aborted and recycles the sample."""
 
 
-class RecordingModel:
+class Qwen3RecordingModel:
     config = None  # mini-swe Model protocol
 
     def __init__(
@@ -112,7 +108,7 @@ class RecordingModel:
                 if isinstance(token_id, int) and token_id >= 0
             ]
         }
-        self._tools = [BASH_TOOL]
+        self._tools = [SWE_BASH_TOOL]
 
     def _render(self, messages: list[dict], add_generation_prompt: bool) -> str:
         clean = [{"role": m["role"], "content": m["content"]} for m in messages]

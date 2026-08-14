@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
+from modal_training_gym.common.agents import MiniSweEnvironmentAdapter
 from modal_training_gym.common.dataset import DatasetConfig
 from modal_training_gym.common.environments.base import (
     EvalVerdict,
@@ -35,6 +36,58 @@ SUPPORTED_LOG_PARSERS = frozenset(
 )
 _APPLY = "git apply -v --3way --recount --ignore-space-change --whitespace=nowarn"
 _EXEC_GRACE_SECONDS = 30
+
+SWE_BASH_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "bash",
+        "description": "Execute one bash command in the task repository.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "command": {
+                    "type": "string",
+                    "description": "The bash command to execute.",
+                }
+            },
+            "required": ["command"],
+        },
+    },
+}
+
+SWE_SYSTEM_TEMPLATE = """\
+You are a software engineer with access to one bash tool. Think briefly, then
+make exactly one bash tool call per response. Inspect the repository, implement
+the requested source-code fix, and verify it without modifying tests.
+"""
+
+SWE_INSTANCE_TEMPLATE = """\
+Solve the following software-engineering task in {{cwd}}:
+
+<task>
+{{task}}
+</task>
+
+Use bash to inspect and edit the repository. Do not modify tests or commit.
+When the fix is ready:
+1. Write only the intended source changes to patch.txt with `git diff`.
+2. Inspect patch.txt.
+3. In a separate final tool call, run exactly:
+   `echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT && cat patch.txt`
+"""
+
+SWE_OBSERVATION_TEMPLATE = """\
+<returncode>{{output.returncode}}</returncode>
+{% if output.output | length < 10000 -%}
+<output>{{ output.output }}</output>
+{%- else -%}
+<output_head>{{ output.output[:5000] }}</output_head>
+<elided_chars>{{ output.output | length - 10000 }}</elided_chars>
+<output_tail>{{ output.output[-5000:] }}</output_tail>
+{%- endif %}
+"""
+
+SWE_SUBMIT_SENTINEL = "COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"
 
 
 @dataclass(frozen=True)
@@ -423,6 +476,40 @@ class SweEnvironment(SandboxEnvironment):
 
     def serialize(self) -> dict[str, Any]:
         return {}
+
+
+class SweMiniSweEnvironmentAdapter(MiniSweEnvironmentAdapter):
+    """mini-swe adapter implementing SWE patch submission semantics."""
+
+    def execute(
+        self,
+        action: dict,
+        cwd: str = "",
+        *,
+        timeout: int | None = None,
+    ) -> dict:
+        result = self._step(action)
+        formatted = self._format_result(result)
+        lines = formatted["output"].lstrip().splitlines(keepends=True)
+        if (
+            lines
+            and lines[0].strip() == SWE_SUBMIT_SENTINEL
+            and formatted["returncode"] == 0
+        ):
+            from minisweagent.exceptions import Submitted
+
+            submission = "".join(lines[1:])
+            raise Submitted(
+                {
+                    "role": "exit",
+                    "content": submission,
+                    "extra": {
+                        "exit_status": "Submitted",
+                        "submission": submission,
+                    },
+                }
+            )
+        return formatted
 
 
 def grade_swe_patch(
