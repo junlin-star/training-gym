@@ -58,8 +58,8 @@ from modal_training_gym import (
 #   SGLang token IDs, logprobs, loss masks, and weight versions;
 # - a Training Gym rollout plugin bounds fully-async staleness and performs
 #   dynamic sampling; and
-# - a text-only data source avoids treating Qwen3.6's optional processor as a
-#   multimodal input pipeline.
+# - message-list dataset rows stay compatible with slime's standard processor
+#   path while the agent retains control of chat-template rendering.
 #
 # The only added image dependency is mini-swe-agent itself. The tutorial uses
 # Training Gym's pinned slime image without cloning or patching slime.
@@ -76,7 +76,8 @@ def agentic_swe_image(image):
 # The prepared JSONL stores only the fields the rollout needs. Task images are
 # referenced by `image_name`; the dataset does not copy repositories or test
 # assets onto the Training Gym volume. The smoke run selects eight tasks;
-# `FULL_RUN=1` uses the entire filtered set.
+# `FULL_RUN=1` uses the entire filtered set. Prompts are stored as a single
+# user message so they remain compatible with slime's standard data source.
 
 def build_dataset(*, full_run: bool = False) -> SweRebenchV2Dataset:
     return SweRebenchV2Dataset(
@@ -147,10 +148,6 @@ def build_training_config(*, full_run: bool = False) -> TrainConfig:
             "custom_generate_function_path": (
                 "modal_training_gym.frameworks.slime.swe_agent."
                 "generate.generate"
-            ),
-            "data_source_path": (
-                "modal_training_gym.frameworks.slime.text_data_source."
-                "TextOnlyRolloutDataSourceWithBuffer"
             ),
             "metadata_key": "metadata",
             "rollout_shuffle": True,

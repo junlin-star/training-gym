@@ -257,7 +257,12 @@ class SweRebenchV2Dataset(DatasetConfig):
                 continue
             rows.append(
                 {
-                    "prompt": task["problem_statement"],
+                    "prompt": [
+                        {
+                            "role": "user",
+                            "content": task["problem_statement"],
+                        }
+                    ],
                     "label": task["instance_id"],
                     "metadata": task,
                 }
