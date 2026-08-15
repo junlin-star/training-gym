@@ -11,19 +11,16 @@ Plug in per-sample logic via ``--custom-generate-function-path`` and
 per-sample reward via ``--custom-rm-path`` — the worker calls slime's stock
 :func:`generate_and_rm_group` which dispatches to those.
 
-Concurrency is sourced from ``args.sglang_server_concurrency`` and scaled by
-the number of sglang engines to match the per-sample semaphore cap in
-:mod:`slime.rollout.sglang_rollout`. ``rollout_max_staleness`` bounds the
-combined in-flight and completed pool to
+Concurrency starts from slime's per-sample serving cap and is divided by
+``n_samples_per_prompt`` to produce a prompt-group budget.
+``rollout_max_staleness`` bounds the combined in-flight and completed pool to
 ``rollout_max_staleness * rollout_batch_size`` groups.
 
 The worker is intentionally oblivious to slime's higher-level pause /
 weight-update signalling (e.g. ``GenerateState.aborted``). Each in-flight
 generation short-circuits on those signals on its own and surfaces
-:data:`Sample.Status.ABORTED`; the only piece the worker owns is
-**redirecting ABORTED groups back to ``data_buffer``** instead of shipping
-them to training, so the next rollout (with refreshed weights) can pick
-them up.
+:data:`Sample.Status.ABORTED`. Aborted or failed groups are returned to
+``data_buffer`` so transient failures do not consume prompts.
 """
 
 from __future__ import annotations
@@ -56,11 +53,17 @@ def _get_global_worker(args, data_buffer) -> AsyncRolloutWorker:
     with _worker_lock:
         if _global_worker is None or not _global_worker.worker_thread.is_alive():
             logger.info("starting fully-async rollout worker")
+            sample_capacity = args.sglang_server_concurrency * get_rollout_num_engines(
+                args
+            )
+            group_capacity = max(
+                1,
+                sample_capacity // max(1, args.n_samples_per_prompt),
+            )
             _global_worker = AsyncRolloutWorker(
                 args,
                 data_buffer,
-                concurrency=args.sglang_server_concurrency
-                * get_rollout_num_engines(args),
+                concurrency=group_capacity,
             )
             _global_worker.start()
         return _global_worker
@@ -181,7 +184,7 @@ class AsyncRolloutWorker:
                                 evaluation=False,
                             )
                         )
-                        task.add_done_callback(self._make_done_cb(gid))
+                        task.add_done_callback(self._make_done_cb(gid, group))
                         active_tasks.add(task)
 
                 await asyncio.sleep(1)
@@ -199,7 +202,17 @@ class AsyncRolloutWorker:
             except Exception:  # noqa: BLE001
                 pass
 
-    def _make_done_cb(self, gid: int):
+    def _requeue_group(self, group: list[Any]) -> None:
+        from slime.utils.types import Sample
+
+        for sample in group:
+            sample.status = Sample.Status.PENDING
+        try:
+            self.data_buffer.add_samples([group])
+        except Exception:  # noqa: BLE001
+            logger.exception("fully-async: failed to requeue group")
+
+    def _make_done_cb(self, gid: int, original_group: list[Any]):
         def _cb(done_task: asyncio.Task) -> None:
             from slime.utils.types import Sample
 
@@ -210,24 +223,21 @@ class AsyncRolloutWorker:
                 result = done_task.result()
             except Exception:  # noqa: BLE001
                 logger.exception("fully-async: process task raised")
+                self._requeue_group(original_group)
                 return
             if not isinstance(result, list):
                 logger.warning(
-                    "fully-async: generate_and_rm_group returned %r, expected list[Sample]; dropping",
+                    "fully-async: generate_and_rm_group returned %r, expected list[Sample]; requeueing",
                     type(result).__name__,
                 )
+                self._requeue_group(original_group)
                 return
             # Aborted group → requeue for redo under a fresh gid, don't ship to training. Reset EVERY
             # sibling to PENDING: on re-pull, generate_and_rm short-circuits COMPLETED samples (returns
             # them verbatim, no regeneration), which would ship the siblings' old-policy trajectories under
             # a fresh gid — stale data outside the staleness window. PENDING forces a full-group redo.
             if any(getattr(s, "status", None) == Sample.Status.ABORTED for s in result):
-                for s in result:
-                    s.status = Sample.Status.PENDING
-                try:
-                    self.data_buffer.add_samples([result])
-                except Exception:  # noqa: BLE001
-                    logger.exception("fully-async: failed to requeue aborted group")
+                self._requeue_group(result)
                 return
             self.output_queue.put((gid, result))
 
