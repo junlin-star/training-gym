@@ -7,8 +7,6 @@ import time
 import urllib.error
 import urllib.request
 
-from minisweagent.exceptions import FormatError, InterruptAgentFlow
-
 from modal_training_gym.common.environments.swerebench import SWE_BASH_TOOL
 
 # Qwen3.6 native tool-call is the qwen3_xml format (NOT JSON), e.g.:
@@ -31,15 +29,10 @@ _CONTEXT_MARGIN = 256  # headroom for stop/special tokens
 _MIN_GEN_TOKENS = 2048  # below this much room left, end the episode rather than spiral on truncated actions
 
 
-class ContextExceeded(InterruptAgentFlow):
-    """The growing trajectory left no room to generate."""
+def _interrupt_agent_flow(message: dict):
+    from minisweagent.exceptions import InterruptAgentFlow
 
-
-class RolloutAborted(InterruptAgentFlow):
-    """The rollout was aborted (the step's batch is already full) — end this surplus episode at the turn
-    boundary instead of running to completion. Engine-side aborts only kill in-flight generations; an
-    episode that was mid-bash never sees one, so without this check it churns for up to a full episode
-    while the sync drain waits for it. generate() sees model.aborted and recycles the sample."""
+    return InterruptAgentFlow(message)
 
 
 class Qwen3RecordingModel:
@@ -58,9 +51,7 @@ class Qwen3RecordingModel:
     ):
         self.tokenizer = tokenizer
         self.sampling_params = sampling_params
-        self._abort_check = (
-            abort_check  # per-turn rollout-abort probe (see RolloutAborted)
-        )
+        self._abort_check = abort_check  # per-turn rollout-abort probe
         self.url = f"{router_url}/generate"
         self.query_timeout = (
             query_timeout  # cap per-turn sglang call; bounds hung/queued generations
@@ -133,8 +124,10 @@ class Qwen3RecordingModel:
 
     def _tool_call_format_error(
         self, n_found: int, segment: str, msg: str, finish: str
-    ) -> FormatError:
+    ):
         """Build the mini-swe feedback message for a malformed tool call."""
+        from minisweagent.exceptions import FormatError
+
         if finish == "length":
             msg = "your response hit the output-token limit before a complete `bash` tool call"
         content = f"Format error: {msg}.\n\nProvide a THOUGHT, then make EXACTLY ONE call to the `bash` tool with a single command. To finish the task, call `bash` with `echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT && cat patch.txt`."
@@ -186,7 +179,7 @@ class Qwen3RecordingModel:
     def query(self, messages: list[dict], **kwargs) -> dict:
         if self._abort_check is not None and self._abort_check():
             self.aborted = True
-            raise RolloutAborted(
+            raise _interrupt_agent_flow(
                 {
                     "role": "exit",
                     "content": "RolloutAborted",
@@ -210,7 +203,7 @@ class Qwen3RecordingModel:
         # produce a useful turn, end the episode cleanly rather than spiral on truncated actions.
         remaining = self.max_context_len - len(self.tokens) - _CONTEXT_MARGIN
         if remaining < _MIN_GEN_TOKENS:
-            raise ContextExceeded(
+            raise _interrupt_agent_flow(
                 {
                     "role": "exit",
                     "content": "ContextExceeded",
@@ -264,7 +257,7 @@ class Qwen3RecordingModel:
             # Engine aborted this generation (weight update / engine restart) — the turn is truncated garbage
             # and the sample will be recycled, so end the episode NOW rather than burn the remaining budget.
             self.aborted = True
-            raise RolloutAborted(
+            raise _interrupt_agent_flow(
                 {
                     "role": "exit",
                     "content": "RolloutAborted",
@@ -281,6 +274,8 @@ class Qwen3RecordingModel:
             )
 
         # Parse the action from the post-reasoning segment only — a tool call inside <think> is not an action.
+        from minisweagent.exceptions import FormatError
+
         try:
             actions = self._parse_actions(text.split("</think>")[-1], finish)
         except FormatError:
