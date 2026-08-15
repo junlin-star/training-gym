@@ -203,7 +203,7 @@ def _config():
             n_samples_per_prompt=n_samples_per_prompt,
             global_batch_size=rollout_batch_size * n_samples_per_prompt,
             rollout_num_gpus_per_engine=2,
-            rollout_max_response_len=8192,
+            rollout_max_response_len=16384,
             rollout_temperature=1.0,
             max_tokens_per_gpu=32768,
             # The one-step smoke skips a large checkpoint; full runs save every
