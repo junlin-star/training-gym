@@ -136,7 +136,7 @@ def _run_episode(
                 patch,
                 timeout=limits["grade_timeout"],
             )
-            reward = float(verdict.metadata.get("dense_reward", verdict.passed))
+            reward = float(verdict.passed)
             solved = float(verdict.passed)
         except Exception:
             logger.exception("grading failed (instance=%s)", task.get("instance_id"))
@@ -273,11 +273,11 @@ async def generate(args, sample: Any, sampling_params, evaluation: bool = False)
     # slow/streaming generation on a congested engine can overshoot it by hours, poisoning the batch with
     # extreme staleness. Cap it here from the rollout side and recycle; the orphan thread unwinds on its own.
     # A legitimate episode can use its wall limit, one final generation, and
-    # both baseline/patched grading passes.
+    # one patched grading pass.
     hard_cap = (
         limits["episode_timeout"]
         + limits["query_timeout"]
-        + 2 * limits["grade_timeout"]
+        + limits["grade_timeout"]
         + 120
     )
     try:

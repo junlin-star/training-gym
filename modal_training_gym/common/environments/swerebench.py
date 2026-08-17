@@ -506,16 +506,17 @@ def grade_swe_patch(
         return EvalVerdict(
             passed=False,
             detail="The agent produced an empty patch.",
-            metadata={"dense_reward": 0.0, "missing": normalized["FAIL_TO_PASS"]},
+            metadata={"missing": normalized["FAIL_TO_PASS"]},
         )
 
     timeout = timeout or config.grade_timeout
-    grader = SweEnvironment.create(
-        normalized,
-        config=config,
-        lifetime=2 * timeout + 120,
-    )
+    grader = None
     try:
+        grader = SweEnvironment.create(
+            normalized,
+            config=config,
+            lifetime=timeout + 120,
+        )
         grader.write_file("/tmp/model.patch", model_patch)
         grader.write_file("/tmp/test.patch", normalized["test_patch"])
         test_cmd = normalized["install_config"]["test_cmd"]
@@ -525,20 +526,6 @@ def grade_swe_patch(
             f"|| rm -f {shlex.quote(path)}"
             for path in test_files_from_patch(normalized["test_patch"])
         ]
-
-        baseline_script = "\n".join(
-            [
-                "set -e",
-                "git reset --hard HEAD",
-                f"{_APPLY} /tmp/test.patch",
-                "set +e",
-                *test_commands,
-            ]
-        )
-        _, baseline_output = grader.execute_bash(
-            baseline_script,
-            timeout=timeout,
-        )
 
         patched_script = "\n".join(
             [
@@ -557,12 +544,12 @@ def grade_swe_patch(
             passed=False,
             detail=f"SWE grading harness: {type(error).__name__}: {error}",
             harness_error=True,
-            metadata={"dense_reward": 0.0},
+            metadata={},
         )
     finally:
-        grader.close()
+        if grader is not None:
+            grader.close()
 
-    baseline_passed = passed_pytest_tests(baseline_output)
     passed = passed_pytest_tests(output)
     fail_to_pass = normalized["FAIL_TO_PASS"]
     pass_to_pass = normalized["PASS_TO_PASS"]
@@ -570,31 +557,13 @@ def grade_swe_patch(
     missing = [test for test in required if test not in passed]
     solved = bool(fail_to_pass) and not missing
 
-    fixable = [test for test in fail_to_pass if test not in baseline_passed]
-    progress = (
-        len([test for test in fixable if test in passed]) / len(fixable)
-        if fixable
-        else (1.0 if solved else 0.0)
-    )
-    stable = [test for test in pass_to_pass if test in baseline_passed]
-    stable_fraction = (
-        len([test for test in stable if test in passed]) / len(stable)
-        if stable
-        else 1.0
-    )
-    dense_reward = round(progress * stable_fraction, 4)
-
     return EvalVerdict(
         passed=solved,
         detail="" if solved else f"Missing {len(missing)}/{len(required)} tests",
         metadata={
-            "dense_reward": dense_reward,
             "passed": sorted(passed),
-            "baseline_passed": sorted(baseline_passed),
             "required": required,
             "missing": missing,
-            "progress": round(progress, 4),
-            "pass_to_pass_fraction": round(stable_fraction, 4),
             "output": output,
         },
     )

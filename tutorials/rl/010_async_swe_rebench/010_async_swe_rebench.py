@@ -78,6 +78,9 @@ def agentic_swe_image(image):
 # assets onto the Training Gym volume. The smoke run selects eight tasks;
 # `FULL_RUN=1` uses the entire filtered set. Prompts are stored as a single
 # user message so they remain compatible with slime's standard data source.
+#
+# Reward is binary: `1` only when every `FAIL_TO_PASS` and `PASS_TO_PASS` test
+# passes in the clean grading sandbox, otherwise `0`.
 
 def build_dataset(*, full_run: bool = False) -> SweRebenchV2Dataset:
     return SweRebenchV2Dataset(
