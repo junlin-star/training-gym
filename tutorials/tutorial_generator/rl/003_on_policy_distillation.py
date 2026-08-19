@@ -115,9 +115,9 @@ def _deploy_base_intro():
 
 @code
 def _deploy_base():
-    base_student_model = Qwen3_5_4B()
+    student_model = Qwen3_5_4B()
     base_student_deployment = Endpoint.launch(
-        base_student_model, unauthenticated=True, recreate_if_existing=True
+        student_model, unauthenticated=True, recreate_if_existing=True
     )
 
     teacher_model = Qwen3_5_9B()
@@ -314,7 +314,8 @@ def _rm_fn():
 
         teacher_response = await _opd_reward(args, sample, **kwargs)
 
-        score = score_answer(sample.response, sample.label)
+        response = student_model.parse_response(sample.response)
+        score = score_answer(response.content, sample.label)
         sample.score = score
         if not isinstance(getattr(sample, "metadata", None), dict):
             sample.metadata = {}
@@ -344,7 +345,7 @@ def _train_intro():
 @code
 def _train():
     train_run = TrainConfig(
-        model=base_student_model,
+        model=student_model,
         dataset=train_dataset,
         recipe=SlimeRecipe(
             gpu_type="H100",
@@ -403,7 +404,7 @@ def _eval_trained():
     print(f"checkpoint: {checkpoint.path}")
 
     trained_student_deployment = Endpoint.launch(
-        Qwen3_5_4B(), checkpoint, unauthenticated=True, recreate_if_existing=True
+        student_model, checkpoint, unauthenticated=True, recreate_if_existing=True
     )
     trained_student_deployment.wait_until_ready(timeout=15 * 60)
     print(f"checkpoint deployed to {trained_student_deployment.url}")

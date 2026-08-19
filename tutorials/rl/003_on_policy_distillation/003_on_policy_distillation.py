@@ -60,6 +60,18 @@ from modal_training_gym import (
     list_checkpoints,
 )
 
+# ## Deploy the base models
+#
+# First, we'll deploy the teacher and base models to derive a baseline.
+# We can use an [Endpoint](https://modal.com/docs/guide/endpoints)
+# to serve the student. However, for the teacher model, we need per-token logprobs, 
+# which are not currently supported by Endpoints when speculative decoding is
+# enabled. So we instead use a
+# [CustomDeployment](https://gym.modal.dev/reference/deployment/customdeployment/)
+# to serve the teacher.
+
+student_model = Qwen3_5_4B()
+
 # ## Define a scoring function
 #
 # Following the [DAPO paper](https://arxiv.org/abs/2503.14476), we'll normalize as 
@@ -194,7 +206,8 @@ async def math_opd_rm(args, sample, **kwargs):
 
     teacher_response = await _opd_reward(args, sample, **kwargs)
 
-    score = score_answer(sample.response, sample.label)
+    response = student_model.parse_response(sample.response)
+    score = score_answer(response.content, sample.label)
     sample.score = score
     if not isinstance(getattr(sample, "metadata", None), dict):
         sample.metadata = {}
@@ -223,19 +236,8 @@ def _main_impl() -> None:
             "https://modal.com/secrets with an HF_TOKEN entry, then re-run."
         ) from e
 
-    # ## Deploy the base models
-    #
-    # First, we'll deploy the teacher and base models to derive a baseline.
-    # We can use an [Endpoint](https://modal.com/docs/guide/endpoints)
-    # to serve the student. However, for the teacher model, we need per-token logprobs, 
-    # which are not currently supported by Endpoints when speculative decoding is
-    # enabled. So we instead use a
-    # [CustomDeployment](https://gym.modal.dev/reference/deployment/customdeployment/)
-    # to serve the teacher.
-
-    base_student_model = Qwen3_5_4B()
     base_student_deployment = Endpoint.launch(
-        base_student_model, unauthenticated=True, recreate_if_existing=True
+        student_model, unauthenticated=True, recreate_if_existing=True
     )
 
     teacher_model = Qwen3_5_9B()
@@ -269,7 +271,7 @@ def _main_impl() -> None:
     # framework-necessary environment variables and flags.
 
     train_run = TrainConfig(
-        model=base_student_model,
+        model=student_model,
         dataset=train_dataset,
         recipe=SlimeRecipe(
             gpu_type="H100",
@@ -320,7 +322,7 @@ def _main_impl() -> None:
     print(f"checkpoint: {checkpoint.path}")
 
     trained_student_deployment = Endpoint.launch(
-        Qwen3_5_4B(), checkpoint, unauthenticated=True, recreate_if_existing=True
+        student_model, checkpoint, unauthenticated=True, recreate_if_existing=True
     )
     trained_student_deployment.wait_until_ready(timeout=15 * 60)
     print(f"checkpoint deployed to {trained_student_deployment.url}")
