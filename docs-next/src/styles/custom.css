@@ -672,7 +672,6 @@ body::before {
 
 @media (min-width: 72rem) {
   .tg-page-head__actions {
-    margin-top: -1.5rem;
     margin-bottom: 1.5rem;
   }
 }
