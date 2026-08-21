@@ -163,29 +163,86 @@ _PATCH_SGLANG_PARALLEL_ALIASES_B64 = encode_patch(
     "patch_sglang_parallel_aliases", _SLIME_PATCHES
 )
 
+# Patches targeting /root/slime* — a git overlay replaces that directory, so
+# these are skipped in the base image when an overlay is configured and applied
+# after the replacement instead.
+_SLIME_ROOT_PATCHES_B64 = (
+    _PATCH_MEGATRON_BRIDGE_B64,
+    _PATCH_ADVANTAGES_B64,
+    _PATCH_STOP_TOKEN_DIAG_B64,
+    _PATCH_QWEN3_ASR_EXPORT_B64,
+    _PATCH_QWEN3_VL_EXPORT_B64,
+    _PATCH_QWEN3_VL_TORCH_DIST_B64,
+    _PATCH_ROLLOUT_STATUS_B64,
+    _PATCH_ADVANTAGE_DIST_B64,
+    _PATCH_ZERO_STD_METRICS_B64,
+    _PATCH_SGLANG_PARALLEL_ALIASES_B64,
+    _PATCH_SUBSTEP_TIMING_B64,
+)
 
-def _build_slime_base_image() -> "Image":
+# Patches targeting Megatron-LM or site-packages — survive a git overlay.
+_SLIME_EXTERNAL_PATCHES_B64 = (
+    _PATCH_BRIDGE_NONE_TASK_B64,
+    _PATCH_LOG_ELIDE_B64,
+    _PATCH_DIST_CKPT_QUANTIZED_B64,
+)
+
+
+def _patch_commands(patches: tuple[str, ...]) -> tuple[str, ...]:
+    return tuple(f"echo {patch} | base64 -d | python3" for patch in patches)
+
+
+def _build_slime_base_image(*, apply_root_patches: bool = True) -> "Image":
+    patches = _SLIME_EXTERNAL_PATCHES_B64
+    if apply_root_patches:
+        patches = patches + _SLIME_ROOT_PATCHES_B64
     return (
         Image.from_registry(SLIME_IMAGE)
         .entrypoint([])
-        .run_commands(
-            "rm -rf /root/.cache/huggingface",
-            f"echo {_PATCH_MEGATRON_BRIDGE_B64} | base64 -d | python3",
-            f"echo {_PATCH_ADVANTAGES_B64} | base64 -d | python3",
-            f"echo {_PATCH_BRIDGE_NONE_TASK_B64} | base64 -d | python3",
-            f"echo {_PATCH_STOP_TOKEN_DIAG_B64} | base64 -d | python3",
-            f"echo {_PATCH_QWEN3_ASR_EXPORT_B64} | base64 -d | python3",
-            f"echo {_PATCH_QWEN3_VL_EXPORT_B64} | base64 -d | python3",
-            f"echo {_PATCH_QWEN3_VL_TORCH_DIST_B64} | base64 -d | python3",
-            f"echo {_PATCH_ROLLOUT_STATUS_B64} | base64 -d | python3",
-            f"echo {_PATCH_ADVANTAGE_DIST_B64} | base64 -d | python3",
-            f"echo {_PATCH_LOG_ELIDE_B64} | base64 -d | python3",
-            f"echo {_PATCH_DIST_CKPT_QUANTIZED_B64} | base64 -d | python3",
-            f"echo {_PATCH_ZERO_STD_METRICS_B64} | base64 -d | python3",
-            f"echo {_PATCH_SGLANG_PARALLEL_ALIASES_B64} | base64 -d | python3",
-            f"echo {_PATCH_SUBSTEP_TIMING_B64} | base64 -d | python3",
-        )
+        .run_commands("rm -rf /root/.cache/huggingface", *_patch_commands(patches))
     )
+
+
+def _slime_git_overlay_command(repository: str, revision: str) -> str:
+    """Build the reproducible image command for a fork source overlay."""
+    repo = shlex.quote(repository)
+    sha = shlex.quote(revision)
+    checkout = "/tmp/training-gym-slime"
+    return (
+        "set -eux; "
+        "command -v git >/dev/null; "
+        f"rm -rf {checkout}; "
+        f"git init {checkout}; "
+        f"git -C {checkout} remote add origin {repo}; "
+        f"git -C {checkout} fetch --depth=1 origin {sha}; "
+        f"git -C {checkout} checkout --detach FETCH_HEAD; "
+        f'test "$(git -C {checkout} rev-parse HEAD)" = {sha}; '
+        f"rm -rf {checkout}/.git {SLIME_ROOT}; "
+        f"mv {checkout} {SLIME_ROOT}"
+    )
+
+
+def _overlay_slime_source(image: "Image", slime: SlimeRecipe) -> "Image":
+    if slime.local_slime:
+        # Preserve the local dev overlay's existing semantics: use the checkout
+        # exactly as supplied rather than requiring it to match patch anchors.
+        return image.add_local_dir(
+            slime.local_slime,
+            remote_path=SLIME_ROOT,
+            copy=True,
+            ignore=["**/__pycache__", "**/*.pyc", "**/.git", "**/.venv"],
+        )
+    if not (slime.slime_git_repository and slime.slime_git_revision):
+        return image
+
+    image = image.run_commands(
+        _slime_git_overlay_command(slime.slime_git_repository, slime.slime_git_revision)
+    )
+
+    # The pinned source replaced /root/slime after the base-image patches ran.
+    # Fail if required patches no longer apply rather than run an incompatible
+    # fork with silently missing Training Gym behavior.
+    return image.run_commands(*_patch_commands(_SLIME_ROOT_PATCHES_B64))
 
 
 def _build_conversion_config(slime_cfg: Any, model: Any = None) -> dict[str, Any]:
@@ -328,7 +385,10 @@ def build_slime_app(
     _caller_module, caller_script = resolve_caller_context()
 
     # ── Image ────────────────────────────────────────────────────────────────
-    image = _build_slime_base_image()
+    # When a git overlay will replace /root/slime, skip root patches here so they
+    # run once after the replacement instead of being applied and then discarded.
+    _needs_git_overlay = bool(slime.slime_git_repository and slime.slime_git_revision)
+    image = _build_slime_base_image(apply_root_patches=not _needs_git_overlay)
 
     # Hybrid models have layers with different parameter sets (e.g. GDN
     # layers carry linear_attn.dt_bias that standard attention layers lack).
@@ -355,13 +415,7 @@ def build_slime_app(
     if isinstance(dataset, HarborDataset):
         image = image.uv_pip_install(f"harbor=={HARBOR_PKG_VERSION}")
 
-    if slime.local_slime:
-        image = image.add_local_dir(
-            slime.local_slime,
-            remote_path=SLIME_ROOT,
-            copy=True,
-            ignore=["**/__pycache__", "**/*.pyc", "**/.git", "**/.venv"],
-        )
+    image = _overlay_slime_source(image, slime)
 
     if slime.image_run_commands:
         image = image.run_commands(*slime.image_run_commands)
@@ -546,6 +600,7 @@ def build_slime_app(
         recipe_app_tags=slime.app_tags,
         wandb=slime.wandb,
     )
+
     app = App(app_name, tags=tags)
     gpu_spec = f"{slime.gpu_type}:{slime.actor_num_gpus_per_node}"
 
