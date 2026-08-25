@@ -26,9 +26,21 @@ SITE = "https://gym.modal.dev"
 REPO = "https://github.com/modal-projects/training-gym"
 
 
-def _collect_guides() -> list[tuple[str, str, str, int]]:
-    """Return (slug, title, description, sidebar order) for authored guides."""
-    guides: list[tuple[str, str, str, int]] = []
+def _site_url(*parts: str) -> str:
+    path = "/".join(part.strip("/") for part in parts if part)
+    return f"{SITE}/{path}" if path else f"{SITE}/"
+
+
+def _first_heading(body: str) -> str | None:
+    for line in body.splitlines():
+        if line.startswith("# "):
+            return line[2:].strip()
+    return None
+
+
+def _collect_guides() -> list[tuple[str, str, int]]:
+    """Return (slug, title, order) for authored guides."""
+    guides: list[tuple[str, str, int]] = []
     for path in sorted(GUIDES_DIR.rglob("*.md")):
         text = path.read_text()
         if not text.startswith("---\n"):
@@ -37,6 +49,7 @@ def _collect_guides() -> list[tuple[str, str, str, int]]:
         if len(parts) != 3:
             raise ValueError(f"Guide has invalid frontmatter: {path}")
         frontmatter = parts[1]
+        body = parts[2]
 
         try:
             metadata = yaml.safe_load(frontmatter)
@@ -45,31 +58,24 @@ def _collect_guides() -> list[tuple[str, str, str, int]]:
         if not isinstance(metadata, dict):
             raise ValueError(f"Guide frontmatter must be a mapping: {path}")
 
-        title = metadata.get("title")
-        if not isinstance(title, str) or not title:
-            raise ValueError(f"Guide frontmatter is missing title: {path}")
-        description = metadata.get("description", "")
-        if not isinstance(description, str):
-            raise ValueError(f"Guide description must be a string: {path}")
-
-        sidebar = metadata.get("sidebar", {})
-        if not isinstance(sidebar, dict):
-            raise ValueError(f"Guide sidebar must be a mapping: {path}")
-        sidebar_order = sidebar.get("order", 10_000)
-        if type(sidebar_order) is not int:
-            raise ValueError(f"Guide sidebar order must be an integer: {path}")
+        order = metadata.get("order")
+        if type(order) is not int:
+            raise ValueError(f"Guide frontmatter requires an integer order: {path}")
+        title = _first_heading(body)
+        if not title:
+            raise ValueError(f"Guide is missing an H1 heading: {path}")
 
         slug = path.relative_to(GUIDES_DIR).with_suffix("").as_posix()
         if slug != "index":
-            guides.append((slug, title, description, sidebar_order))
+            guides.append((slug, title, order))
 
-    guides.sort(key=lambda guide: (guide[3], guide[1].lower()))
+    guides.sort(key=lambda guide: (guide[2], guide[1].lower()))
     return guides
 
 
 def _render(
     tutorials: tuple[TutorialEntry, ...],
-    guides: list[tuple[str, str, str, int]],
+    guides: list[tuple[str, str, int]],
 ) -> str:
     lines: list[str] = [
         "# Modal Training Gym",
@@ -82,25 +88,23 @@ def _render(
         "(import as `modal_training_gym`). Prefer `TrainConfig` + recipe over older",
         "framework-specific launcher APIs.",
         "",
-        f"Docs: {SITE}/",
+        f"Docs: {_site_url()}",
         f"Repo: {REPO}",
         "",
         "## Docs",
         "",
-        f"- [Overview]({SITE}/): Product overview and getting started",
-        f"- [Guides]({SITE}/guides/): Concepts and practical workflows",
-        f"- [Tutorials]({SITE}/tutorials/): Runnable Python guides",
-        f"- [API Reference]({SITE}/reference/): Public class reference",
-        f"- [CLI Reference]({SITE}/reference/cli/): `modal-training-gym` CLI",
-        f"- [Support]({SITE}/support/): Support and contribution notes",
+        f"- [Home]({_site_url()}): Docs home",
+        f"- [Guides]({_site_url('guides')}): Concepts and practical workflows",
+        f"- [Tutorials]({_site_url('tutorials')}): Runnable Python guides",
+        f"- [Reference]({_site_url('reference')}): Public class reference",
+        f"- [CLI Reference]({_site_url('reference/cli')}): `modal-training-gym` CLI",
         "",
         "## Guides",
         "",
     ]
 
-    for slug, title, description, _ in guides:
-        suffix = f": {description}" if description else ""
-        lines.append(f"- [{title}]({SITE}/guides/{slug}/){suffix}")
+    for slug, title, _order in guides:
+        lines.append(f"- [{title}]({_site_url('guides', slug)})")
 
     lines.extend(
         [
@@ -111,15 +115,15 @@ def _render(
     )
 
     for tutorial in tutorials:
-        lines.append(f"- [{tutorial.title}]({SITE}/tutorials/{tutorial.slug}/)")
+        lines.append(f"- [{tutorial.title}]({_site_url('tutorials', tutorial.slug)})")
     lines.append("")
 
     lines.extend(
         [
-            "## API Reference",
+            "## Reference",
             "",
-            f"- [Overview]({SITE}/reference/): Index of public classes",
-            f"- [CLI Reference]({SITE}/reference/cli/): CLI commands and flags",
+            f"- [Reference]({_site_url('reference')}): Index of public classes",
+            f"- [CLI Reference]({_site_url('reference/cli')}): CLI commands and flags",
             "",
         ]
     )
@@ -140,7 +144,7 @@ def _render(
             class_name = entry["class_name"]
             label = entry.get("sidebar_label") or class_name
             path = CLASS_REFERENCE_PATHS[class_name]
-            lines.append(f"- [{label}]({SITE}{path}): `{class_name}`")
+            lines.append(f"- [{label}]({_site_url(path)}): `{class_name}`")
         lines.append("")
 
     lines.extend(
