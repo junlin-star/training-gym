@@ -51,6 +51,15 @@ _EXPORTS = {
     ),
     "ModelArchitecture": ("modal_training_gym.common.models", "ModelArchitecture"),
     "ModelConfig": ("modal_training_gym.common.models", "ModelConfig"),
+    "Inkling_Small": ("modal_training_gym.common.models", "Inkling_Small"),
+    "Inkling_Small_Recipe": (
+        "modal_training_gym.train_recipes.miles_recipe",
+        "Inkling_Small_Recipe",
+    ),
+    "Inkling_Small_LoRA_Recipe": (
+        "modal_training_gym.train_recipes.miles_recipe",
+        "Inkling_Small_LoRA_Recipe",
+    ),
     "Moonlight_16B_A3B_Instruct": (
         "modal_training_gym.common.models",
         "Moonlight_16B_A3B_Instruct",
@@ -165,6 +174,9 @@ __all__ = [
     "ModalCaptureError",
     "ModelArchitecture",
     "ModelConfig",
+    "Inkling_Small",
+    "Inkling_Small_Recipe",
+    "Inkling_Small_LoRA_Recipe",
     "Moonlight_16B_A3B_Instruct",
     "Moonlight_16B_A3B_Recipe",
     "MilesRecipe",
