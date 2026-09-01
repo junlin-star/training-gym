@@ -7,7 +7,7 @@ import time
 import urllib.error
 import urllib.request
 
-from modal_training_gym.common.environments.swerebench import SWE_BASH_TOOL
+from .env import SWE_BASH_TOOL
 
 # Qwen3.6 native tool-call is the qwen3_xml format (NOT JSON), e.g.:
 #   <tool_call>
@@ -237,7 +237,11 @@ class Qwen3RecordingModel:
                     out = json.loads(resp.read())
                 break
             except urllib.error.URLError as e:
-                retriable = not isinstance(e, urllib.error.HTTPError) or e.code >= 500
+                retriable = (
+                    not isinstance(e, urllib.error.HTTPError)
+                    or e.code == 429
+                    or e.code >= 500
+                )
                 if retriable and attempt < 4:
                     time.sleep(random.uniform(1.0, 2.0 ** (attempt + 1)))
                     continue

@@ -4,10 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from modal_training_gym.common.environments.swerebench import (
-    extract_swe_submission,
-)
-from modal_training_gym.common.models import ToolCall
+from .env import extract_swe_submission
 
 
 class MiniSweEnvironmentAdapter:
@@ -25,9 +22,9 @@ class MiniSweEnvironmentAdapter:
         *,
         timeout: int | None = None,
     ) -> dict:
-        result = self.environment.step(ToolCall(name="bash", arguments=dict(action)))
-        returncode = int(result.observation.metadata.get("returncode", 0))
-        output = result.observation.text
+        returncode, output = self.environment.execute_bash(
+            str(action.get("command", ""))
+        )
         submission = extract_swe_submission(output, returncode)
         if submission is not None:
             from minisweagent.exceptions import Submitted

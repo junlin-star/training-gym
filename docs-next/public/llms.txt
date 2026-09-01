@@ -40,9 +40,9 @@ Repo: https://github.com/modal-projects/training-gym
 - [Speech transcription that's better, faster, and cheaper](https://gym.modal.dev/tutorials/audio_asr)
 - [Massively-parallel hyperparameter sweeps](https://gym.modal.dev/tutorials/param_sweep)
 - [GUI Grounding with Qwen3-VL-8B](https://gym.modal.dev/tutorials/computer_use)
-- [On-policy Distillation (OPD) Across Model Families](https://gym.modal.dev/tutorials/cross_tokenizer_distillation)
-- [Fully-async Qwen3.6-27B agent RL on SWE-Rebench V2](https://gym.modal.dev/tutorials/async_swe_rebench)
+- [On-policy Distillation (OPD) Across Model Families](https://gym.modal.dev/tutorials/cross_tok_distill)
 - [Frontier-scale training](https://gym.modal.dev/tutorials/multinode)
+- [Fully-async SWE agent RL with Qwen3.6-27B](https://gym.modal.dev/tutorials/swe_bench)
 
 ## Reference
 
@@ -57,10 +57,6 @@ Repo: https://github.com/modal-projects/training-gym
 - [DatasetConfig](https://gym.modal.dev/reference/datasetconfig)
 - [HuggingFaceDataset](https://gym.modal.dev/reference/huggingfacedataset)
 - [HarborDataset](https://gym.modal.dev/reference/harbordataset)
-- [SweRebenchV2Config](https://gym.modal.dev/reference/swerebenchv2config)
-- [SweRebenchV2Dataset](https://gym.modal.dev/reference/swerebenchv2dataset)
-- [SweEnvironmentConfig](https://gym.modal.dev/reference/sweenvironmentconfig)
-- [SweEnvironment](https://gym.modal.dev/reference/sweenvironment)
 - [MetricConfig](https://gym.modal.dev/reference/metricconfig)
 - [WandbConfig](https://gym.modal.dev/reference/wandbconfig)
 - [ModalRayCluster](https://gym.modal.dev/reference/modalraycluster)

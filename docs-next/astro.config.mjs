@@ -8,6 +8,7 @@ import rehypeKatex from 'rehype-katex';
 import remarkMath from 'remark-math';
 import { rehypeTableWrapper } from './rehype-table-wrapper.mjs';
 import { flattenDocId, parseTutorialMetadata } from './src/lib/tutorial-docs-loader.ts';
+import { discoverTutorialEntries } from './src/lib/tutorial-slugs.ts';
 
 const configDirectory = path.dirname(fileURLToPath(import.meta.url));
 
@@ -22,17 +23,14 @@ function remarkStripPageTitle() {
   };
 }
 
-function loadTutorialPages() {
+async function loadTutorialPages() {
   const tutorialsDirectory = path.resolve(configDirectory, '../tutorials');
-  const tutorials = readdirSync(tutorialsDirectory)
-    .filter((fileName) => fileName.endsWith('.py'))
-    .map((fileName) => {
-      const tutorialPath = path.join(tutorialsDirectory, fileName);
-      const source = readFileSync(tutorialPath, 'utf8');
-      const { order } = parseTutorialMetadata(source, tutorialPath);
-      return { order, slug: path.basename(fileName, '.py') };
-    })
-    .sort((left, right) => left.order - right.order || left.slug.localeCompare(right.slug));
+  const tutorials = (await discoverTutorialEntries(tutorialsDirectory)).map((entry) => {
+    const source = readFileSync(entry.path, 'utf8');
+    const { order } = parseTutorialMetadata(source, entry.path);
+    return { order, slug: entry.slug };
+  });
+  tutorials.sort((left, right) => left.order - right.order || left.slug.localeCompare(right.slug));
   if (!tutorials[0]) {
     throw new Error('No tutorial pages found');
   }
@@ -78,7 +76,7 @@ function nestedDocRedirects() {
   return redirects;
 }
 
-const tutorialPages = loadTutorialPages();
+const tutorialPages = await loadTutorialPages();
 const firstTutorial = `/tutorials/${tutorialPages[0].slug}`;
 const firstGuide = firstGuidePath();
 
@@ -104,7 +102,8 @@ export default defineConfig({
     '/tutorials/rl/007_param_sweep': '/tutorials/param_sweep',
     '/tutorials/rl/008_computer_use': '/tutorials/computer_use',
     '/tutorials/rl/009_cross_tokenizer_distillation':
-      '/tutorials/cross_tokenizer_distillation',
+      '/tutorials/cross_tok_distill',
+    '/tutorials/cross_tokenizer_distillation': '/tutorials/cross_tok_distill',
     '/tutorials/tools/000_observability_dashboard':
       '/guides/observability-dashboard',
     '/tutorials/tools/001_wandb_integration': '/guides/wandb-integration',

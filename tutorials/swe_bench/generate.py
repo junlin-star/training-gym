@@ -12,7 +12,7 @@ import time
 import uuid
 from typing import Any
 
-from modal_training_gym.common.environments.swerebench import (
+from .env import (
     SWE_INSTANCE_TEMPLATE,
     SWE_OBSERVATION_TEMPLATE,
     SWE_SYSTEM_TEMPLATE,
@@ -20,7 +20,6 @@ from modal_training_gym.common.environments.swerebench import (
     SweEnvironmentConfig,
     grade_swe_patch,
 )
-
 from .environment import MiniSweEnvironmentAdapter
 from .qwen3_model import Qwen3RecordingModel
 
@@ -85,6 +84,7 @@ def _run_episode(
         abort_check=abort_check,
     )
     patch, reward, solved, exit_status, grade_time = None, 0.0, 0.0, "none", 0.0
+    harness_error = False
     sandbox = None
     t0 = time.perf_counter()
     try:
@@ -138,8 +138,10 @@ def _run_episode(
             )
             reward = float(verdict.passed)
             solved = float(verdict.passed)
+            harness_error = verdict.harness_error
         except Exception:
             logger.exception("grading failed (instance=%s)", task.get("instance_id"))
+            harness_error = True
         grade_time = time.perf_counter() - g0
 
     stats = {
@@ -152,6 +154,7 @@ def _run_episode(
         "length_truncations": model.n_length_truncations,  # turns the model's output was cut at the per-turn cap
         "exit_status": exit_status,
         "solved": float(solved),
+        "harness_error": harness_error,
         "gen_time": round(model.gen_time, 1),
         "exec_time": round(sandbox.exec_time if sandbox is not None else 0.0, 1),
         "exec_timeouts": sandbox.exec_timeouts if sandbox is not None else 0,
@@ -311,9 +314,14 @@ async def generate(args, sample: Any, sampling_params, evaluation: bool = False)
             "WeightUpdateAborted",
         )
 
-    # No usable trajectory (boot failed / every turn rolled back): retry a few times for transient
-    # failures, then ship a masked sample so the group leaves the buffer instead of recycling forever.
-    if model.prompt_len is None or len(model.tokens) <= model.prompt_len:
+    # No usable trajectory (boot failed / every turn rolled back) or the grading harness itself
+    # failed: retry a few times for transient failures, then ship a masked sample so the group
+    # leaves the buffer instead of recycling forever.
+    if (
+        model.prompt_len is None
+        or len(model.tokens) <= model.prompt_len
+        or stats["harness_error"]
+    ):
         _boot_fails[key] = _boot_fails.get(key, 0) + 1
         if _boot_fails[key] <= getattr(args, "agentic_max_boot_retries", 3):
             return _recycle_or_drop(

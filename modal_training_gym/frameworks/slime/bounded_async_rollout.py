@@ -94,6 +94,7 @@ class AsyncRolloutWorker:
         # provides backpressure before new work is submitted.
         self.output_queue: queue.Queue[tuple[int, list[Any]]] = queue.Queue()
         self.worker_thread: threading.Thread | None = None
+        self._failure_error: BaseException | None = None
         from slime.rollout.sglang_rollout import GenerateState
 
         self.state = GenerateState(args)
@@ -135,10 +136,24 @@ class AsyncRolloutWorker:
     def queue_size(self) -> int:
         return self.output_queue.qsize()
 
+    def raise_if_failed(self) -> None:
+        if self._failure_error is not None:
+            raise RuntimeError(
+                "fully-async rollout producer failed"
+            ) from self._failure_error
+
     # -- internals -----------------------------------------------------------
 
     def _thread_main(self) -> None:
-        asyncio.run(self._loop())
+        try:
+            asyncio.run(self._loop())
+        except BaseException as exc:
+            logger.exception("fully-async rollout producer crashed")
+            self._fail(exc)
+
+    def _fail(self, error: BaseException) -> None:
+        self._failure_error = error
+        self.running = False
 
     async def _loop(self) -> None:
         from slime.rollout.sglang_rollout import generate_and_rm_group
@@ -290,6 +305,7 @@ async def _generate_rollout_async(
         0.0  # sum of per-group mean reward over ALL examined groups (pre-filter)
     )
     while len(collected) < target:
+        worker.raise_if_failed()
         for gid, group in worker.get_completed_groups():
             buf[gid] = group
 

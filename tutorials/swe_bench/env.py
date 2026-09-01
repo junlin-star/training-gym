@@ -9,21 +9,15 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shlex
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
 from modal_training_gym.common.dataset import DatasetConfig
-from modal_training_gym.common.environments.base import (
-    EvalVerdict,
-    Observation,
-    SandboxEnvironment,
-    StepResult,
-    ToolCall,
-)
 from modal_training_gym.common.errors import TrainingGymConfigError
 
 SUPPORTED_LOG_PARSERS = frozenset(
@@ -35,6 +29,16 @@ SUPPORTED_LOG_PARSERS = frozenset(
 )
 _APPLY = "git apply -v --3way --recount --ignore-space-change --whitespace=nowarn"
 _EXEC_GRACE_SECONDS = 30
+_PYTEST_CONFIG_FILES = frozenset({"pytest.ini", "pyproject.toml", "setup.cfg", "tox.ini"})
+
+
+@dataclass
+class EvalVerdict:
+    passed: bool
+    detail: str = ""
+    harness_error: bool = False
+    metadata: dict[str, Any] = field(default_factory=dict)
+
 
 SWE_BASH_TOOL = {
     "type": "function",
@@ -140,13 +144,48 @@ def test_files_from_patch(test_patch: str) -> list[str]:
     ]
 
 
-def passed_pytest_tests(log: str) -> set[str]:
+def changed_files_from_patch(patch: str) -> set[str]:
+    paths = set()
+    for line in (patch or "").splitlines():
+        for prefix in ("--- a/", "+++ b/"):
+            if line.startswith(prefix):
+                paths.add(line[len(prefix) :].strip())
+    return paths
+
+
+def grader_protected_files(model_patch: str) -> set[str]:
+    return {
+        path
+        for path in changed_files_from_patch(model_patch)
+        if Path(path).name == "conftest.py" or path in _PYTEST_CONFIG_FILES
+    }
+
+
+def passed_pytest_tests(log: str, parser: str) -> set[str]:
     passed = set()
     for line in log.splitlines():
-        if line.startswith("PASSED"):
-            parts = line.split()
-            if len(parts) >= 2:
-                passed.add(parts[1])
+        line = re.sub(r"\x1b\[\d+m", "", line)
+        parts = line.split()
+        if len(parts) < 2:
+            continue
+        if parser == "parse_log_pytest_v2" and parts[-1] == "PASSED":
+            passed.add(" ".join(parts[:-1]))
+            continue
+        if parts[0] != "PASSED":
+            continue
+        test_name = " ".join(parts[1:]) if parser == "parse_log_pytest_v2" else parts[1]
+        if parser == "parse_log_pytest_options":
+            match = re.fullmatch(r"(.*?)\[(.*)\]", test_name)
+            if match:
+                test_name, option = match.groups()
+                if (
+                    option.startswith("/")
+                    and not option.startswith("//")
+                    and "*" not in option
+                ):
+                    option = "/" + option.rsplit("/", 1)[-1]
+                test_name = f"{test_name}[{option}]"
+        passed.add(test_name)
     return passed
 
 
@@ -314,7 +353,7 @@ def _run_with_timeout(fn, timeout_seconds: float, operation: str):
     return result.get("value")
 
 
-class SweEnvironment(SandboxEnvironment):
+class SweEnvironment:
     """One mutable SWE repository in a Modal Sandbox."""
 
     def __init__(
@@ -325,7 +364,7 @@ class SweEnvironment(SandboxEnvironment):
         config: SweEnvironmentConfig,
         boot_time: float = 0.0,
     ) -> None:
-        super().__init__(sandbox)
+        self.sandbox = sandbox
         self.task = task
         self.config = config
         self.workdir = task["workdir"]
@@ -448,23 +487,6 @@ class SweEnvironment(SandboxEnvironment):
             f"write_file({path})",
         )
 
-    def step(self, action: ToolCall) -> StepResult:
-        if action.name != "bash":
-            return StepResult(
-                observation=Observation(
-                    text=f"Unsupported tool {action.name!r}",
-                    is_error=True,
-                )
-            )
-        returncode, output = self.execute_bash(str(action.arguments.get("command", "")))
-        return StepResult(
-            observation=Observation(
-                text=output,
-                is_error=returncode != 0,
-                metadata={"returncode": returncode},
-            )
-        )
-
     def capture_patch(self) -> str:
         _, patch = self.execute_bash(
             "git add -A && git diff --cached HEAD",
@@ -490,6 +512,12 @@ class SweEnvironment(SandboxEnvironment):
 
     def serialize(self) -> dict[str, Any]:
         return {}
+
+    def close(self) -> None:
+        try:
+            self.sandbox.terminate()
+        except Exception:
+            pass
 
 
 def grade_swe_patch(
@@ -521,10 +549,12 @@ def grade_swe_patch(
         grader.write_file("/tmp/test.patch", normalized["test_patch"])
         test_cmd = normalized["install_config"]["test_cmd"]
         test_commands = test_cmd if isinstance(test_cmd, list) else [test_cmd]
+        protected_files = set(test_files_from_patch(normalized["test_patch"]))
+        protected_files.update(grader_protected_files(model_patch))
         reset_test_files = [
             f"git checkout HEAD -- {shlex.quote(path)} 2>/dev/null "
             f"|| rm -f {shlex.quote(path)}"
-            for path in test_files_from_patch(normalized["test_patch"])
+            for path in sorted(protected_files)
         ]
 
         patched_script = "\n".join(
@@ -550,7 +580,7 @@ def grade_swe_patch(
         if grader is not None:
             grader.close()
 
-    passed = passed_pytest_tests(output)
+    passed = passed_pytest_tests(output, normalized["install_config"]["log_parser"])
     fail_to_pass = normalized["FAIL_TO_PASS"]
     pass_to_pass = normalized["PASS_TO_PASS"]
     required = fail_to_pass + pass_to_pass
