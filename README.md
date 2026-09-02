@@ -34,13 +34,34 @@ Authenticate with Modal:
 modal setup
 ```
 
+Set up the [dashboard](https://gym.modal.dev/guides/dashboard):
+
+```bash
+training-gym setup
+```
+
+<div class="tg-dashboard-previews">
+  <span>
+    <img src="./assets/homepage.gif" alt="Training runs list in the Training Gym dashboard" width="100%" />
+  </span>
+  <span>
+    <img src="./assets/longrun.gif" alt="Long-running training run details in the Training Gym dashboard" width="100%" />
+  </span>
+</div>
+
+And empower your agents with the Gym's skill bundle:
+
+```bash
+training-gym skills install
+```
+
 Then, it's as easy as:
 
 ```python
 from modal_training_gym import (
     HuggingFaceDataset,
     Qwen3_4B,
-    Qwen3_4b_Recipe,
+    Qwen3_4B_Recipe,
     TrainConfig,
 )
 
@@ -56,7 +77,7 @@ class MathDataset(HuggingFaceDataset):
 config = TrainConfig(
     model=Qwen3_4B(),
     dataset=MathDataset(n_rows=120),
-    recipe=Qwen3_4b_Recipe(
+    recipe=Qwen3_4B_Recipe(
         gpu_type="H100",
         actor_num_nodes=1,
         actor_num_gpus_per_node=8,
@@ -77,22 +98,6 @@ config = TrainConfig(
 run = config.launch()
 print(run.training_run_id)
 ```
-
-And you can view in-progress training runs in the dashboard:
-
-```bash
-training-gym setup  # first-time deploy
-training-gym open  # opens in your browser
-```
-
-<div class="tg-dashboard-previews">
-  <span>
-    <img src="./assets/homepage.gif" alt="Training runs list in the Training Gym dashboard" width="100%" />
-  </span>
-  <span>
-    <img src="./assets/longrun.gif" alt="Long-running training run details in the Training Gym dashboard" width="100%" />
-  </span>
-</div>
 
 ## Supported models
 

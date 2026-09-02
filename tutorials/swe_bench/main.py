@@ -43,7 +43,7 @@ import modal
 
 from modal_training_gym import (
     Qwen3_6_27B,
-    Qwen3_6_27b_Recipe,
+    Qwen3_6_27B_Recipe,
     TrainConfig,
 )
 
@@ -124,7 +124,7 @@ def build_training_config(*, full_run: bool = False) -> TrainConfig:
     num_rollout = 100 if full_run else 1
     max_staleness = 4 if full_run else 2
 
-    recipe = Qwen3_6_27b_Recipe(
+    recipe = Qwen3_6_27B_Recipe(
         # Non-colocated async topology.
         gpu_type="H200",
         async_mode=True,
