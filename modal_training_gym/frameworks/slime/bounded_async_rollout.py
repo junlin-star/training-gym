@@ -239,6 +239,7 @@ class AsyncRolloutWorker:
             self.inflight_gids.discard(
                 gid
             )  # no longer generating → unpins the staleness window
+            launch_rid = self.launch_rid.pop(gid, None)
             try:
                 result = done_task.result()
             except Exception:  # noqa: BLE001
@@ -259,6 +260,8 @@ class AsyncRolloutWorker:
             if any(getattr(s, "status", None) == Sample.Status.ABORTED for s in result):
                 self._requeue_group(result)
                 return
+            if launch_rid is not None:
+                self.launch_rid[gid] = launch_rid
             self.output_queue.put((gid, result))
 
         return _cb

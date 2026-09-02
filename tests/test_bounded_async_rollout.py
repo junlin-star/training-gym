@@ -80,3 +80,25 @@ def test_groups_older_than_max_staleness_are_dropped(
 
     assert [s.index for group in out for s in group] == [1]
     assert logged["rollout/stale_groups_dropped"] == 1
+
+
+def test_requeued_group_drops_launch_rid(
+    fake_slime: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    types_mod = ModuleType("slime.utils.types")
+    types_mod.Sample = SimpleNamespace(Status=SimpleNamespace(PENDING=0, ABORTED=1))
+    monkeypatch.setitem(sys.modules, "slime.utils.types", types_mod)
+    args = SimpleNamespace(rollout_batch_size=1, rollout_max_staleness=None)
+    data_buffer = SimpleNamespace(add_samples=lambda groups: None)
+    worker = bounded_async_rollout.AsyncRolloutWorker(args, data_buffer, concurrency=1)
+    worker.launch_rid[0] = 0
+
+    async def run() -> None:
+        task = asyncio.ensure_future(asyncio.sleep(0, result="not a list"))
+        await task
+        worker._make_done_cb(0, [SimpleNamespace()])(task)
+
+    asyncio.run(run())
+
+    assert 0 not in worker.launch_rid
+    assert worker.output_queue.empty()
