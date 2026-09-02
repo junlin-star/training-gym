@@ -111,6 +111,7 @@ class AsyncRolloutWorker:
         self.launch_rid: dict[int, int] = {}
         self.requeues: dict[int, int] = {}
         self.max_requeues = getattr(args, "rollout_max_group_requeues", 3)
+        self.max_loop_failures = getattr(args, "rollout_max_loop_failures", 5)
         self.aborted_groups_dropped = 0
         max_staleness = getattr(args, "rollout_max_staleness", None)
         staleness_limit = (
@@ -169,6 +170,7 @@ class AsyncRolloutWorker:
         active_tasks: set[asyncio.Task] = set()
         max_concurrent = self.concurrency
         gid_counter = 0
+        consecutive_failures = 0
 
         while self.running:
             try:
@@ -211,8 +213,14 @@ class AsyncRolloutWorker:
                         task.add_done_callback(self._make_done_cb(gid, group))
                         active_tasks.add(task)
 
+                consecutive_failures = 0
                 await asyncio.sleep(1)
             except Exception as e:  # noqa: BLE001
+                # Transient producer errors are retried; persistent ones must
+                # surface via _fail instead of hanging the consumer forever.
+                consecutive_failures += 1
+                if consecutive_failures > self.max_loop_failures:
+                    raise
                 logger.exception("fully-async loop iteration error: %s", e)
                 await asyncio.sleep(1)
 

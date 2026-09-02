@@ -48,6 +48,33 @@ def test_dead_producer_thread_surfaces_original_error(fake_slime: None) -> None:
     assert str(exc_info.value.__cause__) == "producer boom"
 
 
+def test_persistent_get_samples_failure_surfaces_original_error(
+    fake_slime: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        sys.modules["slime.rollout.sglang_rollout"],
+        "generate_and_rm_group",
+        None,
+        raising=False,
+    )
+    args = SimpleNamespace(
+        rollout_batch_size=1, rollout_max_staleness=None, rollout_max_loop_failures=0
+    )
+
+    def get_samples(n: int) -> list:
+        raise ValueError("buffer boom")
+
+    data_buffer = SimpleNamespace(get_samples=get_samples)
+    worker = bounded_async_rollout.AsyncRolloutWorker(args, data_buffer, concurrency=1)
+    worker.start()
+    assert worker.worker_thread is not None
+    worker.worker_thread.join(timeout=2)
+
+    with pytest.raises(RuntimeError, match="producer failed") as exc_info:
+        worker.raise_if_failed()
+    assert str(exc_info.value.__cause__) == "buffer boom"
+
+
 def test_groups_older_than_max_staleness_are_dropped(
     fake_slime: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
