@@ -14,7 +14,9 @@ per-sample reward via ``--custom-rm-path`` — the worker calls slime's stock
 Concurrency starts from slime's per-sample serving cap and is divided by
 ``n_samples_per_prompt`` to produce a prompt-group budget.
 ``rollout_max_staleness`` bounds the combined in-flight and completed pool to
-``rollout_max_staleness * rollout_batch_size`` groups.
+``rollout_max_staleness * rollout_batch_size`` groups, and any finished group
+launched more than ``rollout_max_staleness`` rollouts ago is dropped rather
+than trained on.
 
 The worker is intentionally oblivious to slime's higher-level pause /
 weight-update signalling (e.g. ``GenerateState.aborted``). Each in-flight
@@ -104,6 +106,8 @@ class AsyncRolloutWorker:
         # a pool of N * rollout_batch_size is at most roughly N updates deep.
         self.completed_buffer: dict[int, list[Any]] = {}
         self.inflight_gids: set[int] = set()
+        self.current_rollout_id = 0
+        self.launch_rid: dict[int, int] = {}
         max_staleness = getattr(args, "rollout_max_staleness", None)
         staleness_limit = (
             max_staleness * args.rollout_batch_size if max_staleness else concurrency
@@ -191,6 +195,7 @@ class AsyncRolloutWorker:
                         gid = gid_counter
                         gid_counter += 1
                         self.inflight_gids.add(gid)
+                        self.launch_rid[gid] = self.current_rollout_id
                         task = asyncio.create_task(
                             generate_and_rm_group(
                                 self.args,
@@ -266,6 +271,8 @@ async def _generate_rollout_async(
 
     assert args.rollout_global_dataset
     worker = _get_global_worker(args, data_buffer)
+    worker.current_rollout_id = rollout_id
+    max_staleness = getattr(args, "rollout_max_staleness", None)
 
     target = args.rollout_batch_size
     logger.info(
@@ -301,6 +308,7 @@ async def _generate_rollout_async(
         0  # groups passed through the filter this rollout (pre-filter denominator)
     )
     n_kept = 0  # groups the filter accepted
+    n_stale = 0  # groups launched more than max_staleness rollouts ago
     reward_sum_all = (
         0.0  # sum of per-group mean reward over ALL examined groups (pre-filter)
     )
@@ -313,6 +321,10 @@ async def _generate_rollout_async(
             if len(collected) >= target:
                 break
             group = buf.pop(gid)
+            age = rollout_id - worker.launch_rid.pop(gid, rollout_id)
+            if max_staleness is not None and age > max_staleness:
+                n_stale += 1
+                continue
             if dyn_filter is None:
                 collected.append(group)
                 continue
@@ -355,14 +367,23 @@ async def _generate_rollout_async(
         return 0
 
     out = sorted(collected, key=_key)
+    metrics = {"rollout/stale_groups_dropped": float(n_stale)}
     if dyn_filter is not None and n_examined:
-        _log_dynamic_sampling(
-            args, rollout_id, n_examined, n_kept, reward_sum_all / n_examined
+        kept_frac = n_kept / n_examined
+        metrics.update(
+            {
+                "dynamic_sampling/kept_frac": kept_frac,
+                "dynamic_sampling/filtered_frac": 1.0 - kept_frac,
+                "dynamic_sampling/groups_examined": float(n_examined),
+                "dynamic_sampling/raw_reward_all": reward_sum_all / n_examined,
+            }
         )
+    _log_rollout_metrics(args, rollout_id, metrics)
     logger.info(
-        "fully-async rollout %d: done in %.1fs, buffered_left=%d, in_flight=%d",
+        "fully-async rollout %d: done in %.1fs, stale_dropped=%d, buffered_left=%d, in_flight=%d",
         rollout_id,
         time.time() - started,
+        n_stale,
         len(buf),
         len(worker.inflight_gids),
     )
@@ -378,35 +399,19 @@ def _group_mean_reward(group: list[Any], args) -> float:
     return sum(rs) / len(rs) if rs else 0.0
 
 
-def _log_dynamic_sampling(
-    args, rollout_id: int, n_examined: int, n_kept: int, raw_reward_all: float
-) -> None:
-    """Emit dynamic-sampling telemetry. raw_reward_all is the UNBIASED mean reward over every generated group
-    (pre-filter) — the true learning signal; slime's rollout/raw_reward is over the kept (non-zero-std) subset
-    and reads high once the filter is active."""
+def _log_rollout_metrics(args, rollout_id: int, metrics: dict[str, float]) -> None:
+    """Emit rollout telemetry. dynamic_sampling/raw_reward_all is the UNBIASED mean reward over every generated
+    group (pre-filter) — the true learning signal; slime's rollout/raw_reward is over the kept (non-zero-std)
+    subset and reads high once the filter is active."""
     try:
         from slime.ray.rollout import compute_rollout_step
         from slime.utils import logging_utils
 
-        kept_frac = n_kept / n_examined
-        metrics = {
-            "dynamic_sampling/kept_frac": kept_frac,
-            "dynamic_sampling/filtered_frac": 1.0 - kept_frac,
-            "dynamic_sampling/groups_examined": float(n_examined),
-            "dynamic_sampling/raw_reward_all": raw_reward_all,
-            "rollout/step": compute_rollout_step(args, rollout_id),
-        }
+        metrics["rollout/step"] = compute_rollout_step(args, rollout_id)
         logging_utils.log(args, metrics, step_key="rollout/step")
-        logger.info(
-            "fully-async rollout %d: dynamic-sampling kept %d/%d (%.0f%%), raw_reward_all=%.3f",
-            rollout_id,
-            n_kept,
-            n_examined,
-            100 * kept_frac,
-            raw_reward_all,
-        )
+        logger.info("fully-async rollout %d: %s", rollout_id, metrics)
     except Exception:  # noqa: BLE001 — telemetry must never crash the rollout
-        logger.exception("dynamic-sampling logging failed (non-fatal)")
+        logger.exception("rollout metrics logging failed (non-fatal)")
 
 
 def generate_rollout_fully_async(
