@@ -35,6 +35,16 @@ def _interrupt_agent_flow(message: dict):
     return InterruptAgentFlow(message)
 
 
+def _rollout_aborted():
+    return _interrupt_agent_flow(
+        {
+            "role": "exit",
+            "content": "RolloutAborted",
+            "extra": {"exit_status": "RolloutAborted", "submission": ""},
+        }
+    )
+
+
 class Qwen3RecordingModel:
     config = None  # mini-swe Model protocol
 
@@ -80,6 +90,7 @@ class Qwen3RecordingModel:
         )
         self.n_calls = 0  # total query() calls incl. format-error retries (vs len(versions) = productive turns)
         self.n_format_errors = 0
+        self.resumed_turns = 0  # turns re-issued after a weight-sync abort discarded their partial output
         self.n_length_truncations = (
             0  # turns the model overran the per-turn cap (finish_reason=length)
         )
@@ -179,13 +190,7 @@ class Qwen3RecordingModel:
     def query(self, messages: list[dict], **kwargs) -> dict:
         if self._abort_check is not None and self._abort_check():
             self.aborted = True
-            raise _interrupt_agent_flow(
-                {
-                    "role": "exit",
-                    "content": "RolloutAborted",
-                    "extra": {"exit_status": "RolloutAborted", "submission": ""},
-                }
-            )
+            raise _rollout_aborted()
         self.n_calls += 1
         full = self._render(messages, add_generation_prompt=True)
         # The render must extend the prior verbatim or exact-token recording
@@ -231,43 +236,44 @@ class Qwen3RecordingModel:
         # Retry transient overload — any connection error, or a 5xx (engine/router load-shed, worst during
         # the cold-start concurrency ramp). Jittered backoff disperses the thundering herd so retries don't
         # re-synchronize into another burst. HTTPError is a URLError subclass, so one handler covers both.
-        for attempt in range(5):
+        # finish_reason=abort is a weight-sync pause, not a model output: drop the partial and re-send the
+        # identical request so the episode survives the update. Recorded logprobs keep the ratio exact.
+        http_attempt = 0
+        while True:
             try:
                 with urllib.request.urlopen(req, timeout=self.query_timeout) as resp:
                     out = json.loads(resp.read())
-                break
             except urllib.error.URLError as e:
                 retriable = (
                     not isinstance(e, urllib.error.HTTPError)
                     or e.code == 429
                     or e.code >= 500
                 )
-                if retriable and attempt < 4:
-                    time.sleep(random.uniform(1.0, 2.0 ** (attempt + 1)))
+                http_attempt += 1
+                if retriable and http_attempt < 5:
+                    time.sleep(random.uniform(1.0, 2.0**http_attempt))
                     continue
                 raise
+            meta = out["meta_info"]
+            finish = meta.get("finish_reason", {}).get("type", "stop")
+            if finish != "abort":
+                break
+            self.resumed_turns += 1
+            if (self._abort_check is not None and self._abort_check()) or (
+                time.perf_counter() - t0 > self.query_timeout
+            ):
+                self.aborted = True
+                raise _rollout_aborted()
+            time.sleep(random.uniform(1.0, 2.0))
         self.gen_time += time.perf_counter() - t0
-        meta = out["meta_info"]
         self.cached_tokens += meta.get("cached_tokens", 0)
         self.input_tokens += n_in
         token_logprobs = meta.get("output_token_logprobs") or []
         text = out.get("text", "")
-        finish = meta.get("finish_reason", {}).get("type", "stop")
         self.tokens += [t[1] for t in token_logprobs]  # exact generated ids (trained)
         self.loss_mask += [1] * len(token_logprobs)
         self.logprobs += [t[0] for t in token_logprobs]
         self.versions.append(meta.get("weight_version"))
-        if finish == "abort":
-            # Engine aborted this generation (weight update / engine restart) — the turn is truncated garbage
-            # and the sample will be recycled, so end the episode NOW rather than burn the remaining budget.
-            self.aborted = True
-            raise _interrupt_agent_flow(
-                {
-                    "role": "exit",
-                    "content": "RolloutAborted",
-                    "extra": {"exit_status": "RolloutAborted", "submission": ""},
-                }
-            )
         if finish == "length":
             self.n_length_truncations += 1
         if "</think>" in text:  # reasoning the policy spent before its answer

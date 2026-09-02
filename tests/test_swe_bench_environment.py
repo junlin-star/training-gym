@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import io
+import json
 import sys
 from types import ModuleType
 
 import pytest
 
-from tutorials.swe_bench import env, generate
+from tutorials.swe_bench import env, generate, qwen3_model
 
 
 @pytest.fixture
@@ -194,6 +196,57 @@ def test_grader_exit_status(monkeypatch: pytest.MonkeyPatch) -> None:
     verdict = env.grade_swe_patch(_grading_task(), "diff --git a/x b/x")
     assert verdict.passed is False
     assert verdict.harness_error is True
+
+
+def test_weight_sync_abort_reissues_turn(monkeypatch: pytest.MonkeyPatch) -> None:
+    tool_call = "<tool_call>\n<function=bash>\n<parameter=command>\nls\n</parameter>\n</function>\n</tool_call>"
+    responses = [
+        {
+            "text": "par",
+            "meta_info": {
+                "finish_reason": {"type": "abort"},
+                "output_token_logprobs": [(-0.5, 9)],
+            },
+        },
+        {
+            "text": "",
+            "meta_info": {
+                "finish_reason": {"type": "abort"},
+                "output_token_logprobs": [],
+            },
+        },
+        {
+            "text": tool_call,
+            "meta_info": {
+                "finish_reason": {"type": "stop"},
+                "output_token_logprobs": [(-0.1, 7), (-0.2, 8)],
+            },
+        },
+    ]
+    payloads: list[dict] = []
+
+    def urlopen(req, timeout):
+        payloads.append(json.loads(req.data))
+        return io.BytesIO(json.dumps(responses.pop(0)).encode())
+
+    monkeypatch.setattr(qwen3_model.urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr(qwen3_model.time, "sleep", lambda s: None)
+    exceptions = ModuleType("minisweagent.exceptions")
+    exceptions.FormatError = type("FormatError", (Exception,), {})
+    monkeypatch.setitem(sys.modules, "minisweagent.exceptions", exceptions)
+    model = qwen3_model.Qwen3RecordingModel(
+        _Tokenizer(), {}, "http://router", "{output}", "session", max_context_len=8192
+    )
+
+    out = model.query([{"role": "user", "content": "fix"}])
+
+    prompt_ids = _Tokenizer.encode("prompt")
+    assert [p["input_ids"] for p in payloads] == [prompt_ids] * 3
+    assert model.tokens == prompt_ids + [7, 8]
+    assert model.logprobs[len(prompt_ids) :] == [-0.1, -0.2]
+    assert model.resumed_turns == 2
+    assert model.aborted is False
+    assert out["extra"]["actions"] == [{"command": "ls"}]
 
 
 def test_grading_harness_failure_is_retryable(

@@ -151,6 +151,7 @@ def _run_episode(
         ),  # ran out of turns (vs other exits)
         "n_calls": model.n_calls,  # total model calls; n_calls - turns = the format-error tax
         "format_errors": model.n_format_errors,
+        "resumed_turns": model.resumed_turns,  # turns re-issued after a weight-sync abort
         "length_truncations": model.n_length_truncations,  # turns the model's output was cut at the per-turn cap
         "exit_status": exit_status,
         "solved": float(solved),
@@ -303,15 +304,13 @@ async def generate(args, sample: Any, sampling_params, evaluation: bool = False)
 
     key = sample.label or task.get("instance_id") or ""
 
-    if (
-        model.aborted
-    ):  # weight update aborted a turn mid-flight → recycle (async) / drop (sync)
+    if model.aborted:  # abort probe fired mid-episode → recycle (async) / drop (sync)
         return _recycle_or_drop(
             args,
             sample,
             state.tokenizer,
             task.get("problem_statement", ""),
-            "WeightUpdateAborted",
+            "RolloutAborted",
         )
 
     # No usable trajectory (boot failed / every turn rolled back) or the grading harness itself
