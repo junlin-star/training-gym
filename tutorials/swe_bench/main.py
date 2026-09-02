@@ -1,5 +1,5 @@
 # ---
-# order: 10
+# order: 2
 # ---
 #
 # # Fully-async SWE agent RL with Qwen3.6-27B
