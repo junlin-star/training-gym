@@ -553,7 +553,7 @@ def grade_swe_patch(
         protected_files.update(grader_protected_files(model_patch))
         reset_test_files = [
             f"git checkout HEAD -- {shlex.quote(path)} 2>/dev/null "
-            f"|| rm -f {shlex.quote(path)}"
+            f"|| rm -f -- {shlex.quote(path)}"
             for path in sorted(protected_files)
         ]
 
