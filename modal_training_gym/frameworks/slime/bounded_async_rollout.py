@@ -22,7 +22,8 @@ The worker is intentionally oblivious to slime's higher-level pause /
 weight-update signalling (e.g. ``GenerateState.aborted``). Each in-flight
 generation short-circuits on those signals on its own and surfaces
 :data:`Sample.Status.ABORTED`. Aborted or failed groups are returned to
-``data_buffer`` so transient failures do not consume prompts.
+``data_buffer`` so transient failures do not consume prompts, at most
+``rollout_max_group_requeues`` times per group before the group is dropped.
 """
 
 from __future__ import annotations
@@ -108,6 +109,9 @@ class AsyncRolloutWorker:
         self.inflight_gids: set[int] = set()
         self.current_rollout_id = 0
         self.launch_rid: dict[int, int] = {}
+        self.requeues: dict[int, int] = {}
+        self.max_requeues = getattr(args, "rollout_max_group_requeues", 3)
+        self.aborted_groups_dropped = 0
         max_staleness = getattr(args, "rollout_max_staleness", None)
         staleness_limit = (
             max_staleness * args.rollout_batch_size if max_staleness else concurrency
@@ -225,6 +229,17 @@ class AsyncRolloutWorker:
     def _requeue_group(self, group: list[Any]) -> None:
         from slime.utils.types import Sample
 
+        key = _group_key(group)
+        self.requeues[key] = self.requeues.get(key, 0) + 1
+        if self.requeues[key] > self.max_requeues:
+            del self.requeues[key]
+            self.aborted_groups_dropped += 1
+            logger.warning(
+                "fully-async: group %d aborted %d times; dropping",
+                key,
+                self.max_requeues + 1,
+            )
+            return
         for sample in group:
             sample.status = Sample.Status.PENDING
         try:
@@ -262,6 +277,7 @@ class AsyncRolloutWorker:
                 return
             if launch_rid is not None:
                 self.launch_rid[gid] = launch_rid
+            self.requeues.pop(_group_key(result), None)
             self.output_queue.put((gid, result))
 
         return _cb
@@ -362,15 +378,12 @@ async def _generate_rollout_async(
             last_log = now
 
     # Order by sample.index for determinism (slime convention).
-    def _key(group: list[Any]) -> int:
-        for s in group:
-            idx = getattr(s, "index", None)
-            if idx is not None:
-                return int(idx)
-        return 0
-
-    out = sorted(collected, key=_key)
-    metrics = {"rollout/stale_groups_dropped": float(n_stale)}
+    out = sorted(collected, key=_group_key)
+    n_aborted, worker.aborted_groups_dropped = worker.aborted_groups_dropped, 0
+    metrics = {
+        "rollout/stale_groups_dropped": float(n_stale),
+        "rollout/aborted_groups_dropped": float(n_aborted),
+    }
     if dyn_filter is not None and n_examined:
         kept_frac = n_kept / n_examined
         metrics.update(
@@ -391,6 +404,14 @@ async def _generate_rollout_async(
         len(worker.inflight_gids),
     )
     return out
+
+
+def _group_key(group: list[Any]) -> int:
+    for s in group:
+        idx = getattr(s, "index", None)
+        if idx is not None:
+            return int(idx)
+    return 0
 
 
 def _group_mean_reward(group: list[Any], args) -> float:

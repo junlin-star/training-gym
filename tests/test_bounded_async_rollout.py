@@ -62,6 +62,7 @@ def test_groups_older_than_max_staleness_are_dropped(
         completed_buffer={},
         launch_rid={0: 0, 1: 1},
         inflight_gids=set(),
+        aborted_groups_dropped=0,
         raise_if_failed=lambda: None,
         queue_size=lambda: 0,
         get_completed_groups=lambda: [pending.pop(0)] if pending else [],
@@ -101,4 +102,33 @@ def test_requeued_group_drops_launch_rid(
     asyncio.run(run())
 
     assert 0 not in worker.launch_rid
+    assert worker.output_queue.empty()
+
+
+def test_permanently_aborted_group_is_dropped_after_max_requeues(
+    fake_slime: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    types_mod = ModuleType("slime.utils.types")
+    types_mod.Sample = SimpleNamespace(Status=SimpleNamespace(PENDING=0, ABORTED=1))
+    monkeypatch.setitem(sys.modules, "slime.utils.types", types_mod)
+    args = SimpleNamespace(
+        rollout_batch_size=1, rollout_max_staleness=None, rollout_max_group_requeues=2
+    )
+    requeued: list[list] = []
+    data_buffer = SimpleNamespace(add_samples=requeued.extend)
+    worker = bounded_async_rollout.AsyncRolloutWorker(args, data_buffer, concurrency=1)
+    group = [SimpleNamespace(index=7, status=1)]
+
+    async def run() -> None:
+        for gid in range(3):
+            task = asyncio.ensure_future(asyncio.sleep(0, result=group))
+            await task
+            worker._make_done_cb(gid, group)(task)
+            group[0].status = 1
+
+    asyncio.run(run())
+
+    assert len(requeued) == 2
+    assert worker.aborted_groups_dropped == 1
+    assert 7 not in worker.requeues
     assert worker.output_queue.empty()
